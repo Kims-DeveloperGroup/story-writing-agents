@@ -254,6 +254,15 @@ if mode == "nonzero" or os.environ.get("STORY_FAKE_CODEX_FAIL_SUBSTANTIVE") == "
 output_path = Path(argv[argv.index("--output-last-message") + 1])
 if mode == "missing_output":
     pass
+elif "STORY_FAKE_CODEX_PHYSICAL_OUTPUTS" in os.environ:
+    outputs = json.loads(os.environ["STORY_FAKE_CODEX_PHYSICAL_OUTPUTS"])
+    invocations = [
+        json.loads(line)
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    physical_index = sum("payload" in item for item in invocations) - 1
+    output_path.write_text(outputs[physical_index], encoding="utf-8")
 elif "STORY_FAKE_CODEX_OUTPUTS" in os.environ:
     outputs = json.loads(os.environ["STORY_FAKE_CODEX_OUTPUTS"])
     action_index = payload["retrieval"]["action_index"]
@@ -4952,6 +4961,39 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(BackendProtocolError):
                     AgentBackend._decode_reply(phase, value, revision_id="r2")
 
+    async def test_rejected_debate_attempts_return_phase_safe_deadlocks(self) -> None:
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        bound = await backend.bind(self.definition())
+
+        for phase in (
+            Phase.DRAFT,
+            Phase.PROPOSE_REVISION,
+            Phase.SYNTHESIZE,
+            Phase.FINALIZE,
+        ):
+            with self.subTest(phase=phase):
+                session_id = f"rejected_{phase.value}_session"
+                backend.create_session_with_access(session_id)
+                before = len(self.provider_invocations())
+                with mock.patch.dict(
+                    os.environ,
+                    {"STORY_FAKE_CODEX_OUTPUT": "not-json"},
+                ):
+                    reply = await bound.invoke(
+                        self.request(
+                            session_id=session_id,
+                            debate_id=f"rejected_{phase.value}_debate",
+                            phase=phase,
+                        )
+                    )
+
+                self.assertEqual(len(self.provider_invocations()) - before, 2)
+                self.assertIs(reply.kind, AgentReplyKind.DEADLOCK)
+                self.assertTrue(reply.deadlocked)
+                self.assertIs(reply.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
+                self.assertIn("after one repair attempt", reply.content)
+
     async def test_converse_rejects_wrong_types_tampering_and_routing_preflight(
         self,
     ) -> None:
@@ -6319,14 +6361,27 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 ),
             ]
         }
-        expected_schema = {
-            "type": "object",
-            "properties": {"action": expected_action_schema},
-            "required": ["action"],
-            "additionalProperties": False,
-        }
-        self.assertTrue(
-            all(invocation["schema"] == expected_schema for invocation in invocations)
+        expected_schemas = [
+            {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "anyOf": [
+                            branch
+                            for branch in expected_action_schema["anyOf"]
+                            if branch["properties"]["kind"]["enum"][0]
+                            in control["allowed_actions"]
+                        ]
+                    }
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            }
+            for control in controls
+        ]
+        self.assertEqual(
+            [invocation["schema"] for invocation in invocations],
+            expected_schemas,
         )
         read_branch = expected_action_schema["anyOf"][1]
         self.assertIn("end_sequence", read_branch["required"])
@@ -6338,6 +6393,99 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             ),
             (ConversationRetrievalActionKind.ANSWER,),
         )
+
+    async def test_retrieval_repairs_share_five_call_budget_and_close_fifth_to_answer(
+        self,
+    ) -> None:
+        request = self.retrieval_request()
+        search_one = _retrieval_action_json(
+            request,
+            kind=ConversationRetrievalActionKind.SEARCH_CONVERSATIONS,
+            action_index=1,
+            query="Needle one",
+        )
+        search_two = _retrieval_action_json(
+            request,
+            kind=ConversationRetrievalActionKind.SEARCH_CONVERSATIONS,
+            action_index=2,
+            query="Needle two",
+        )
+        answer = _retrieval_action_json(
+            request,
+            kind=ConversationRetrievalActionKind.ANSWER,
+            action_index=3,
+            content="bounded answer",
+            citation_ids=[],
+        )
+        rejected_fifth = _retrieval_action_json(
+            request,
+            kind=ConversationRetrievalActionKind.SEARCH_CONVERSATIONS,
+            action_index=3,
+            query="forbidden sixth call",
+        )
+
+        for label, fifth_output, expected_origin in (
+            ("accepted_answer", answer, ReplyTraceOrigin.RECOVERED),
+            ("rejected_search", rejected_fifth, ReplyTraceOrigin.RUNTIME_FALLBACK),
+        ):
+            with self.subTest(label=label):
+                self.log_path.unlink(missing_ok=True)
+                session_id = f"retrieval_physical_budget_{label}"
+                backend = AgentBackend(
+                    self.workspace,
+                    executable=str(self.executable),
+                )
+                self.addCleanup(backend.close)
+                backend.create_session_with_access(session_id)
+                bound = await backend.bind(self.definition())
+                handler = _RecordingRetrievalHandler()
+                outputs = (
+                    search_one,
+                    "not-json",
+                    search_two,
+                    "not-json",
+                    fifth_output,
+                )
+                with mock.patch.dict(
+                    os.environ,
+                    {
+                        "STORY_FAKE_CODEX_PHYSICAL_OUTPUTS": json.dumps(outputs),
+                    },
+                ):
+                    reply = await bound.converse_with_retrieval(
+                        self.retrieval_request(session_id=session_id),
+                        handler,
+                    )
+
+                calls = self.provider_invocations()
+                self.assertEqual(len(calls), 5)
+                self.assertEqual(
+                    [call["payload"]["retrieval"]["action_index"] for call in calls],
+                    [1, 2, 2, 3, 3],
+                )
+                fifth = calls[4]
+                self.assertEqual(
+                    fifth["payload"]["retrieval"]["allowed_actions"],
+                    [ConversationRetrievalActionKind.ANSWER.value],
+                )
+                self.assertIn("structured_response_repair", fifth["payload"])
+                fifth_branches = fifth["schema"]["properties"]["action"]["anyOf"]
+                self.assertEqual(len(fifth_branches), 1)
+                self.assertEqual(
+                    fifth_branches[0]["properties"]["kind"]["enum"],
+                    [ConversationRetrievalActionKind.ANSWER.value],
+                )
+                self.assertEqual(len(handler.actions), 3)
+                self.assertIs(
+                    type(handler.actions[-1]),
+                    ConversationRetrievalAnswerAction,
+                )
+                self.assertIs(reply.trace.origin, expected_origin)
+                if label == "accepted_answer":
+                    self.assertEqual(reply.content, "bounded answer")
+                else:
+                    self.assertIn("after one repair attempt", reply.content)
+                    self.assertNotIn("forbidden sixth call", reply.content)
 
     def test_retrieval_schema_uses_supported_strict_object_subset(self) -> None:
         schema = AgentBackend._conversation_retrieval_action_schema()
@@ -7405,6 +7553,116 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             ],
         )
         self.assert_reference_accepted(repository, authorization, operation_id)
+
+    async def test_reference_runtime_fallback_terminates_and_repair_accepts(
+        self,
+    ) -> None:
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        bound = await backend.bind(self.definition())
+
+        for route in ("debate", "conversation", "retrieval"):
+            for outcome in ("fallback", "repaired"):
+                with self.subTest(route=route, outcome=outcome):
+                    self.log_path.unlink(missing_ok=True)
+                    session_id = f"reference_{route}_{outcome}"
+                    operation_id = f"reference_operation_{route}_{outcome}"
+                    backend.create_session_with_access(session_id)
+                    repository, authorization, invocation = self.reference_invocation(
+                        operation_id=operation_id,
+                        invocation_id=f"reference_invocation_{route}_{outcome}",
+                        phase=(
+                            "draft"
+                            if route == "debate"
+                            else (
+                                "conversation"
+                                if route == "conversation"
+                                else "conversation_retrieval"
+                            )
+                        ),
+                        round_number=(0 if route == "debate" else None),
+                    )
+                    if route == "debate":
+                        accepted_output = json.dumps({"message": "repaired candidate"})
+                    elif route == "conversation":
+                        accepted_output = json.dumps(
+                            {"message": "repaired conversation"}
+                        )
+                    else:
+                        accepted_output = _retrieval_action_json(
+                            self.retrieval_request(session_id=session_id),
+                            kind=ConversationRetrievalActionKind.ANSWER,
+                            action_index=1,
+                            content="repaired retrieval",
+                            citation_ids=[],
+                        )
+                    outputs = (
+                        "not-json",
+                        "not-json" if outcome == "fallback" else accepted_output,
+                    )
+                    with mock.patch.dict(
+                        os.environ,
+                        {
+                            "STORY_FAKE_CODEX_PHYSICAL_OUTPUTS": json.dumps(outputs),
+                        },
+                    ):
+                        if route == "debate":
+                            reply = await bound.invoke(
+                                self.request(session_id=session_id),
+                                reference_read=invocation,
+                            )
+                        elif route == "conversation":
+                            reply = await bound.converse(
+                                self.conversation_request(session_id=session_id),
+                                reference_read=invocation,
+                            )
+                        else:
+                            reply = await bound.converse_with_retrieval(
+                                self.retrieval_request(session_id=session_id),
+                                _RecordingRetrievalHandler(),
+                                reference_read=invocation,
+                            )
+
+                    self.assertEqual(len(self.provider_invocations()), 2)
+                    self.assertIs(
+                        reply.trace.origin,
+                        (
+                            ReplyTraceOrigin.RUNTIME_FALLBACK
+                            if outcome == "fallback"
+                            else ReplyTraceOrigin.RECOVERED
+                        ),
+                    )
+                    if outcome == "repaired":
+                        self.assert_reference_accepted(
+                            repository,
+                            authorization,
+                            operation_id,
+                        )
+                        continue
+
+                    history = repository.inspect_reference_operation(operation_id)
+                    assert history is not None
+                    invocation_events = history.invocation_events[0]
+                    self.assertEqual(
+                        tuple(event.invocation_state for event in invocation_events),
+                        (
+                            ReferenceInvocationState.AUTHORIZED,
+                            ReferenceInvocationState.DELIVERED,
+                            ReferenceInvocationState.TERMINATED,
+                        ),
+                    )
+                    self.assertTrue(
+                        {
+                            ReferenceInvocationState.RESULT_RECEIVED,
+                            ReferenceInvocationState.ACCEPTED,
+                        }.isdisjoint(
+                            event.invocation_state for event in invocation_events
+                        )
+                    )
+                    self.assertIs(
+                        invocation_events[-1].outcome,
+                        ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+                    )
 
     async def test_local_reference_handler_failures_are_durable(self) -> None:
         cases = (

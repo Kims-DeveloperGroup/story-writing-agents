@@ -22,10 +22,10 @@ flowchart TD
     P --> T[Durable terminal result]
     T -->|completed with successor| N2[Explicit next-phase request]
     T -->|finalization completed| H[Read-only reviewed handoff]
-    T -->|deadlocked| C[Explicit continuation choice and ruling]
+    T -->|synthesis deadlock| C[Explicit continuation choice and ruling]
     C -->|resume in place or linked workflow| CR[Fresh REPAIR request]
     CR --> A
-    T -->|failure| Z[No publication]
+    T -->|failure or repair/finalization fallback deadlock| Z[Inspect failure; no publication]
     H --> AP[Separate confirmed artifact Apply]
     AP --> GC[Separate confirmed Git Commit]
 ```
@@ -47,12 +47,12 @@ the caller to operator recovery instead of guessing or replaying.
 
 | Consensus phase | Bound agent(s) | Provider `Phase` | Result and normal successor |
 | --- | --- | --- | --- |
-| `draft` | Execution Specialist | `draft` | New unpublished `r0` candidate → `audit` |
+| `draft` | Execution Specialist | `draft` | New unpublished `r0` candidate → `audit`; exhausted structured repair → failure with no candidate |
 | `audit` | Plot Architect, Character Custodian, Execution Specialist | `audit` | Three current-revision votes → `synthesis` |
-| `synthesis` | Lead Orchestrator | `synthesize` | Nonvoting choice of `repair`, `finalization`, or deadlock |
-| `repair` | Execution Specialist | `propose_revision` | New unpublished candidate → `reaudit`; revision increments when requested |
+| `synthesis` | Lead Orchestrator | `synthesize` | Nonvoting choice of `repair`, `finalization`, or continuable deadlock retaining the candidate |
+| `repair` | Execution Specialist | `propose_revision` | New unpublished candidate → `reaudit`; exhausted structured repair → noncontinuable deadlock retaining the prior candidate |
 | `reaudit` | Same three auditors | `audit` | Three fresh votes → `synthesis` |
-| `finalization` | Lead Orchestrator | `finalize` | Validated read-only handoff; no successor or publication |
+| `finalization` | Lead Orchestrator | `finalize` | Validated read-only handoff; exhausted structured repair → noncontinuable deadlock retaining the candidate; no publication |
 
 The lead does not vote. All three auditors inspect the same candidate handle
 and revision. Synthesis cannot carry an audit verdict. Repair must produce a
@@ -88,10 +88,11 @@ Projection carries content-free continuation facts:
 `continuation_mode`, `source_workflow_id`, `source_result_event_id`,
 `source_revision_id`, `source_candidate_digest`, `ruling_digest`,
 `ruling_present`, `added_revision_rounds`, and
-`remaining_revision_rounds`. A deadlock projects
-`next_action=continue_deadlock`; a continuation request projects the ordinary
-`request_decision`. Repeated deadlock remains terminal and nonpublishing, and
-may be continued only by another explicit exact operation.
+`remaining_revision_rounds`. A synthesis deadlock projects
+`next_action=continue_deadlock`; a REPAIR or FINALIZATION fallback deadlock
+projects `next_action=inspect_failure`; and a continuation request projects the
+ordinary `request_decision`. A repeated synthesis deadlock remains terminal and
+nonpublishing, and may be continued only by another explicit exact operation.
 
 Consensus workflow serialization is strict format version 3. No v2
 compatibility reader or migration exists. Malformed, stale, cross-session, foreign-result,
@@ -107,7 +108,11 @@ Runtime converts a `ConsensusPhaseInvocation` into an `AgentRequest` whose
 agent, phase, ordinal, revision, task, input, and candidate are runtime-owned.
 It uses the bound agent's existing contextual prompt definition. Strict
 `AgentReply` validation maps candidate, audit, synthesis, deadlock, and
-finalization replies into digest-bound `ConsensusProviderResult` values.
+finalization replies into digest-bound `ConsensusProviderResult` values. When
+one bounded structured repair is exhausted, DRAFT becomes a definite failure
+with no candidate; REPAIR, SYNTHESIS, and FINALIZATION become deadlocks that
+retain the trusted input candidate. Their content-free reply trace keeps
+`origin=runtime_fallback` and `action=none`; no fallback grants publication.
 
 Prompt text and supplied drafts are immutable content-addressed material.
 Draft and repair output is likewise unpublished material. Durable events keep
@@ -128,9 +133,10 @@ digest, last sequence, and one safe `next_action`:
   active; do not issue another decision.
 - `request_next_phase`: the prior phase completed or was revised; creating the
   next request is explicit and does not execute it.
-- `inspect_failure`: interruption or definite failure is terminal.
+- `inspect_failure`: interruption, definite failure, or a noncontinuable
+  REPAIR/FINALIZATION fallback deadlock is terminal.
 - `operator_recovery`: outcome or durability is uncertain; automation stops.
-- `continue_deadlock`: offer an explicit deadlock continuation or stop.
+- `continue_deadlock`: offer an explicit synthesis-deadlock continuation or stop.
 - `none`: finalization or rejection has no consensus successor.
 
 The user meanings of all states and sample calls are in

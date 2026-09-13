@@ -382,7 +382,11 @@ def _visible_state(
         ConsensusPhaseState.RECOVERY_REQUIRED: ConsensusNextAction.OPERATOR_RECOVERY,
         ConsensusPhaseState.REJECTED: ConsensusNextAction.NONE,
         ConsensusPhaseState.SUPERSEDED: ConsensusNextAction.REQUEST_NEXT_PHASE,
-        ConsensusPhaseState.DEADLOCKED: ConsensusNextAction.CONTINUE_DEADLOCK,
+        ConsensusPhaseState.DEADLOCKED: (
+            ConsensusNextAction.CONTINUE_DEADLOCK
+            if result.phase is ConsensusPhase.SYNTHESIS
+            else ConsensusNextAction.INSPECT_FAILURE
+        ),
     }
     return result.state, actions[result.state]
 

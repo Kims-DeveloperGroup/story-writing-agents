@@ -332,6 +332,58 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(appended), 2)
                 self.assertEqual(appended[0].payload.state, ConsensusPhaseState.RUNNING)
 
+        appended = []
+
+        async def definite_failure(_invocation):
+            return ConsensusProviderResult(
+                ConsensusPhaseOutputKind.FAILURE,
+                "8" * 64,
+                None,
+            )
+
+        _, _, _, _, receipt = await self.execute(
+            ConsensusPhase.DRAFT,
+            appended.append,
+            definite_failure,
+        )
+        self.assertEqual(receipt.state, ConsensusPhaseState.FAILED)
+        self.assertIsNone(receipt.terminal_event.payload.candidate_digest)
+        self.assertEqual(len(receipt.provider_results), 1)
+        self.assertIsNone(receipt.provider_results[0].candidate_material)
+
+    async def test_candidate_phases_deadlock_with_existing_lineage(self) -> None:
+        async def deadlock(invocation):
+            return ConsensusProviderResult(
+                ConsensusPhaseOutputKind.DEADLOCK,
+                "9" * 64,
+                invocation.candidate_material,
+            )
+
+        for phase in (
+            ConsensusPhase.REPAIR,
+            ConsensusPhase.SYNTHESIS,
+            ConsensusPhase.FINALIZATION,
+        ):
+            with self.subTest(phase=phase):
+                appended = []
+                _, _, _, _, receipt = await self.execute(
+                    phase,
+                    appended.append,
+                    deadlock,
+                )
+                self.assertEqual(receipt.state, ConsensusPhaseState.DEADLOCKED)
+                self.assertEqual(
+                    receipt.terminal_event.payload.candidate_digest,
+                    _CANDIDATE,
+                )
+                self.assertIsNone(receipt.terminal_event.payload.next_phase)
+                self.assertFalse(receipt.terminal_event.payload.publication_allowed)
+                self.assertEqual(len(receipt.provider_results), 1)
+                self.assertIs(
+                    receipt.provider_results[0].candidate_material,
+                    _CANDIDATE_MATERIAL,
+                )
+
     async def test_append_uncertainty_never_invokes_early_or_claims_durability(
         self,
     ) -> None:

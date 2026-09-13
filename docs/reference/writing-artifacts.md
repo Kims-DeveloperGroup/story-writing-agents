@@ -1346,6 +1346,12 @@ own ordered history:
 | `accepted` | Another full revalidation succeeded after the recorded result. | The exact invocation evidence chain was accepted before the backend returned its reply. The result's optional operation ID lets Python callers inspect the content-free history. |
 | `terminated` | A fixed coded failure ended the invocation. | No accepted reply exists for the attempt. A retry needs a fresh correlation, coordinator, and one-use capability; it cannot reuse this evidence. |
 
+When structured repair exhaustion selects a safe runtime fallback, the backend
+terminates the invocation and reference operation with `provider_failure` from
+their current nonterminal states. It records neither `result_received` nor
+`accepted`. The local fallback reply may still be visible, but its
+`origin=runtime_fallback` trace does not change that reference history.
+
 The durable schema-v2 history contains ordered path and optional range,
 content-free filesystem source identity, selected SHA-256 and byte count,
 source line count, agent/invocation
@@ -1372,8 +1378,14 @@ models. An internal caller first captures a nonempty batch and calls
    backend decodes the selected strict-UTF-8 bytes and adds them once, in the
    same order, under `untrusted_writing_artifact_context` on the immediately
    following substantive payload.
-5. A structurally valid result advances through `result_received`, final
-   repository revalidation, and `accepted` before the backend returns it.
+5. A structurally valid provider or repaired result advances through
+   `result_received`, final repository revalidation, and `accepted` before the
+   backend returns it.
+
+If the bounded structured repair is exhausted instead, the backend returns its
+safe local fallback only after terminating the invocation and operation with
+`provider_failure`; the fallback path skips both `result_received` and
+`accepted`.
 
 The selected content is not copied into the task, user text, candidate,
 blackboard messages, conversation history, retrieval observations, durable
