@@ -311,12 +311,17 @@ invocation. `action` is one schema-selected closed variant:
 ```
 
 ```json
-{"action":{"kind":"answer","result":{"message":"What would you like to work on?"}}}
+{"action":{"kind":"answer","result":{"message":"What would you like to work on?","authoring_scope":{"activity":"workflow","target_paths":[],"domains":[],"task":"task_demo@1"}}}}
 ```
 
 The third example uses the complete workflow-meta `lead-outcome-v5` answer variant
-with illustrative offered task `task_demo` at revision `1`;
-the live ANSWER schema embeds the invocation-specific result schema at
+with illustrative offered task `task_demo` at revision `1`. Every provider-
+produced direct Lead result requires this compact semantic scope; runtime does
+not infer a missing scope as workflow. A missing scope is rejected, receives
+one bounded structured repair, and then becomes a runtime-owned visible no-
+action fallback if repair also fails. That fallback is not part of the closed
+provider schema. The default answer omits `kind`, while questions and critiques
+add it. The live ANSWER schema embeds the invocation-specific result schema at
 `action.result`. There is no JSON-in-string layer and no compatibility decoder
 for an older action envelope. Runtime associates successful READ receipts with
 the final answer; the provider does not echo their handles.
@@ -325,9 +330,11 @@ boundary, digest, size, provenance, handle, and untrusted content required for
 provider reasoning, even though the input payload remains compact.
 
 For a lead initial call, `core_statuses` is an additional top-level list beside
-`c`, `q`, and `i`. The final `action.result` contains `kind`, `message`, compact
-`authoring_scope`, and only the semantic intent required by its selected
-`lead-outcome-v5` variant. Omitted objective intent makes no transition; `start`,
+`c`, `q`, and `i`. The final `action.result` contains `message`, compact
+`authoring_scope`, and only the semantic fields required by its selected
+`lead-outcome-v5` variant. The default direct answer omits `kind`; questions,
+critiques, recommendations, and proposals include the kind selected by their
+variant. Omitted objective intent makes no transition; `start`,
 `continue`, and `cancel` follow the strict
 [objective contract](../reference/runtime-api.md#contextual-authoring-objectives).
 Fresh recommendations require `recommended_action`; other variants omit it.

@@ -266,10 +266,15 @@ authority, or a call to another agent.
 `lead_front_channel` receives the current command, identity, content-free input
 aliases, current owner-conversation objectives and offered draft sources,
 offered authoring tasks, a minimal `lead-outcome-v5` answer contract, and
-canonical-core status rows. Every variant requires `kind`, `message`, and the
-compact semantic `authoring_scope`; intent fields appear only for variants that
-need them. Inventory alone supplies no story body. Runtime derives evidence
-scope, status, receipts, IDs, revisions, and interpretation from local facts.
+canonical-core status rows. Every variant requires `message` and the compact
+semantic `authoring_scope`; the default direct answer omits `kind`, while
+questions, critiques, recommendations, and proposals add the kind selected by
+their closed variant. Intent fields appear only for variants that need them.
+Inventory alone supplies no story body. Runtime derives evidence scope, status,
+receipts, IDs, revisions, and interpretation from local facts. It never infers
+a missing scope as workflow: omission receives one bounded repair and then a
+runtime-owned visible no-action fallback if repair fails. That fallback is not
+a provider-schema variant.
 
 Fresh front-channel recommendations require `recommended_action`; unused
 intent fields are omitted. The action selects `prepare_artifact` or
@@ -296,7 +301,9 @@ digests, target scope, and current artifact evidence before publishing an
 objective transition with its accepted result. A selected exact empty-core
 status can support replacement after revalidation; nonempty targets require
 attached-reference or READ evidence. Synthesis keeps the objective open.
-Only a matching successful Apply result satisfies it. A new objective from
+Only a matching successful Apply result satisfies it. An ordinary v1 objective
+stores the exact originating user-event content as its request rather than a
+provider-authored request field. A new objective from
 recommendation Confirm records v2 request/decision origins; a continued objective
 keeps its immutable v1 or v2 facts. Execution origin remains independently
 validated, without a synthetic user message. See the

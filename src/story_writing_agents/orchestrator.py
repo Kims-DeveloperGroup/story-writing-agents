@@ -333,8 +333,8 @@ _LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES = frozenset(
 _LEAD_RESPONSE_CORRECTION_INSTRUCTION = (
     "Return ANSWER now without SEARCH or READ. Encode exactly one complete "
     "lead_front_channel lead-outcome-v5 object in action.result with only the fields "
-    "required by its selected semantic variant. A direct answer needs only message; "
-    "include kind for a question or critique. Include authoring_scope, proposal, "
+    "required by its selected semantic variant. Every direct answer needs message and "
+    "authoring_scope; include kind for a question or critique. Include proposal, "
     "artifact_intent, objective_intent, or "
     "recommended_action only when that variant requires it. Preserve a selected objective PREPARE as an exact "
     "artifact proposal; do not downgrade it into advice or claim completion."
@@ -597,14 +597,10 @@ def _lead_front_result_contract(
         if item in {LeadOutcomeKind.QUESTION, LeadOutcomeKind.CRITIQUE}
     ]
     variants = [
-        _closed_result_object(message),
-        _closed_result_object({
-            **message,
-            "kind": {"enum": direct_kinds, "type": "string"},
-        }),
+        _closed_result_object(scoped),
         _closed_result_object({
             **scoped,
-            "kind": {"enum": [LeadOutcomeKind.QUESTION.value], "type": "string"},
+            "kind": {"enum": direct_kinds, "type": "string"},
         }),
         _closed_result_object({
             **scoped,
@@ -4406,7 +4402,13 @@ class StoryRuntime:
                 message=message,
                 rationale=message,
                 user_impact=_LEAD_PROPOSAL_USER_IMPACT,
-                limitations="No additional limitations were reported.",
+                limitations=(
+                    "No additional limitations were reported."
+                    if not unresolved
+                    else "Unresolved reviewer inputs remain: "
+                    + ", ".join(unresolved)
+                    + "."
+                ),
                 reply_event_ids=reply_event_ids,
                 unresolved_input_ids=unresolved,
             )
@@ -6724,10 +6726,12 @@ class StoryRuntime:
                         "mode": "draft | review",
                         "review_basis": "omit for draft; concrete candidate_input_ids and criteria for review",
                     },
-                    "direct_answer": "message only; add kind only for question or critique",
+                    "direct_answer": (
+                        "message and authoring_scope; add kind only for question or critique"
+                    ),
                     "authoring_scope": (
-                        "required only for objective, recommendation, proposal, or artifact intent; "
-                        "include activity, targets, domains, and exact offered task token"
+                        "always required; include activity, targets, domains, and exact "
+                        "offered task token"
                     ),
                     "kind": "required only when selecting a non-default semantic variant",
                     "message": "always required nonempty user-visible text",
@@ -6854,15 +6858,6 @@ class StoryRuntime:
                     answer,
                     expected_relation=expected_relation,
                 )
-                if decoded.authoring_scope is None and (
-                    reference_operation.reference_proofs
-                    or authorization.used_evidence
-                ):
-                    decoded = replace(
-                        decoded,
-                        scope=LeadOutcomeScope.STORY_SPECIFIC,
-                        evidence_status=LeadEvidenceStatus.VERIFIED,
-                    )
                 if preparation is not None:
                     preparation_request = cast(
                         LeadRecommendationRequestPayload,
@@ -6920,33 +6915,9 @@ class StoryRuntime:
                 )
                 authoring_scope = decoded.authoring_scope
                 if authoring_scope is None:
-                    if (
-                        decoded.kind not in {
-                            LeadOutcomeKind.ANSWER,
-                            LeadOutcomeKind.QUESTION,
-                            LeadOutcomeKind.CRITIQUE,
-                        }
-                        or decoded.objective_intent is not None
-                        or decoded.proposal is not None
-                        or decoded.artifact_intent is not None
-                        or decoded.recommended_action is not None
-                    ):
-                        raise _LeadOutcomeValidationError(
-                            "authority-bearing outcomes require explicit authoring scope"
-                        )
-                    task_id, task_revision = next(
-                        (key for key, prior in offered_tasks.items() if prior is None),
-                        next(iter(offered_tasks)),
+                    raise _LeadOutcomeValidationError(
+                        "provider Lead outcomes require explicit authoring scope"
                     )
-                    authoring_scope = AuthoringScope(
-                        AuthoringActivity.WORKFLOW,
-                        (),
-                        (),
-                        decoded.message,
-                        task_id,
-                        task_revision,
-                    )
-                    decoded = replace(decoded, authoring_scope=authoring_scope)
                 if (authoring_scope.task_id, authoring_scope.task_revision) not in offered_tasks:
                     raise _LeadOutcomeValidationError("authoring scope uses an unoffered task revision")
                 selected_prior = offered_tasks[(authoring_scope.task_id, authoring_scope.task_revision)]
@@ -8009,12 +7980,11 @@ class StoryRuntime:
             elif origin is None:
                 raise _LeadOutcomeValidationError("new objective lacks its exact origin user event")
             else:
-                assert intent.request is not None
                 facts = ArtifactObjectiveFacts(
                     objective_id=self._new_id("obj"),
                     origin_conversation_id=judgment.conversation_id,
                     origin_user_event_id=origin.event_id,
-                    request=intent.request, target_paths=intent.target_paths,
+                    request=origin.payload.content, target_paths=intent.target_paths,
                     offered_draft_sources=projection.offered_draft_sources,
                 )
         else:
@@ -8680,8 +8650,7 @@ class StoryRuntime:
                 parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
             )
             allowed = {
-                frozenset({"message"}),
-                frozenset({"kind", "message"}),
+                frozenset({"authoring_scope", "message"}),
                 frozenset({"authoring_scope", "kind", "message"}),
                 frozenset({"authoring_scope", "kind", "message", "objective_intent"}),
                 frozenset({"authoring_scope", "kind", "message", "recommended_action"}),
@@ -8691,38 +8660,30 @@ class StoryRuntime:
             if type(value) is not dict or frozenset(value) not in allowed:
                 raise ValueError
             raw_scope = value.get("authoring_scope")
-            if raw_scope is not None and type(raw_scope) is not dict:
+            if type(raw_scope) is not dict:
                 raise ValueError
             kind = LeadOutcomeKind(value.get("kind", LeadOutcomeKind.ANSWER.value))
             if (
                 frozenset(value) == frozenset({"authoring_scope", "kind", "message"})
-                and kind is not LeadOutcomeKind.QUESTION
+                and kind not in {LeadOutcomeKind.QUESTION, LeadOutcomeKind.CRITIQUE}
             ):
                 raise ValueError
-            if raw_scope is None and kind not in {
-                LeadOutcomeKind.ANSWER, LeadOutcomeKind.QUESTION, LeadOutcomeKind.CRITIQUE,
-            }:
-                raise ValueError
             message = value["message"]
-            if raw_scope is None:
-                authoring_scope = None
-            else:
-                task_id, separator, raw_revision = cast(str, raw_scope["task"]).rpartition("@")
-                if not separator:
-                    raise ValueError
-                authoring_scope = authoring_scope_from_dict({
-                    "schema_version": 1,
-                    **{
-                        key: item for key, item in raw_scope.items() if key != "task"
-                    },
-                    "task_id": task_id,
-                    "task_revision": int(raw_revision),
-                    "interpretation": message,
-                })
+            task_id, separator, raw_revision = cast(str, raw_scope["task"]).rpartition("@")
+            if not separator:
+                raise ValueError
+            authoring_scope = authoring_scope_from_dict({
+                "schema_version": 1,
+                **{
+                    key: item for key, item in raw_scope.items() if key != "task"
+                },
+                "task_id": task_id,
+                "task_revision": int(raw_revision),
+                "interpretation": message,
+            })
             scope = (
                 LeadOutcomeScope.WORKFLOW_META
-                if authoring_scope is None
-                or authoring_scope.activity is AuthoringActivity.WORKFLOW
+                if authoring_scope.activity is AuthoringActivity.WORKFLOW
                 else LeadOutcomeScope.STORY_SPECIFIC
             )
             evidence_status = (

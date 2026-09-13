@@ -477,8 +477,13 @@ object supplied on argv, whose canonical bytes must match exactly.
     "action": {
       "kind": "answer",
       "result": {
-        "kind": "answer",
-        "message": "<sanitized reply>"
+        "message": "<sanitized reply>",
+        "authoring_scope": {
+          "activity": "workflow",
+          "target_paths": [],
+          "domains": [],
+          "task": "task_demo@1"
+        }
       }
     }
   },
@@ -487,8 +492,14 @@ object supplied on argv, whose canonical bytes must match exactly.
 }
 ```
 
-The example shows the minimal fields of a `lead-outcome-v5` Lead ANSWER. Other
-calls require the semantic fields for their selected result type. Fresh
+The example shows the minimal fields of a `lead-outcome-v5` Lead ANSWER using
+an illustrative task offered by runtime. Every provider-produced direct Lead
+result requires `message` and compact `authoring_scope`; questions and critiques
+add `kind`, while the default answer omits it. Missing scope receives one
+bounded structured repair and then a runtime-owned visible no-action fallback
+if repair also fails; runtime never infers a workflow scope. The fallback is
+not a variant of the closed native Structured Output schema. Other calls
+require only the semantic fields for their selected result type. Fresh
 recommendations require one typed preparation action, then offer
 Confirm/Reject/Revise. Confirm prepares an exact proposal or asks a material
 question; specialist execution/review, Apply, and Commit need separate
