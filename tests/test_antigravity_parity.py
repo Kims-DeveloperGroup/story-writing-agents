@@ -1538,6 +1538,13 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 "conversation-one",
                 "turn-direct",
                 "conversation answer",
+                trace=ReplyTrace(
+                    role=PLOT_ARCHITECT,
+                    action="reply",
+                    context_sources=("current_input",),
+                    recovered_fields=(),
+                    origin=ReplyTraceOrigin.PROVIDER,
+                ),
             ),
         )
 

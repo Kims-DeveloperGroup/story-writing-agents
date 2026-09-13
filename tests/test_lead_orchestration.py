@@ -492,11 +492,12 @@ def _live_result(call, value):
         and value.get("recommended_action") is None
         and execution is None
     ):
+        authoring_scope = value.get("authoring_scope")
+        if type(authoring_scope) is not dict:
+            authoring_scope = _live_scope(call, activity="workflow")
         compact = {
             "message": value["message"],
-            "authoring_scope": _compact_scope(
-                _live_scope(call, activity="workflow")
-            ),
+            "authoring_scope": _compact_scope(authoring_scope),
         }
         if value["kind"] != "answer":
             compact["kind"] = value["kind"]

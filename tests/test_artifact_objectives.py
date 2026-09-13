@@ -315,7 +315,10 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         readable = c.project_collaboration_readable_history(before)
         objective_record = next(item for item in readable if isinstance(item.payload, c.ArtifactObjectivePayload))
         self.assertEqual({field.key: field.text for field in objective_record.fields}, {
-            c.CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_REQUEST: "The scoped work requires its disclosed specialists.",
+            c.CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_REQUEST: (
+                "Draft core_documents/global_outline.md from this brief: a lantern "
+                "vanishes, its keeper is found, and it returns."
+            ),
             c.CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_ACTION: "start",
             c.CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_NEXT_STEP: "consult",
         })
