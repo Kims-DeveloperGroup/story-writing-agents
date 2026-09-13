@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import Mapping, Protocol
 
 from ..errors import SessionIdError
+from ..reply_trace import ReplyTrace
 from ..specialist_routing import SpecialistAssignmentMode
 from .events import (
     ArtifactDraftSource,
@@ -869,6 +870,7 @@ class LeadTurnResult:
     artifact_application_request: ArtifactApplicationRequestPayload | None = None
     story_commit_request: StoryCommitRequestPayload | None = None
     recommendation_request: LeadRecommendationRequestPayload | None = None
+    trace: ReplyTrace | None = None
 
     def __post_init__(self) -> None:
         for value, label in (
@@ -882,6 +884,8 @@ class LeadTurnResult:
             _validate_identifier(value, label=label)
         if type(self.kind) is not LeadOutcomeKind:
             raise TypeError("lead result kind must be LeadOutcomeKind")
+        if self.trace is not None and type(self.trace) is not ReplyTrace:
+            raise TypeError("lead result trace must be ReplyTrace or None")
         if type(self.message) is not str or not self.message:
             raise ValueError("lead result message must be nonempty text")
         try:

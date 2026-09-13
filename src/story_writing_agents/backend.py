@@ -156,6 +156,7 @@ from .provider_error_artifacts import (
     WorkspaceProviderErrorArtifacts,
 )
 from .provider_process import ProcessTimedOut, stop_process
+from .reply_trace import ReplyTrace, ReplyTraceOrigin
 from .session_lifecycle import (
     SessionAccessState,
     SessionDurableState,
@@ -2807,6 +2808,7 @@ class AgentBackend:
                 fallback=fallback,
                 best_effort_taint=True,
                 call_kind=call_kind,
+                trace_role=bound_agent.definition.agent_id,
             )
         except BaseException as exc:
             self._fail_reference_read_without_replacing(
@@ -3147,6 +3149,7 @@ class AgentBackend:
                 decode=decode,
                 fallback=fallback,
                 call_kind=ProviderCallKind.DEBATE,
+                trace_role=request.agent_id,
             )
         return await self._invoke_codex_after_reference_read(
             bound_agent,
@@ -3254,6 +3257,7 @@ class AgentBackend:
                 decode=decode,
                 fallback=fallback,
                 call_kind=ProviderCallKind.CONVERSATION,
+                trace_role=request.agent_id,
             )
         return await self._invoke_codex_after_reference_read(
             bound_agent,
@@ -3365,6 +3369,8 @@ class AgentBackend:
         after_read = False
         pending_observation = False
         reference_provider_failure = False
+        trace_sources: list[str] = []
+        recovered = False
         try:
             for action_index in range(
                 1,
@@ -3420,7 +3426,31 @@ class AgentBackend:
                     ),
                     best_effort_taint=reference_read is not None,
                     call_kind=call_kind,
+                    trace_role=request.agent_id,
                 )
+                if action.trace is not None:
+                    trace_sources.extend(action.trace.context_sources)
+                    recovered = recovered or (
+                        action.trace.origin is ReplyTraceOrigin.RECOVERED
+                    )
+                    if type(action) is ConversationRetrievalAnswerAction:
+                        origin = action.trace.origin
+                        recovered_fields = action.trace.recovered_fields
+                        if recovered and origin is ReplyTraceOrigin.PROVIDER:
+                            origin = ReplyTraceOrigin.RECOVERED
+                            recovered_fields = ("structured_reply",)
+                        action = replace(
+                            action,
+                            trace=ReplyTrace(
+                                role=request.agent_id,
+                                action=action.trace.action,
+                                context_sources=tuple(
+                                    dict.fromkeys(trace_sources)
+                                ),
+                                recovered_fields=recovered_fields,
+                                origin=origin,
+                            ),
+                        )
                 reference_provider_failure = False
                 if type(action) in {
                     ConversationRetrievalSearchAction,
@@ -3458,6 +3488,7 @@ class AgentBackend:
                                 self._canonical_conversation_retrieval_source(source)
                                 for source in outcome.sources
                             ),
+                            trace=action.trace,
                         )
                     except Exception as exc:
                         raise BackendProtocolError(
@@ -3981,6 +4012,7 @@ class AgentBackend:
         conversation_id: str | None = None,
         best_effort_taint: bool = False,
         call_kind: ProviderCallKind = ProviderCallKind.UNCLASSIFIED,
+        trace_role: str | None = None,
     ) -> _StructuredReply:
         """Repair one rejected structured value, then return a safe local reply."""
 
@@ -3994,10 +4026,16 @@ class AgentBackend:
             "call_kind": call_kind,
         }
         try:
-            return await self._invoke_provider_structured(
+            value = await self._invoke_provider_structured(
                 bound_agent,
                 payload=payload,
                 **arguments,
+            )
+            return self._attach_reply_trace(
+                value,
+                role=trace_role,
+                payload=payload,
+                origin=ReplyTraceOrigin.PROVIDER,
             )
         except _StructuredOutputRejected:
             repair_payload = dict(payload)
@@ -4008,13 +4046,84 @@ class AgentBackend:
                 )
             }
         try:
-            return await self._invoke_provider_structured(
+            value = await self._invoke_provider_structured(
                 bound_agent,
                 payload=repair_payload,
                 **arguments,
             )
+            return self._attach_reply_trace(
+                value,
+                role=trace_role,
+                payload=repair_payload,
+                origin=ReplyTraceOrigin.RECOVERED,
+            )
         except _StructuredOutputRejected:
-            return fallback()
+            return self._attach_reply_trace(
+                fallback(),
+                role=trace_role,
+                payload=repair_payload,
+                origin=ReplyTraceOrigin.RUNTIME_FALLBACK,
+            )
+
+    @staticmethod
+    def _attach_reply_trace(
+        value: _StructuredReply,
+        *,
+        role: str | None,
+        payload: Mapping[str, Any],
+        origin: ReplyTraceOrigin,
+    ) -> _StructuredReply:
+        """Attach content-free construction facts to supported public replies."""
+
+        if role is None or type(value) not in {
+            AgentReply,
+            ConversationReply,
+            ConversationRetrievalSearchAction,
+            ConversationRetrievalReadAction,
+            ConversationRetrievalAnswerAction,
+        }:
+            return value
+        if type(value) is AgentReply:
+            action = value.kind.value
+        elif type(value) is ConversationReply:
+            action = "reply"
+        else:
+            action = value.kind.value
+        labels = {
+            "agent_state": "agent_state",
+            "context": "conversation_history",
+            "conversation_context": "conversation_history",
+            "messages": "debate_history",
+            "observation": "retrieval_observation",
+            "rag_context": "retrieval_index",
+            "story_session_context": "story_session",
+            "untrusted_writing_artifact_context": "writing_artifacts",
+        }
+        has_current_input = any(
+            key in payload and payload[key] not in (None, "", [], (), {})
+            for key in ("candidate_payload", "content", "task", "user_payload")
+        )
+        context_sources = (("current_input",) if has_current_input else ()) + tuple(
+            label
+            for key, label in labels.items()
+            if key in payload and payload[key] not in (None, [], (), {})
+        )
+        trace = ReplyTrace(
+            role=role,
+            action=(
+                "none"
+                if origin is ReplyTraceOrigin.RUNTIME_FALLBACK
+                else action
+            ),
+            context_sources=context_sources,
+            recovered_fields=(
+                ()
+                if origin is ReplyTraceOrigin.PROVIDER
+                else ("structured_reply",)
+            ),
+            origin=origin,
+        )
+        return replace(value, trace=trace)
 
     async def _invoke_provider_structured(
         self,

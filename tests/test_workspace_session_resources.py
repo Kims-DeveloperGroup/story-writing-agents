@@ -46,7 +46,7 @@ class WorkspaceSessionResourceCompositionTests(GitSessionResourceGitTestCase):
                 self.assertEqual(str(inspect.signature(operation)), signature)
                 self.assertFalse(hasattr(workspace_facade, operation.__name__))
                 self.assertFalse(hasattr(story_writing_agents, operation.__name__))
-        self.assertEqual(len(story_writing_agents.__all__), 104)
+        self.assertEqual(len(story_writing_agents.__all__), 106)
         self.assertEqual(len(git_facade.__all__), 24)
         self.assertEqual(len(workspace_facade.__all__), 3)
 

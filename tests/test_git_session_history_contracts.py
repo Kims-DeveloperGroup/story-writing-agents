@@ -184,7 +184,7 @@ class GitSessionHistoryContractTests(unittest.TestCase):
             self.assertFalse(hasattr(git_facade, name), name)
             self.assertFalse(hasattr(story_writing_agents, name), name)
         self.assertEqual(len(git_facade.__all__), 24)
-        self.assertEqual(len(story_writing_agents.__all__), 104)
+        self.assertEqual(len(story_writing_agents.__all__), 106)
 
     def test_snapshot_is_exact_frozen_slotted_sorted_and_content_safe(self) -> None:
         candidate = _candidate(

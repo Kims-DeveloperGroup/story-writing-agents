@@ -192,7 +192,7 @@ class ReferenceReadActionContractTests(unittest.TestCase):
         self.assertTrue(
             all(name not in story_writing_agents.__all__ for name in public)
         )
-        self.assertEqual(len(story_writing_agents.__all__), 104)
+        self.assertEqual(len(story_writing_agents.__all__), 106)
 
     def test_contract_module_has_clean_accepted_dependency_direction(self) -> None:
         source = Path(action_module.__file__)

@@ -534,8 +534,8 @@ class Workspace:
                     or round_number < 0
                 ):
                     raise TypeError("debate log round must be a non-negative integer")
-                messages.append(DebateMessage(**value))
-            except (json.JSONDecodeError, TypeError) as exc:
+                messages.append(DebateMessage.from_dict(value))
+            except (json.JSONDecodeError, TypeError, ValueError) as exc:
                 raise WorkspaceFormatError(
                     f"invalid debate log entry at line {line_number}"
                 ) from exc

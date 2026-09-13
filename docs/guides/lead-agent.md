@@ -249,8 +249,22 @@ LeadTurnResult:
   state: none
   next_action: continue_with_lead
   evidence: workflow_meta / not_applicable / no receipts
+  reply_construction:
+    role: lead_orchestrator
+    action: answer
+    context: current_input, session_state
+    recovered_fields: none
+    origin: provider
 Provider work: lead only; required session memory; no added reference/SEARCH/READ or specialist
 ```
+
+The terminal renders these content-free construction facts beside fresh and
+historical Lead/specialist replies. `origin=recovered` means the first
+structured result was rejected and the single repair succeeded.
+`origin=runtime_fallback` always has `action=none`; it keeps the conversation
+open but supplies no collaboration or mutation authority. The trace lists
+context classes, not the prompt, retrieved text, hidden reasoning, or reply
+content.
 
 The same front channel is available as ordinary input in the interactive
 shell. Exact prose is provider-generated, while the typed outcome and next

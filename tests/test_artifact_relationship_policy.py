@@ -302,7 +302,7 @@ class ArtifactRelationshipSurfaceTests(RelationshipTestCase):
                 )
                 self.assertNotIn(name, story_writing_agents.__all__)
                 self.assertFalse(hasattr(story_writing_agents, name))
-        self.assertEqual(len(story_writing_agents.__all__), 104)
+        self.assertEqual(len(story_writing_agents.__all__), 106)
         self.assertEqual(
             tuple(code.value for code in ArtifactRelationshipErrorCode),
             tuple(code.value for code in _ERROR_MESSAGES),

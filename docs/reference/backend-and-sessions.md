@@ -81,6 +81,15 @@ not replace the shared runtime's validation of runtime-owned correlation, issued
 handles, evidence IDs, Lead outcome matrix, input aliases, artifact authority,
 or confirmation.
 
+Successful `AgentReply`, `ConversationReply`, and retrieval replies carry a
+runtime-derived `ReplyTrace`. It reports only the role, normalized action,
+content-source labels, recovered field labels, and whether the reply came from
+the provider, the one repair call, or the safe runtime fallback. The trace is
+not requested from the provider and never contains prompt, reply, reference,
+or story bytes. Missing or invalid semantic output still receives one bounded
+repair; a second rejection returns a visible `action=none` fallback so the
+conversation remains usable without inferring authority.
+
 For Antigravity, runtime installs the selected definition at
 `.agents/agents/<agent-id>/agent.md` beneath the isolated
 session/agent/fingerprint working directory and always supplies `--agent`.

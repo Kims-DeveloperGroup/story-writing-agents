@@ -7,7 +7,7 @@ import json
 import unittest
 from dataclasses import replace
 
-from story_writing_agents import StoryRuntime
+from story_writing_agents import ReplyTraceOrigin, StoryRuntime
 from story_writing_agents.agents import (
     CHARACTER_CUSTODIAN,
     EXECUTION_SPECIALIST,
@@ -604,6 +604,11 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                     reply.assessment,
                     CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE,
                 )
+                self.assertIs(
+                    reply.trace.origin,
+                    ReplyTraceOrigin.RUNTIME_FALLBACK,
+                )
+                self.assertEqual(reply.trace.action, "none")
                 self.assertNotIn("private_state", repr(self.history(conversation_id)))
 
     async def test_synthesis_contract_is_semantic_and_runtime_derives_attribution(
@@ -638,6 +643,8 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         reply_events = _events(history, CollaborationEventKind.SPECIALIST_REPLY)
         self.assertEqual(len(reply_events), 2)
         synthesis = _payloads(history, CollaborationLeadSynthesisPayload)[0]
+        self.assertIs(synthesis.trace.origin, ReplyTraceOrigin.PROVIDER)
+        self.assertEqual(synthesis.trace.action, "synthesis")
         self.assertEqual(
             synthesis.reply_event_ids,
             tuple(event.event_id for event in reply_events),

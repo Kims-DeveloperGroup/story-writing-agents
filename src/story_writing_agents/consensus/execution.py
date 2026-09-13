@@ -8,6 +8,7 @@ from enum import StrEnum
 from typing import Protocol
 
 from ..agents import EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR
+from ..reply_trace import ReplyTrace
 from .contracts import (
     CONSENSUS_AUDITORS,
     ConsensusAudit,
@@ -93,6 +94,7 @@ class ConsensusProviderResult:
     audit_verdict: ConsensusAuditVerdict | None = None
     next_phase: ConsensusPhase | None = None
     conflict_material: ConsensusMaterialHandle | None = None
+    trace: ReplyTrace | None = None
 
     def __post_init__(self) -> None:
         if type(self.kind) is not ConsensusPhaseOutputKind:
@@ -109,6 +111,8 @@ class ConsensusProviderResult:
             or not self.conflict_material.locator.startswith("candidate:")
         ):
             raise TypeError("consensus provider conflict material is invalid")
+        if self.trace is not None and type(self.trace) is not ReplyTrace:
+            raise TypeError("consensus provider trace must be ReplyTrace or None")
         if self.kind in {
             ConsensusPhaseOutputKind.AUDIT,
             ConsensusPhaseOutputKind.CONFLICT,

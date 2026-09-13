@@ -16,14 +16,14 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 142.
+Importable production units indexed: 143.
 
-Direct internal dependency edges indexed: 565.
+Direct internal dependency edges indexed: 574.
 
 Directed internal dependency cycles indexed: 0.
 
 Edge and cycle totals exclude annotation-only `TYPE_CHECKING` imports. The
-all-import AST graph has 567 edges. Its two annotation-only edges are
+all-import AST graph has 576 edges. Its two annotation-only edges are
 `config -> workspace` and `interactive_terminal._core -> conversations`; the
 workspace cycle was already present in the 135-unit baseline
 (528 all-import / 526 runtime edges).
@@ -77,7 +77,7 @@ __main__ -> cli -> conversation_rag_cli
 
 consensus -> consensus.contracts/consensus.execution/consensus.projection/consensus.runtime_adapter/consensus.serialization
 consensus.contracts -> agents/writing_artifacts.catalog
-consensus.execution -> agents/consensus.contracts/consensus.projection
+consensus.execution -> agents/consensus.contracts/consensus.projection/reply_trace
 consensus.projection -> consensus.contracts
 consensus.runtime_adapter -> consensus.contracts/consensus.execution/consensus.projection/consensus.serialization
 consensus.serialization -> consensus.contracts/consensus.projection
@@ -149,7 +149,8 @@ interactive_terminal._viewer_controls -> interactive_terminal._model
 interactive_terminal._viewer_render -> interactive_terminal._model
                                     -> interactive_terminal._viewer_model
 interactive_terminal._collaboration_view -> conversations/specialist_routing
-                                        -> interactive_terminal._model/writing_artifacts
+                                        -> interactive_terminal._model/reply_trace
+                                        -> writing_artifacts
 conversation_literal_search -> (standard library only)
 conversation_rag -> (standard library only)
 conversation_rag_local -> conversation_literal_search/conversation_rag
@@ -172,7 +173,7 @@ conversation_rag_cli -> config/conversation_rag/conversation_rag_composition
 story_writing_agents facade -> agents/backend/conversation_retrieval
                             -> conversation_search/conversations/directives
                             -> errors/interactive_commands/models/orchestrator
-                            -> session_lifecycle/workspace
+                            -> reply_trace/session_lifecycle/workspace
 conversation_storage -> conversation_storage.archive/composition/contracts
                      -> conversation_storage.filesystem_archive
 conversation_storage.archive -> conversations/errors
@@ -206,9 +207,9 @@ orchestrator -> agent_context.progress/artifact_proposals/backend/config/consens
              -> conversation_storage.composition/contracts
              -> errors/git.story_commit_contracts/git.story_commits
              -> models
-             -> prompts/specialist_routing/workspace/workspace.initialization
+             -> prompts/reply_trace/specialist_routing/workspace/workspace.initialization
              -> writing_artifacts/repository/runtime_references
-models -> conversations/agents/errors
+models -> conversations/agents/errors/reply_trace
 agent_context -> agent_context.accounting
 agent_context.accounting -> (standard library only)
 agent_context.actions -> agent_context.manifest/planning
@@ -1266,6 +1267,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   typed synthesis next-phase/deadlock metadata and finalization references to
   an existing reviewed proposal; duplicate JSON fields and prose-derived
   authority are rejected before orchestration.
+  Successful structured replies receive one runtime-derived, content-free
+  `ReplyTrace`; one successful repair is marked recovered and an exhausted
+  repair returns an `action=none` runtime fallback without halting the
+  conversation or adding authority.
 - **Authentication boundary:** Both legacy and contextual physical calls enter
   the scoped provider activity gate; this backend does not replay a provider
   call itself. It attaches the admitted authentication generation to typed
@@ -1289,7 +1294,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `conversation_retrieval`, `debug_log`, `errors`, `git.session_contracts`,
   `interactive_settings`,
   `models`, `provider_adapter`, `provider_auth_recovery`,
-  `provider_error_artifacts`, `provider_process`,
+  `provider_error_artifacts`, `provider_process`, `reply_trace`,
   `runtime_state_paths`,
   `session_lifecycle`, `session_recovery`,
   `session_recovery.transition_assessment`, `workspace`, and
@@ -2213,8 +2218,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   only through immutable content-addressed material handles. Continuation
   lineage is forwarded to every provider assignment without becoming execution
   authority.
-- **Direct internal dependencies:** `agents`, `consensus.contracts`, and
-  `consensus.projection`.
+- **Direct internal dependencies:** `agents`, `consensus.contracts`,
+  `consensus.projection`, and `reply_trace`.
 - **State, resources, and side effects:** Retains only injected ports and
   owner identity. Provider and event-persistence effects are delegated through
   those ports; importing performs no operational I/O.
@@ -2381,7 +2386,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   citation identities, event correlation, source identities, and half-open
   ranges; they omit query text, subjects, provider scores/candidates, paths,
   credentials, exception text, and generation identities. No name is
-  re-exported by the 104-name package-root facade.
+  re-exported by the 106-name package-root facade.
 - **Direct internal dependencies:** `config`, `conversation_rag`,
   `conversation_rag_composition`, `conversation_rag_local`,
   `conversation_rag_runtime`, `conversation_rag_store`,
@@ -2446,7 +2451,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ConversationRagStateError`, and `ConversationRagOperationError`.
   These names are supported only from
   `story_writing_agents.conversation_rag`; none is re-exported by the
-  104-name package-root facade.
+  106-name package-root facade.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** Standard-library-only frozen,
   slotted values, exact enums, runtime-checkable caller-owned collaborator
@@ -3202,7 +3207,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   bounded `preflight(..., forced_query=None)`, explicit
   `search_authorized(...)`, and
   `project_authorized(..., rebuild=False)` operations. None is re-exported by
-  the 104-name package-root facade.
+  the 106-name package-root facade.
 - **Direct internal dependencies:** `conversation_literal_search`,
   `conversation_rag`, `conversation_retrieval`, `conversation_search`,
   `conversation_storage.contracts`, and `conversations`.
@@ -3287,7 +3292,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `serialize_conversation_retrieval_observation`. The original retrieval
   contract names plus `ConversationRetrievalHistoryRecord` remain package-
   facade exports; the three RAG values and serializer are supported only from
-  this direct module, producing the exact 104-name root facade.
+  this direct module, producing the exact 106-name root facade.
   `ConversationRetrievalActionKind` permits only `SEARCH_CONVERSATIONS`,
   `READ_HISTORY`, and `ANSWER`. Each history record carries one validated
   `CollaborationReadableRecord` plus one exact citation ID per ordered closed
@@ -3309,8 +3314,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ConversationRetrievalRequest` also carries an additive optional validated
   `story_session_context`; omission preserves legacy request construction and
   projection, and runtime-built requests may carry both context forms.
+  Search, read, answer, final reply, and result values can carry a content-free
+  runtime `ReplyTrace`; retrieval accumulates the ordered context-source labels
+  used across its bounded action loop.
 - **Direct internal dependencies:** `agents`, `conversation_rag`,
-  `conversation_search`, `conversations`, `errors`, and `models`.
+  `conversation_search`, `conversations`, `errors`, `models`, and
+  `reply_trace`.
 - **State, resources, and side effects:** Frozen, slotted contracts, immutable
   policy metadata, exact validators, and pure canonical serialization only.
   Authoritative excerpt and readable-field content is excluded from dataclass
@@ -3815,7 +3824,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `agent_states/orchestrator_state/conversation_storage_transfers`.
   The frozen report provides its fixed counts-only `to_dict`, compact sorted
   `to_json`, and process `exit_code` projections. These names are absent from
-  both the 63-name conversation-storage facade and 104-name package-root
+  both the 63-name conversation-storage facade and 106-name package-root
   facade. No former migration-named public constant, type, operation, or
   callable remains as an alias.
 - **Direct internal dependencies:** `conversation_storage.archive`,
@@ -4633,7 +4642,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   the prior task, advances its revision by one, and cannot discard known
   targets or domains. Legacy absent-scope history remains readable.
 - **Direct internal dependencies:** `conversations.events`, `errors`,
-  `git.story_commit_contracts`, `specialist_routing`, and `writing_artifacts`.
+  `git.story_commit_contracts`, `reply_trace`, `specialist_routing`, and
+  `writing_artifacts`.
 - **State, resources, and side effects:** Immutable policy, window, and
   projection/readable values; immutable closed field and transition metadata;
   the immutable legacy context values and active v2 storage-neutral port; pure
@@ -4759,8 +4769,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   mode. `DRAFTED` is limited to explicit draft replies and cannot become an
   artifact-review assessment. The conversations facade exposes every defining object, while
   the project-root facade retains only the three immutable visible-event names.
+  Agent-authored messages, judgments, specialist replies, and syntheses carry
+  an optional strict `ReplyTrace`; canonical event codecs persist the trace so
+  content-free construction facts survive reopen.
 - **Direct internal dependencies:** `agents`, `artifact_proposals`, `errors`,
-  `git.story_commit_contracts`, `specialist_routing`, and `writing_artifacts`.
+  `git.story_commit_contracts`, `reply_trace`, `specialist_routing`, and
+  `writing_artifacts`.
 - **State, resources, and side effects:** Immutable v1 and v2 values plus
   deterministic identifier, strict UTF-8/size/privacy, actor direction,
   lead-result closure, the strict workflow-meta/story-specific
@@ -6086,6 +6100,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   their prose messages with the renderer's `AGENT` role. User messages,
   objectives, instructions, recommendation metadata, and structural fields do
   not opt into agent-prose normalization.
+  When present, their content-free trace is rendered in a separate
+  `Reply construction` section with role, action, context-source labels,
+  recovered-field labels, and origin.
   `validate_collaboration_event_order`
   rejects mixed conversation scope, duplicate sequence, and out-of-order input
   before presentation. Details mode adds durable record identity but cannot
@@ -6096,7 +6113,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   an explicit legacy label when absent. Rendering supplies no routing or
   confirmation authority.
 - **Direct internal dependencies:** `conversations`, `specialist_routing`,
-  `writing_artifacts`, and `interactive_terminal._model`.
+  `writing_artifacts`, `reply_trace`, and `interactive_terminal._model`.
 - **State, resources, and side effects:** Pure validated projection only. It
   reads no store, invokes no provider, writes no stream, and owns no terminal,
   artifact, Git, or runtime state. Closed payload dispatch fails on unknown
@@ -6681,7 +6698,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   deadlock, and finalization fields are mutually exclusive; synthesis carries
   only a closed next-phase value, while finalization carries only a reviewed
   proposal ID and tagged digest and never carries artifact content or authority.
-- **Direct internal dependencies:** `agents`, `conversations`, and `errors`.
+  `DebateMessage`, `AgentReply`, `ConversationReply`, and
+  `ConversationResult` can carry the shared content-free `ReplyTrace`.
+- **Direct internal dependencies:** `agents`, `conversations`, `errors`, and
+  `reply_trace`.
 - **State, resources, and side effects:** Value contracts own no process state;
   owner outcomes retain only the newest complete suffix under both 24-entry and
   32,768-UTF-8-byte caps with total/retained/omitted/byte/truncation accounting.
@@ -7001,6 +7021,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   draft provenance and exact-candidate review gates still control candidate
   preparation and Apply. Recommendation requests participate in the existing
   task projection; recommendation completion never satisfies authoring.
+  The runtime derives content-free reply traces from the admitted role,
+  semantic action, delivered context classes, and repair outcome; it persists
+  those facts with Lead, specialist, and synthesis replies without deriving
+  user authority from the trace.
 - **Direct internal dependencies:** `agent_context.accounting`,
   `agent_context.continuation`, `agent_context.manifest`, `agent_context.planning`, `agent_context.service`,
   `agent_context.progress`, `agent_context.sources`, `agents`, `artifact_proposals`, `backend`, `config`,
@@ -7010,7 +7034,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `git.story_commit_contracts`, `git.story_commits`,
   `conversation_rag_runtime`, `conversation_storage.composition`,
   `conversation_storage.contracts`, `debug_log`, `directives`, `errors`,
-  `models`, `prompts`, `specialist_routing`, `workspace`, `workspace.initialization`,
+  `models`, `prompts`, `reply_trace`, `specialist_routing`, `workspace`, `workspace.initialization`,
   `writing_artifacts`, `writing_artifacts.catalog`, `writing_artifacts.repository`, and
   `writing_artifacts.runtime_references`.
 - **State, resources, and side effects:** Retains workspace, prompt/config, one
@@ -7165,6 +7189,29 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_codex_backend.py`, `docs/reference/writing-artifacts.md`,
   `docs/reference/agent-contracts.md#recommendation-preparation-contracts`, and
   `docs/design/prompts-and-provider.md#current-contextual-binding`.
+
+### `story_writing_agents.reply_trace`
+
+- **Source:** `src/story_writing_agents/reply_trace.py`
+- **Responsibility:** Define the shared compact, content-free construction
+  trace attached to visible agent replies.
+- **Supported surface:** Package-supported `ReplyTrace` and
+  `ReplyTraceOrigin`. The exact JSON-compatible shape contains `role`,
+  `action`, `context_sources`, `recovered_fields`, and `origin`. Origins are
+  `provider`, `recovered`, and `runtime_fallback`; fallback must use
+  `action=none` and non-provider origins must identify affected fields.
+- **Direct internal dependencies:** None.
+- **State, resources, and side effects:** Frozen slotted values, safe bounded
+  labels, and exact pure dict codecs only. The module contains no prompt,
+  reply, retrieved, reference, hidden-reasoning, or authority bytes and owns no
+  mutable state, storage, provider, process, filesystem, or import-time I/O.
+- **Primary verification/documentation:** `tests/test_reply_trace.py`,
+  `tests/test_codex_backend.py`, `tests/test_lead_orchestration.py`,
+  `tests/test_specialist_orchestration.py`,
+  `tests/test_consensus_runtime_correlation.py`,
+  `tests/test_interactive_collaboration_view.py`,
+  `docs/reference/backend-and-sessions.md`,
+  `docs/reference/runtime-api.md`, and `docs/guides/lead-agent.md`.
 
 ### `story_writing_agents.run_inputs`
 
@@ -8417,7 +8464,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- The combined runtime has 140 production units, 555 runtime edges, 557
+- The combined runtime has 143 production units, 574 runtime edges, 576
   all-import edges, and no directed runtime cycle. Whole-source path parity is
   exact. Specialist routing adds one pure module and five net inward runtime
   edges over the provider-recovery baseline: artifact proposals replace their

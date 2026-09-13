@@ -469,7 +469,10 @@ class CollaborationValueContractTests(unittest.TestCase):
                 ),
             ),
             (lead_evidence, ("scope", "status", "receipts")),
-            (lead_judgment, ("kind", "message", "evidence", "authoring_scope")),
+            (
+                lead_judgment,
+                ("kind", "message", "evidence", "authoring_scope", "trace"),
+            ),
             (lead_failure, ("code", "invocation_id", "call_id")),
             (
                 proposal.basis.inputs[0],
@@ -627,6 +630,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                     "objective_intent",
                     "recommended_action",
                     "authoring_scope",
+                    "trace",
                 ),
             ),
             (
@@ -642,6 +646,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                     "message",
                     "input_ids",
                     "mode",
+                    "trace",
                 ),
             ),
             (
@@ -657,6 +662,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                     "evidence",
                     "next_intent",
                     "authoring_scope",
+                    "trace",
                 ),
             ),
             (

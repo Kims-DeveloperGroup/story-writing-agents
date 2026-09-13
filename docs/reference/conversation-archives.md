@@ -16,7 +16,7 @@ change the source or destination during the operation.
 
 ## Public API
 
-The archive implementation is intentionally absent from the 104-name
+The archive implementation is intentionally absent from the 106-name
 `story_writing_agents` root facade. Its 21 archive-owned names and two
 filesystem-adapter names are supported from
 `story_writing_agents.conversation_storage`:

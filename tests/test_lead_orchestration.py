@@ -14,7 +14,12 @@ from dataclasses import dataclass, replace
 from typing import Awaitable, Callable
 from unittest import mock
 
-from story_writing_agents import RuntimeSession, StoryRuntime, Workspace
+from story_writing_agents import (
+    ReplyTraceOrigin,
+    RuntimeSession,
+    StoryRuntime,
+    Workspace,
+)
 from story_writing_agents import orchestrator as orchestrator_module
 from story_writing_agents.agent_context.accounting import (
     ProviderCallAccounting,
@@ -60,6 +65,9 @@ from story_writing_agents.conversations import (
     LeadOutcomeScope,
     LeadStepDecision,
     project_collaboration_history,
+)
+from story_writing_agents.conversation_storage import (
+    compose_filesystem_conversation_storage,
 )
 from story_writing_agents.errors import BackendProtocolError
 from story_writing_agents.writing_artifacts.authorization import (
@@ -1149,6 +1157,16 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         )
         self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
         self.assertEqual(result.message, "Repaired visible answer.")
+        self.assertIs(result.trace.origin, ReplyTraceOrigin.RECOVERED)
+        self.assertEqual(result.trace.action, "answer")
+        self.assertEqual(result.trace.recovered_fields, ("structured_reply",))
+        reopened = compose_filesystem_conversation_storage(self.workspace).event_store
+        persisted = next(
+            event.payload
+            for event in reopened.read(self.session_id, conversation_id)
+            if type(event.payload) is CollaborationLeadJudgmentPayload
+        )
+        self.assertEqual(persisted.trace, result.trace)
         self.assertEqual(len(self.backend.calls), 2)
         repair = _workflow_material(self.backend.calls[-1].payload)
         self.assertIn("response_correction", repair)
