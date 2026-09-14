@@ -336,7 +336,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:** `src/story_writing_agents/__init__.py`
 - **Responsibility:** Provide the intentional package-level API facade.
-- **Supported surface:** Exactly these 104 names in canonical `__all__` order:
+- **Supported surface:** Exactly these 106 names in canonical `__all__` order:
   `AGENT_SPECS`, `COMMANDS`, `ActionKind`, `AgentBackend`, `AgentDefinition`,
   `AgentReply`, `AgentRequest`, `AgentStateEntry`, `BackendProtocolError`,
   `BoundAgent`, `CHARACTER_CUSTODIAN`, `CONVERSATION_MEMORY_POLICY`,
@@ -370,7 +370,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `LEAD_ORCHESTRATOR`,
   `MAX_CONVERSATION_SUBJECT_LENGTH`, `ManuscriptExistsError`, `PLOT_ARCHITECT`,
   `Phase`, `PromptFileReference`, `ProgressObserverError`, `ROSTER`,
-  `RuntimeDirective`, `RuntimeSession`, `SPECIALIST_IDS`,
+  `ReplyTrace`, `ReplyTraceOrigin`, `RuntimeDirective`, `RuntimeSession`,
+  `SPECIALIST_IDS`,
   `SessionAccessBlockedError`, `SessionAccessState`,
   `SessionDurableState`, `SessionExistsError`, `SessionIdError`,
   `SessionLifecycleState`, `SessionNotFoundError`,
@@ -387,7 +388,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** `agents`, `backend`,
   `conversation_retrieval`, `conversation_search`, `conversations`,
   `directives`, `errors`, `interactive_commands`, `models`,
-  `orchestrator`, `session_lifecycle`, and `workspace`.
+  `orchestrator`, `reply_trace`, `session_lifecycle`, and `workspace`.
 - **State, resources, and side effects:** Owns no state or external resource;
   importing the facade loads its exported modules.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
@@ -8565,10 +8566,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   commit contracts, from orchestrator to the commit contracts, commit service,
   and workspace initializer, and from workspace initialization to the commit
   service, producing the historical 122-module, 477-edge acyclic graph.
-- The project-root facade contains exactly 104 unique exports. It removes the
+- The project-root facade contains exactly 106 unique exports. It removes the
   active schema-v1 store, search/page/service, and transcript-retrieval surface;
-  adds only `ConversationRetrievalHistoryRecord`; and exports no concrete v2
-  storage adapter. The workspace facade contains exactly `Workspace`,
+  adds `ConversationRetrievalHistoryRecord`, `ReplyTrace`, and
+  `ReplyTraceOrigin`; and exports no concrete v2 storage adapter. The workspace
+  facade contains exactly `Workspace`,
   `initialize_workspace`, and `FilesystemConversationCatalog`; its internal
   discovery binding adds no export. The 63-name conversation-storage facade
   exports contracts/composition/archive workflow only and no concrete

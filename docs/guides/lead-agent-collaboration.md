@@ -289,16 +289,30 @@ memory, and the outer compact input envelope are omitted:
     }
   ],
   "answer_contract": {
-    "scope": "story_specific | workflow_meta",
-    "authoring_scope": "schema 1 with exact offered task/revision",
-    "evidence_status": "not_applicable | verified | missing | empty | incomplete | conflicting",
-    "evidence_ids": "ordered runtime-issued IDs only",
-    "kind": "answer | question | critique | recommendation | proposal",
-    "message": "nonempty visible text",
-    "proposal": "null or scope plus explicit draft/review assignments and bases",
-    "artifact_intent": "null or supported artifact operations",
-    "objective_intent": "null or start/continue/cancel intent",
-    "recommended_action": null
+    "outer_action": {"kind": "answer"},
+    "direct_result": "message plus compact authoring_scope; no inner kind",
+    "selected_variant": "add only its required kind and semantic field",
+    "unused_fields": "omit instead of null"
+  }
+}
+```
+
+A default direct answer keeps the required outer action kind. Its result has
+only the visible message and compact authoring scope, with no inner `kind`:
+
+```json
+{
+  "action": {
+    "kind": "answer",
+    "result": {
+      "message": "The request is ready for a review proposal.",
+      "authoring_scope": {
+        "activity": "workflow",
+        "target_paths": [],
+        "domains": [],
+        "task": "task_outline@1"
+      }
+    }
   }
 }
 ```
@@ -315,73 +329,44 @@ The Lead requests a bounded search, then reads a returned opaque handle:
 
 Assume READ returns the nonempty part outline as `read_1`. A
 `lead-outcome-v5` ANSWER returns only its semantic result fields. Runtime derives
-the used-handle receipts, evidence status, scope, and correlation. Substantive
-critique requires a proposal:
+the used-handle receipts, evidence status, scope, correlation, versions, and
+interpretation. Substantive critique requires a proposal, so this selected
+variant adds an inner `kind` and `proposal`:
 
 ```json
 {
-  "scope": "story_specific",
-  "authoring_scope": {
-    "schema_version": 1,
-    "activity": "review",
-    "target_paths": [
-      "core_documents/global_outline.md",
-      "core_documents/part_outlines.md"
-    ],
-    "domains": [
-      "plot_structure"
-    ],
-    "interpretation": "Review the part outline for pacing against the global outline.",
-    "task_id": "task_outline",
-    "task_revision": 1
-  },
-  "evidence_status": "verified",
-  "evidence_ids": [
-    "reference_1",
-    "read_1"
-  ],
-  "kind": "proposal",
-  "message": "I propose Plot review of part-outline pacing against the global outline.",
-  "proposal": {
-    "relation": "new_step",
-    "purpose": "Review outline pacing.",
-    "authoring_scope": {
-      "schema_version": 1,
-      "activity": "review",
-      "target_paths": [
-        "core_documents/global_outline.md",
-        "core_documents/part_outlines.md"
-      ],
-      "domains": [
-        "plot_structure"
-      ],
-      "interpretation": "Review the part outline for pacing against the global outline.",
-      "task_id": "task_outline",
-      "task_revision": 1
-    },
-    "assignments": [
-      {
-        "agent_id": "plot_architect",
-        "instruction": "Review the concrete part outline against the global outline.",
-        "input_ids": [
-          "user_input",
-          "reference_1",
-          "read_1"
+  "action": {
+    "kind": "answer",
+    "result": {
+      "message": "I propose Plot review of part-outline pacing against the global outline.",
+      "authoring_scope": {
+        "activity": "review",
+        "target_paths": [
+          "core_documents/global_outline.md",
+          "core_documents/part_outlines.md"
         ],
-        "mode": "review",
-        "review_basis": {
-          "schema_version": 1,
-          "candidate_input_ids": [
-            "read_1"
-          ],
-          "criteria": "Check pacing and causal order."
-        }
+        "domains": [
+          "plot_structure"
+        ],
+        "task": "task_outline@1"
+      },
+      "kind": "proposal",
+      "proposal": {
+        "assignments": [
+          {
+            "agent_id": "plot_architect",
+            "instruction": "Review the concrete part outline against the global outline.",
+            "input_ids": [
+              "user_input",
+              "reference_1",
+              "read_1"
+            ],
+            "mode": "review"
+          }
+        ]
       }
-    ]
-  },
-  "artifact_intent": null,
-  "objective_intent": null,
-  "recommended_action": null
+    }
+  }
 }
 ```
 

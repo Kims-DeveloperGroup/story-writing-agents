@@ -128,7 +128,7 @@ class LeadRecommendationTests(RecommendationCase):
                 self.assertEqual(self.snapshots(), before)
                 self.assert_no_downstream(conversation_id)
 
-    async def test_missing_action_fields_fall_back_but_conflicting_authority_retries(self):
+    async def test_malformed_recommendation_results_exhaust_repair_and_fall_back_without_authority(self):
         conversation_id, turn = await self.recommend()
         call = self.backend.calls[-1]
         expected = {"kind", "message", "recommended_action", "authoring_scope"}
@@ -145,26 +145,47 @@ class LeadRecommendationTests(RecommendationCase):
                     dict(value, recommended_action={**value["recommended_action"], "apply": True}),
                     dict(value, objective_intent={"action": "start",
                          "target_paths": [OUTLINE], "next_step": "clarify"})]
-        expected_actions = (
-            c.CollaborationNextAction.CONTINUE_WITH_LEAD,
-            c.CollaborationNextAction.CONTINUE_WITH_LEAD,
-            c.CollaborationNextAction.RETRY_LEAD_TURN,
-            c.CollaborationNextAction.RETRY_LEAD_TURN,
-            c.CollaborationNextAction.RETRY_LEAD_TURN,
-        )
-        for index, (bad, expected_action) in enumerate(
-            zip(invalid, expected_actions, strict=True)
-        ):
+        for index, bad in enumerate(invalid):
             with self.subTest(index=index):
                 cid = self.conversation(f"Invalid typed recommendation {index}")
                 def response(request, _provider, body=bad):
-                    return lead._provider_envelope(request, body)
+                    return json.dumps(
+                        {"action": {"kind": "answer", "result": body}},
+                        ensure_ascii=False,
+                    )
+                calls = len(self.backend.calls)
                 self.backend.enqueue(response)
                 self.backend.enqueue(response)
                 result = await self.runtime.lead_turn(self.session_id, cid, "Reject a malformed action.")
+                self.assertEqual(len(self.backend.calls) - calls, 2)
+                self.assertIs(result.kind, c.LeadOutcomeKind.ANSWER)
                 self.assertIsNone(result.recommendation_request)
-                self.assertIs(result.next_action, expected_action)
-                self.assertEqual(self.projection(cid).artifact_objectives, ())
+                self.assertIsNone(result.proposal)
+                self.assertIsNone(result.artifact_proposal)
+                self.assertIsNone(result.artifact_application_request)
+                self.assertIsNone(result.story_commit_request)
+                self.assertIs(result.next_action, c.CollaborationNextAction.CONTINUE_WITH_LEAD)
+                self.assertEqual(
+                    result.message,
+                    "I couldn't validate the provider's structured reply after one repair "
+                    "attempt, so no action was taken. You can continue the conversation or "
+                    "try again.",
+                )
+                self.assertIsNotNone(result.trace)
+                self.assertEqual(
+                    result.trace.to_dict(),
+                    {
+                        "role": LEAD_ORCHESTRATOR,
+                        "action": "none",
+                        "context_sources": ["current_input"],
+                        "recovered_fields": ["structured_reply"],
+                        "origin": "runtime_fallback",
+                    },
+                )
+                projection = self.projection(cid)
+                self.assertIsNone(projection.current_recommendation_request)
+                self.assertIsNone(projection.current_recommendation_state)
+                self.assertEqual(projection.artifact_objectives, ())
                 self.assert_no_downstream(cid)
 
     async def test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review(self):
