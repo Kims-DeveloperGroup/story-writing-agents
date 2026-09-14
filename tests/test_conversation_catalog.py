@@ -48,7 +48,7 @@ from tests.conversation_catalog_contract import (
     CONVERSATION_CATALOG_METHODS,
     ConversationCatalogContractMixin,
 )
-from tests.helpers import initialize_test_workspace
+from tests.helpers import pristine_initialized_workspace
 from tests.collaboration_contract_fixture import (
     COLLABORATION_CONTEXT_EXPORTS,
     COLLABORATION_EVENT_EXPORTS,
@@ -304,19 +304,18 @@ class FilesystemConversationCatalogContractTests(
     unittest.TestCase,
 ):
     def make_catalog(self) -> ConversationCatalog:
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        self.workspace = initialize_test_workspace(temporary.name)
+        self.workspace = pristine_initialized_workspace(self)
         self.services = compose_filesystem_conversation_storage(self.workspace)
         return self.services.catalog
 
 
 class FilesystemConversationCatalogPersistenceTests(unittest.TestCase):
     def new_workspace(self, *, initialize: bool = True) -> Workspace:
+        if initialize:
+            return pristine_initialized_workspace(self)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        workspace = Workspace(temporary.name)
-        return workspace.initialize() if initialize else workspace
+        return Workspace(temporary.name)
 
     def test_exact_versioned_json_and_fixed_session_scoped_layout(self) -> None:
         workspace = self.new_workspace()

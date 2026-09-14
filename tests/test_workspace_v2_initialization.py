@@ -47,7 +47,10 @@ from story_writing_agents.workspace.schema import (
 )
 
 from tests.git_contract_fixture import DisposableGitTestCase, exception_graph
-from tests.helpers import workspace_git_identity
+from tests.helpers import (
+    materialize_pristine_initialized_workspace,
+    workspace_git_identity,
+)
 
 
 _IDENTITY_ENVIRONMENT = {
@@ -315,6 +318,11 @@ class WorkspaceV2GitTestCase(DisposableGitTestCase):
         ):
             return Workspace(root).initialize()
 
+    def materialize_ready_workspace_fixture(self, name: str) -> Workspace:
+        """Copy an already-ready precondition below the guarded Git test root."""
+
+        return materialize_pristine_initialized_workspace(self.test_root / name)
+
     def assert_exact_baseline(self, root: Path) -> None:
         self.assertEqual(
             self.run_git(root, "symbolic-ref", "HEAD").stdout,
@@ -460,7 +468,9 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
         git_without_baseline = self.repository("git-no-baseline")
         _write_initializing_root(git_without_baseline)
         self.initialize(git_without_baseline)
-        ready_with_journal = self.initialize_workspace_fixture("ready-journal").root
+        ready_with_journal = self.materialize_ready_workspace_fixture(
+            "ready-journal"
+        ).root
         (ready_with_journal / WORKSPACE_INITIALIZATION_JOURNAL_PATH).write_bytes(
             _journal_bytes()
         )
@@ -482,7 +492,7 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
                 self.assert_exact_baseline(root)
 
     def test_clean_ready_reopen_is_byte_index_ref_and_mtime_idempotent(self) -> None:
-        workspace = self.initialize_workspace_fixture("reopen")
+        workspace = self.materialize_ready_workspace_fixture("reopen")
         root = workspace.root
         fixed_ns = 1_600_000_000_123_456_789
         index = root / ".git" / "index"
@@ -509,7 +519,7 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
         }
         for case, relative in cases.items():
             with self.subTest(case=case):
-                root = self.initialize_workspace_fixture(f"opaque-{case}").root
+                root = self.materialize_ready_workspace_fixture(f"opaque-{case}").root
                 target = root / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(b"private unknown bytes\n")
@@ -526,7 +536,7 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
         cases = ("tracked-required", "staged-unknown", "committed-unknown")
         for case in cases:
             with self.subTest(case=case):
-                root = self.initialize_workspace_fixture(f"dirty-{case}").root
+                root = self.materialize_ready_workspace_fixture(f"dirty-{case}").root
                 if case == "tracked-required":
                     target = root / "core_documents/global_outline.md"
                     target.write_bytes(b"private changed prose\n")
@@ -557,7 +567,7 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
         path = "config/system_defaults.json"
         for case in ("staged", "renamed"):
             with self.subTest(case=case):
-                root = self.initialize_workspace_fixture(f"config-{case}").root
+                root = self.materialize_ready_workspace_fixture(f"config-{case}").root
                 defaults = json.loads((root / path).read_text(encoding="utf-8"))
                 defaults["default_backend"] = "codex"
                 (root / path).write_text(
@@ -578,7 +588,7 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
     def test_ready_antigravity_tree_is_never_enumerated_inspected_or_opened(
         self,
     ) -> None:
-        root = self.initialize_workspace_fixture("opaque-antigravity").root
+        root = self.materialize_ready_workspace_fixture("opaque-antigravity").root
         provider = (
             root
             / "agent_states/orchestrator_state/provider_sessions/.antigravity"
@@ -686,7 +696,7 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
         )
         for case in cases:
             with self.subTest(case=case):
-                root = self.initialize_workspace_fixture(f"required-{case}").root
+                root = self.materialize_ready_workspace_fixture(f"required-{case}").root
                 target = root / (
                     WORKSPACE_MARKER_PATH
                     if case == "marker-schema"
@@ -726,7 +736,7 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
     def test_invalid_utf8_mutable_configuration_fails_with_typed_readiness_error(
         self,
     ) -> None:
-        root = self.initialize_workspace_fixture("config-invalid-utf8").root
+        root = self.materialize_ready_workspace_fixture("config-invalid-utf8").root
         target = root / "config/system_defaults.json"
         target.write_bytes(b"\xff\xfeprivate-invalid-configuration")
         before = _namespace_snapshot(root)
@@ -757,7 +767,7 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
         )
 
     def test_consensus_storage_roots_and_dynamic_state_survive_reopen(self) -> None:
-        workspace = self.initialize_workspace_fixture("consensus-state")
+        workspace = self.materialize_ready_workspace_fixture("consensus-state")
         root = workspace.root
         material_root = root / "agent_states/orchestrator_state/consensus_materials/v1"
         workflow_root = root / "agent_states/orchestrator_state/consensus_workflows/v2"
@@ -814,7 +824,7 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
         ))
 
     def test_canonical_interactive_runtime_files_survive_reopen(self) -> None:
-        root = self.initialize_workspace_fixture("interactive-runtime").root
+        root = self.materialize_ready_workspace_fixture("interactive-runtime").root
         session_id = "Session_1"
         conversation_id = "c_" + "a" * 32
         files = {
@@ -846,7 +856,7 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
             self.assertEqual((root / relative).read_bytes(), content)
 
     def test_backend_access_claim_allows_second_session_and_destination_entry(self) -> None:
-        workspace = self.initialize_workspace_fixture("backend-access-claim")
+        workspace = self.materialize_ready_workspace_fixture("backend-access-claim")
         with mock.patch.dict(os.environ, self.initialization_environment(), clear=True):
             backend = AgentBackend(workspace)
             self.addCleanup(backend.close)
@@ -876,7 +886,7 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
             Workspace(workspace.root).require_ready()
 
     def test_exact_registered_runtime_owner_paths_survive_reopen(self) -> None:
-        root = self.initialize_workspace_fixture("registered-runtime-paths").root
+        root = self.materialize_ready_workspace_fixture("registered-runtime-paths").root
         digest = "a" * 64
         application = "application_1"
         invocation = "invocation_1"
@@ -921,7 +931,7 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
         }
         for name, relative in cases.items():
             with self.subTest(name=name):
-                root = self.initialize_workspace_fixture(name).root
+                root = self.materialize_ready_workspace_fixture(name).root
                 target = root / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(b"unexpected\n")
@@ -956,7 +966,7 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
         }
         for name, relative in cases.items():
             with self.subTest(name=name):
-                root = self.initialize_workspace_fixture(name).root
+                root = self.materialize_ready_workspace_fixture(name).root
                 target = root / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(b"unexpected\n")
@@ -1141,7 +1151,9 @@ class WorkspaceV2RejectionTests(WorkspaceV2GitTestCase):
     ) -> None:
         for case in ("ref", "history", "index", "owned"):
             with self.subTest(case=case):
-                root = self.initialize_workspace_fixture(f"unexpected-{case}").root
+                root = self.materialize_ready_workspace_fixture(
+                    f"unexpected-{case}"
+                ).root
                 if case == "ref":
                     self.run_git(root, "branch", "extra", "HEAD")
                 elif case == "history":
