@@ -6,7 +6,9 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import platform
+import stat
 import sys
 import time
 import unittest
@@ -422,8 +424,26 @@ def _write_json(path: str, payload: dict[str, object]) -> None:
     rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
     if path == "-":
         sys.stdout.write(rendered)
-    else:
-        Path(path).write_text(rendered, encoding="utf-8")
+        return
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    for name in ("O_NOFOLLOW", "O_CLOEXEC"):
+        flags |= int(getattr(os, name, 0))
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise OSError("JSON evidence destination is not a regular file")
+        if hasattr(os, "geteuid") and opened.st_uid != os.geteuid():
+            raise OSError("JSON evidence destination is not owned by this user")
+        if hasattr(os, "fchmod"):
+            os.fchmod(descriptor, 0o600)
+        os.set_inheritable(descriptor, False)
+        with os.fdopen(descriptor, "w", encoding="utf-8", closefd=True) as stream:
+            descriptor = -1
+            stream.write(rendered)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _write_policy_human(report: dict[str, object], stream: TextIO) -> None:
@@ -475,10 +495,33 @@ def _write_human_report(report: dict[str, object], stream: TextIO) -> None:
 
 
 def _load_json_object(path: str) -> dict[str, object]:
+    descriptor = -1
     try:
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+        inspected = os.lstat(path)
+        if not stat.S_ISREG(inspected.st_mode):
+            raise OSError("shard report is not a regular file")
+        if hasattr(os, "geteuid") and inspected.st_uid != os.geteuid():
+            raise OSError("shard report is not owned by this user")
+        flags = os.O_RDONLY
+        for name in ("O_NOFOLLOW", "O_NONBLOCK", "O_CLOEXEC"):
+            flags |= int(getattr(os, name, 0))
+        descriptor = os.open(path, flags)
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise OSError("opened shard report is not a regular file")
+        if hasattr(os, "geteuid") and opened.st_uid != os.geteuid():
+            raise OSError("opened shard report is not owned by this user")
+        if (inspected.st_dev, inspected.st_ino) != (opened.st_dev, opened.st_ino):
+            raise OSError("shard report identity changed while opening")
+        os.set_inheritable(descriptor, False)
+        with os.fdopen(descriptor, "r", encoding="utf-8", closefd=True) as stream:
+            descriptor = -1
+            payload = json.load(stream)
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise RunnerError(f"cannot read shard report {path!r}: {error}") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
     if type(payload) is not dict:
         raise RunnerError(f"shard report {path!r} must be a JSON object")
     return payload

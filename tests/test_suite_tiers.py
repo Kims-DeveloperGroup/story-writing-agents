@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import stat
 import tempfile
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from tests import runner, suite_policy
@@ -328,6 +331,55 @@ class ShardRunnerTests(unittest.TestCase):
             + second["durations"]["cumulative_test_seconds"],
         )
         self.assertEqual(report["unexecuted_ids"], [])
+
+    def test_reconcile_inputs_reject_unsafe_types_without_blocking_or_mutation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            first_path, second_path = self._reports(directory)
+            outside = directory / "outside.json"
+            outside.write_bytes(first_path.read_bytes())
+            symlink = directory / "symlink.json"
+            symlink.symlink_to(outside)
+            existing_directory = directory / "directory.json"
+            existing_directory.mkdir()
+            unsafe = [symlink, existing_directory]
+            fifo = directory / "fifo.json"
+            if hasattr(os, "mkfifo"):
+                os.mkfifo(fifo)
+                unsafe.append(fifo)
+            if Path("/dev/null").exists():
+                unsafe.append(Path("/dev/null"))
+            for path in unsafe:
+                with self.subTest(path=str(path)), redirect_stderr(io.StringIO()) as errors:
+                    self.assertEqual(
+                        runner.main(("reconcile", str(path), str(second_path))),
+                        2,
+                    )
+                    self.assertIn("cannot read shard report", errors.getvalue())
+            self.assertEqual(outside.read_bytes(), first_path.read_bytes())
+            self.assertTrue(symlink.is_symlink())
+            self.assertTrue(existing_directory.is_dir())
+            if fifo in unsafe:
+                self.assertTrue(stat.S_ISFIFO(fifo.lstat().st_mode))
+
+    def test_reconcile_inputs_reject_foreign_owner_and_name_swap(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            first_path, _second_path = self._reports(Path(temporary))
+            inspected = first_path.lstat()
+            if hasattr(os, "geteuid"):
+                foreign_uid = inspected.st_uid + 1
+                with mock.patch.object(runner.os, "geteuid", return_value=foreign_uid):
+                    with self.assertRaisesRegex(runner.RunnerError, "not owned"):
+                        runner._load_json_object(str(first_path))
+            swapped = SimpleNamespace(
+                st_mode=inspected.st_mode,
+                st_uid=inspected.st_uid,
+                st_dev=inspected.st_dev,
+                st_ino=inspected.st_ino + 1,
+            )
+            with mock.patch.object(runner.os, "fstat", return_value=swapped):
+                with self.assertRaisesRegex(runner.RunnerError, "identity changed"):
+                    runner._load_json_object(str(first_path))
 
     def test_reconcile_rejects_overlap_incompletion_and_plan_disagreement(self):
         with tempfile.TemporaryDirectory() as temporary:

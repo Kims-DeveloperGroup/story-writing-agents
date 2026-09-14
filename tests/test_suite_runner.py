@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
+import stat
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -182,6 +184,53 @@ class RunnerCliTests(unittest.TestCase):
         self.assertEqual(payload["schema_version"], 1)
         self.assertEqual(payload["kind"], "manifest")
         self.assertEqual(payload["selection_manifest"]["ordered_ids"], list(self.collection.ids))
+
+    def test_json_output_is_new_private_regular_and_non_inheritable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "manifest.json"
+            setter = os.set_inheritable
+            with mock.patch.object(runner, "_discover_canonical", return_value=self.collection), \
+                 mock.patch.object(runner.os, "set_inheritable", wraps=setter) as inheritable:
+                self.assertEqual(runner.main(("list", "--json", str(path))), 0)
+            self.assertTrue(stat.S_ISREG(path.lstat().st_mode))
+            self.assertEqual(stat.S_IMODE(path.lstat().st_mode), 0o600)
+            inheritable.assert_called_once_with(mock.ANY, False)
+
+    def test_json_output_refuses_and_preserves_every_existing_leaf(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            outside = directory / "outside.json"
+            outside.write_bytes(b"outside-sentinel")
+            existing = directory / "existing.json"
+            existing.write_bytes(b"existing-sentinel")
+            symlink = directory / "symlink.json"
+            symlink.symlink_to(outside)
+            existing_directory = directory / "directory.json"
+            existing_directory.mkdir()
+            leaves = [existing, symlink, existing_directory]
+            fifo = directory / "fifo.json"
+            if hasattr(os, "mkfifo"):
+                os.mkfifo(fifo)
+                leaves.append(fifo)
+            for leaf in leaves:
+                with self.subTest(leaf=leaf.name), \
+                     mock.patch.object(runner, "_discover_canonical", return_value=self.collection), \
+                     redirect_stderr(io.StringIO()) as errors:
+                    self.assertEqual(runner.main(("list", "--json", str(leaf))), 2)
+                    self.assertIn("test runner evidence error", errors.getvalue())
+            self.assertEqual(existing.read_bytes(), b"existing-sentinel")
+            self.assertEqual(outside.read_bytes(), b"outside-sentinel")
+            self.assertTrue(symlink.is_symlink())
+            self.assertTrue(existing_directory.is_dir())
+            if fifo in leaves:
+                self.assertTrue(stat.S_ISFIFO(fifo.lstat().st_mode))
+
+    def test_json_stdout_remains_supported_without_opening_a_file(self):
+        output = io.StringIO()
+        with mock.patch.object(runner.os, "open") as open_file, redirect_stdout(output):
+            runner._write_json("-", {"schema_version": 1})
+        open_file.assert_not_called()
+        self.assertEqual(json.loads(output.getvalue()), {"schema_version": 1})
 
     def test_invalid_selection_exits_two_before_execution(self):
         with mock.patch.object(runner, "_discover_canonical", return_value=self.collection), \
