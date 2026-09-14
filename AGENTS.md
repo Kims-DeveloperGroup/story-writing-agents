@@ -85,7 +85,9 @@ Unexpected triggers stop writers. Load routing for policy/index procedures.
 ### Adaptive Verification
 
 Load `$adaptive-verification` before planning, running, reusing, escalating, or accepting
-evidence for nontrivial tracked changes. Root owns authorization and sufficiency.
+evidence for nontrivial tracked changes. Root owns authorization and sufficiency. Tests use
+the canonical repository test runner `PYTHONPATH=src python -m tests.runner`; README runner
+guidance is human-facing and non-normative.
 
 ### Handoff and Result Contracts
 
