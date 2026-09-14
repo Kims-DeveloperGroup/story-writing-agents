@@ -1749,8 +1749,10 @@ material in the session tree for provider filesystem access.
 Generation is revalidated after provider adapter cleanup and when contextual
 invocation ownership exits, not only before accepting the decoded result. A
 direct BoundAgent execution-workspace owner also revalidates as it exits after
-the logical body: loss prevents an apparent successful return, while an active
-body failure remains primary and receives only a content-free validation note.
+the logical body: loss prevents an apparent successful return, taints the exact
+generation-bound continuation, and terminalizes the response as a runtime
+failure rather than accepted, while an active body failure remains primary and
+receives only a content-free validation note.
 Reference, SEARCH, and READ work revalidates after the host constructs its
 observation and before the provider-call finalizer is accepted. Context-ledger
 checkpoint commit is checked immediately before and after publication. A

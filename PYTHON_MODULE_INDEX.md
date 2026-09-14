@@ -1386,7 +1386,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   failure removes provisional Codex staging before propagation. Codex calls
   bind persisted legacy and contextual continuation fingerprints to the current
   session-worktree generation and revalidate the borrowed capability after
-  provider submission and before thread persistence. The binding-scoped context
+  provider submission and before thread persistence. A direct Codex owner
+  defers its accepted exchange terminal until its execution-workspace context
+  exits current; exit loss taints the exact continuation and records a
+  post-response runtime failure instead. The binding-scoped context
   provider alone may retain that capability for its active invocation. A
   provider-minted capability closes on invocation exit; a caller-supplied
   capability remains caller-owned. Neither is retained by the backend,
@@ -8182,6 +8185,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   exit first revalidates capability currentness: standalone generation loss
   propagates after close, while a concurrent body failure remains primary and
   receives only a content-free validation-type note. The
+  package-internal `main_workspace_root` normalizes either a main root or a
+  READY session-worktree root to its owning main root, so provider control-root
+  policy never treats a session root as a nested control root. The
   binding and wrapper pin retain the creator process and non-recyclable thread token, reject
   cross-process or cross-thread acquisition/recheck before any copied lock or
   lower-level I/O, and close a fork child's copied pin without entering an

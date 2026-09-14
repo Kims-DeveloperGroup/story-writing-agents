@@ -679,6 +679,7 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
                 "physical_call_limit",
                 "include_core_statuses",
                 "session_state_json",
+                "execution_workspace",
             ),
         )
         request = self.request()

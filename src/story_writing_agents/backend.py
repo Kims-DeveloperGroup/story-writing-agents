@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import contextvars
 import errno
 import hashlib
 import inspect
@@ -189,6 +190,7 @@ from .workspace import Workspace
 from .runtime_state_paths import CONTEXTUAL_PROVIDER_DIRECTORY
 from .workspace.initialization import (
     compose_session_artifact_binding as _compose_session_artifact_binding,
+    main_workspace_root as _main_workspace_root,
     provision_session_resources as _provision_session_resources,
     require_ready_session_resources as _require_ready_session_resources,
 )
@@ -207,6 +209,19 @@ _ACCESS_DIAGNOSTIC_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
 _SAFE_THREAD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _SAFE_FINGERPRINT = re.compile(r"[0-9a-f]{64}")
 _SAFE_CONTEXT_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+@dataclass(frozen=True, slots=True)
+class _DeferredDirectCodexAcceptance:
+    """Delay one successful direct-call terminal until workspace exit is safe."""
+
+    accept: Callable[[], None]
+    reject: Callable[[], None]
+
+
+_DEFERRED_DIRECT_CODEX_ACCEPTANCES: contextvars.ContextVar[
+    list[_DeferredDirectCodexAcceptance] | None
+] = contextvars.ContextVar("deferred_direct_codex_acceptances", default=None)
 
 _CONVERSATION_RETRIEVAL_RULES = (
     "Return exactly one structured retrieval action with the supplied "
@@ -891,6 +906,10 @@ class BoundAgent:
         """Open direct-call authority and retire pre-entry references on loss."""
 
         entered = False
+        deferred: list[_DeferredDirectCodexAcceptance] = []
+        token: contextvars.Token[list[_DeferredDirectCodexAcceptance] | None] | None = (
+            None
+        )
         try:
             binding = _compose_session_artifact_binding(
                 self.backend.workspace.root,
@@ -898,11 +917,21 @@ class BoundAgent:
             )
             with binding.open_provider_execution_workspace() as workspace:
                 entered = True
-                yield workspace
+                token = _DEFERRED_DIRECT_CODEX_ACCEPTANCES.set(deferred)
+                try:
+                    yield workspace
+                finally:
+                    _DEFERRED_DIRECT_CODEX_ACCEPTANCES.reset(token)
+                    token = None
         except BaseException as failure:
+            for acceptance in deferred:
+                acceptance.reject()
             if not entered:
                 self._terminate_reference_before_provider(reference_read, failure)
             raise
+        else:
+            for acceptance in deferred:
+                acceptance.accept()
 
     def _context_provider(
         self,
@@ -1634,6 +1663,7 @@ class AgentBackend:
         self.workspace = (
             workspace if isinstance(workspace, Workspace) else Workspace(workspace)
         )
+        self._control_workspace_root = _main_workspace_root(self.workspace.root)
         self._debug_log = WorkspaceDebugLog(
             self.workspace,
             defer_until_session=True,
@@ -1742,7 +1772,7 @@ class AgentBackend:
                 timeout_seconds=float(timeout_seconds),
                 configuration=configuration,
                 explicit_model=explicit_model,
-                control_root=self.workspace.root,
+                control_root=self._control_workspace_root,
                 execution_profiles={
                     agent_id: profile
                     for agent_id, profile in profiles.items()
@@ -2317,7 +2347,7 @@ class AgentBackend:
             timeout_seconds=self.timeout_seconds,
             configuration=configuration,
             explicit_model=self._explicit_model,
-            control_root=self.workspace.root,
+            control_root=self._control_workspace_root,
             execution_profiles={
                 agent_id: profile
                 for agent_id, profile in profiles.items()
@@ -4853,7 +4883,27 @@ class AgentBackend:
                         AgentExchangeTerminalCode.THREAD_PERSISTENCE_FAILED,
                     )
                 raise
-            self._capture_accepted_without_replacing(exchange)
+            deferred = _DEFERRED_DIRECT_CODEX_ACCEPTANCES.get()
+            if deferred is None:
+                self._capture_accepted_without_replacing(exchange)
+            else:
+                def reject_deferred_acceptance() -> None:
+                    try:
+                        taint_thread()
+                    finally:
+                        self._capture_runtime_failure_without_replacing(
+                            exchange,
+                            AgentExchangeTerminalCode.THREAD_PERSISTENCE_FAILED,
+                        )
+
+                deferred.append(
+                    _DeferredDirectCodexAcceptance(
+                        accept=lambda: self._capture_accepted_without_replacing(
+                            exchange
+                        ),
+                        reject=reject_deferred_acceptance,
+                    )
+                )
             return reply
         except (json.JSONDecodeError, UnicodeError) as exc:
             try:

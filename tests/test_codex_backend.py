@@ -94,7 +94,7 @@ from story_writing_agents.agent_context.manifest import (
     ContextScope,
     ContextSubjectKind,
 )
-from story_writing_agents.agents import LEAD_ORCHESTRATOR
+from story_writing_agents.agents import CORE_DOCUMENTS, LEAD_ORCHESTRATOR
 from story_writing_agents.agent_context.service import (
     ContextProviderCallRequest,
     ContextProviderTerminalCode,
@@ -1921,7 +1921,6 @@ class CodexBackendDefaultsTests(unittest.TestCase):
 class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.workspace = pristine_initialized_workspace(self)
-        _mark_debug_session_attached(self.workspace)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.fake_directory = Path(temporary.name)
@@ -1965,6 +1964,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         session_id: str,
     ) -> SessionLifecycleState:
         provision_session_resources(self.workspace.root, session_id)
+        _mark_debug_session_attached(self.workspace)
         return backend.create_session_with_access(session_id)
 
     def direct_execution_workspace(
@@ -2556,18 +2556,27 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     async def test_binding_stages_isolated_agents_and_turn_omits_static_prompt(
         self,
     ) -> None:
-        definition = self.definition()
-        role = definition.system_prompt_file.read_text()
-        persona = definition.persona_file.read_text()
-        contexts = [
-            reference.read_text() for reference in definition.context_document_files
-        ]
         physical_workspace = pristine_initialized_workspace(self)
         resources = provision_session_resources(
             physical_workspace.root,
             "story_session",
         )
         session_workspace = Workspace(resources.identity.worktree_root)
+        _mark_debug_session_attached(session_workspace)
+        for filename in CORE_DOCUMENTS:
+            session_workspace.path(f"core_documents/{filename}").write_text(
+                f"test input for {filename}\n",
+                encoding="utf-8",
+            )
+        definition = PromptAssembler(session_workspace).build_definition(
+            session_id="definition_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        role = definition.system_prompt_file.read_text()
+        persona = definition.persona_file.read_text()
+        contexts = [
+            reference.read_text() for reference in definition.context_document_files
+        ]
         session_workspace.path(
             "agent_states/orchestrator_state/provider_sessions"
         ).mkdir(parents=True, exist_ok=True)
@@ -2941,6 +2950,63 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(captured), 1)
         with self.assertRaises(SessionArtifactBindingError):
             captured[0].require_current()
+
+    async def test_direct_workspace_exit_loss_taints_and_terminalizes(
+        self,
+    ) -> None:
+        physical_workspace = pristine_initialized_workspace(self)
+        session_id = "direct_exit_terminalization"
+        provision_session_resources(physical_workspace.root, session_id)
+        _mark_debug_session_attached(physical_workspace)
+        backend = AgentBackend(
+            physical_workspace,
+            executable=str(self.executable),
+        )
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        invoke = backend._invoke_provider
+
+        async def succeed_then_lose(*args, **kwargs):
+            reply = await invoke(*args, **kwargs)
+            execution_workspace = kwargs["execution_workspace"]
+            self.assertIsNotNone(execution_workspace)
+            execution_workspace.close()
+            return reply
+
+        with mock.patch.object(
+            backend,
+            "_invoke_provider",
+            new=succeed_then_lose,
+        ):
+            with self.assertRaises(SessionArtifactBindingError):
+                await bound.invoke(self.request(session_id=session_id))
+
+        manifest = physical_workspace.read_json(
+            "agent_states/orchestrator_state/provider_sessions/"
+            f"{session_id}.json"
+        )
+        matching_threads = [
+            thread
+            for thread in manifest["provider_threads"].values()
+            if thread["backend"] == "codex"
+            and thread["agent_id"] == PLOT_ARCHITECT
+        ]
+        self.assertEqual(len(matching_threads), 1)
+        self.assertIs(matching_threads[0]["tainted"], True)
+        outcomes = [
+            json.loads(record["content"])
+            for record in _agent_exchange_records(physical_workspace)
+            if record.get("session_id") == session_id
+            and record.get("request_type") == "outcome"
+        ]
+        self.assertEqual(
+            outcomes[-1],
+            {
+                "code": "thread_persistence_failed",
+                "outcome": "post_response_runtime_failure",
+            },
+        )
 
     async def test_final_workspace_validation_failure_taints_and_terminalizes(
         self,
@@ -4685,10 +4751,12 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         session_id = "defaults_snapshot"
+        provision_session_resources(self.workspace.root, session_id)
+        _mark_debug_session_attached(self.workspace)
         self.write_codex_defaults("persisted-one", "high")
         first_definition = self.definition()
         first = AgentBackend(self.workspace, executable=str(self.executable))
-        self.create_provisioned_session_with_access(first, session_id)
+        first.create_session_with_access(session_id)
         first_bound = await first.bind(first_definition)
 
         self.write_codex_defaults("persisted-two", "low")
@@ -4757,7 +4825,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     f"{session_id}.json"
                 )["provider_threads"]
             ),
-            {"codex:plot_architect"},
+            {f"codex:plot_architect:{thread['fingerprint']}"},
         )
         self.assertEqual(thread["fingerprint"], first_fingerprint)
         self.assertEqual(
@@ -5827,7 +5895,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             "agent_states/orchestrator_state/provider_sessions/story_session.json"
         )
         self.assertEqual(
-            manifest["provider_threads"]["codex:plot_architect"]["thread_id"],
+            self.thread("story_session")["thread_id"],
             "thread-story_session-plot_architect",
         )
 
@@ -5944,13 +6012,22 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             "agent_states/orchestrator_state/provider_sessions/session_two.json"
         )
         self.assertEqual(
+            {
+                f"{thread['backend']}:{thread['agent_id']}:{thread['fingerprint']}"
+                for thread in session_one["provider_threads"].values()
+            },
             set(session_one["provider_threads"]),
-            {"codex:plot_architect", "codex:character_custodian"},
         )
-        self.assertEqual(set(session_two["provider_threads"]), {"codex:plot_architect"})
+        self.assertEqual(
+            {
+                f"{thread['backend']}:{thread['agent_id']}:{thread['fingerprint']}"
+                for thread in session_two["provider_threads"].values()
+            },
+            set(session_two["provider_threads"]),
+        )
         self.assertNotEqual(
-            session_one["provider_threads"]["codex:plot_architect"]["thread_id"],
-            session_two["provider_threads"]["codex:plot_architect"]["thread_id"],
+            self.thread("session_one")["thread_id"],
+            self.thread("session_two")["thread_id"],
         )
 
     async def test_separate_bindings_serialize_one_session_agent_thread(

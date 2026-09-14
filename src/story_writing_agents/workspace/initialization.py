@@ -1653,6 +1653,12 @@ def _main_root(root: Path) -> Path:
     return main_root
 
 
+def main_workspace_root(root: Path) -> Path:
+    """Return the canonical main workspace that owns one workspace root."""
+
+    return _main_root(root)
+
+
 def _validate_initializing_root(
     descriptor: int,
     *,

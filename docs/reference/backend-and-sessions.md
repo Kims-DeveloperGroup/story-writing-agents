@@ -134,8 +134,10 @@ Capability checks run before launch, immediately after process creation, after
 the process returns, before result acceptance, after adapter cleanup, and when
 the direct execution-workspace owner or contextual invocation exits. Direct
 BoundAgent methods keep that owner around their complete logical call; exit
-loss prevents an apparent body success from returning. If the body is already
-failing, it remains primary and receives only a content-free validation note.
+loss prevents an apparent body success from returning, taints its exact
+generation-bound continuation, and records a post-response runtime failure
+instead of an accepted exchange. If the body is already failing, it remains
+primary and receives only a content-free validation note.
 Reference, SEARCH, and READ paths also revalidate after host observation
 construction and before accepting their provider-call finalizers. A missing,
 replaced, or aliased named root fails the invocation rather than transferring
