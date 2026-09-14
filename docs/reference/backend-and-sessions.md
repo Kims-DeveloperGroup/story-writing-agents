@@ -128,9 +128,11 @@ receives `--cd .`; therefore its OS working directory and native project root
 refer to the selected original inode rather than a reopened path, prompt
 staging, the initialization root, or the controller's current directory.
 Capability checks run before launch, immediately after process creation, after
-the process returns, and before result acceptance. A missing, replaced, or
-aliased named root fails the invocation rather than transferring authority to
-another generation.
+the process returns, before result acceptance, after adapter cleanup, and when
+the contextual invocation exits. Reference, SEARCH, and READ paths also
+revalidate after host observation construction and before accepting their
+provider-call finalizers. A missing, replaced, or aliased named root fails the
+invocation rather than transferring authority to another generation.
 
 On Darwin the native process is additionally wrapped by a default-deny SBPL
 profile and retains Codex's own `--sandbox read-only` setting. The profile
@@ -143,10 +145,11 @@ observations. Unspecified paths remain denied, including the initialization
 and control roots, sibling worktrees, traversal and symlink escape targets, and
 provider-definition staging.
 
-Closed external allowances cover the resolved provider executable/runtime, the
-exact schema read and response write, required system runtime files, outbound
-network/system sockets, and one validated provider-native state subtree. The
-resolved `CODEX_HOME` must already be a directory owned by the effective user,
+Closed external allowances cover only the literal canonical resolved Codex
+executable, the exact schema read and response write, required system runtime
+files, outbound network/system sockets, and one validated provider-native state
+subtree. Configured `CODEX_HOME` must be absolute before canonical resolution.
+The resolved path must already be a directory owned by the effective user,
 must not be group- or other-writable, and must be neither the filesystem root
 nor the user's home. It may neither contain nor be contained by the control
 root, selected session root, prompt staging, or response-output directory. An
@@ -168,6 +171,13 @@ model-catalog discovery, help, and other management probes are not story
 invocations and retain their separately documented process boundaries.
 Antigravity is intentionally unchanged here and remains tracked by
 [Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
+
+Context-ledger publication is generation-checked immediately before and after
+checkpoint commit. Loss after a commit invalidates that exact checkpoint
+generation before the failure escapes. A later contextual exit failure also
+taints the exact generation-bound provider thread and invalidates an already
+committed non-pending checkpoint. When another body failure is active, it stays
+primary and receives only a content-free exit-validation note.
 
 ## Lead session continuation
 

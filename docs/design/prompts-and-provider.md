@@ -491,15 +491,19 @@ See the official
 [Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
 Replies still pass Story's correlation, handle, evidence, semantic, and phase
 checks.
-On Darwin, a default-deny outer sandbox admits only the exact runtime,
-transport, validated provider-native state, required system, and network
-resources. It grants the provider no session-tree file reads or writes and
-explicitly denies session `.git`, staging, the control/initialization roots,
-siblings, traversal, and symlink escapes. Runtime-owned context capture,
+On Darwin, a default-deny outer sandbox admits only the literal canonical Codex
+executable, exact transport, validated provider-native state, required system
+resources, and network access. It grants the provider no session-tree file
+reads or writes and explicitly denies session `.git`, staging, the
+control/initialization roots, siblings, traversal, and symlink escapes.
+Runtime-owned context capture,
 explicit references, and SEARCH/READ handlers deliver selected story content
 through the request or observation rather than provider filesystem access.
-Generation checks bracket process creation, return, and acceptance;
-post-submission loss rejects the result and taints the compatible continuation.
+Generation checks bracket process creation, return, host observation and
+provider-call acceptance, checkpoint commit, adapter cleanup, and contextual
+exit. Post-commit loss invalidates the exact context checkpoint;
+post-submission or exit loss rejects the result and taints the compatible
+generation-bound continuation. An active body failure remains primary.
 The exact sandbox, approval, tool, configuration, and instruction controls live
 in
 [Privacy and provider exposure](../operations/privacy-and-provider.md#provider-processes-and-credentials).

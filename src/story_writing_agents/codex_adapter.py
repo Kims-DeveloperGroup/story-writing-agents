@@ -334,6 +334,9 @@ class CodexAdapter:
         )
         schema_path = temporary_directory / "schema.json"
         output_path = temporary_directory / "response.json"
+        invocation_failure: BaseException | None = None
+        submitted = False
+        stdin: bytes | None = None
         try:
             if invocation.payload_json is None:
                 raise ProviderInvocationError(
@@ -357,7 +360,6 @@ class CodexAdapter:
                 execution_workspace,
             )
             stdin = invocation.payload_json
-            submitted = False
             create_process = self._create_process()
 
             async def tracked_create_process(
@@ -498,8 +500,34 @@ class CodexAdapter:
                     actual_transport_utf8_bytes=len(stdin),
                 )
                 raise
+        except BaseException as failure:
+            invocation_failure = failure
+            raise
         finally:
             shutil.rmtree(temporary_directory, ignore_errors=True)
+            try:
+                execution_workspace.require_current()
+            except BaseException as validation_failure:
+                if invocation_failure is None:
+                    record_provider_failure_accounting(
+                        validation_failure,
+                        state=(
+                            ProviderCallState.SUBMITTED
+                            if submitted
+                            else ProviderCallState.PREPARED
+                        ),
+                        actual_transport_utf8_bytes=(
+                            None if stdin is None else len(stdin)
+                        ),
+                    )
+                    raise
+                try:
+                    invocation_failure.add_note(
+                        "Codex execution workspace exit validation failed: "
+                        f"{type(validation_failure).__name__}"
+                    )
+                except BaseException:
+                    pass
 
     def _confined_command(
         self,
@@ -554,8 +582,7 @@ class CodexAdapter:
             )
         sandbox = DarwinSandboxRequirements(
             executable=executable,
-            read_subpaths=(executable.parent,),
-            read_paths=(schema,),
+            read_paths=(executable, schema),
             write_subpaths=(native_state,),
             write_paths=(output,),
             deny_subpaths=(session_root / ".git", staging),
@@ -622,11 +649,15 @@ class CodexAdapter:
     ) -> Path:
         """Return a narrow, owned Codex state root or fail before launch."""
 
-        native_state = Path(
-            os.path.realpath(
-                os.environ.get("CODEX_HOME", os.fspath(Path.home() / ".codex"))
-            )
+        configured_native_state = Path(
+            os.environ.get("CODEX_HOME", os.fspath(Path.home() / ".codex"))
         )
+        if not configured_native_state.is_absolute():
+            raise ProviderInvocationError(
+                "Codex native state directory is unsafe",
+                taint_existing_thread=False,
+            )
+        native_state = Path(os.path.realpath(configured_native_state))
         home = Path(os.path.realpath(Path.home()))
 
         def overlaps(first: Path, second: Path) -> bool:

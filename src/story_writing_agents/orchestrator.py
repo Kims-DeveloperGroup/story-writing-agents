@@ -1140,6 +1140,19 @@ class _AccountingContextProvider:
             execution_workspace=execution_workspace,
         )
 
+    def require_current_execution_workspace(
+        self,
+        scope: ContextScope,
+        policy_fingerprint: str,
+    ) -> None:
+        callback = getattr(
+            self._delegate,
+            "require_current_execution_workspace",
+            None,
+        )
+        if callback is not None:
+            callback(scope, policy_fingerprint)
+
     async def prepare_references(
         self,
         request: ContextReferencePreludeRequest,

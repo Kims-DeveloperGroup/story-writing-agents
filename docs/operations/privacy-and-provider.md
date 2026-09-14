@@ -1119,15 +1119,16 @@ capture, explicit-reference delivery, and SEARCH/READ handlers perform guarded
 story reads and place only selected content in request payloads or observations;
 the provider receives no session filesystem read authority from its CWD.
 
-Exact external exceptions admit the resolved executable/runtime, schema/result
-transport, required system files, outbound network/system sockets, and one
-validated provider-native state subtree. The resolved `CODEX_HOME` must already
-be a directory owned by the effective user without group/other write bits. It
-cannot be the filesystem root or user home, and it may neither contain nor be
-contained by the control root, selected session, prompt staging, or response-
-output directory. An unsafe value produces a fixed pre-submission provider
-failure. This is filesystem confinement, not a claim that the executable,
-broker-delivered content, or remote provider is trusted.
+Exact external exceptions admit only the literal canonical resolved Codex
+executable, schema/result transport, required system files, outbound
+network/system sockets, and one validated provider-native state subtree.
+Configured `CODEX_HOME` must be absolute before canonical resolution. Its
+resolved path must already be a directory owned by the effective user without
+group/other write bits. It cannot be the filesystem root or user home, and it
+may neither contain nor be contained by the control root, selected session,
+prompt staging, or response-output directory. An unsafe value produces a fixed
+pre-submission provider failure. This is filesystem confinement, not a claim
+that the executable, broker-delivered content, or remote provider is trusted.
 
 Stable instructions are prepared outside story Git, read before launch, and
 passed as a `developer_instructions` configuration argument; their text can be

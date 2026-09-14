@@ -310,10 +310,11 @@ Darwin, a second default-deny sandbox grants the provider no session-tree read
 or write access and explicitly denies `.git` and prompt staging. Host-owned
 context, explicit-reference, SEARCH, and READ services select and deliver story
 content through the provider payload instead. Closed exceptions admit only
-provider/runtime transport, outbound network access, and an existing
-owner-controlled `CODEX_HOME` that cannot overlap the control root, session,
-staging, or output transport. Bound instructions, schema, and response
-transport remain outside story Git. The
+the literal canonical Codex executable, required system runtime files,
+transport, outbound network access, and an existing absolute owner-controlled
+`CODEX_HOME` that cannot overlap the control root, session, staging, or output
+transport. Bound instructions, schema, and response transport remain outside
+story Git. The
 deprecated Darwin sandbox facility is fail-closed when unavailable, and an
 unsupported host does not fall back to an unconfined Codex story call.
 Codex also rejects a fully encoded `developer_instructions=` argument above

@@ -292,9 +292,11 @@ class ProviderExecutionWorkspaceTests(unittest.TestCase):
         self.assertNotIn(str(staging), command)
         self.assertNotIn("project_doc_max_bytes=", "\n".join(command))
         self.assertEqual(sandbox.executable, executable)
-        self.assertEqual(sandbox.read_subpaths, (executable.parent,))
+        self.assertEqual(sandbox.read_subpaths, ())
         self.assertNotIn(self.root, sandbox.read_subpaths)
-        self.assertEqual(sandbox.read_paths, (schema,))
+        self.assertNotIn(executable.parent, sandbox.read_subpaths)
+        self.assertEqual(sandbox.read_paths, (executable, schema))
+        self.assertNotIn(self.root, sandbox.read_paths)
         self.assertEqual(sandbox.write_subpaths, (native,))
         self.assertEqual(sandbox.write_paths, (output,))
         self.assertEqual(sandbox.deny_subpaths, (self.root / ".git", staging))
@@ -313,6 +315,19 @@ class ProviderExecutionWorkspaceTests(unittest.TestCase):
             directory.mkdir(mode=0o700)
         output = output_parent / "response.json"
         owner = SimpleNamespace(_control_root=control)
+
+        with mock.patch.dict(os.environ, {"CODEX_HOME": "relative-codex-home"}), (
+            self.assertRaisesRegex(
+                ProviderInvocationError,
+                "native state directory is unsafe",
+            )
+        ):
+            CodexAdapter._native_state_directory(
+                owner,
+                session_root=self.root,
+                staging=staging,
+                output=output,
+            )
 
         with mock.patch.dict(os.environ, {"CODEX_HOME": str(safe)}):
             self.assertEqual(

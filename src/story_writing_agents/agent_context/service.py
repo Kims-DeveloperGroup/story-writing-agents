@@ -1656,6 +1656,13 @@ class ContextProvider(Protocol):
     ) -> str | None:
         """Return one usable exact scoped continuation, if present."""
 
+    def require_current_execution_workspace(
+        self,
+        scope: ContextScope,
+        policy_fingerprint: str,
+    ) -> None:
+        """Revalidate any execution workspace retained by the invocation."""
+
     async def prepare_references(
         self,
         request: ContextReferencePreludeRequest,
@@ -4342,57 +4349,80 @@ class AgentContextService:
             "__aexit__",
         ):
             raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
-        async with context_manager:
-            async with lock:
-                if abandoned_operation_ids:
-                    assert continuation is not None
-                    key = ContextLedgerKey(continuation.identity.checkpoint_scope(), provider_id)
-                    inspection = self._ledger.inspect(key)
-                    record = inspection.record
-                    if (record is not None and record.attempt is not None
-                        and record.attempt.plan.operation_id in abandoned_operation_ids
-                        and record.attempt.outcome is not ContextLedgerAttemptOutcome.COMMITTED):
-                        # Invalidate first: a crash during native retirement must
-                        # still force the next owner to bootstrap, never resume.
-                        self._ledger.invalidate(key, expected_generation=inspection.generation)
-                        if request.execution_workspace is None:
-                            provider.taint_context_thread(scope, policy_fingerprint)
-                            remaining_thread = provider.inspect_context_thread(
-                                scope, policy_fingerprint
-                            )
-                        else:
-                            provider.taint_context_thread(
-                                scope,
-                                policy_fingerprint,
-                                execution_workspace=request.execution_workspace,
-                            )
-                            remaining_thread = provider.inspect_context_thread(
-                                scope,
-                                policy_fingerprint,
-                                execution_workspace=request.execution_workspace,
-                            )
-                        if remaining_thread is not None:
-                            raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
-                return await self._invoke_locked(
-                    request,
-                    provider,
-                    provider_id=provider_id,
-                    definition_fingerprint=definition_fingerprint,
-                    scope=scope,
-                    writing_artifacts=writing_artifacts,
-                    focused_conversation=focused_conversation,
-                    active_debate=active_debate,
-                    own_agent_state=own_agent_state,
-                    physical_call_limit=physical_call_limit,
-                    answer_validator=answer_validator,
-                    event_sink=event_sink,
-                    progress_sink=progress_sink,
-                    phase=phase,
-                    round_number=round_number,
-                    continuation=continuation,
-                    session_history=session_history,
-                    publication_validator=publication_validator,
-                )
+        checkpoint_scope = (
+            scope if continuation is None else continuation.identity.checkpoint_scope()
+        )
+        key = ContextLedgerKey(checkpoint_scope, provider_id)
+        result: ContextInvocationResult | None = None
+        try:
+            async with context_manager:
+                async with lock:
+                    if abandoned_operation_ids:
+                        assert continuation is not None
+                        inspection = self._ledger.inspect(key)
+                        record = inspection.record
+                        if (record is not None and record.attempt is not None
+                            and record.attempt.plan.operation_id in abandoned_operation_ids
+                            and record.attempt.outcome is not ContextLedgerAttemptOutcome.COMMITTED):
+                            # Invalidate first: a crash during native retirement must
+                            # still force the next owner to bootstrap, never resume.
+                            self._ledger.invalidate(key, expected_generation=inspection.generation)
+                            if request.execution_workspace is None:
+                                provider.taint_context_thread(scope, policy_fingerprint)
+                                remaining_thread = provider.inspect_context_thread(
+                                    scope, policy_fingerprint
+                                )
+                            else:
+                                provider.taint_context_thread(
+                                    scope,
+                                    policy_fingerprint,
+                                    execution_workspace=request.execution_workspace,
+                                )
+                                remaining_thread = provider.inspect_context_thread(
+                                    scope,
+                                    policy_fingerprint,
+                                    execution_workspace=request.execution_workspace,
+                                )
+                            if remaining_thread is not None:
+                                raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+                    result = await self._invoke_locked(
+                        request,
+                        provider,
+                        provider_id=provider_id,
+                        definition_fingerprint=definition_fingerprint,
+                        scope=scope,
+                        writing_artifacts=writing_artifacts,
+                        focused_conversation=focused_conversation,
+                        active_debate=active_debate,
+                        own_agent_state=own_agent_state,
+                        physical_call_limit=physical_call_limit,
+                        answer_validator=answer_validator,
+                        event_sink=event_sink,
+                        progress_sink=progress_sink,
+                        phase=phase,
+                        round_number=round_number,
+                        continuation=continuation,
+                        session_history=session_history,
+                        publication_validator=publication_validator,
+                    )
+        except BaseException as failure:
+            if result is not None and not result.checkpoint_pending:
+                try:
+                    self._ledger.invalidate(
+                        key,
+                        expected_generation=result.ledger_generation,
+                    )
+                except BaseException as invalidation_failure:
+                    try:
+                        failure.add_note(
+                            "context checkpoint invalidation failed: "
+                            f"{type(invalidation_failure).__name__}"
+                        )
+                    except BaseException:
+                        pass
+            raise
+        assert result is not None
+        return result
 
     async def _invoke_locked(
         self,
@@ -4437,6 +4467,18 @@ class AgentContextService:
                 policy_fingerprint,
                 execution_workspace=request.execution_workspace,
             )
+
+        def require_execution_workspace_current() -> None:
+            if request.execution_workspace is not None:
+                request.execution_workspace.require_current()
+                return
+            callback = getattr(
+                provider,
+                "require_current_execution_workspace",
+                None,
+            )
+            if callback is not None:
+                _require_sync_none(callback(scope, policy_fingerprint))
 
         checkpoint_scope = (
             scope if continuation is None else continuation.identity.checkpoint_scope()
@@ -5046,8 +5088,7 @@ class AgentContextService:
                     call_id,
                     result.accounting,
                 )
-                if request.execution_workspace is not None:
-                    request.execution_workspace.require_current()
+                require_execution_workspace_current()
                 if result.accounting.payload.call_kind is not call_kind:
                     finalizer = call_finalizer
                     call_finalizer = None
@@ -5241,11 +5282,10 @@ class AgentContextService:
                             truncated=search_observation.truncated,
                         ),
                     )
+                    require_execution_workspace_current()
                     finalizer = call_finalizer
                     call_finalizer = None
                     if finalizer is not None:
-                        if request.execution_workspace is not None:
-                            request.execution_workspace.require_current()
                         _accept_provider_call_without_replacing(finalizer)
                     continue
                 if type(action) is ContextReadAction:
@@ -5310,11 +5350,10 @@ class AgentContextService:
                             ),
                         ),
                     )
+                    require_execution_workspace_current()
                     finalizer = call_finalizer
                     call_finalizer = None
                     if finalizer is not None:
-                        if request.execution_workspace is not None:
-                            request.execution_workspace.require_current()
                         _accept_provider_call_without_replacing(finalizer)
                     continue
 
@@ -5351,12 +5390,10 @@ class AgentContextService:
                 )
                 if request.mandatory_references:
                     stage = "reference_complete"
-                    if request.execution_workspace is not None:
-                        request.execution_workspace.require_current()
+                    require_execution_workspace_current()
                     provider.complete_references(scope, policy_fingerprint)
                 stage = "commit"
-                if request.execution_workspace is not None:
-                    request.execution_workspace.require_current()
+                require_execution_workspace_current()
                 assert current_thread_id is not None
                 assert terminal_call_id is not None
                 commit_authorization = ContextLedgerCommitAuthorization(
@@ -5380,10 +5417,29 @@ class AgentContextService:
 
                     def commit_published() -> None:
                         nonlocal deferred_committed
-                        self._ledger.commit_attempt(
-                            key, expected_generation=generation,
+                        require_execution_workspace_current()
+                        commit = self._ledger.commit_attempt(
+                            key,
+                            expected_generation=generation,
                             authorization=commit_authorization,
                         )
+                        try:
+                            require_execution_workspace_current()
+                        except BaseException as failure:
+                            try:
+                                self._ledger.invalidate(
+                                    key,
+                                    expected_generation=commit.generation,
+                                )
+                            except BaseException as invalidation_failure:
+                                try:
+                                    failure.add_note(
+                                        "context checkpoint invalidation failed: "
+                                        f"{type(invalidation_failure).__name__}"
+                                    )
+                                except BaseException:
+                                    pass
+                            raise
                         deferred_committed = True
                         if deferred_finalizer is not None:
                             _accept_provider_call_without_replacing(deferred_finalizer)
@@ -5413,8 +5469,7 @@ class AgentContextService:
                         ))
 
                     continuation.stage(commit_published, abort_unpublished, publication_validator)
-                    if request.execution_workspace is not None:
-                        request.execution_workspace.require_current()
+                    require_execution_workspace_current()
                     return ContextInvocationResult(
                         action.answer, authorization, projection.accounting,
                         current_thread_id, tuple(calls), generation,
@@ -5424,8 +5479,23 @@ class AgentContextService:
                     key, expected_generation=generation,
                     authorization=commit_authorization,
                 )
-                if request.execution_workspace is not None:
-                    request.execution_workspace.require_current()
+                try:
+                    require_execution_workspace_current()
+                except BaseException as failure:
+                    try:
+                        self._ledger.invalidate(
+                            key,
+                            expected_generation=commit.generation,
+                        )
+                    except BaseException as invalidation_failure:
+                        try:
+                            failure.add_note(
+                                "context checkpoint invalidation failed: "
+                                f"{type(invalidation_failure).__name__}"
+                            )
+                        except BaseException:
+                            pass
+                    raise
                 terminal_provider_succeeded = False
                 checkpoint_committed = True
                 finalizer = call_finalizer

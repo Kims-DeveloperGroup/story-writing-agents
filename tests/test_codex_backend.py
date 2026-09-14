@@ -127,6 +127,7 @@ from story_writing_agents.interactive_settings import (
 from story_writing_agents.git.session_resources import GitSessionGenerationPin
 from story_writing_agents.orchestrator import StoryRuntime
 from story_writing_agents.provider_execution_workspace import (
+    ProviderExecutionWorkspace,
     mint_provider_execution_workspace,
 )
 from story_writing_agents.workspace.initialization import provision_session_resources
@@ -3107,6 +3108,124 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
         authorization.close()
 
+    async def test_reference_prelude_revalidates_before_accepting_provider_result(
+        self,
+    ) -> None:
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        bound = await backend.bind(self.definition())
+        _repository, authorization, reference_read = self.reference_invocation(
+            operation_id="generation_reference_revalidation",
+            invocation_id="generation_reference_revalidation_invocation",
+        )
+        scope = ContextScope(
+            "generation-reference-workspace",
+            "story_session",
+            ContextSubjectKind.DEBATE,
+            "generation-reference-subject",
+            PLOT_ARCHITECT,
+        )
+        policy = "sha256:" + "7" * 64
+        root = self.fake_directory / "generation-reference-revalidation-root"
+        root.mkdir()
+        descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+        identity = os.fstat(descriptor)
+        pin = object.__new__(GitSessionGenerationPin)
+        workspace = mint_provider_execution_workspace(
+            session_id="story_session",
+            worktree_root=root,
+            root_identity=(identity.st_dev, identity.st_ino),
+            generation_provenance="sha256:" + "d" * 64,
+            root_descriptor=descriptor,
+            generation_pin=pin,
+            failure_factory=lambda: SessionArtifactBindingError(
+                "session artifact resources are unavailable"
+            ),
+        )
+        payload = AgentBackend._reference_read_prelude_payload(reference_read.request)
+        encoded, payload_accounting = account_provider_payload(
+            backend._reference_read_action_schema(reference_read.request),
+            payload,
+            call_kind=ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
+        )
+        accounting = ProviderCallAccounting(
+            payload_accounting,
+            state=ProviderCallState.SUBMITTED,
+            actual_transport_utf8_bytes=len(encoded),
+        )
+        finalizer = SimpleNamespace(
+            accepted=mock.Mock(),
+            rejected=mock.Mock(),
+            cancelled=mock.Mock(),
+            post_response_runtime_failure=mock.Mock(),
+        )
+        result = SimpleNamespace(
+            response_text="{}",
+            thread_id="generation-reference-thread",
+            accounting=accounting,
+            finalizer=finalizer,
+        )
+        action = ReferenceReadAction(
+            ReferenceReadActionKind.READ_WRITING_ARTIFACTS,
+            reference_read.request.correlation,
+            reference_read.request.references,
+        )
+        request = ContextReferencePreludeRequest(
+            scope,
+            policy,
+            "generation_reference_revalidation_call",
+            reference_read.request.correlation.operation_id,
+            None,
+            execution_workspace=workspace,
+        )
+        failure = SessionArtifactBindingError("synthetic generation loss")
+        target_currentness_calls = 0
+
+        def require_current(observed_pin: GitSessionGenerationPin) -> None:
+            nonlocal target_currentness_calls
+            if observed_pin is pin:
+                target_currentness_calls += 1
+                if target_currentness_calls == 3:
+                    raise failure
+
+        with mock.patch.object(
+            GitSessionGenerationPin,
+            "require_current",
+            autospec=True,
+            side_effect=require_current,
+        ), mock.patch.object(
+            GitSessionGenerationPin,
+            "close",
+            autospec=True,
+        ), mock.patch.object(
+            backend,
+            "_invoke_context_physical",
+            new=mock.AsyncMock(return_value=result),
+        ), mock.patch.object(
+            backend,
+            "_decode_reference_read_action",
+            return_value=action,
+        ):
+            try:
+                with self.assertRaises(SessionArtifactBindingError) as caught:
+                    await backend._prepare_context_references(
+                        bound,
+                        reference_read,
+                        request,
+                    )
+            finally:
+                workspace.close()
+        self.assertEqual(
+            str(caught.exception),
+            "session artifact resources are unavailable",
+        )
+        finalizer.accepted.assert_not_called()
+        finalizer.post_response_runtime_failure.assert_called_once_with(
+            ContextProviderTerminalCode.REFERENCE_RUNTIME_FAILED
+        )
+        self.assertEqual(target_currentness_calls, 3)
+        authorization.close()
+
     async def test_binding_stages_immutable_bytes_after_all_source_paths_become_unsafe(
         self,
     ) -> None:
@@ -4335,7 +4454,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.write_codex_defaults(model, effort)
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
         captured_stderr = io.StringIO()
 
@@ -7681,16 +7800,21 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 staging = bound.staging_directory
                 entered = asyncio.Event()
                 proceed = asyncio.Event()
+                observed_workspaces: list[ProviderExecutionWorkspace] = []
 
                 async def provider(
                     *args: object,
                     reference_read: object | None = None,
-                    execution_workspace: object | None = None,
+                    execution_workspace: ProviderExecutionWorkspace | None = None,
                 ) -> object:
                     self.assertIsNone(reference_read)
                     self.assertIsNotNone(execution_workspace)
+                    assert execution_workspace is not None
+                    observed_workspaces.append(execution_workspace)
+                    execution_workspace.require_current()
                     entered.set()
                     await proceed.wait()
+                    execution_workspace.require_current()
                     if label == "invoke":
                         return AgentReply.candidate("r0", "candidate")
                     request = args[1]
@@ -7752,6 +7876,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         await call()
                     proceed.set()
                     await asyncio.wait_for(active, timeout=1)
+
+                with self.assertRaises(SessionArtifactBindingError):
+                    observed_workspaces[0].require_current()
+                self.assertEqual(len(observed_workspaces), 1)
 
                 self.assertFalse(staging.exists())
                 self.assertNotIn(bound, backend._bound_agents)
@@ -8700,7 +8828,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         session_id = "reference_pre_provider"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
         _, authorization, wrong = self.reference_invocation(
             operation_id="wrong_correlation",

@@ -479,13 +479,42 @@ class _BoundContextProvider:
                             active_execution_workspace
                         )
                         entered = True
+                        body_failure: BaseException | None = None
                         try:
-                            yield
+                            try:
+                                yield
+                            except BaseException as failure:
+                                body_failure = failure
+                                raise
                         finally:
-                            self._active_scope = None
-                            self._continuation_identity = None
-                            self._active_policy_fingerprint = None
-                            self._active_execution_workspace = None
+                            try:
+                                if active_execution_workspace is not None:
+                                    active_execution_workspace.require_current()
+                            except BaseException as validation_failure:
+                                try:
+                                    self._bound_agent.backend._taint_context_thread(
+                                        storage_scope,
+                                        self.provider_id,
+                                        definition_fingerprint,
+                                        effective_policy_fingerprint,
+                                    )
+                                except BaseException:
+                                    pass
+                                if body_failure is None:
+                                    raise
+                                try:
+                                    body_failure.add_note(
+                                        "provider execution workspace exit validation "
+                                        "failed: "
+                                        f"{type(validation_failure).__name__}"
+                                    )
+                                except BaseException:
+                                    pass
+                            finally:
+                                self._active_scope = None
+                                self._continuation_identity = None
+                                self._active_policy_fingerprint = None
+                                self._active_execution_workspace = None
         except BaseException as failure:
             if not entered:
                 self._bound_agent._terminate_reference_before_provider(
@@ -544,6 +573,16 @@ class _BoundContextProvider:
             effective_policy_fingerprint,
         )
 
+    def require_current_execution_workspace(
+        self,
+        scope: ContextScope,
+        policy_fingerprint: str,
+    ) -> None:
+        """Revalidate the capability retained by this active invocation."""
+
+        self._require_active(scope, policy_fingerprint)
+        self._active_workspace(None)
+
     async def prepare_references(
         self,
         request: ContextReferencePreludeRequest,
@@ -583,6 +622,7 @@ class _BoundContextProvider:
             ):
                 self._reference_terminal = True
             raise
+        self._active_workspace(execution_workspace)
         self._reference_prepared = True
         return result
 
@@ -594,7 +634,7 @@ class _BoundContextProvider:
         if request.continuation_identity != self._continuation_identity:
             raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         execution_workspace = self._active_workspace(request.execution_workspace)
-        return await self._bound_agent.backend._invoke_context_physical(
+        result = await self._bound_agent.backend._invoke_context_physical(
             self._bound_agent,
             scope=request.scope,
             policy_fingerprint=request.policy_fingerprint,
@@ -607,6 +647,8 @@ class _BoundContextProvider:
             continuation_identity=request.continuation_identity,
             execution_workspace=execution_workspace,
         )
+        self._active_workspace(execution_workspace)
+        return result
 
     def complete_references(
         self,
@@ -614,7 +656,7 @@ class _BoundContextProvider:
         policy_fingerprint: str,
     ) -> None:
         self._require_active(scope, policy_fingerprint)
-        self._active_workspace(None)
+        execution_workspace = self._active_workspace(None)
         if self._reference_read is None:
             return
         if not self._reference_prepared or self._reference_terminal:
@@ -623,6 +665,8 @@ class _BoundContextProvider:
             )
         try:
             for name in ("record_result_received", "accept"):
+                if execution_workspace is not None:
+                    execution_workspace.require_current()
                 outcome = getattr(self._reference_read, name)()
                 if inspect.isawaitable(outcome):
                     if inspect.iscoroutine(outcome):
@@ -3094,6 +3138,7 @@ class AgentBackend:
             session_id=session_id,
             definition=bound_agent.definition,
             continuation_fingerprint=continuation_fingerprint,
+            execution_workspace=execution_workspace,
         )
         return reply
 
@@ -3128,6 +3173,8 @@ class AgentBackend:
                 call_kind=ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
                 execution_workspace=execution_workspace,
             )
+            if execution_workspace is not None:
+                execution_workspace.require_current()
         except BaseException as exc:
             self._fail_reference_read_without_replacing(
                 reference_read,
@@ -3169,7 +3216,10 @@ class AgentBackend:
                     "reference read handler returned an invalid result"
                 )
             with result:
-                return self._reference_read_context(result)
+                context = self._reference_read_context(result)
+            if execution_workspace is not None:
+                execution_workspace.require_current()
+            return context
         except BaseException as exc:
             self._fail_reference_read_without_replacing(
                 reference_read,
@@ -3188,11 +3238,14 @@ class AgentBackend:
         session_id: str,
         definition: AgentDefinition,
         continuation_fingerprint: str,
+        execution_workspace: ProviderExecutionWorkspace | None,
     ) -> None:
         """Record and accept one structurally valid substantive result."""
 
         try:
             for name in ("record_result_received", "accept"):
+                if execution_workspace is not None:
+                    execution_workspace.require_current()
                 outcome = getattr(reference_read, name)()
                 if inspect.isawaitable(outcome):
                     if inspect.iscoroutine(outcome):
@@ -4020,6 +4073,7 @@ class AgentBackend:
                             session_id=request.session_id,
                             definition=bound_agent.definition,
                             continuation_fingerprint=continuation_fingerprint,
+                            execution_workspace=execution_workspace,
                         )
                     return outcome
 
@@ -4799,6 +4853,7 @@ class AgentBackend:
                         AgentExchangeTerminalCode.THREAD_PERSISTENCE_FAILED,
                     )
                 raise
+            self._require_postsubmission_workspace(invocation)
             self._capture_accepted_without_replacing(exchange)
             return reply
         except (json.JSONDecodeError, UnicodeError) as exc:
@@ -5399,6 +5454,8 @@ class AgentBackend:
                 result.thread_id,
                 result.accounting,
             )
+            if request.execution_workspace is not None:
+                request.execution_workspace.require_current()
             self._accept_context_finalizer_without_replacing(finalizer)
             return prelude
         except BaseException as failure:

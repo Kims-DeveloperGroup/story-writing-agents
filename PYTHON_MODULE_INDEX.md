@@ -995,9 +995,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   delegated to the injected registry adapters, ledger persistence remains
   ledger-owned, and provider transport/native-thread storage remains delegated
   through `ContextProvider`. Requests may carry one repr-hidden,
-  comparison-excluded call-local provider workspace; the service validates its
-  exact session identity at admission and revalidates it around provider return,
-  reference completion, and checkpoint authorization without retaining it.
+  comparison-excluded call-local provider workspace; when they do not, the
+  service-owned provider protocol exposes synchronous currentness validation
+  for a workspace retained by the active provider invocation. The service
+  validates an explicit workspace's exact session identity at admission and
+  revalidates either form after provider results, before accepting SEARCH/READ
+  actions or references, and before and after immediate or deferred checkpoint
+  commitment without retaining the capability. Generation loss after a ledger
+  commit invalidates that just-committed checkpoint before failure propagates.
   Every physical call is appended in order; only a
   revalidated and synchronously domain-validated terminal answer may commit
   READY. For an explicit session continuation, `session_continuation()` lends
@@ -1353,8 +1358,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   failure removes provisional Codex staging before propagation. Codex calls
   bind persisted legacy and contextual continuation fingerprints to the current
   session-worktree generation and revalidate the borrowed capability after
-  provider submission and before thread persistence; no capability is retained
-  by the backend, BoundAgent, binding, or adapter generation.
+  provider submission and before thread persistence. The binding-scoped context
+  provider alone may retain that capability for its active invocation. A
+  provider-minted capability closes on invocation exit; a caller-supplied
+  capability remains caller-owned. Neither is retained by the backend,
+  BoundAgent, binding, or adapter generation.
   Backend close is terminal and idempotent: it retires all concrete bindings
   immediately, then defers access-claim release, in-memory thread-lock cleanup,
   and remaining adapter cleanup until no active binding can use them. One
@@ -1449,8 +1457,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   unavailable usage remains absent and is never estimated. At the contextual
   boundary, a binding-scoped adapter implements the service-owned
   `ContextProvider` protocol without giving the backend planner, ledger, or
-  source authority. It retains the bound provider for the complete lifecycle,
-  runs the existing exact reference prelude when requested, builds one
+  source authority. It retains the bound provider and, for Codex, borrows the
+  exact caller-supplied execution workspace or owns an invocation-minted one
+  for the complete call-local lifecycle. Its synchronous currentness hook lets
+  the service revalidate that retained capability without transferring
+  ownership; the provider also checks it after physical and reference results,
+  around reference acceptance, and on invocation exit, tainting the contextual
+  thread if exit validation fails. It runs the existing exact reference prelude
+  when requested, builds one
   `ProviderInvocation` from each service-supplied schema/payload/component
   mapping, passes its single canonical `payload_json` to the selected adapter,
   and returns raw response, thread identity, and exact content-free accounting
@@ -1812,7 +1826,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   requests descriptor-relative `--cd .` execution plus exact Codex resource
   requirements from `provider_process`; no staging-directory or path-only
   launch fallback remains. It creates and removes temporary schema/response
-  files; `close()` removes all
+  files, then revalidates the workspace on every invocation exit. Standalone
+  exit loss retains prepared/submitted accounting and becomes the invocation
+  failure; loss during another failure is attached without replacing that
+  primary failure. `close()` removes all
   retained binding directories idempotently. Optional `--model` and `--config
   model_reasoning_effort="LEVEL"` arguments retain their exact order after
   `exec` and before any resume marker. Importing performs no I/O.

@@ -216,8 +216,9 @@ callback.
 
 Codex process creation requires Darwin's `sandbox-exec` and canonicalized
 resource paths. The compiled SBPL profile denies by default. It admits reads of
-the resolved executable directory and required system runtime files, but none
-of the exact session subtree. Session `.git` reads/writes and every session
+only the literal canonical resolved Codex executable and required system
+runtime files, but none of the exact session subtree. Session `.git`
+reads/writes and every session
 write remain explicit denies. The initialization/control root, sibling
 worktrees, lexical traversal, symlink escape targets, and prompt staging are
 also denied. Descriptor-selected CWD therefore supplies process placement and
@@ -228,21 +229,27 @@ selected bytes enter only provider payloads or observations.
 The remaining closed allowances cover the exact schema read and output write,
 null/random devices, process support, outbound network/system sockets, and one
 provider-native state subtree. Resolved `CODEX_HOME` is accepted only when it
-already names a directory owned by the effective user with no group/other write
-bits. It must be neither the filesystem root nor the user home, and it may not
-overlap in either direction with the exact control root, selected session,
-prompt staging, or response-output directory. Invalid or unsafe state fails
-before launch. Instructions are injected after a prelaunch staging read;
+was configured as an absolute path and already names a directory owned by the
+effective user with no group/other write bits. It must be neither the
+filesystem root nor the user home, and it may not overlap in either direction
+with the exact control root, selected session, prompt staging, or response-
+output directory. Invalid or unsafe state fails before launch. Instructions are
+injected after a prelaunch staging read;
 schema and output stay in external temporary storage. The call therefore
 creates no provider-definition or output residue in the story Git tree.
 
 The generation is checked before descriptor duplication, after child creation,
-after process return, and before result/ledger acceptance. A deleted, replaced,
-or symlinked named session root cannot acquire the old descriptor authority or
-redirect a call. Unsupported hosts, a missing deprecated sandbox facility, an
-executable mismatch, or a noncanonical exception path fail before provider
-submission; there is no path-only working-directory or unconfined fallback.
-This Codex boundary does not cover the separately tracked Antigravity adapter.
+after process return, around reference/SEARCH/READ host observation and
+provider-call acceptance, before and after context-checkpoint commit, after
+adapter temporary cleanup, and on contextual invocation exit. Loss after a
+checkpoint commit invalidates that exact ledger generation. Exit loss taints
+the exact generation-bound thread; an existing body failure stays primary and
+receives only a content-free validation note. A deleted, replaced, or symlinked
+named session root cannot acquire the old descriptor authority or redirect a
+call. Unsupported hosts, a missing deprecated sandbox facility, an executable
+mismatch, or a noncanonical exception path fail before provider submission;
+there is no path-only working-directory or unconfined fallback. This Codex
+boundary does not cover the separately tracked Antigravity adapter.
 
 Ordinary artifact access retains the stronger semantic boundary: one outer
 synchronous transaction performs a complete READY validation before and after

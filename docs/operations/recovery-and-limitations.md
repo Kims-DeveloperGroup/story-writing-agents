@@ -1708,9 +1708,10 @@ result.
 Darwin sandbox unavailability, an unsupported host, invalid canonical
 resources, or unsafe native state fails before submission and has no
 unconfined fallback. For `CODEX_HOME`, verify an existing effective-user-owned
-directory with no group/other write bits that is not filesystem root or user
-home and does not contain or sit beneath the control root, session, staging, or
-response-output directory. Apple's underlying `sandbox-exec` facility is
+directory configured by an absolute path, with no group/other write bits, that
+is not filesystem root or user home and does not contain or sit beneath the
+control root, session, staging, or response-output directory. Apple's
+underlying `sandbox-exec` facility is
 deprecated, so deployment checks must treat its absence as loss of Codex story-
 call capability. Authentication, catalog, help, and other management probes
 are outside this story boundary.
@@ -1725,6 +1726,18 @@ definition that depended on larger file staging, keep stable role constraints
 in the binding and migrate story material to host-owned context, explicit
 references, or SEARCH/READ sources. Do not weaken the limit or place that
 material in the session tree for provider filesystem access.
+
+Generation is revalidated after provider adapter cleanup and when contextual
+invocation ownership exits, not only before accepting the decoded result.
+Reference, SEARCH, and READ work revalidates after the host constructs its
+observation and before the provider-call finalizer is accepted. Context-ledger
+checkpoint commit is checked immediately before and after publication; loss
+after publication invalidates that exact checkpoint generation. A later exit
+failure similarly taints the generation-bound thread and invalidates an
+already committed non-pending checkpoint. If another body failure is active, it
+remains primary and receives only a content-free validation note. Do not resume
+from an invalidated checkpoint; restore exact READY resources and begin the
+next safe authorized bootstrap.
 
 ## Controller cancellation proof
 
