@@ -162,6 +162,30 @@ class ProviderExecutionWorkspaceTests(unittest.TestCase):
                         self.root.rmdir()
                     moved.rename(self.root)
 
+    def test_launch_descriptor_is_never_a_standard_stream(self) -> None:
+        workspace = self.mint()
+        self.addCleanup(workspace.close)
+        relocated = os.dup(workspace._root_descriptor)
+        original_close = os.close
+
+        def close_without_standard_stream(fd: int) -> None:
+            if fd != 0:
+                original_close(fd)
+
+        with mock.patch.object(os, "dup", return_value=0), mock.patch.object(
+            os,
+            "dup2",
+            return_value=relocated,
+        ) as duplicate_to_safe_fd, mock.patch.object(
+            os,
+            "close",
+            side_effect=close_without_standard_stream,
+        ):
+            self.assertEqual(workspace.duplicate_launch_descriptor(), relocated)
+
+        duplicate_to_safe_fd.assert_called_once_with(0, 3, inheritable=False)
+        original_close(relocated)
+
     def test_foreign_pid_and_thread_cannot_use_capability(self) -> None:
         workspace = self.mint()
         failures: list[BaseException] = []

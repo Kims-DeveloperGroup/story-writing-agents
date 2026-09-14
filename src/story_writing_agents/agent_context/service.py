@@ -4410,7 +4410,6 @@ class AgentContextService:
                     if (
                         continuation is not None
                         and provider_id == "codex"
-                        and request.execution_workspace is None
                         and result.checkpoint_pending
                     ):
                         continuation.retain_async_context_manager(

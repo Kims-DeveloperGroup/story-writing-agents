@@ -155,6 +155,10 @@ class ProviderExecutionWorkspace:
                 if self._closed:
                     raise OSError
                 descriptor = os.dup(self._root_descriptor)
+                if descriptor < 3:
+                    relocated = os.dup2(descriptor, 3, inheritable=False)
+                    os.close(descriptor)
+                    descriptor = relocated
             os.set_inheritable(descriptor, False)
             if _directory_identity(os.fstat(descriptor)) != self._root_identity:
                 raise OSError

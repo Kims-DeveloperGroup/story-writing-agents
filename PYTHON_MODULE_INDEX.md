@@ -1010,9 +1010,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   revalidates either form after provider results, before accepting SEARCH/READ
   actions or references, and before and after immediate or deferred checkpoint
   commitment without persistent service ownership. For a deferred Codex call
-  whose provider invocation minted the workspace, the service transfers its
-  popped asynchronous provider stack to the active continuation so the provider
-  context and capability remain live through authoritative publication and
+  the service transfers its popped asynchronous provider stack to the active
+  continuation so the provider context and capability remain live through
+  authoritative publication and
   checkpoint commitment. Generation loss or transferred-context cleanup after
   a ledger commit invalidates that just-committed checkpoint before failure
   propagates.
@@ -1993,7 +1993,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** No facade or project-root export. Package-internal
   `ProviderExecutionWorkspace` exposes only content-free session/generation
   identity, current-generation validation, continuation-digest derivation,
-  one duplicated launch descriptor, and idempotent close;
+  one duplicated launch descriptor guaranteed not to be a standard stream, and
+  idempotent close;
   `mint_provider_execution_workspace(...)` is the token-gated package-private
   mint used solely by `SessionArtifactBinding`.
 - **Direct internal dependencies:** `git.repository_lock` and
@@ -2023,8 +2024,10 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** `run_process` launches one child with
   piped stdin/stdout/stderr, drains both streams concurrently through
   `communicate`, and enforces the supplied timeout. A supplied provider
-  workspace transfers only a duplicated root descriptor to an isolated helper,
   which selects the physical child cwd with `fchdir` before exact process exec;
+  workspace transfers only a duplicated root descriptor numbered at least three
+  to an isolated helper, which selects the physical child cwd with `fchdir`
+  before exact process exec;
   the parent closes its duplicate after launch and validates authority before
   spawn, after spawn, and after communication. On Darwin, this module compiles
   provider-declared exact resource requirements into the shared default-deny

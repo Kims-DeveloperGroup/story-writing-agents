@@ -244,6 +244,9 @@ identity, mode, link count, size, and modification metadata must remain stable
 during the read, and its bytes must decode as strict UTF-8. The call therefore
 creates no provider-definition or output residue in the story Git tree.
 
+The launch descriptor is non-inheritable in the parent and is always numbered
+at least three before the helper receives it, so replacement of standard input,
+output, or error with provider pipes cannot redirect the helper's `fchdir`.
 The generation is checked before descriptor duplication, after child creation,
 after process return, around reference/SEARCH/READ host observation and
 provider-call acceptance, before and after context-checkpoint commit, after
