@@ -40,6 +40,7 @@ from story_writing_agents.workspace.schema import (
 )
 
 from tests.git_contract_fixture import DisposableGitTestCase, exception_graph
+from tests.helpers import materialize_pristine_initialized_workspace
 
 
 class GitSessionResourceFailureTests(unittest.TestCase):
@@ -124,8 +125,7 @@ class GitSessionResourceGitTestCase(DisposableGitTestCase):
     def initialize_workspace(self, name: str, *, object_format: str = "sha1") -> Path:
         root = self.test_root / name
         if object_format == "sha1":
-            with mock.patch.dict(os.environ, self.session_environment(), clear=True):
-                Workspace(root).initialize()
+            materialize_pristine_initialized_workspace(root)
             return root
         root.mkdir()
         scaffold = canonical_initializer_scaffold()
@@ -183,8 +183,7 @@ class GitSessionResourceCollisionTests(GitSessionResourceGitTestCase):
     ) -> None:
         root = self.test_root / "story"
         identity_environment = self.session_environment()
-        with mock.patch.dict(os.environ, identity_environment, clear=True):
-            Workspace(root).initialize()
+        materialize_pristine_initialized_workspace(root)
 
         identity = GitSessionIdentity(root, "novel")
         identity.worktree_root.mkdir(parents=True)

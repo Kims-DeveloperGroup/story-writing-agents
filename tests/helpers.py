@@ -306,9 +306,48 @@ def _copied_test_workspace(
 ) -> tuple[Workspace, int]:
     """Materialize an independent baseline through validated or guarded trust."""
 
+    owner = tempfile.TemporaryDirectory(prefix="story-workspace-copy-")
+    target = Path(os.path.realpath(owner.name)) / "workspace"
+    try:
+        workspace, materialization_id = _materialize_test_workspace(
+            target,
+            trust_tier=trust_tier,
+        )
+    except BaseException:
+        owner.cleanup()
+        raise
+
+    def cleanup() -> None:
+        cleanup_started = time.perf_counter()
+        owner.cleanup()
+        with _WORKSPACE_TEMPLATE_LOCK:
+            _record_workspace_fixture_timing(
+                materialization_id, trust_tier, "cleanup", cleanup_started
+            )
+
+    test_case.addCleanup(cleanup)
+    return workspace, materialization_id
+
+
+def _materialize_test_workspace(
+    target: Path,
+    *,
+    trust_tier: str,
+) -> tuple[Workspace, int]:
+    """Copy the sealed baseline to one absent caller-owned target."""
+
     global _WORKSPACE_MATERIALIZATION_SEQUENCE
     if trust_tier not in {"validated", "guarded"}:
         raise ValueError("workspace fixture trust tier is invalid")
+    lexical_target = Path(target)
+    target = Path(os.path.realpath(lexical_target.parent)) / lexical_target.name
+    try:
+        target.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise FileExistsError(f"workspace fixture target already exists: {target}")
+
     with _WORKSPACE_TEMPLATE_LOCK:
         template = _workspace_template()
         overall_started = time.perf_counter()
@@ -320,44 +359,55 @@ def _copied_test_workspace(
         _record_workspace_fixture_timing(
             materialization_id, trust_tier, "integrity_before", integrity_started
         )
-        owner = tempfile.TemporaryDirectory(prefix="story-workspace-copy-")
-        target = Path(os.path.realpath(owner.name)) / "workspace"
+        owns_target = False
         try:
-            copy_started = time.perf_counter()
-            shutil.copytree(template.root, target, copy_function=shutil.copy2, symlinks=True)
-            _record_workspace_fixture_timing(materialization_id, trust_tier, "copy", copy_started)
-            bind_started = time.perf_counter()
-            guarded = _bind_guarded_ready_workspace(target, template.digest)
-            _record_workspace_fixture_timing(materialization_id, trust_tier, "bind", bind_started)
-            validated: Workspace | None = None
-            if trust_tier == "validated" or not template.first_copy_validated:
-                validation_started = time.perf_counter()
-                validated = Workspace(target).require_ready()
-                _record_workspace_fixture_timing(
-                    materialization_id, trust_tier, "normal_validation", validation_started
+            try:
+                target.mkdir()
+                owns_target = True
+                copy_started = time.perf_counter()
+                shutil.copytree(
+                    template.root,
+                    target,
+                    copy_function=shutil.copy2,
+                    symlinks=True,
+                    dirs_exist_ok=True,
                 )
-                _require_equivalent_ready_shape(validated, guarded)
-                template.first_copy_validated = True
-            integrity_started = time.perf_counter()
-            if _tree_digest(template.root) != template.digest:
-                raise AssertionError("sealed workspace fixture template changed after copying")
-            _record_workspace_fixture_timing(
-                materialization_id, trust_tier, "integrity_after", integrity_started
-            )
+                _record_workspace_fixture_timing(
+                    materialization_id, trust_tier, "copy", copy_started
+                )
+                bind_started = time.perf_counter()
+                guarded = _bind_guarded_ready_workspace(target, template.digest)
+                _record_workspace_fixture_timing(
+                    materialization_id, trust_tier, "bind", bind_started
+                )
+                validated: Workspace | None = None
+                if trust_tier == "validated" or not template.first_copy_validated:
+                    validation_started = time.perf_counter()
+                    validated = Workspace(target).require_ready()
+                    _record_workspace_fixture_timing(
+                        materialization_id,
+                        trust_tier,
+                        "normal_validation",
+                        validation_started,
+                    )
+                    _require_equivalent_ready_shape(validated, guarded)
+                    template.first_copy_validated = True
+            finally:
+                integrity_started = time.perf_counter()
+                if _tree_digest(template.root) != template.digest:
+                    raise AssertionError(
+                        "sealed workspace fixture template changed after copying"
+                    )
+                _record_workspace_fixture_timing(
+                    materialization_id,
+                    trust_tier,
+                    "integrity_after",
+                    integrity_started,
+                )
         except BaseException:
-            owner.cleanup()
+            if owns_target:
+                shutil.rmtree(target, ignore_errors=True)
             raise
-
-    def cleanup() -> None:
-        cleanup_started = time.perf_counter()
-        owner.cleanup()
-        with _WORKSPACE_TEMPLATE_LOCK:
-            _record_workspace_fixture_timing(
-                materialization_id, trust_tier, "cleanup", cleanup_started
-            )
-
-    test_case.addCleanup(cleanup)
-    with _WORKSPACE_TEMPLATE_LOCK:
         _record_workspace_fixture_timing(
             materialization_id, trust_tier, "materialize", overall_started
         )
@@ -409,6 +459,22 @@ def pristine_initialized_workspace(test_case: TestCase) -> Workspace:
 
     workspace, _materialization_id = _copied_test_workspace(
         test_case, trust_tier="guarded"
+    )
+    return workspace
+
+
+def materialize_pristine_initialized_workspace(
+    target: str | os.PathLike[str],
+) -> Workspace:
+    """GUARDED tier: materialize at an absent caller-owned target.
+
+    The helper removes the exact target if materialization fails. After success,
+    the caller owns its lifecycle; no cleanup is registered or performed here.
+    """
+
+    workspace, _materialization_id = _materialize_test_workspace(
+        Path(target),
+        trust_tier="guarded",
     )
     return workspace
 
