@@ -1427,7 +1427,7 @@ class AntigravityAdapter:
                 agent_id=binding.definition.agent_id,
                 content=staged_agent_content,
             )
-        except OSError as exc:
+        except (OSError, RuntimeError) as exc:
             failure = ProviderInvocationError(
                 "Antigravity session role projection changed",
                 taint_existing_thread=True,

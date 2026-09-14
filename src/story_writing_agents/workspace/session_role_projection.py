@@ -156,13 +156,14 @@ def _ensure_git_exclusion(common_git_descriptor: int) -> None:
         lines = current.splitlines()
         if _EXCLUDE_LINE in lines:
             return
-        if len(current) > _MAX_EXCLUDE_BYTES:
-            raise OSError("session role Git exclusion is unsafe")
         separator = b"" if not current or current.endswith(b"\n") else b"\n"
+        replacement = current + separator + _EXCLUDE_LINE + b"\n"
+        if len(replacement) > _MAX_EXCLUDE_BYTES:
+            raise OSError("session role Git exclusion is unsafe")
         _install_regular(
             info,
             "exclude",
-            current + separator + _EXCLUDE_LINE + b"\n",
+            replacement,
             mode=0o600,
             replace_existing=True,
         )
@@ -366,7 +367,7 @@ def _read_regular_identity(
     name: str,
     *,
     immutable: bool = False,
-) -> tuple[bytes, tuple[int, int, int, int, int]]:
+) -> tuple[bytes, tuple[int, int, int, int, int, int, int, int]]:
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
     flags |= getattr(os, "O_NONBLOCK", 0)
     try:
@@ -376,13 +377,7 @@ def _read_regular_identity(
     try:
         os.set_inheritable(descriptor, False)
         value = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(value.st_mode)
-            or value.st_nlink != 1
-            or value.st_uid != os.geteuid()
-            or stat.S_IMODE(value.st_mode) & 0o022
-            or (immutable and stat.S_IMODE(value.st_mode) & 0o222)
-        ):
+        if not _safe_regular(value, immutable=immutable):
             raise OSError("session role projection file is unsafe")
         chunks: list[bytes] = []
         total = 0
@@ -395,24 +390,46 @@ def _read_regular_identity(
             if total > _MAX_EXCLUDE_BYTES and name == "exclude":
                 raise OSError("session role Git exclusion is unsafe")
         identity = _regular_identity(value)
-        if _regular_identity(os.fstat(descriptor)) != identity:
+        final_value = os.fstat(descriptor)
+        if (
+            not _safe_regular(final_value, immutable=immutable)
+            or _regular_identity(final_value) != identity
+        ):
             raise OSError("session role projection file changed")
     finally:
         os.close(descriptor)
-    if _regular_identity(
-        os.stat(name, dir_fd=parent, follow_symlinks=False)
-    ) != identity:
+    named_value = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    if (
+        not _safe_regular(named_value, immutable=immutable)
+        or _regular_identity(named_value) != identity
+    ):
         raise OSError("session role projection file changed")
     return b"".join(chunks), identity
 
 
-def _regular_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
+def _safe_regular(value: os.stat_result, *, immutable: bool) -> bool:
+    mode = stat.S_IMODE(value.st_mode)
+    return (
+        stat.S_ISREG(value.st_mode)
+        and value.st_nlink == 1
+        and value.st_uid == os.geteuid()
+        and mode & 0o022 == 0
+        and (not immutable or mode & 0o222 == 0)
+    )
+
+
+def _regular_identity(
+    value: os.stat_result,
+) -> tuple[int, int, int, int, int, int, int, int]:
     return (
         value.st_dev,
         value.st_ino,
         value.st_size,
         value.st_mtime_ns,
-        stat.S_IMODE(value.st_mode),
+        value.st_ctime_ns,
+        value.st_mode,
+        value.st_nlink,
+        value.st_uid,
     )
 
 
