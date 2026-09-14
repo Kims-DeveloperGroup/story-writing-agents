@@ -263,8 +263,36 @@ continuation. A deleted, replaced, or symlinked named session root cannot
 acquire the old descriptor authority or redirect a call. Unsupported hosts, a
 missing deprecated sandbox facility, an executable mismatch, or a noncanonical
 exception path fail before provider submission; there is no path-only working-
-directory or unconfined fallback. This Codex boundary does not cover the
-separately tracked Antigravity adapter.
+directory or unconfined fallback. This Codex boundary requires no Codex
+configuration file in the session worktree.
+
+Antigravity story calls use the same descriptor-selected exact session CWD and
+generation checks, not the adapter's control directory. Before capability
+entry, the host projects the exact staged role bytes to
+`.agents/agents/<agent-id>/agent.md` through the live READY binding and adds
+`/.agents/` to the common Git exclusion. Projection traversal is descriptor-
+relative and no-follow. Directories must be owner-controlled with no group or
+other writes; the selected role must be regular, singly linked, byte-exact, and
+read-only. Only `.agents/agents`, canonical roster directories, and their
+`agent.md` leaves are admitted. Differing bytes, unsafe or foreign entries,
+symlinks, hard links, FIFOs, devices, and topology drift fail closed and are
+preserved. Nonblocking reads reject FIFOs and other special files promptly.
+
+A failed fresh projection removes only directories created by that call that
+still have their recorded identity and remain empty, walking leaf first.
+Existing, changed, replaced, or nonempty paths are preserved. Cleanup failure
+does not replace the primary setup failure and is recorded only as content-free
+context. The read-only role projection is persistent runtime control data, not
+mutable provider residue or story content; Git, artifact, reference, and SEARCH/
+READ selection exclude it.
+
+Antigravity's Darwin sandbox allows literal reads only for the executable,
+session-root/role traversal, selected role, and required system resources. It
+denies direct session story-file reads, the session `.git` path, and all writes
+beneath the session root. Mutable native continuation state is external and
+partitioned by session physical generation, session, agent, and definition
+fingerprint; schema/request arguments and stdout/stderr transport remain
+external as well. Unsupported or unavailable confinement fails closed.
 
 Ordinary artifact access retains the stronger semantic boundary: one outer
 synchronous transaction performs a complete READY validation before and after

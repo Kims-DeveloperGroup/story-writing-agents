@@ -89,6 +89,7 @@ from .schema import (
     validate_workspace_identifier,
     validate_workspace_template_name,
 )
+from .session_role_projection import install_session_role_projection
 
 
 _LEGACY_SENTINELS = (
@@ -1035,6 +1036,27 @@ class SessionArtifactAccess:
         except BaseException as failure:
             _close_untransferred_artifact_descriptor(descriptor, failure)
             raise
+
+    def install_provider_role(self, agent_id: str, content: bytes) -> None:
+        """Project one provider role through live Git and worktree authority."""
+
+        self.require_active()
+        if self._lease is None:
+            raise SessionArtifactBindingError(
+                "session artifact resources are unavailable"
+            )
+        try:
+            install_session_role_projection(
+                self._descriptor,
+                self._lease.common_descriptor,
+                agent_id=agent_id,
+                content=content,
+            )
+            self.require_active()
+        except OSError:
+            raise SessionArtifactBindingError(
+                "session artifact resources are unavailable"
+            ) from None
 
     def require_active(self) -> None:
         """Require the live lease, descriptor, and named worktree identity."""

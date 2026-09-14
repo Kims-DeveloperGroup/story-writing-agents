@@ -72,14 +72,15 @@ session worktree relationship. It retains that pin through the provider await
 and durable result publication, rechecks the relationship, and closes the pin.
 The pin carries no artifact bytes, path traversal, repository operation, or
 semantic READY authority; each source read still uses its own short guarded
-READY transaction, and no Git lease spans the provider wait. For each Codex
-story call, the same session binding separately mints a call-local capability
-that selects the retained session-root descriptor as OS working directory and
-native project root `--cd .`; the continuity pin itself still grants no such
+READY transaction, and no Git lease spans the provider wait. For each Codex or
+Antigravity story call, the same session binding separately mints a call-local
+capability that selects the retained session-root descriptor as OS working
+directory. Codex also uses native project root `--cd .`; Antigravity uses the
+exact CWD as its project root. The continuity pin itself still grants no such
 process authority. See the
-[Codex session execution boundary](../reference/backend-and-sessions.md#codex-session-execution-boundary).
-Antigravity adoption remains
-[Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
+[Provider session execution boundary](../reference/backend-and-sessions.md#codex-session-execution-boundary).
+Neither provider reads story evidence from that placement; runtime-mediated
+context and SEARCH/READ supply selected content.
 
 The initial substantive payload of each Lead invocation includes required
 session context (`h`). Bootstrap supplies all retained active and archived

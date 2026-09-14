@@ -172,6 +172,33 @@ class ProviderExecutionWorkspace:
                 raise
             raise self._binding_failure() from None
 
+    def duplicate_validation_descriptor(self) -> int:
+        """Duplicate the exact root only for package-internal read validation."""
+
+        self.require_current()
+        descriptor = -1
+        try:
+            with self._lock:
+                if self._closed:
+                    raise OSError
+                descriptor = _duplicate_descriptor_at_least_three(
+                    self._root_descriptor
+                )
+            os.set_inheritable(descriptor, False)
+            if _directory_identity(os.fstat(descriptor)) != self._root_identity:
+                raise OSError
+            self.require_current()
+            return descriptor
+        except BaseException as failure:
+            if descriptor >= 0:
+                try:
+                    os.close(descriptor)
+                except BaseException as cleanup_failure:
+                    _annotate_cleanup(failure, cleanup_failure)
+            if not isinstance(failure, Exception):
+                raise
+            raise self._binding_failure() from None
+
     def close(self, *, failure: BaseException | None = None) -> None:
         """Release owned descriptors once without replacing a primary failure."""
 

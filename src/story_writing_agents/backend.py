@@ -483,7 +483,7 @@ class _BoundContextProvider:
             with ExitStack() as workspace_stack:
                 active_execution_workspace = execution_workspace
                 if (
-                    self.provider_id == "codex"
+                    self.provider_id in {"codex", "antigravity"}
                     and active_execution_workspace is None
                 ):
                     binding = _compose_session_artifact_binding(
@@ -491,7 +491,10 @@ class _BoundContextProvider:
                         scope.session_id,
                     )
                     active_execution_workspace = workspace_stack.enter_context(
-                        binding.open_provider_execution_workspace()
+                        provider_execution_workspace_manager(
+                            self._bound_agent,
+                            binding,
+                        )
                     )
                 definition_fingerprint, effective_policy_fingerprint = (
                     self._effective_context_fingerprints(
@@ -592,7 +595,7 @@ class _BoundContextProvider:
         """Resolve only the capability owned by this active invocation."""
 
         active = self._active_execution_workspace
-        if self.provider_id != "codex":
+        if self.provider_id not in {"codex", "antigravity"}:
             return supplied
         if type(active) is not ProviderExecutionWorkspace or (
             supplied is not None and supplied is not active
@@ -934,7 +937,7 @@ class BoundAgent:
         return _BoundContextProvider(self, reference_read)
 
     @asynccontextmanager
-    async def _direct_codex_execution_workspace(
+    async def _direct_execution_workspace(
         self,
         session_id: str,
         reference_read: ReferenceReadInvocation | None,
@@ -954,7 +957,7 @@ class BoundAgent:
                 session_id,
             )
             binding = binding.transfer_to_current_thread()
-            with binding.open_provider_execution_workspace() as workspace:
+            with provider_execution_workspace_manager(self, binding) as workspace:
                 entered = True
                 token = _DEFERRED_DIRECT_CODEX_ACCEPTANCES.set(deferred)
                 try:
@@ -1092,7 +1095,7 @@ class BoundAgent:
     ) -> AgentReply:
         """Invoke the selected vendor while serializing its persistent thread."""
 
-        if self.vendor == "codex":
+        if self.vendor in {"codex", "antigravity"}:
             if type(request) is not AgentRequest:
                 failure = TypeError("request must be an AgentRequest")
                 self._terminate_reference_before_provider(reference_read, failure)
@@ -1127,7 +1130,7 @@ class BoundAgent:
                     phase=request.phase.value,
                     round_number=request.round_number,
                 )
-            async with self._direct_codex_execution_workspace(
+            async with self._direct_execution_workspace(
                 request.session_id,
                 reference_read,
             ) as workspace:
@@ -1265,7 +1268,7 @@ class BoundAgent:
     ) -> ConversationReply:
         """Run one validated visible conversation turn on this agent thread."""
 
-        if self.vendor == "codex":
+        if self.vendor in {"codex", "antigravity"}:
             try:
                 validated = self._validated_conversation_request(request)
             except BaseException as failure:
@@ -1278,7 +1281,7 @@ class BoundAgent:
                     phase="conversation",
                     round_number=None,
                 )
-            async with self._direct_codex_execution_workspace(
+            async with self._direct_execution_workspace(
                 validated.session_id,
                 reference_read,
             ) as workspace:
@@ -1402,7 +1405,7 @@ class BoundAgent:
         propagate with incomplete observation state tainted when required.
         """
 
-        if self.vendor == "codex":
+        if self.vendor in {"codex", "antigravity"}:
             try:
                 validated = self._validated_conversation_retrieval_request(request)
             except BaseException as failure:
@@ -1415,7 +1418,7 @@ class BoundAgent:
                     phase="conversation_retrieval",
                     round_number=None,
                 )
-            async with self._direct_codex_execution_workspace(
+            async with self._direct_execution_workspace(
                 validated.session_id,
                 reference_read,
             ) as workspace:
@@ -4785,13 +4788,13 @@ class AgentBackend:
         bound_agent: BoundAgent,
         execution_workspace: ProviderExecutionWorkspace | None,
     ) -> str:
-        """Bind legacy Codex thread compatibility without changing its schema."""
+        """Bind workspace-backed thread compatibility without changing its schema."""
 
         fingerprint = bound_agent.definition.fingerprint
-        if bound_agent.vendor != "codex":
+        if bound_agent.vendor not in {"codex", "antigravity"}:
             return fingerprint
         if type(execution_workspace) is not ProviderExecutionWorkspace:
-            raise BackendProtocolError("Codex execution workspace is unavailable")
+            raise BackendProtocolError("provider execution workspace is unavailable")
         return execution_workspace.continuation_digest(
             "legacy-definition-policy",
             fingerprint,
@@ -5241,7 +5244,7 @@ class AgentBackend:
         """Return existing-shaped context keys proven for this generation."""
 
         definition_fingerprint = f"sha256:{bound_agent.definition.fingerprint}"
-        if bound_agent.vendor != "codex":
+        if bound_agent.vendor not in {"codex", "antigravity"}:
             return definition_fingerprint, policy_fingerprint
         if type(execution_workspace) is not ProviderExecutionWorkspace:
             raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
@@ -7731,6 +7734,45 @@ class AgentBackend:
         """Return the access-claim path for a validated session ID."""
 
         return f"{_SESSION_DIRECTORY}/{session_id}.access.json"
+
+
+@contextmanager
+def provider_execution_workspace_manager(
+    bound_agent: BoundAgent,
+    binding: SessionArtifactBinding,
+) -> Iterator[ProviderExecutionWorkspace]:
+    """Open one workspace-backed provider capability with host-owned setup."""
+
+    if (
+        type(bound_agent) is not BoundAgent
+        or type(binding) is not SessionArtifactBinding
+        or bound_agent.vendor not in {"codex", "antigravity"}
+    ):
+        raise BackendProtocolError("provider execution workspace is unavailable")
+    if bound_agent.vendor == "antigravity":
+        try:
+            generation = bound_agent._adapter_generation
+            adapter = (
+                bound_agent.backend._adapter_for("antigravity")
+                if generation is None
+                else generation.adapters["antigravity"]
+            )
+            if type(adapter) is not AntigravityAdapter:
+                raise OSError("Antigravity provider adapter is invalid")
+            content = adapter.session_role_projection_bytes(
+                bound_agent._provider_binding
+            )
+            with binding.open_ready_resources() as access:
+                access.install_provider_role(
+                    bound_agent.definition.agent_id,
+                    content,
+                )
+        except OSError as failure:
+            raise BackendProtocolError(
+                "Antigravity session role projection is unavailable"
+            ) from failure
+    with binding.open_provider_execution_workspace() as workspace:
+        yield workspace
 
 
 async def invoke_story_bound_agent(

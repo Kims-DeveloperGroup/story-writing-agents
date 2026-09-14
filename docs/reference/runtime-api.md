@@ -128,20 +128,23 @@ Lead and collaboration pin finalization is primary-aware: it preserves an
 active failure and cannot skip the remaining bound-agent or sibling cleanup.
 
 The continuity pin alone grants no process working-directory authority. For
-each Codex story invocation, the same `SessionArtifactBinding` separately mints
-an opaque call-local execution capability: the provider enters the retained
-session-root descriptor and receives native project root `--cd .` under the
-fail-closed Darwin boundary. That placement grants no session filesystem read
-authority; host-owned context, reference, SEARCH, and READ services deliver
-only selected story content in provider payloads and observations. Direct
+each Codex or Antigravity story invocation, the same `SessionArtifactBinding`
+separately mints an opaque call-local execution capability: the provider enters
+the retained session-root descriptor under the fail-closed Darwin boundary.
+Codex receives native project root `--cd .`; Antigravity uses the exact CWD as
+its native project root without an adapter-control fallback. That placement
+grants no direct manuscript/core-document read authority; host-owned context,
+reference, SEARCH, and READ services deliver only selected story content in
+provider payloads and observations. Direct
 BoundAgent entry points retain the execution-workspace owner around the full
 logical call and revalidate currentness when it exits, including after apparent
 body success. Exit loss fails that return; if another body failure is already
 active, it remains primary and receives only a content-free failure-type note.
 See the
-[Codex session execution boundary](backend-and-sessions.md#codex-session-execution-boundary).
-Antigravity adoption remains
-[Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
+[Provider session execution boundary](backend-and-sessions.md#codex-session-execution-boundary).
+Antigravity additionally requires the exact protected session role projection;
+Codex continues direct developer-instruction injection and needs no worktree
+configuration file.
 
 This covers explicit and contextual references, source status and
 fingerprints, proposal and review

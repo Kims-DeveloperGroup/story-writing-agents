@@ -248,13 +248,14 @@ common-Git, worktree-administration, session-worktree, `.git`, and `commondir`
 relationship through durable result publication, then rechecks and closes.
 This pin can span the provider await because it retains no Git lease and grants
 no traversal, content, mutation, or semantic READY authority. The pin itself
-does not set a process working directory. For each Codex story call, the same
-session binding separately mints an opaque call-local capability that selects
-the retained session-root descriptor as OS working directory and native
-project root `--cd .`. See the
-[Codex session execution boundary](../reference/backend-and-sessions.md#codex-session-execution-boundary).
-Antigravity adoption remains
-[Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
+does not set a process working directory. For each Codex or Antigravity story
+call, the same session binding separately mints an opaque call-local capability
+that selects the retained session-root descriptor as OS working directory.
+Codex also selects native project root `--cd .`; Antigravity uses that exact CWD
+as its project root. See the
+[Provider session execution boundary](../reference/backend-and-sessions.md#codex-session-execution-boundary).
+Antigravity's selected role projection is protected control data rather than
+story content; SEARCH/READ remains the story-evidence path.
 
 The session-source reader accepts only canonical relative POSIX paths. It
 traverses without following symlinks, retains the complete root-to-parent

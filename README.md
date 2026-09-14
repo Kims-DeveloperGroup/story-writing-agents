@@ -318,20 +318,23 @@ control-plane storage. Replacing the named worktree does not transfer authority
 to the replacement.
 The runtime never falls back to `main`, the current directory, or a previously
 used session, and it does not provision missing session resources as a side
-effect. For every Codex Lead, specialist, synthesis, consensus, or direct bound-
-agent call, the runtime derives a call-local execution capability from that
-binding. The child enters the descriptor-selected exact session worktree and
-uses `--cd .`, so both its OS working directory and native project root are the
-same pinned generation, never prompt staging or the control workspace. On
-Darwin, a second default-deny sandbox grants the provider no session-tree read
-or write access and explicitly denies `.git` and prompt staging. Host-owned
+effect. For every Codex or Antigravity Lead, specialist, synthesis, consensus,
+or direct bound-agent call, the runtime derives a call-local execution
+capability from that binding. The child enters the descriptor-selected exact
+session worktree, so its OS working directory is the same pinned generation,
+never provider staging or the control workspace. Codex also uses `--cd .`;
+Antigravity treats that exact CWD as its native project root without an adapter-
+control fallback. On Darwin, a second default-deny sandbox gives Codex no
+session-tree reads and gives Antigravity only literal project traversal plus
+its selected protected role file. Neither provider receives direct manuscript
+or core-document access; session writes and `.git` are denied. Host-owned
 context, explicit-reference, SEARCH, and READ services select and deliver story
-content through the provider payload instead. Closed exceptions admit only
-the literal canonical Codex executable, required system runtime files,
-transport, outbound network access, and an existing absolute owner-controlled
-`CODEX_HOME` that cannot overlap the control root, the schema-derived sibling-
-worktree container, staging, or output transport. Bound instructions, schema,
-and response transport remain outside story Git. The response is accepted only
+content through the provider payload instead. Codex exceptions admit only its
+literal canonical executable, required system runtime files, transport,
+outbound network access, and an existing absolute owner-controlled `CODEX_HOME`
+that cannot overlap the control root, the schema-derived sibling-worktree
+container, staging, or output transport. Bound instructions, schema, and
+response transport remain outside story Git. The Codex response is accepted only
 from a no-follow, identity-stable, singly linked regular file containing strict
 UTF-8 and no more than 8 MiB. The
 deprecated Darwin sandbox facility is fail-closed when unavailable, and an
@@ -345,8 +348,12 @@ provider-call finalizer is accepted; failure after checkpoint commit invalidates
 that exact committed generation. Direct execution-workspace ownership also
 revalidates currentness on exit; exit loss prevents an apparent success from
 returning, while an active body failure remains primary.
-Antigravity adopts the corresponding worktree boundary separately in
-[Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
+Antigravity projects exact runtime-owned role bytes to the unversioned,
+read-only `.agents/agents/<agent-id>/agent.md`. That protected control file is
+the only provider-readable session leaf; mutable provider state remains
+external and generation-qualified, while schema/output transport also stays
+external. Codex continues to inject developer instructions directly and
+requires no worktree configuration file.
 Create or reopen the session through the lifecycle first.
 
 ```python

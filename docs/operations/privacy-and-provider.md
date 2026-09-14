@@ -1192,9 +1192,10 @@ These controls apply to provider-bound story calls, including direct bound-
 agent, Lead, specialist, synthesis, and consensus paths. Native authentication,
 model-catalog discovery, `--help`, and other management probes are excluded and
 keep the distinct workspace/environment exposure documented in their own
-sections. Antigravity does not yet inherit the Codex worktree capability or
-outer sandbox; that work remains
-[Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
+sections. Antigravity story calls now use the same exact session-generation
+capability and descriptor-selected CWD. Their outer sandbox admits only literal
+project traversal and the selected protected role, while denying direct story-
+file reads, session writes, and `.git`.
 
 Antigravity also runs without shell evaluation. The backend passes the exact
 confidential story request JSON as one `--print` argument, uses
@@ -1207,16 +1208,19 @@ adapter uses the prompt argument. OS argument-size limits may reject large
 requests before process creation with a typed start failure and no submitted
 transport count.
 
-It stages and selects a custom main agent beneath an isolated provider
-workspace, uses `--new-project` for fresh history or the exact retained
-`--conversation` ID for resume, and passes sandbox, plan-mode, and
-disabled-slash flags without an approval bypass. It never registers the
-canonical story root as the provider project. CLI 1.1.27 warns that plan mode
+It projects exact runtime-owned role bytes to the unversioned, read-only
+`.agents/agents/<agent-id>/agent.md` in the selected session worktree, uses
+`--new-project` for fresh history or the exact retained `--conversation` ID for
+compatible generation-bound resume, and passes sandbox, plan-mode, and disabled-
+slash flags without an approval bypass. The role is protected control data, not
+story content or mutable provider residue; Git, story references, SEARCH/READ
+sources, and artifact paths exclude `.agents`. CLI 1.1.27 warns that plan mode
 has no effect when slash commands are disabled. The argument list also contains
-the output schema, isolated state path, optional model/effort, and conversation
-ID. The child inherits the runtime environment. Keep credentials out of request
-content, model names, paths, configuration fields, shell history, and
-diagnostics; inherited variables must be suitable for a provider subprocess.
+the output schema, external generation-qualified state path, optional model/
+effort, and conversation ID. The child inherits the runtime environment. Keep
+credentials out of request content, model names, paths, configuration fields,
+shell history, and diagnostics; inherited variables must be suitable for a
+provider subprocess.
 
 Workspace fallback and per-agent Codex model/reasoning values are plaintext
 configuration. An `AgentBackend` passes each bound agent's effective non-null
@@ -1228,24 +1232,19 @@ plaintext local process configuration and appear in arguments when set. Treat
 all provider settings as locally exposed process configuration, not as a place
 to store secrets.
 
-Antigravity's isolated provider-native state is also plaintext and is retained
-when a backend closes. Taint or definition-fingerprint mismatch starts a fresh
-provider conversation without deleting prior provider data. On supported POSIX
-systems, the adapter best-effort requests owner-only (`0700`) modes for its
-Antigravity state root and adapter-owned definition and session directory
-chains, and it rejects a detected link or non-directory in those components
-before a provider launch. It does not recursively change the backend-owned
-containing directory or provider-created files. Adapter-owned staged and
-workspace custom-agent definition leaves are verified as regular and singly linked
-when present, then installed through an exclusively created same-directory
-temporary with requested `0600` mode and atomic replacement. Detected symbolic
-links, non-regular entries, and multiply linked leaves are preserved and
-rejected before provider launch.
-Unsupported platforms, including Windows, and ordinary mode-setting failures
-retain platform behavior; parent-directory traversal is not descriptor-anchored,
-so these protections are neither application access control nor race-proof
-containment. Protect the complete workspace and provider-state paths with
-OS-level controls; the runtime provides neither encryption nor secure erase.
+Antigravity's external provider-native state is also plaintext, qualified by
+physical session generation, session, agent, and definition fingerprint, and
+retained when a backend closes. Taint, definition mismatch, or unproved foreign-
+generation history starts fresh without deleting prior provider data. The
+adapter keeps its staged definitions and mutable native state outside the
+session tree. The session role projection instead uses descriptor-relative,
+no-follow validation: owner-controlled directories, exact bytes, and one singly
+linked role file with no write bits. Differing content, symbolic links, FIFOs,
+other nonregular entries, multiply linked files, writable roles, and foreign
+topology are rejected and preserved. Nonblocking file opens make FIFO and
+special-file failures prompt rather than waiting for content. Protect the
+complete workspace and provider-state paths with OS-level controls; the runtime
+provides neither encryption nor secure erase.
 
 The custom definition declares only `finish`, but earlier CLI 1.1.27 stream
 probes advertised a 57-tool main-agent catalog. Neither that declaration nor

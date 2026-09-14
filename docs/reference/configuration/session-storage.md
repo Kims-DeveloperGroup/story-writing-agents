@@ -765,7 +765,7 @@ boolean. Opening ready state and releasing access do not rewrite the manifest.
 
 The base key is used when the effective continuation fingerprint is the bound
 definition fingerprint. A different effective fingerprint, including a Codex
-session-generation fingerprint, uses the qualified key. Lookup and taint check
+or Antigravity session-generation fingerprint, uses the qualified key. Lookup and taint check
 that qualified record first. Only when it is absent may an exact-fingerprint
 legacy base record act as fallback; a present qualified record never falls
 back because it is tainted or incompatible. A successful store or fallback
@@ -790,11 +790,24 @@ workspace backup, or run a version that understands qualified records.
 
 Antigravity owns a stable root below `provider_sessions/.antigravity/` and
 partitions bound definitions by agent and definition fingerprint. Invocation
-state is separately partitioned by session, agent, and definition fingerprint.
-Each invocation uses sibling isolated provider and working directories and
-copies only the verified bound rules into the working directory. The runtime
-deliberately retains this plaintext state across switch, pause, quit, EOF, and
-`AgentBackend.close()` so a compatible provider conversation can resume later.
+state is separately partitioned by session, physical session-generation digest,
+agent, and definition fingerprint at
+`sessions/<session>/<generation>/<agent>/<definition>/provider`. It remains
+outside the selected session worktree. The runtime deliberately retains this
+plaintext state across switch, pause, quit, EOF, and `AgentBackend.close()` so a
+compatible, proved-generation provider conversation can resume later. Foreign
+or unproved generation state is retained but starts fresh rather than being
+adopted.
+
+The selected session worktree contains one persistent runtime-control
+projection at `.agents/agents/<agent-id>/agent.md`. Its bytes exactly match the
+adapter's staged role, the file is singly linked and read-only, and its
+directories are owner-controlled. The common Git exclusion contains
+`/.agents/`; story references, SEARCH/READ sources, and artifact paths also
+exclude this tree. It is therefore unversioned protected control data, not
+mutable provider-native residue or story content. Differing/unsafe bytes or
+foreign topology fail closed and are preserved. Failed fresh setup removes
+only still-empty, identity-matching directories created by that call.
 
 Each successful invocation supplies one JSON result with a safe
 `conversation_id`; resume requires it to equal the retained reference. The
@@ -803,10 +816,10 @@ manifest stores only that validated reference. It does not store native
 as a process-visible `--print` argument with empty stdin; see
 [provider privacy](../../operations/privacy-and-provider.md#provider-processes-and-credentials).
 
-Antigravity owns the native conversation contents beneath its isolated state.
+Antigravity owns the native conversation contents beneath its external state.
 Neither close nor taint is deletion, secure erase, or a retention policy. Back
 up and protect this root with the rest of the workspace, and do not edit its
-provider-managed contents.
+provider-managed contents or the protected session role projection.
 
 ## Access claim and guard
 

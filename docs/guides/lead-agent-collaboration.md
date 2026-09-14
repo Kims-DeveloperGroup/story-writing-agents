@@ -93,13 +93,13 @@ restores state between checks. Stop workspace processes before external
 recovery work.
 
 The continuity pin itself grants no provider process authority. For each Codex
-story call, the same session binding separately mints an opaque call-local
-capability that selects the retained session-root descriptor as OS working
-directory and native project root `--cd .` under the fail-closed Darwin
-boundary. See the
-[Codex session execution boundary](../reference/backend-and-sessions.md#codex-session-execution-boundary).
-Antigravity adoption remains
-[Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
+or Antigravity story call, the same session binding separately mints an opaque
+call-local capability that selects the retained session-root descriptor as OS
+working directory under the fail-closed Darwin boundary. Codex also uses native
+project root `--cd .`; Antigravity uses the exact CWD as its project root. See the
+[Provider session execution boundary](../reference/backend-and-sessions.md#codex-session-execution-boundary).
+Neither provider gains direct manuscript access; story evidence remains
+runtime-mediated.
 
 ## The normal request flow
 
