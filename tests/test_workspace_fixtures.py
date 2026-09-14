@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from story_writing_agents import Workspace, WorkspaceFormatError, WorkspaceSecurityError
 from story_writing_agents.workspace import open_workspace_root_directory
@@ -195,6 +196,102 @@ class WorkspaceFixtureContractTests(unittest.TestCase):
             timing.seconds for timing in timings if timing.phase == "materialize"
         )
         self.assertLess(materialization, preparation)
+
+    def test_caller_owned_target_is_exact_absent_independent_and_failure_safe(self):
+        with tempfile.TemporaryDirectory(prefix="caller-workspace-tier-") as temporary:
+            container = Path(os.path.realpath(temporary))
+            first_root = container / "first"
+            second_root = container / "second"
+            sealed_before = helpers._workspace_template_digest()
+
+            first = helpers.materialize_pristine_initialized_workspace(first_root)
+            second = helpers.materialize_pristine_initialized_workspace(second_root)
+
+            self.assertEqual(first.root, first_root)
+            self.assertEqual(second.root, second_root)
+            self.assertTrue(first_root.is_dir())
+            self.assertTrue(second_root.is_dir())
+            first_observed = first_root.lstat()
+            first_identity = (first_observed.st_dev, first_observed.st_ino)
+            self.assertEqual(first._root_identity, first_identity)
+            self.assertEqual(
+                first._root_inspection,
+                WorkspaceRootInspection(
+                    WorkspaceRootState.READY,
+                    first_identity,
+                    WorkspaceRootRole.MAIN,
+                    None,
+                    first_root,
+                ),
+            )
+            self.assertNotEqual(first_observed.st_ino, second_root.lstat().st_ino)
+            self.assertNotEqual(
+                (first_root / ".git/index").lstat().st_ino,
+                (second_root / ".git/index").lstat().st_ino,
+            )
+            for first_path in first_root.rglob("*"):
+                if not first_path.is_file() or first_path.is_symlink():
+                    continue
+                relative = first_path.relative_to(first_root)
+                second_path = second_root / relative
+                self.assertTrue(second_path.is_file(), relative)
+                self.assertNotEqual(
+                    (first_path.lstat().st_dev, first_path.lstat().st_ino),
+                    (second_path.lstat().st_dev, second_path.lstat().st_ino),
+                    relative,
+                )
+
+            first.path("config/.caller-owned.lock").write_text("lock", encoding="utf-8")
+            head = _git(first_root, "rev-parse", "HEAD")
+            self.assertEqual(head.returncode, 0, head.stderr)
+            self.assertEqual(
+                _git(
+                    first_root,
+                    "update-ref",
+                    "refs/test/caller-owned",
+                    head.stdout.strip(),
+                ).returncode,
+                0,
+            )
+            self.assertFalse(second.path("config/.caller-owned.lock").exists())
+            self.assertNotEqual(
+                _git(second_root, "show-ref", "--verify", "refs/test/caller-owned").returncode,
+                0,
+            )
+
+            existing = container / "existing"
+            existing.mkdir()
+            sentinel = existing / "sentinel"
+            sentinel.write_text("preserve", encoding="utf-8")
+            with self.assertRaises(FileExistsError):
+                helpers.materialize_pristine_initialized_workspace(existing)
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "preserve")
+
+            existing_file = container / "existing-file"
+            existing_file.write_text("preserve file", encoding="utf-8")
+            with self.assertRaises(FileExistsError):
+                helpers.materialize_pristine_initialized_workspace(existing_file)
+            self.assertEqual(existing_file.read_text(encoding="utf-8"), "preserve file")
+
+            external = container / "external"
+            external.write_text("preserve link target", encoding="utf-8")
+            existing_link = container / "existing-link"
+            existing_link.symlink_to(external)
+            with self.assertRaises(FileExistsError):
+                helpers.materialize_pristine_initialized_workspace(existing_link)
+            self.assertTrue(existing_link.is_symlink())
+            self.assertEqual(external.read_text(encoding="utf-8"), "preserve link target")
+
+            failed = container / "failed"
+            with mock.patch.object(
+                helpers,
+                "_bind_guarded_ready_workspace",
+                side_effect=AssertionError("diagnostic bind failure"),
+            ):
+                with self.assertRaisesRegex(AssertionError, "diagnostic bind failure"):
+                    helpers.materialize_pristine_initialized_workspace(failed)
+            self.assertFalse(failed.exists())
+            self.assertEqual(helpers._workspace_template_digest(), sealed_before)
 
 
 if __name__ == "__main__":

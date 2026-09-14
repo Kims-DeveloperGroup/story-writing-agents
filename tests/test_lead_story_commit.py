@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import subprocess
-import tempfile
 import unittest
 from dataclasses import replace
 from unittest import mock
@@ -35,6 +34,7 @@ from story_writing_agents.git.story_commit_contracts import (
 from story_writing_agents.workspace.initialization import provision_session_resources
 
 from tests import test_lead_artifact_application as lead_artifact_application_tests
+from tests.helpers import pristine_initialized_workspace
 from tests.test_artifact_proposal_orchestration import (
     _RULES,
     _artifact_outcome,
@@ -99,10 +99,7 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
     artifact_snapshot = lead_artifact_application_tests.LeadArtifactApplicationTests.artifact_snapshot
 
     def setUp(self) -> None:
-        temporary = tempfile.TemporaryDirectory(prefix="lead-story-commit-")
-        self.temporary = temporary
-        self.addCleanup(temporary.cleanup)
-        main = Workspace(temporary.name).initialize()
+        main = pristine_initialized_workspace(self)
         self.session_id = "story_session"
         ready = provision_session_resources(main.root, self.session_id)
         self.workspace = Workspace(ready.identity.worktree_root).require_ready()

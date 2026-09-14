@@ -10,7 +10,6 @@ import os
 import stat
 import subprocess
 import sys
-import tempfile
 import textwrap
 import unittest
 from dataclasses import FrozenInstanceError, fields
@@ -35,7 +34,7 @@ from story_writing_agents.conversation_rag_store import (
     ConversationRagStoreStatus,
 )
 
-from tests.helpers import initialize_test_workspace
+from tests.helpers import pristine_initialized_workspace
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _GENERIC_SOURCE = _REPOSITORY_ROOT / "vendor" / "generic-rag" / "src"
@@ -219,9 +218,7 @@ class ConversationRagStoreTests(unittest.TestCase):
     def new_store(
         self,
     ) -> tuple[Workspace, ConversationRagGenerationStore]:
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        workspace = initialize_test_workspace(temporary.name)
+        workspace = pristine_initialized_workspace(self)
         return workspace, ConversationRagGenerationStore(workspace)
 
     @staticmethod

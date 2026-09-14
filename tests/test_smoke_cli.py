@@ -9,7 +9,6 @@ import os
 import stat
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -19,7 +18,7 @@ from story_writing_agents import cli as cli_module
 from story_writing_agents import smoke as smoke_module
 from story_writing_agents.smoke import run_smoke
 
-from tests.helpers import initialize_test_workspace, workspace_git_identity
+from tests.helpers import pristine_initialized_workspace, workspace_git_identity
 
 
 EXPECTED_CHECKS = [
@@ -171,9 +170,7 @@ class SmokeExplicitWorkspaceTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.enterContext(workspace_git_identity())
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        self.workspace = initialize_test_workspace(Path(temporary.name) / "workspace")
+        self.workspace = pristine_initialized_workspace(self)
 
     def test_explicit_smoke_is_exact_read_only_and_collaborator_free(self) -> None:
         before = tree_snapshot(self.workspace.root)

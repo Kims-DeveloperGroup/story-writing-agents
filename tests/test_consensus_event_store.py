@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
-import tempfile
 import unittest
 from unittest import mock
 
@@ -37,7 +35,7 @@ from story_writing_agents.consensus.event_store import (
 from story_writing_agents.consensus.execution import ConsensusPhaseOutputKind
 from story_writing_agents.consensus.serialization import serialize_consensus_workflow
 
-from tests.helpers import initialize_test_workspace
+from tests.helpers import pristine_initialized_workspace
 
 
 _IDENTITY = ConsensusExecutionIdentity("session-1", "conversation-1")
@@ -105,10 +103,8 @@ class _DurableConsensusPort:
 
 class ConsensusEventStoreTests(unittest.TestCase):
     def setUp(self) -> None:
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name) / "workspace"
-        self.workspace = initialize_test_workspace(self.root)
+        self.workspace = pristine_initialized_workspace(self)
+        self.root = self.workspace.root
         self.store = ConsensusEventStore(self.workspace)
 
     def request_and_submission(
@@ -275,9 +271,7 @@ class ConsensusEventStoreTests(unittest.TestCase):
 
 class DurableConsensusRestartTests(unittest.IsolatedAsyncioTestCase):
     async def test_restart_exposes_state_without_replaying_confirmation_or_provider(self) -> None:
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        workspace = initialize_test_workspace(Path(temporary.name) / "workspace")
+        workspace = pristine_initialized_workspace(self)
         port = _DurableConsensusPort(workspace)
         first = ConsensusRuntimeAdapter(port)
         submitted = first.submit_prompt(

@@ -5,9 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
-import tempfile
 from dataclasses import replace
-from pathlib import Path
 from unittest import mock
 
 from story_writing_agents import StoryRuntime, Workspace
@@ -18,6 +16,7 @@ from tests import test_lead_orchestration as lead
 from tests import test_artifact_proposal_orchestration as artifact
 from tests import test_lead_artifact_application as application
 from tests import test_lead_story_commit as commit
+from tests.helpers import pristine_initialized_workspace
 
 OUTLINE = "core_documents/global_outline.md"
 DRAFT = "1. A lantern vanishes.\n2. 민 finds its keeper.\n3. The lantern returns.\n[A641 synthetic]\n"
@@ -44,9 +43,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
     """Shared setup only; importing it does not duplicate concrete test IDs."""
 
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="artifact-objective-")
-        self.addCleanup(temporary.cleanup)
-        main = Workspace(Path(temporary.name) / "main").initialize()
+        main = pristine_initialized_workspace(self)
         self.session_id = "story_session"
         ready = provision_session_resources(main.root, self.session_id)
         self.workspace = Workspace(ready.identity.worktree_root).require_ready()
@@ -315,7 +312,10 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         readable = c.project_collaboration_readable_history(before)
         objective_record = next(item for item in readable if isinstance(item.payload, c.ArtifactObjectivePayload))
         self.assertEqual({field.key: field.text for field in objective_record.fields}, {
-            c.CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_REQUEST: "The scoped work requires its disclosed specialists.",
+            c.CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_REQUEST: (
+                "Draft core_documents/global_outline.md from this brief: a lantern "
+                "vanishes, its keeper is found, and it returns."
+            ),
             c.CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_ACTION: "start",
             c.CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_NEXT_STEP: "consult",
         })

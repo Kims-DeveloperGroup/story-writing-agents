@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -38,7 +37,7 @@ from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
 
-from tests.helpers import initialize_test_workspace
+from tests.helpers import pristine_initialized_workspace
 
 
 _CORE_CREATE = "core_documents/character_sheets.md"
@@ -188,10 +187,7 @@ def _five_operation_request(
 
 class _ApplicationStoreTestCase(unittest.TestCase):
     def new_repository(self) -> tuple[Path, WritingArtifactRepository]:
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        root = Path(temporary.name)
-        initialize_test_workspace(root)
+        root = pristine_initialized_workspace(self).root
         return root, WritingArtifactRepository(root)
 
     @staticmethod
