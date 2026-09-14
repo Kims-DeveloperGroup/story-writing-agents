@@ -273,10 +273,15 @@ entry, the host projects the exact staged role bytes to
 `/.agents/` to the common Git exclusion. Projection traversal is descriptor-
 relative and no-follow. Directories must be owner-controlled with no group or
 other writes; the selected role must be regular, singly linked, byte-exact, and
-read-only. Only `.agents/agents`, canonical roster directories, and their
-`agent.md` leaves are admitted. Differing bytes, unsafe or foreign entries,
-symlinks, hard links, FIFOs, devices, and topology drift fail closed and are
-preserved. Nonblocking reads reject FIFOs and other special files promptly.
+have exact mode `0400`. Pre-launch and post-return checks require that same
+exact file identity, so replacing the role with equal bytes still fails closed.
+Only `.agents/agents`, canonical roster directories, and their `agent.md`
+leaves are admitted. When `/.agents/` must be appended to the common Git
+exclusion, the complete replacement—including any separator and the appended
+line—must remain at or below 64 KiB. Differing bytes, unsafe or foreign entries,
+symlinks, hard links, FIFOs, devices, identity replacement, an oversized final
+exclusion, and topology drift fail closed and are preserved. Nonblocking reads
+reject FIFOs and other special files promptly.
 
 A failed fresh projection removes only directories created by that call that
 still have their recorded identity and remain empty, walking leaf first.

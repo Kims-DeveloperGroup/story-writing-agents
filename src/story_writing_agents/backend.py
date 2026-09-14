@@ -985,6 +985,20 @@ class BoundAgent:
             for acceptance in deferred:
                 acceptance.accept()
 
+    @asynccontextmanager
+    async def _direct_codex_execution_workspace(
+        self,
+        session_id: str,
+        reference_read: ReferenceReadInvocation | None,
+    ) -> AsyncIterator[ProviderExecutionWorkspace]:
+        """Compatibility delegate for the generalized direct-call authority."""
+
+        async with self._direct_execution_workspace(
+            session_id,
+            reference_read,
+        ) as workspace:
+            yield workspace
+
     def _preflight_direct_codex_workspace(self, session_id: str) -> None:
         """Reject unavailable logical work before opening a physical workspace."""
 

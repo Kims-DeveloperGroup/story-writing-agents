@@ -1377,6 +1377,7 @@ class ConversationCase:
     async def diagnostic_cases(self):
         from story_writing_agents.prompts import PromptAssembler
         from story_writing_agents.provider_adapter import ProviderInvocation, ProviderInvocationError
+        from story_writing_agents.workspace.initialization import compose_session_artifact_binding
         schema = {'additionalProperties': False,
          'properties': {'correlation': {'description': 'Echo the exact correlation token from this '
                                                        'call.',
@@ -1417,49 +1418,59 @@ class ConversationCase:
          'description': 'Return exactly one schema-selected context action with its exact '
                         'correlation token.'}
         definition = PromptAssembler(self.workspace, backend_overrides={'plot_architect': 'antigravity'}).build_contextual_definition(session_id='diagnostics', agent_id='plot_architect')
+        session_binding = compose_session_artifact_binding(
+            self.workspace.root,
+            self.session,
+        )
         outcomes = []
         for index, fault in enumerate((None, 'known_error', 'utf8', 'json', 'unrelated_error', 'schema')):
             adapter = antigravity_adapter.AntigravityAdapter(executable=os.environ.get('STORY_ANTIGRAVITY_EXECUTABLE', 'agy'), timeout_seconds=180, state_root=self.directory / f'diagnostic-state-{index}', explicit_model=self.model, explicit_effort=None)
             binding = adapter.bind(definition)
-            payload = {'c': 'synthetic-correlation', 'q': 'Return exactly the schema-selected outer answer. action.result must contain assessment supports, assignment_id synthetic-assignment, input_ids [synthetic-input], and a short visible message. Set used_handles to [].'}
-            invocation = ProviderInvocation(session_id='diagnostics', schema=antigravity_adapter.AntigravityAdapter.native_output_schema(schema), payload=payload, thread_id=None, binding_components=binding.binding_components)
-            self.observer.fault = fault
-            self.observer.fault_agent = 'plot_architect'
-            self.observer.fault_consumed = False
-            from story_writing_agents.agent_exchanges import AgentExchangeProvider, AgentExchangeScopeKind
-            capture = self.backend._agent_exchange_capture.begin(session_id=self.session, scope_kind=AgentExchangeScopeKind.CONVERSATION, scope_id=self.conversation, agent_id='plot_architect', provider=AgentExchangeProvider.ANTIGRAVITY, invocation=invocation)
-            try:
-                result = await adapter.invoke(binding, invocation)
-            except ProviderInvocationError as exc:
-                from story_writing_agents.agent_exchanges.capture import AgentExchangeTerminalCode
-                self.backend._capture_provider_failure_without_replacing(capture, AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, failure=exc)
-                require(fault not in (None, 'known_error'), 'Expected real/positively proven recovered completion failed')
-                require(exc.response_diagnostic is not None, 'Completed failure diagnostics missing')
-                outcomes.append({'fault': fault, 'accepted': False, 'diagnostic': str(exc)})
-            else:
-                capture.record_response(result)
-                capture.accepted()
-                require(fault in (None, 'known_error'), 'Injected malformed/error result accepted')
-                answer = json.loads(result.response_text)
-                require(type(answer) is dict and set(answer) == {'correlation', 'action'}
-                        and answer['correlation'] == 'synthetic-correlation',
-                        'Direct diagnostic answer has incorrect outer identity')
-                action = answer['action']
-                require(type(action) is dict and set(action) == {'kind', 'result', 'used_handles'}
-                        and action['kind'] == 'answer' and type(action['used_handles']) is list
-                        and action['used_handles'] == [], 'Direct diagnostic action differs')
-                assessment = action['result']
-                require(type(assessment) is dict
-                        and set(assessment) == {'assessment', 'assignment_id', 'input_ids', 'message'}
-                        and assessment['assessment'] == 'supports'
-                        and assessment['assignment_id'] == 'synthetic-assignment'
-                        and type(assessment['input_ids']) is list
-                        and assessment['input_ids'] == ['synthetic-input']
-                        and type(assessment['message']) is str and bool(assessment['message'].strip()),
-                        'Direct diagnostic specialist result differs')
-                if fault == 'known_error':
-                    require(result.response_diagnostic is not None, 'Recovered native envelope not retained')
-                outcomes.append({'fault': fault, 'accepted': True})
+            with session_binding.open_ready_resources() as access:
+                access.install_provider_role(
+                    'plot_architect',
+                    adapter.session_role_projection_bytes(binding),
+                )
+            with session_binding.open_provider_execution_workspace() as execution_workspace:
+                payload = {'c': 'synthetic-correlation', 'q': 'Return exactly the schema-selected outer answer. action.result must contain assessment supports, assignment_id synthetic-assignment, input_ids [synthetic-input], and a short visible message. Set used_handles to [].'}
+                invocation = ProviderInvocation(session_id=self.session, schema=antigravity_adapter.AntigravityAdapter.native_output_schema(schema), payload=payload, thread_id=None, binding_components=binding.binding_components, execution_workspace=execution_workspace)
+                self.observer.fault = fault
+                self.observer.fault_agent = 'plot_architect'
+                self.observer.fault_consumed = False
+                from story_writing_agents.agent_exchanges import AgentExchangeProvider, AgentExchangeScopeKind
+                capture = self.backend._agent_exchange_capture.begin(session_id=self.session, scope_kind=AgentExchangeScopeKind.CONVERSATION, scope_id=self.conversation, agent_id='plot_architect', provider=AgentExchangeProvider.ANTIGRAVITY, invocation=invocation)
+                try:
+                    result = await adapter.invoke(binding, invocation)
+                except ProviderInvocationError as exc:
+                    from story_writing_agents.agent_exchanges.capture import AgentExchangeTerminalCode
+                    self.backend._capture_provider_failure_without_replacing(capture, AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, failure=exc)
+                    require(fault not in (None, 'known_error'), 'Expected real/positively proven recovered completion failed')
+                    require(exc.response_diagnostic is not None, 'Completed failure diagnostics missing')
+                    outcomes.append({'fault': fault, 'accepted': False, 'diagnostic': str(exc)})
+                else:
+                    capture.record_response(result)
+                    capture.accepted()
+                    require(fault in (None, 'known_error'), 'Injected malformed/error result accepted')
+                    answer = json.loads(result.response_text)
+                    require(type(answer) is dict and set(answer) == {'correlation', 'action'}
+                            and answer['correlation'] == 'synthetic-correlation',
+                            'Direct diagnostic answer has incorrect outer identity')
+                    action = answer['action']
+                    require(type(action) is dict and set(action) == {'kind', 'result', 'used_handles'}
+                            and action['kind'] == 'answer' and type(action['used_handles']) is list
+                            and action['used_handles'] == [], 'Direct diagnostic action differs')
+                    assessment = action['result']
+                    require(type(assessment) is dict
+                            and set(assessment) == {'assessment', 'assignment_id', 'input_ids', 'message'}
+                            and assessment['assessment'] == 'supports'
+                            and assessment['assignment_id'] == 'synthetic-assignment'
+                            and type(assessment['input_ids']) is list
+                            and assessment['input_ids'] == ['synthetic-input']
+                            and type(assessment['message']) is str and bool(assessment['message'].strip()),
+                            'Direct diagnostic specialist result differs')
+                    if fault == 'known_error':
+                        require(result.response_diagnostic is not None, 'Recovered native envelope not retained')
+                    outcomes.append({'fault': fault, 'accepted': True})
         save(self.directory / 'diagnostic-outcomes.sanitized.json', outcomes)
 
     async def budget_finalization(self):

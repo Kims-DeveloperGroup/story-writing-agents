@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
@@ -16,6 +17,15 @@ _AGENTS_DIRECTORY = "agents"
 _ROLE_FILE = "agent.md"
 _EXCLUDE_LINE = b"/.agents/"
 _MAX_EXCLUDE_BYTES = 64 * 1024
+_RegularFileIdentity = tuple[int, int, int, int, int, int, int, int]
+
+
+@dataclass(frozen=True, slots=True)
+class SessionRoleProjection:
+    """Package-internal identity of one validated projected role leaf."""
+
+    path: Path
+    _file_identity: _RegularFileIdentity
 
 
 def install_session_role_projection(
@@ -83,7 +93,8 @@ def require_session_role_projection(
     *,
     agent_id: str,
     content: bytes,
-) -> Path:
+    expected: SessionRoleProjection | None = None,
+) -> SessionRoleProjection:
     """Require exact projected bytes through the retained session capability."""
 
     if (
@@ -91,6 +102,10 @@ def require_session_role_projection(
         or agent_id not in ROSTER
         or type(content) is not bytes
         or not content
+        or (
+            expected is not None
+            and type(expected) is not SessionRoleProjection
+        )
     ):
         raise OSError("session role projection is invalid")
     execution_workspace.require_current()
@@ -103,7 +118,12 @@ def require_session_role_projection(
                 selected = _open_existing_directory(agents, agent_id)
                 try:
                     _require_selected_directory(selected)
-                    observed = _read_regular(selected, _ROLE_FILE, immutable=True)
+                    observed, file_identity = _read_regular_identity(
+                        selected,
+                        _ROLE_FILE,
+                        immutable=True,
+                        exact_mode=0o400,
+                    )
                 finally:
                     os.close(selected)
                 _require_agents_directory(agents)
@@ -114,15 +134,28 @@ def require_session_role_projection(
             os.close(root)
     finally:
         os.close(descriptor)
-    if observed != content:
-        raise OSError("session role projection changed")
-    execution_workspace.require_current()
-    return (
+    projected_path = (
         execution_workspace.worktree_root
         / _AGENTS_ROOT
         / _AGENTS_DIRECTORY
         / agent_id
         / _ROLE_FILE
+    )
+    if (
+        observed != content
+        or (
+            expected is not None
+            and (
+                expected.path != projected_path
+                or expected._file_identity != file_identity
+            )
+        )
+    ):
+        raise OSError("session role projection changed")
+    execution_workspace.require_current()
+    return SessionRoleProjection(
+        path=projected_path,
+        _file_identity=file_identity,
     )
 
 
@@ -208,6 +241,7 @@ def _preflight_projection(
                             selected,
                             _ROLE_FILE,
                             immutable=True,
+                            exact_mode=0o400,
                         )
                         if name == agent_id and observed != content:
                             raise OSError("session role projection target differs")
@@ -227,7 +261,12 @@ def _require_agents_directory(descriptor: int) -> None:
         child = _open_existing_directory(descriptor, name)
         try:
             _require_selected_directory(child)
-            _read_regular(child, _ROLE_FILE, immutable=True)
+            _read_regular(
+                child,
+                _ROLE_FILE,
+                immutable=True,
+                exact_mode=0o400,
+            )
         finally:
             os.close(child)
 
@@ -353,11 +392,18 @@ def _safe_directory(value: os.stat_result) -> bool:
     )
 
 
-def _read_regular(parent: int, name: str, *, immutable: bool = False) -> bytes:
+def _read_regular(
+    parent: int,
+    name: str,
+    *,
+    immutable: bool = False,
+    exact_mode: int | None = None,
+) -> bytes:
     content, _identity = _read_regular_identity(
         parent,
         name,
         immutable=immutable,
+        exact_mode=exact_mode,
     )
     return content
 
@@ -367,7 +413,8 @@ def _read_regular_identity(
     name: str,
     *,
     immutable: bool = False,
-) -> tuple[bytes, tuple[int, int, int, int, int, int, int, int]]:
+    exact_mode: int | None = None,
+) -> tuple[bytes, _RegularFileIdentity]:
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
     flags |= getattr(os, "O_NONBLOCK", 0)
     try:
@@ -377,7 +424,11 @@ def _read_regular_identity(
     try:
         os.set_inheritable(descriptor, False)
         value = os.fstat(descriptor)
-        if not _safe_regular(value, immutable=immutable):
+        if not _safe_regular(
+            value,
+            immutable=immutable,
+            exact_mode=exact_mode,
+        ):
             raise OSError("session role projection file is unsafe")
         chunks: list[bytes] = []
         total = 0
@@ -392,7 +443,11 @@ def _read_regular_identity(
         identity = _regular_identity(value)
         final_value = os.fstat(descriptor)
         if (
-            not _safe_regular(final_value, immutable=immutable)
+            not _safe_regular(
+                final_value,
+                immutable=immutable,
+                exact_mode=exact_mode,
+            )
             or _regular_identity(final_value) != identity
         ):
             raise OSError("session role projection file changed")
@@ -400,14 +455,23 @@ def _read_regular_identity(
         os.close(descriptor)
     named_value = os.stat(name, dir_fd=parent, follow_symlinks=False)
     if (
-        not _safe_regular(named_value, immutable=immutable)
+        not _safe_regular(
+            named_value,
+            immutable=immutable,
+            exact_mode=exact_mode,
+        )
         or _regular_identity(named_value) != identity
     ):
         raise OSError("session role projection file changed")
     return b"".join(chunks), identity
 
 
-def _safe_regular(value: os.stat_result, *, immutable: bool) -> bool:
+def _safe_regular(
+    value: os.stat_result,
+    *,
+    immutable: bool,
+    exact_mode: int | None,
+) -> bool:
     mode = stat.S_IMODE(value.st_mode)
     return (
         stat.S_ISREG(value.st_mode)
@@ -415,12 +479,13 @@ def _safe_regular(value: os.stat_result, *, immutable: bool) -> bool:
         and value.st_uid == os.geteuid()
         and mode & 0o022 == 0
         and (not immutable or mode & 0o222 == 0)
+        and (exact_mode is None or mode == exact_mode)
     )
 
 
 def _regular_identity(
     value: os.stat_result,
-) -> tuple[int, int, int, int, int, int, int, int]:
+) -> _RegularFileIdentity:
     return (
         value.st_dev,
         value.st_ino,
@@ -446,6 +511,7 @@ def _install_regular(
             parent,
             name,
             immutable=not replace_existing,
+            exact_mode=None if replace_existing else mode,
         )
     except FileNotFoundError:
         current = None
@@ -486,7 +552,12 @@ def _install_regular(
         descriptor = -1
         os.replace(temporary, name, src_dir_fd=parent, dst_dir_fd=parent)
         present = False
-        if _read_regular(parent, name, immutable=not replace_existing) != content:
+        if _read_regular(
+            parent,
+            name,
+            immutable=not replace_existing,
+            exact_mode=mode,
+        ) != content:
             raise OSError("session role projection install failed")
         os.fsync(parent)
     finally:

@@ -1052,7 +1052,7 @@ class AntigravityAdapter:
                 command,
                 provider_state_directory=provider_state_directory,
                 execution_workspace=execution_workspace,
-                projected_role=projected_role,
+                projected_role=projected_role.path,
             )
         except ProviderInvocationError as exc:
             record_provider_failure_accounting(
@@ -1426,6 +1426,7 @@ class AntigravityAdapter:
                 execution_workspace,
                 agent_id=binding.definition.agent_id,
                 content=staged_agent_content,
+                expected=projected_role,
             )
         except (OSError, RuntimeError) as exc:
             failure = ProviderInvocationError(
