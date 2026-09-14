@@ -1967,12 +1967,12 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         _mark_debug_session_attached(self.workspace)
         return backend.create_session_with_access(session_id)
 
-    def direct_execution_workspace(
+    async def direct_execution_workspace(
         self,
         bound: object,
         session_id: str,
     ) -> ProviderExecutionWorkspace:
-        return self.enterContext(
+        return await self.enterAsyncContext(
             bound._direct_codex_execution_workspace(session_id, None)  # type: ignore[attr-defined]
         )
 
@@ -2948,6 +2948,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 await bound.invoke(self.request(session_id=session_id))
 
         self.assertEqual(len(captured), 1)
+        self.assertEqual(
+            backend.execution_profile_confirmation(PLOT_ARCHITECT),
+            "pending",
+        )
         with self.assertRaises(SessionArtifactBindingError):
             captured[0].require_current()
 
@@ -3937,7 +3941,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(backend.close)
         self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
-        execution_workspace = self.enterContext(
+        execution_workspace = await self.enterAsyncContext(
             bound._direct_codex_execution_workspace(session_id, None)
         )
         original_store_thread = backend._store_thread
@@ -3987,7 +3991,6 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 "accounting",
                 "decode",
                 "thread",
-                "accepted",
             ],
         )
 
@@ -4463,6 +4466,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         """Trace the selected adapter for successful and failed vendor binds."""
 
+        _mark_debug_session_attached(self.workspace)
         for vendor in ("codex", "antigravity"):
             for outcome in ("success", "failure"):
                 with self.subTest(vendor=vendor, outcome=outcome):
@@ -6330,7 +6334,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.create_provisioned_session_with_access(backend, session_id)
         definition = self.definition()
         bound = await backend.bind(definition)
-        execution_workspace = self.enterContext(
+        execution_workspace = await self.enterAsyncContext(
             bound._direct_codex_execution_workspace(session_id, None)
         )
         continuation_fingerprint = backend._legacy_continuation_fingerprint(
@@ -6437,7 +6441,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.create_provisioned_session_with_access(backend, session_id)
         definition = self.definition()
         bound = await backend.bind(definition)
-        execution_workspace = self.direct_execution_workspace(bound, session_id)
+        execution_workspace = await self.direct_execution_workspace(bound, session_id)
         continuation_fingerprint = backend._legacy_continuation_fingerprint(
             bound,
             execution_workspace,
@@ -9833,7 +9837,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             "utf-8", b"\xff", 0, 1, "invalid completed response"
         )
         self.create_provisioned_session_with_access(backend, unicode_session)
-        unicode_workspace = self.direct_execution_workspace(
+        unicode_workspace = await self.direct_execution_workspace(
             bound,
             unicode_session,
         )
@@ -9892,7 +9896,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     session_id = f"capture_failure_{suffix}"
                     debate_id = f"capture_debate_{suffix}"
                     self.create_provisioned_session_with_access(backend, session_id)
-                    execution_workspace = self.direct_execution_workspace(
+                    execution_workspace = await self.direct_execution_workspace(
                         bound,
                         session_id,
                     )
@@ -10029,7 +10033,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
         success_session = "capture_noneligible_success"
         self.create_provisioned_session_with_access(backend, success_session)
-        success_workspace = self.direct_execution_workspace(bound, success_session)
+        success_workspace = await self.direct_execution_workspace(
+            bound,
+            success_session,
+        )
         success_reply = AgentReply.candidate("r0", "validated response")
         with (
             mock.patch.object(
@@ -10073,7 +10080,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             with self.subTest(decode_control=type(failure).__name__):
                 session_id = f"capture_decode_control_{index}"
                 self.create_provisioned_session_with_access(backend, session_id)
-                execution_workspace = self.direct_execution_workspace(
+                execution_workspace = await self.direct_execution_workspace(
                     bound,
                     session_id,
                 )
@@ -10109,7 +10116,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
         provider_session = "capture_provider_pre_result"
         self.create_provisioned_session_with_access(backend, provider_session)
-        provider_workspace = self.direct_execution_workspace(bound, provider_session)
+        provider_workspace = await self.direct_execution_workspace(
+            bound,
+            provider_session,
+        )
         provider_failure = ProviderInvocationError(
             "fixed pre-result failure",
             taint_existing_thread=False,
@@ -10140,7 +10150,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
         adapter_cancel_session = "capture_adapter_cancel"
         self.create_provisioned_session_with_access(backend, adapter_cancel_session)
-        adapter_cancel_workspace = self.direct_execution_workspace(
+        adapter_cancel_workspace = await self.direct_execution_workspace(
             bound,
             adapter_cancel_session,
         )
@@ -10171,7 +10181,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
         persistence_session = "capture_persistence_failure"
         self.create_provisioned_session_with_access(backend, persistence_session)
-        persistence_workspace = self.direct_execution_workspace(
+        persistence_workspace = await self.direct_execution_workspace(
             bound,
             persistence_session,
         )

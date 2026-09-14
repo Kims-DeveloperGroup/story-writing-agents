@@ -751,6 +751,38 @@ class SessionArtifactBinding:
             if body_failure is None and exit_failure is not None:
                 raise exit_failure
 
+    def transfer_to_current_thread(self) -> SessionArtifactBinding:
+        """Recreate immutable binding facts for a new event-loop thread.
+
+        The source binding owns no opened artifact or generation descriptors;
+        this transfer deliberately copies only validated immutable topology.
+        """
+
+        identity = self._generation_identity
+        if identity is None:
+            raise SessionArtifactBindingError(
+                "session artifact resources are unavailable"
+            )
+        transferred_identity = GitSessionGenerationIdentity(
+            session=identity.session,
+            administrative_root=identity.administrative_root,
+            control_root_identity=identity.control_root_identity,
+            common_git_identity=identity.common_git_identity,
+            administrative_identity=identity.administrative_identity,
+            worktree_identity=identity.worktree_identity,
+            git_indirection_facts=identity.git_indirection_facts,
+            common_indirection_facts=identity.common_indirection_facts,
+            git_indirection_sha256=identity.git_indirection_sha256,
+            common_indirection_sha256=identity.common_indirection_sha256,
+        )
+        return SessionArtifactBinding(
+            resources=self.resources,
+            worktree_identity=self.worktree_identity,
+            manifest=self.manifest,
+            allowed_worktree_changes=self.allowed_worktree_changes,
+            _generation_identity=transferred_identity,
+        )
+
     def require_generation_pin(self, pin: SessionArtifactGenerationPin) -> None:
         """Require one opaque pin to match this binding's current generation."""
 

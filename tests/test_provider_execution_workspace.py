@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import fcntl
 import json
 import os
 import pickle
@@ -22,6 +23,7 @@ from story_writing_agents.codex_adapter import CodexAdapter
 from story_writing_agents.orchestrator import _codex_execution_workspace_manager
 from story_writing_agents.provider_execution_workspace import (
     ProviderExecutionWorkspace,
+    _duplicate_descriptor_at_least_three,
     mint_provider_execution_workspace,
 )
 from story_writing_agents.provider_adapter import ProviderInvocationError
@@ -172,9 +174,8 @@ class ProviderExecutionWorkspaceTests(unittest.TestCase):
             if fd != 0:
                 original_close(fd)
 
-        with mock.patch.object(os, "dup", return_value=0), mock.patch.object(
-            os,
-            "dup2",
+        with mock.patch(
+            "story_writing_agents.provider_execution_workspace._duplicate_descriptor_at_least_three",
             return_value=relocated,
         ) as duplicate_to_safe_fd, mock.patch.object(
             os,
@@ -183,8 +184,18 @@ class ProviderExecutionWorkspaceTests(unittest.TestCase):
         ):
             self.assertEqual(workspace.duplicate_launch_descriptor(), relocated)
 
-        duplicate_to_safe_fd.assert_called_once_with(0, 3, inheritable=False)
+        duplicate_to_safe_fd.assert_called_once_with(workspace._root_descriptor)
         original_close(relocated)
+
+    def test_launch_descriptor_allocation_never_replaces_descriptor_three(self) -> None:
+        with mock.patch.object(fcntl, "fcntl", return_value=9) as duplicate:
+            self.assertEqual(_duplicate_descriptor_at_least_three(7), 9)
+
+        duplicate.assert_called_once_with(
+            7,
+            getattr(fcntl, "F_DUPFD_CLOEXEC", fcntl.F_DUPFD),
+            3,
+        )
 
     def test_foreign_pid_and_thread_cannot_use_capability(self) -> None:
         workspace = self.mint()

@@ -154,11 +154,9 @@ class ProviderExecutionWorkspace:
             with self._lock:
                 if self._closed:
                     raise OSError
-                descriptor = os.dup(self._root_descriptor)
-                if descriptor < 3:
-                    relocated = os.dup2(descriptor, 3, inheritable=False)
-                    os.close(descriptor)
-                    descriptor = relocated
+                descriptor = _duplicate_descriptor_at_least_three(
+                    self._root_descriptor
+                )
             os.set_inheritable(descriptor, False)
             if _directory_identity(os.fstat(descriptor)) != self._root_identity:
                 raise OSError
@@ -280,6 +278,21 @@ def _directory_identity(value: os.stat_result) -> tuple[int, int] | None:
         return None
     identity = (value.st_dev, value.st_ino)
     return identity if _valid_identity(identity) else None
+
+
+def _duplicate_descriptor_at_least_three(descriptor: int) -> int:
+    """Duplicate without ever replacing an unrelated standard descriptor."""
+
+    if os.name != "posix":  # pragma: no cover - provider launch is POSIX-only
+        duplicated = os.dup(descriptor)
+        if duplicated < 3:
+            os.close(duplicated)
+            raise OSError("unable to allocate a non-standard descriptor")
+        return duplicated
+    import fcntl
+
+    command = getattr(fcntl, "F_DUPFD_CLOEXEC", fcntl.F_DUPFD)
+    return fcntl.fcntl(descriptor, command, 3)
 
 
 def _valid_identity(value: object) -> bool:

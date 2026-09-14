@@ -8191,7 +8191,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   package-internal `main_workspace_root` normalizes either a main root or a
   READY session-worktree root to its owning main root, so provider control-root
   policy never treats a session root as a nested control root. The
-  binding and wrapper pin retain the creator process and non-recyclable thread token, reject
+  binding may transfer only its validated, descriptor-free immutable topology
+  into a freshly creator-bound binding on the awaiting event-loop thread, so
+  direct Codex acquisition completes off that loop without transferring live
+  authority. The binding and wrapper pin retain the creator process and non-recyclable thread token, reject
   cross-process or cross-thread acquisition/recheck before any copied lock or
   lower-level I/O, and close a fork child's copied pin without entering an
   inherited lock. This continuity check

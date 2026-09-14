@@ -189,6 +189,7 @@ from .writing_artifacts.read_actions import (
 from .workspace import Workspace
 from .runtime_state_paths import CONTEXTUAL_PROVIDER_DIRECTORY
 from .workspace.initialization import (
+    SessionArtifactBinding,
     compose_session_artifact_binding as _compose_session_artifact_binding,
     main_workspace_root as _main_workspace_root,
     provision_session_resources as _provision_session_resources,
@@ -897,41 +898,82 @@ class BoundAgent:
 
         return _BoundContextProvider(self, reference_read)
 
-    @contextmanager
-    def _direct_codex_execution_workspace(
+    @asynccontextmanager
+    async def _direct_codex_execution_workspace(
         self,
         session_id: str,
         reference_read: ReferenceReadInvocation | None,
-    ) -> Iterator[ProviderExecutionWorkspace]:
+    ) -> AsyncIterator[ProviderExecutionWorkspace]:
         """Open direct-call authority and retire pre-entry references on loss."""
 
         entered = False
+        body_failed = False
+        generation_lost = False
         deferred: list[_DeferredDirectCodexAcceptance] = []
         token: contextvars.Token[list[_DeferredDirectCodexAcceptance] | None] | None = (
             None
         )
         try:
-            binding = _compose_session_artifact_binding(
-                self.backend.workspace.root,
+            binding = await asyncio.to_thread(
+                self._compose_direct_codex_binding,
                 session_id,
             )
+            binding = binding.transfer_to_current_thread()
             with binding.open_provider_execution_workspace() as workspace:
                 entered = True
                 token = _DEFERRED_DIRECT_CODEX_ACCEPTANCES.set(deferred)
                 try:
                     yield workspace
+                except BaseException:
+                    body_failed = True
+                    try:
+                        workspace.require_current()
+                    except BaseException:
+                        generation_lost = True
+                    raise
                 finally:
                     _DEFERRED_DIRECT_CODEX_ACCEPTANCES.reset(token)
                     token = None
         except BaseException as failure:
             for acceptance in deferred:
-                acceptance.reject()
+                if body_failed and not generation_lost:
+                    acceptance.accept()
+                else:
+                    acceptance.reject()
             if not entered:
                 self._terminate_reference_before_provider(reference_read, failure)
             raise
         else:
             for acceptance in deferred:
                 acceptance.accept()
+
+    def _preflight_direct_codex_workspace(self, session_id: str) -> None:
+        """Reject unavailable logical work before opening a physical workspace."""
+
+        self.backend._ensure_open()
+        self.backend._assert_provider_work_ready(session_id)
+
+    def _compose_direct_codex_binding(self, session_id: str) -> SessionArtifactBinding:
+        """Run blocking direct-call preflight and binding off the event loop."""
+
+        self._preflight_direct_codex_workspace(session_id)
+        return _compose_session_artifact_binding(
+            self.backend.workspace.root,
+            session_id,
+        )
+
+    @staticmethod
+    def _defer_direct_codex_acceptance(
+        accept: Callable[[], None],
+        reject: Callable[[], None],
+    ) -> None:
+        """Run a logical terminal action only after direct authority validates."""
+
+        deferred = _DEFERRED_DIRECT_CODEX_ACCEPTANCES.get()
+        if deferred is None:
+            accept()
+            return
+        deferred.append(_DeferredDirectCodexAcceptance(accept=accept, reject=reject))
 
     def _context_provider(
         self,
@@ -1047,7 +1089,7 @@ class BoundAgent:
                     phase=request.phase.value,
                     round_number=request.round_number,
                 )
-            with self._direct_codex_execution_workspace(
+            async with self._direct_codex_execution_workspace(
                 request.session_id,
                 reference_read,
             ) as workspace:
@@ -1155,18 +1197,25 @@ class BoundAgent:
                         agent_id=self.definition.agent_id,
                     )
                     raise
-                self.backend._confirm_execution_profile(
-                    self,
-                    context_rehydrated=request.story_session_context is not None,
-                    thread_disposition=thread_disposition,
-                )
-                self.backend._trace_debug(
-                    DebugOperation.PROVIDER_INVOCATION,
-                    DebugPhase.SUCCEEDED,
-                    session_id=request.session_id,
-                    debate_id=request.debate_id,
-                    agent_id=self.definition.agent_id,
-                    outcome=DebugOutcome.COMPLETED,
+                self._defer_direct_codex_acceptance(
+                    lambda: (
+                        self.backend._confirm_execution_profile(
+                            self,
+                            context_rehydrated=(
+                                request.story_session_context is not None
+                            ),
+                            thread_disposition=thread_disposition,
+                        ),
+                        self.backend._trace_debug(
+                            DebugOperation.PROVIDER_INVOCATION,
+                            DebugPhase.SUCCEEDED,
+                            session_id=request.session_id,
+                            debate_id=request.debate_id,
+                            agent_id=self.definition.agent_id,
+                            outcome=DebugOutcome.COMPLETED,
+                        ),
+                    ),
+                    lambda: None,
                 )
                 return reply
 
@@ -1191,7 +1240,7 @@ class BoundAgent:
                     phase="conversation",
                     round_number=None,
                 )
-            with self._direct_codex_execution_workspace(
+            async with self._direct_codex_execution_workspace(
                 validated.session_id,
                 reference_read,
             ) as workspace:
@@ -1277,18 +1326,25 @@ class BoundAgent:
                         agent_id=self.definition.agent_id,
                     )
                     raise
-                self.backend._confirm_execution_profile(
-                    self,
-                    context_rehydrated=(validated.story_session_context is not None),
-                    thread_disposition=thread_disposition,
-                )
-                self.backend._trace_debug(
-                    DebugOperation.PROVIDER_INVOCATION,
-                    DebugPhase.SUCCEEDED,
-                    session_id=validated.session_id,
-                    conversation_id=validated.conversation_id,
-                    agent_id=self.definition.agent_id,
-                    outcome=DebugOutcome.COMPLETED,
+                self._defer_direct_codex_acceptance(
+                    lambda: (
+                        self.backend._confirm_execution_profile(
+                            self,
+                            context_rehydrated=(
+                                validated.story_session_context is not None
+                            ),
+                            thread_disposition=thread_disposition,
+                        ),
+                        self.backend._trace_debug(
+                            DebugOperation.PROVIDER_INVOCATION,
+                            DebugPhase.SUCCEEDED,
+                            session_id=validated.session_id,
+                            conversation_id=validated.conversation_id,
+                            agent_id=self.definition.agent_id,
+                            outcome=DebugOutcome.COMPLETED,
+                        ),
+                    ),
+                    lambda: None,
                 )
                 return reply
 
@@ -1321,7 +1377,7 @@ class BoundAgent:
                     phase="conversation_retrieval",
                     round_number=None,
                 )
-            with self._direct_codex_execution_workspace(
+            async with self._direct_codex_execution_workspace(
                 validated.session_id,
                 reference_read,
             ) as workspace:
@@ -1430,18 +1486,25 @@ class BoundAgent:
                         agent_id=self.definition.agent_id,
                     )
                     raise
-                self.backend._confirm_execution_profile(
-                    self,
-                    context_rehydrated=(validated.story_session_context is not None),
-                    thread_disposition=thread_disposition,
-                )
-                self.backend._trace_debug(
-                    DebugOperation.PROVIDER_INVOCATION,
-                    DebugPhase.SUCCEEDED,
-                    session_id=validated.session_id,
-                    conversation_id=validated.conversation_id,
-                    agent_id=self.definition.agent_id,
-                    outcome=DebugOutcome.COMPLETED,
+                self._defer_direct_codex_acceptance(
+                    lambda: (
+                        self.backend._confirm_execution_profile(
+                            self,
+                            context_rehydrated=(
+                                validated.story_session_context is not None
+                            ),
+                            thread_disposition=thread_disposition,
+                        ),
+                        self.backend._trace_debug(
+                            DebugOperation.PROVIDER_INVOCATION,
+                            DebugPhase.SUCCEEDED,
+                            session_id=validated.session_id,
+                            conversation_id=validated.conversation_id,
+                            agent_id=self.definition.agent_id,
+                            outcome=DebugOutcome.COMPLETED,
+                        ),
+                    ),
+                    lambda: None,
                 )
                 return reply
 
