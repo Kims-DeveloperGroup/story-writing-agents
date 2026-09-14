@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-import tempfile
 import unittest
 from unittest import mock
 
@@ -24,7 +23,7 @@ from story_writing_agents.writing_artifacts.repository import (
 )
 from story_writing_agents.writing_artifacts import repository as repository_module
 
-from tests.helpers import initialize_test_workspace
+from tests.helpers import pristine_initialized_workspace
 from tests.test_artifact_application_store_lifecycle import (
     _apply,
     _five_operation_request,
@@ -64,10 +63,7 @@ def _tree_snapshot(root: Path) -> tuple[tuple[str, str, bytes | None], ...]:
 
 class ArtifactApplicationInspectionTests(unittest.TestCase):
     def new_repository(self) -> tuple[Path, WritingArtifactRepository]:
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        root = Path(temporary.name)
-        initialize_test_workspace(root)
+        root = pristine_initialized_workspace(self).root
         return root, WritingArtifactRepository(root)
 
     def assert_application_error(

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ast
 import pickle
-import tempfile
 import unittest
 from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
@@ -35,7 +34,7 @@ from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
 
-from tests.helpers import initialize_test_workspace
+from tests.helpers import pristine_initialized_workspace
 
 
 _STATE = Path("agent_states/orchestrator_state/writing_artifacts")
@@ -214,10 +213,7 @@ class ReferenceReadActionContractTests(unittest.TestCase):
 
 class ReferenceReadRepositoryTests(unittest.TestCase):
     def setUp(self) -> None:
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
-        initialize_test_workspace(self.root)
+        self.root = pristine_initialized_workspace(self).root
         self.repository = WritingArtifactRepository(self.root)
         for path, content in _MARKERS.items():
             target = self.root / path

@@ -47,11 +47,11 @@ from story_writing_agents.provider_auth_recovery import (
 )
 from story_writing_agents.provider_process import ProcessResult
 from tests import test_agent_context_execution as context
+from tests import test_interactive_controller as interactive_controller_tests
 from tests import test_lead_orchestration as lead
 from tests.test_specialist_orchestration import _assignments
 from tests.helpers import initialized_workspace
 from tests.test_interactive_auth import ScriptedAuthService, TerminalHarness, snapshot, status
-from tests.test_interactive_controller import InteractiveLeadAdapterTests as TerminalFixtures
 from tests.test_provider_auth import ScriptedProcess, ScriptedProcessFactory
 
 
@@ -756,9 +756,10 @@ class InteractiveRecoveryTests(unittest.TestCase):
     def adapter(self, recover=None):
         runner = asyncio.Runner()
         self.addCleanup(runner.close)
-        output = TerminalFixtures._Output()
+        terminal_fixtures = interactive_controller_tests.InteractiveLeadAdapterTests
+        output = terminal_fixtures._Output()
         adapter = InteractiveLeadAdapter(RuntimeSession.__new__(RuntimeSession), runner,
-            TerminalFixtures._Progress(), TerminalFixtures._Picker(), TerminalFixtures._Prompt(),
+            terminal_fixtures._Progress(), terminal_fixtures._Picker(), terminal_fixtures._Prompt(),
             output, recover_authentication=recover)
         return adapter, runner, output
 

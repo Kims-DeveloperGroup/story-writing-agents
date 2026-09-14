@@ -63,7 +63,7 @@ from story_writing_agents.session_recovery.transition_assessment import (
 )
 from story_writing_agents.workspace import initialization as workspace_initialization
 
-from tests.helpers import ScriptedBackend, initialize_test_workspace
+from tests.helpers import ScriptedBackend, pristine_initialized_workspace
 
 
 CLI_CONTEXT_PATH = "agent_states/orchestrator_state/cli_context.json"
@@ -382,7 +382,7 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
         self.base = Path(temporary.name)
 
     def test_nearest_strict_workspace_and_explicit_precedence(self) -> None:
-        outer = initialize_test_workspace(self.base / "outer")
+        outer = pristine_initialized_workspace(self)
         nested = outer.root / "core_documents"
         self.assertEqual(resolve_workspace(None, start=nested).root, outer.root)
         self.assertEqual(
@@ -399,7 +399,7 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
             resolve_workspace(None, start=unsupported)
 
     def test_dangling_exact_legacy_sentinel_is_nearest_unsafe_boundary(self) -> None:
-        outer = initialize_test_workspace(self.base / "outer")
+        outer = pristine_initialized_workspace(self)
         self.assertEqual(
             workspace_initialization._LEGACY_SENTINELS,
             _LEGACY_WORKSPACE_SENTINELS,
@@ -454,9 +454,7 @@ class CliDefaultPersistenceTests(unittest.TestCase):
     """Verify strict V2 default schemas and clean-break rejection."""
 
     def setUp(self) -> None:
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        self.workspace = initialize_test_workspace(Path(temporary.name) / "workspace")
+        self.workspace = pristine_initialized_workspace(self)
 
     def test_default_session_missing_save_load_and_resolve_are_exact(self) -> None:
         self.assertEqual(
@@ -704,8 +702,8 @@ class CliDefaultPersistenceTests(unittest.TestCase):
         self.assertEqual((target.read_bytes(), target.stat().st_mtime_ns), before)
         self.assertEqual(list(target.parent.glob("*.tmp")), [])
 
-        second = initialize_test_workspace(self.workspace.root.parent / "second")
-        external = self.workspace.root.parent / "external"
+        second = pristine_initialized_workspace(self)
+        external = second.root.parent / "external"
         external.mkdir()
         directory = second.root / CONVERSATION_DEFAULT_DIRECTORY
         for child in directory.iterdir():
@@ -744,10 +742,10 @@ class CliDefaultPersistenceTests(unittest.TestCase):
             ):
                 operation()
 
-        second = initialize_test_workspace(self.workspace.root.parent / "symlink-file")
+        second = pristine_initialized_workspace(self)
         target = conversation_default_path(second, "chapter")
         target.parent.mkdir(parents=True, exist_ok=True)
-        external_file = self.workspace.root.parent / "outside-default.json"
+        external_file = second.root.parent / "outside-default.json"
         external_file.write_text("{}\n", encoding="utf-8")
         target.symlink_to(external_file)
         for operation in (
@@ -812,9 +810,7 @@ class LifecycleAutomationTests(unittest.TestCase):
     """Verify exact create/reopen/pause grammar, output, and defaults."""
 
     def setUp(self) -> None:
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        self.workspace = initialize_test_workspace(Path(temporary.name) / "workspace")
+        self.workspace = pristine_initialized_workspace(self)
         self.enterContext(
             mock.patch.object(
                 cli_module,
@@ -1118,9 +1114,7 @@ class DirectiveAndInspectDefaultTests(unittest.TestCase):
     """Verify retained management commands resolve the saved session."""
 
     def setUp(self) -> None:
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        self.workspace = initialize_test_workspace(Path(temporary.name) / "workspace")
+        self.workspace = pristine_initialized_workspace(self)
         self.enterContext(
             mock.patch.object(
                 cli_module,

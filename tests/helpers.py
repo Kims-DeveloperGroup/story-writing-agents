@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-import os
+import atexit
+import hashlib
 import inspect
+import os
+import shutil
+import stat
 import tempfile
+import threading
+import time
 from contextlib import contextmanager
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeAlias
 from unittest import TestCase
@@ -25,6 +32,14 @@ from story_writing_agents import (
     Workspace,
 )
 from story_writing_agents.agents import CORE_DOCUMENTS
+from story_writing_agents.git.session_contracts import (
+    GIT_SESSION_WORKTREE_SIBLING_SUFFIX,
+)
+from story_writing_agents.workspace.initialization import (
+    WorkspaceRootInspection,
+    WorkspaceRootRole,
+    WorkspaceRootState,
+)
 
 
 HandlerResult: TypeAlias = AgentReply | BaseException | Awaitable[AgentReply]
@@ -77,23 +92,350 @@ def workspace_git_identity():
 
 
 def initialize_test_workspace(root: str | os.PathLike[str]) -> Workspace:
-    """Create one exact v2 fixture without relying on developer Git config."""
+    """REAL tier: run exact v2 initialization without developer Git config."""
 
     with workspace_git_identity():
         return Workspace(root).initialize()
 
 
+@dataclass(frozen=True, slots=True)
+class WorkspaceFixtureTiming:
+    """One process-local fixture phase measurement for diagnostic tests."""
+
+    materialization_id: int
+    trust_tier: str
+    phase: str
+    seconds: float
+
+
+@dataclass(slots=True)
+class _WorkspaceTemplate:
+    container: Path
+    root: Path
+    digest: str
+    process_id: int
+    first_copy_validated: bool = False
+
+
+_WORKSPACE_TEMPLATE: _WorkspaceTemplate | None = None
+_WORKSPACE_TEMPLATE_LOCK = threading.RLock()
+_WORKSPACE_FIXTURE_TIMINGS: list[WorkspaceFixtureTiming] = []
+_WORKSPACE_MATERIALIZATION_SEQUENCE = 0
+_RUNTIME_STATE_ROOTS = (
+    "debug_logs",
+    "discussion_logs",
+    "manuscript",
+    "agent_states/orchestrator_state/sessions",
+    "agent_states/orchestrator_state/provider_sessions",
+)
+
+
+def _record_workspace_fixture_timing(
+    materialization_id: int,
+    trust_tier: str,
+    phase: str,
+    started_at: float,
+) -> None:
+    _WORKSPACE_FIXTURE_TIMINGS.append(
+        WorkspaceFixtureTiming(
+            materialization_id,
+            trust_tier,
+            phase,
+            max(0.0, time.perf_counter() - started_at),
+        )
+    )
+
+
+def _workspace_fixture_timing_snapshot() -> tuple[WorkspaceFixtureTiming, ...]:
+    """Return timings without exposing the sealed template or its path."""
+
+    with _WORKSPACE_TEMPLATE_LOCK:
+        return tuple(_WORKSPACE_FIXTURE_TIMINGS)
+
+
+def _workspace_template_digest() -> str:
+    """Return only the sealed digest, never the template location."""
+
+    with _WORKSPACE_TEMPLATE_LOCK:
+        return _workspace_template().digest
+
+
+def _tree_digest(root: Path) -> str:
+    """Digest every relative name, lstat type/mode, and file/link content."""
+
+    digest = hashlib.sha256()
+
+    def add(value: bytes) -> None:
+        digest.update(len(value).to_bytes(8, "big"))
+        digest.update(value)
+
+    def visit(path: Path, relative: str) -> None:
+        observed = path.lstat()
+        file_type = stat.S_IFMT(observed.st_mode)
+        add(relative.encode("utf-8"))
+        add(str(file_type).encode("ascii"))
+        add(str(stat.S_IMODE(observed.st_mode)).encode("ascii"))
+        if stat.S_ISREG(observed.st_mode):
+            add(path.read_bytes())
+        elif stat.S_ISLNK(observed.st_mode):
+            add(os.readlink(path).encode("utf-8"))
+        elif stat.S_ISDIR(observed.st_mode):
+            for child in sorted(path.iterdir(), key=lambda item: item.name):
+                child_relative = child.name if relative == "." else f"{relative}/{child.name}"
+                visit(child, child_relative)
+        else:
+            raise AssertionError(f"workspace fixture contains an unsafe entry: {relative}")
+
+    visit(root, ".")
+    return "sha256:" + digest.hexdigest()
+
+
+def _require_clean_workspace_template(root: Path) -> None:
+    """Reject session, lock, SQLite, and application artifacts before sealing."""
+
+    session_root = root.parent / f"{root.name}{GIT_SESSION_WORKTREE_SIBLING_SUFFIX}"
+    if session_root.exists() or (root / ".git/worktrees").exists():
+        raise AssertionError("workspace fixture template contains session worktrees")
+    for path in root.rglob("*"):
+        name = path.name
+        if name.endswith((".lock", "-wal", "-shm", "-journal")):
+            raise AssertionError(f"workspace fixture template contains runtime state: {name}")
+    for relative in _RUNTIME_STATE_ROOTS:
+        state_root = root / relative
+        if not state_root.exists():
+            continue
+        unexpected = [
+            path for path in state_root.rglob("*")
+            if path.is_file() and path.name != ".gitkeep"
+        ]
+        if unexpected:
+            raise AssertionError(
+                f"workspace fixture template contains application state: {relative}"
+            )
+
+
+def _workspace_template() -> _WorkspaceTemplate:
+    global _WORKSPACE_TEMPLATE
+    if (
+        _WORKSPACE_TEMPLATE is not None
+        and _WORKSPACE_TEMPLATE.process_id != os.getpid()
+    ):
+        _WORKSPACE_TEMPLATE = None
+    if _WORKSPACE_TEMPLATE is not None:
+        if _tree_digest(_WORKSPACE_TEMPLATE.root) != _WORKSPACE_TEMPLATE.digest:
+            raise AssertionError("sealed workspace fixture template changed")
+        return _WORKSPACE_TEMPLATE
+    started_at = time.perf_counter()
+    container = Path(tempfile.mkdtemp(prefix="story-workspace-template-"))
+    root = Path(os.path.realpath(container)) / "workspace"
+    try:
+        initialize_test_workspace(root)
+        _require_clean_workspace_template(root)
+        template = _WorkspaceTemplate(
+            container,
+            root,
+            _tree_digest(root),
+            os.getpid(),
+        )
+    except BaseException:
+        shutil.rmtree(container, ignore_errors=True)
+        raise
+    _WORKSPACE_TEMPLATE = template
+    atexit.register(_cleanup_workspace_template, template.process_id, container)
+    _record_workspace_fixture_timing(0, "real", "template_prepare", started_at)
+    return template
+
+
+def _cleanup_workspace_template(process_id: int, container: Path) -> None:
+    """Remove only the template created by this exact process."""
+
+    if os.getpid() == process_id:
+        shutil.rmtree(container, ignore_errors=True)
+
+
+def _bind_guarded_ready_workspace(root: Path, expected_digest: str) -> Workspace:
+    """Bind one exact copied baseline to fresh root identity without rediscovery."""
+
+    if _tree_digest(root) != expected_digest:
+        raise AssertionError("copied workspace fixture differs from its sealed template")
+    observed = root.lstat()
+    if not stat.S_ISDIR(observed.st_mode) or observed.st_dev <= 0 or observed.st_ino <= 0:
+        raise AssertionError("copied workspace fixture root is not a safe directory")
+    identity = (observed.st_dev, observed.st_ino)
+    inspection = WorkspaceRootInspection(
+        state=WorkspaceRootState.READY,
+        identity=identity,
+        role=WorkspaceRootRole.MAIN,
+        session_id=None,
+        main_root=root,
+    )
+    workspace = Workspace.__new__(Workspace)
+    workspace.root = root
+    workspace._root_inspection = inspection
+    workspace._root_identity = identity
+    workspace._root_role = WorkspaceRootRole.MAIN
+    workspace._session_id = None
+    workspace._main_root = root
+    workspace._ready = True
+    workspace._initialization_failed = False
+    return workspace
+
+
+def _require_equivalent_ready_shape(
+    validated: Workspace,
+    guarded: Workspace,
+) -> None:
+    attributes = (
+        "root",
+        "_root_inspection",
+        "_root_identity",
+        "_root_role",
+        "_session_id",
+        "_main_root",
+        "_ready",
+        "_initialization_failed",
+    )
+    if any(getattr(validated, name) != getattr(guarded, name) for name in attributes):
+        raise AssertionError("guarded workspace fixture binding differs from real reopening")
+
+
+def _copied_test_workspace(
+    test_case: TestCase,
+    *,
+    trust_tier: str,
+) -> tuple[Workspace, int]:
+    """Materialize an independent baseline through validated or guarded trust."""
+
+    owner = tempfile.TemporaryDirectory(prefix="story-workspace-copy-")
+    target = Path(os.path.realpath(owner.name)) / "workspace"
+    try:
+        workspace, materialization_id = _materialize_test_workspace(
+            target,
+            trust_tier=trust_tier,
+        )
+    except BaseException:
+        owner.cleanup()
+        raise
+
+    def cleanup() -> None:
+        cleanup_started = time.perf_counter()
+        owner.cleanup()
+        with _WORKSPACE_TEMPLATE_LOCK:
+            _record_workspace_fixture_timing(
+                materialization_id, trust_tier, "cleanup", cleanup_started
+            )
+
+    test_case.addCleanup(cleanup)
+    return workspace, materialization_id
+
+
+def _materialize_test_workspace(
+    target: Path,
+    *,
+    trust_tier: str,
+) -> tuple[Workspace, int]:
+    """Copy the sealed baseline to one absent caller-owned target."""
+
+    global _WORKSPACE_MATERIALIZATION_SEQUENCE
+    if trust_tier not in {"validated", "guarded"}:
+        raise ValueError("workspace fixture trust tier is invalid")
+    lexical_target = Path(target)
+    target = Path(os.path.realpath(lexical_target.parent)) / lexical_target.name
+    try:
+        target.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise FileExistsError(f"workspace fixture target already exists: {target}")
+
+    with _WORKSPACE_TEMPLATE_LOCK:
+        template = _workspace_template()
+        overall_started = time.perf_counter()
+        _WORKSPACE_MATERIALIZATION_SEQUENCE += 1
+        materialization_id = _WORKSPACE_MATERIALIZATION_SEQUENCE
+        integrity_started = time.perf_counter()
+        if _tree_digest(template.root) != template.digest:
+            raise AssertionError("sealed workspace fixture template changed before copying")
+        _record_workspace_fixture_timing(
+            materialization_id, trust_tier, "integrity_before", integrity_started
+        )
+        owns_target = False
+        try:
+            try:
+                target.mkdir()
+                owns_target = True
+                copy_started = time.perf_counter()
+                shutil.copytree(
+                    template.root,
+                    target,
+                    copy_function=shutil.copy2,
+                    symlinks=True,
+                    dirs_exist_ok=True,
+                )
+                _record_workspace_fixture_timing(
+                    materialization_id, trust_tier, "copy", copy_started
+                )
+                bind_started = time.perf_counter()
+                guarded = _bind_guarded_ready_workspace(target, template.digest)
+                _record_workspace_fixture_timing(
+                    materialization_id, trust_tier, "bind", bind_started
+                )
+                validated: Workspace | None = None
+                if trust_tier == "validated" or not template.first_copy_validated:
+                    validation_started = time.perf_counter()
+                    validated = Workspace(target).require_ready()
+                    _record_workspace_fixture_timing(
+                        materialization_id,
+                        trust_tier,
+                        "normal_validation",
+                        validation_started,
+                    )
+                    _require_equivalent_ready_shape(validated, guarded)
+                    template.first_copy_validated = True
+            finally:
+                integrity_started = time.perf_counter()
+                if _tree_digest(template.root) != template.digest:
+                    raise AssertionError(
+                        "sealed workspace fixture template changed after copying"
+                    )
+                _record_workspace_fixture_timing(
+                    materialization_id,
+                    trust_tier,
+                    "integrity_after",
+                    integrity_started,
+                )
+        except BaseException:
+            if owns_target:
+                shutil.rmtree(target, ignore_errors=True)
+            raise
+        _record_workspace_fixture_timing(
+            materialization_id, trust_tier, "materialize", overall_started
+        )
+    workspace = validated if validated is not None and trust_tier == "validated" else guarded
+    return workspace, materialization_id
+
+
+def validated_initialized_workspace(test_case: TestCase) -> Workspace:
+    """VALIDATED tier: copy the baseline and reopen through normal validation."""
+
+    workspace, _materialization_id = _copied_test_workspace(
+        test_case, trust_tier="validated"
+    )
+    return workspace
+
+
 def initialized_workspace(test_case: TestCase) -> Workspace:
-    """Create an initialized test workspace with explicit core inputs.
+    """GUARDED tier: copy an already-ready workspace and add explicit core inputs.
 
     Workspace initialization deliberately does not author core writing
     artifacts. Tests that exercise story-agent work supply those inputs as
     fixtures instead of relying on legacy generated placeholders.
     """
 
-    temporary = tempfile.TemporaryDirectory()
-    test_case.addCleanup(temporary.cleanup)
-    workspace = initialize_test_workspace(temporary.name)
+    workspace, materialization_id = _copied_test_workspace(
+        test_case, trust_tier="guarded"
+    )
+    mutation_started = time.perf_counter()
     for filename in CORE_DOCUMENTS:
         # These are deliberately unprovenanced fixture inputs. Runtime code
         # cannot create canonical writing artifacts through generic Workspace
@@ -102,15 +444,39 @@ def initialized_workspace(test_case: TestCase) -> Workspace:
             f"test input for {filename}\n",
             encoding="utf-8",
         )
+    with _WORKSPACE_TEMPLATE_LOCK:
+        _record_workspace_fixture_timing(
+            materialization_id,
+            "guarded",
+            "fixture_mutation",
+            mutation_started,
+        )
     return workspace
 
 
 def pristine_initialized_workspace(test_case: TestCase) -> Workspace:
-    """Create one exact clean v2 baseline suitable for session provisioning."""
+    """GUARDED tier: copy one clean baseline for already-ready preconditions."""
 
-    temporary = tempfile.TemporaryDirectory()
-    test_case.addCleanup(temporary.cleanup)
-    return initialize_test_workspace(temporary.name)
+    workspace, _materialization_id = _copied_test_workspace(
+        test_case, trust_tier="guarded"
+    )
+    return workspace
+
+
+def materialize_pristine_initialized_workspace(
+    target: str | os.PathLike[str],
+) -> Workspace:
+    """GUARDED tier: materialize at an absent caller-owned target.
+
+    The helper removes the exact target if materialization fails. After success,
+    the caller owns its lifecycle; no cleanup is registered or performed here.
+    """
+
+    workspace, _materialization_id = _materialize_test_workspace(
+        Path(target),
+        trust_tier="guarded",
+    )
+    return workspace
 
 
 def core_snapshot(workspace: Workspace) -> dict[str, str]:

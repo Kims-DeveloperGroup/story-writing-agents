@@ -31,7 +31,10 @@ from .writing_artifacts.repository import WritingArtifactRepository
 _LEAD_CONTEXTUAL_CONTRACT_OVERLAY = (
     "Runtime Lead contract overlay (lead-outcome-v5). This instruction supersedes "
     "older lead_front_channel field lists in the retained workspace policies. "
-    "Every front-channel result includes kind, message, and authoring_scope. Include "
+    "The context action envelope retains its required outer kind. Inside the final "
+    "action.result, every front-channel variant includes message and authoring_scope. "
+    "The default direct-answer variant omits the inner kind; include the inner kind "
+    "only when the selected strict-schema variant requires it. Include "
     "only the proposal, artifact_intent, objective_intent, or recommended_action "
     "required by the selected strict-schema variant. Runtime derives evidence, "
     "correlation, versions, and repeated context. Follow the "

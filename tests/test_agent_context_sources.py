@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import tempfile
 import unittest
 from dataclasses import FrozenInstanceError, fields, replace
 from unittest import mock
@@ -53,7 +52,7 @@ from story_writing_agents.writing_artifacts.repository import (
 )
 
 from tests.collaboration_contract_fixture import contract_batches
-from tests.helpers import initialize_test_workspace
+from tests.helpers import pristine_initialized_workspace
 
 
 _PRIVATE_SOURCE = "PRIVATE_SOURCE_한🙂"
@@ -158,9 +157,7 @@ class _SourceFixture(unittest.TestCase):
     repository: WritingArtifactRepository
 
     def setUp(self) -> None:
-        temporary = tempfile.TemporaryDirectory(prefix="context-sources-")
-        self.addCleanup(temporary.cleanup)
-        self.workspace = initialize_test_workspace(temporary.name)
+        self.workspace = pristine_initialized_workspace(self)
         self.repository = WritingArtifactRepository(self.workspace.root)
 
     def publish(

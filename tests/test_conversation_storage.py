@@ -85,13 +85,11 @@ from story_writing_agents.conversation_storage.filesystem import (
 from story_writing_agents.conversations import CollaborationEventStore
 
 from tests.collaboration_contract_fixture import contract_batches
-from tests.helpers import initialize_test_workspace
+from tests.helpers import pristine_initialized_workspace
 
 
 def _initialized_workspace(test_case: unittest.TestCase) -> Workspace:
-    temporary = tempfile.TemporaryDirectory()
-    test_case.addCleanup(temporary.cleanup)
-    return initialize_test_workspace(temporary.name)
+    return pristine_initialized_workspace(test_case)
 
 
 def _namespace_snapshot(root: Path) -> dict[str, bytes | None]:
