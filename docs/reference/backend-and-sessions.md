@@ -119,7 +119,10 @@ synthesis phase, and consensus calls without artifact input. The
 nonserializable, process- and thread-affine execution capability. The
 capability is created for one call, is never cached on a binding or adapter,
 and retains the content-free physical-generation proof without retaining a Git
-lease across the provider await.
+lease across the provider await. Deferred Lead publication transfers the
+entered execution and provider contexts to its active in-memory continuation
+transaction, which retains them only until that publication resolves; no such
+authority enters a durable record.
 
 Launch transfers a non-inheritable duplicate of the pinned session-root
 descriptor to a fixed isolated helper. The helper enters that directory with
@@ -152,8 +155,9 @@ subtree. Configured `CODEX_HOME` must be absolute before canonical resolution.
 The resolved path must already be a directory owned by the effective user,
 must not be group- or other-writable, and must be neither the filesystem root
 nor the user's home. It may neither contain nor be contained by the control
-root, selected session root, prompt staging, or response-output directory. An
-unsafe value fails before provider submission. Staged instructions are read
+root, schema-derived sibling-worktree container (including the selected session
+root), prompt staging, or response-output directory. An unsafe value fails
+before provider submission. Staged instructions are read
 before launch and supplied as native developer instructions; neither staging
 nor response transport becomes a Codex project or story-Git residue. The
 complete UTF-8 process argument—including the
@@ -162,6 +166,12 @@ Exceeding that bound fails before submission without tainting an existing
 thread. A custom definition that previously fit file-based staging may need to
 move story material into host-owned context, explicit references, or
 SEARCH/READ sources rather than enlarging the binding instruction.
+
+The response transport is opened without following links and must remain the
+same regular file, including its identity and relevant metadata, throughout a
+bounded read. It must contain strict UTF-8 and may be at most 8 MiB. A missing,
+linked, non-regular, changing, oversized, or invalidly encoded response is
+rejected rather than read through an alternate transport.
 
 Apple's `sandbox-exec` facility is deprecated. A missing facility, non-Darwin
 host, unsafe native-state directory, noncanonical resource, or executable
@@ -173,11 +183,15 @@ Antigravity is intentionally unchanged here and remains tracked by
 [Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
 
 Context-ledger publication is generation-checked immediately before and after
-checkpoint commit. Loss after a commit invalidates that exact checkpoint
-generation before the failure escapes. A later contextual exit failure also
-taints the exact generation-bound provider thread and invalidates an already
-committed non-pending checkpoint. When another body failure is active, it stays
-primary and receives only a content-free exit-validation note.
+checkpoint commit. For deferred publication, retained provider and execution
+contexts are then closed in reverse ownership order, with execution generation
+revalidated before its close; only successful cleanup permits the provider-call
+finalizer and checkpoint-advanced event. Loss or cleanup failure after a commit
+invalidates that exact checkpoint generation before the failure escapes. A
+later contextual exit failure also taints the exact generation-bound provider
+thread and invalidates an already committed non-pending checkpoint. When
+another body failure is active, it stays primary and receives only a content-
+free exit-validation note.
 
 ## Lead session continuation
 

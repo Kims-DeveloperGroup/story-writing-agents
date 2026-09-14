@@ -1710,13 +1710,21 @@ resources, or unsafe native state fails before submission and has no
 unconfined fallback. For `CODEX_HOME`, verify an existing effective-user-owned
 directory configured by an absolute path, with no group/other write bits, that
 is not filesystem root or user home and does not contain or sit beneath the
-control root, session, staging, or response-output directory. Apple's
-underlying `sandbox-exec` facility is
+control root, schema-derived sibling-worktree container (including every
+session), staging, or response-output directory. Apple's underlying
+`sandbox-exec` facility is
 deprecated, so deployment checks must treat its absence as loss of Codex story-
 call capability. Authentication, catalog, help, and other management probes
 are outside this story boundary.
 Antigravity recovery remains unchanged until
 [Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
+
+Treat a missing, linked, non-regular, changing, oversized, or invalid-UTF-8
+response output as a failed submitted call, not as recoverable transport to
+follow or reread. The runtime opens the exact result name without following
+links, verifies one stable regular-file identity and metadata across the read,
+and accepts at most 8 MiB. Preserve the existing thread's tainted state and use
+fresh top-level authority for any explicit retry.
 
 Codex also rejects a fully encoded `developer_instructions=` process argument
 larger than 512 KiB before submission and without tainting an existing thread.
@@ -1731,13 +1739,16 @@ Generation is revalidated after provider adapter cleanup and when contextual
 invocation ownership exits, not only before accepting the decoded result.
 Reference, SEARCH, and READ work revalidates after the host constructs its
 observation and before the provider-call finalizer is accepted. Context-ledger
-checkpoint commit is checked immediately before and after publication; loss
-after publication invalidates that exact checkpoint generation. A later exit
-failure similarly taints the generation-bound thread and invalidates an
-already committed non-pending checkpoint. If another body failure is active, it
-remains primary and receives only a content-free validation note. Do not resume
-from an invalidated checkpoint; restore exact READY resources and begin the
-next safe authorized bootstrap.
+checkpoint commit is checked immediately before and after publication. A
+deferred Lead continuation retains the execution and provider contexts through
+that decision, closes and revalidates them before accepting the provider-call
+finalizer, and publishes checkpoint advancement only after clean completion.
+Loss or cleanup failure after publication invalidates that exact checkpoint
+generation. A later exit failure similarly taints the generation-bound thread
+and invalidates an already committed non-pending checkpoint. If another body
+failure is active, it remains primary and receives only a content-free
+validation note. Do not resume from an invalidated checkpoint; restore exact
+READY resources and begin the next safe authorized bootstrap.
 
 ## Controller cancellation proof
 

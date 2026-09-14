@@ -39,6 +39,8 @@ from story_writing_agents.conversations.session_context import (
 )
 from story_writing_agents.conversations.context import CollaborationReadableField, CollaborationReadableFieldKey
 from story_writing_agents.conversation_storage import compose_filesystem_conversation_storage
+from story_writing_agents.provider_execution_workspace import ProviderExecutionWorkspace
+from story_writing_agents.workspace.initialization import SessionArtifactBindingError
 from story_writing_agents.conversation_storage.sqlite import compose_sqlite_conversation_storage
 
 from tests import test_lead_orchestration as lead
@@ -344,6 +346,66 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertEqual(order, ["capture", "first_provider", "publication", "commit", "capture", "publication", "commit"])
         fields = [field["text"] for record in _records(self.backend.calls[-1].payload["h"]) for field in record["fields"]]
         self.assertIn("First terminal result.", fields)
+
+    async def test_codex_lead_retains_capability_through_publication_and_checkpoint(
+        self,
+    ):
+        self.backend = lead._LeadBackend(
+            persist_context_threads=True,
+            vendor="codex",
+        )
+        self.runtime = StoryRuntime(self.control_workspace, self.backend)
+        conversation = self.conversation("Codex capability publication")
+        self.backend.enqueue(
+            lead._visible_outcome("answer", "Published under retained capability.")
+        )
+        storage = self.runtime.conversation_storage_services
+        append = type(storage.event_store).append_batch
+        ledger = self.runtime._agent_context_service._ledger
+        commit = type(ledger).commit_attempt
+        boundaries: list[str] = []
+        observed: list[ProviderExecutionWorkspace] = []
+
+        def require_capability(boundary: str) -> None:
+            workspace = self.backend.execution_workspaces[-1]
+            self.assertIsInstance(workspace, ProviderExecutionWorkspace)
+            assert isinstance(workspace, ProviderExecutionWorkspace)
+            workspace.require_current()
+            observed.append(workspace)
+            boundaries.append(boundary)
+
+        def appended(store, batch):
+            if any(
+                type(event.payload) is CollaborationLeadJudgmentPayload
+                for event in batch.events
+            ):
+                require_capability("publication")
+            return append(store, batch)
+
+        def committed(current, *args, **kwargs):
+            require_capability("checkpoint")
+            return commit(current, *args, **kwargs)
+
+        with mock.patch.object(
+            type(storage.event_store),
+            "append_batch",
+            new=appended,
+        ), mock.patch.object(
+            type(ledger),
+            "commit_attempt",
+            new=committed,
+        ):
+            result = await self.runtime.lead_turn(
+                self.session_id,
+                conversation,
+                "Retain the exact capability through publication.",
+            )
+
+        self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
+        self.assertEqual(boundaries, ["publication", "checkpoint"])
+        self.assertEqual(len({id(workspace) for workspace in observed}), 1)
+        with self.assertRaises(SessionArtifactBindingError):
+            observed[0].require_current()
 
     async def test_separate_runtime_instances_serialize_session_while_other_session_progresses(self):
         first, second = self.conversation(), self.conversation()

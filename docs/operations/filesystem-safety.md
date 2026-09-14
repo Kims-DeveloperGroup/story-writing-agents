@@ -210,9 +210,11 @@ helper uses descriptor-relative `fchdir`, closes the transfer descriptor, and
 executes Codex with `--cd .`. The child therefore starts on the retained
 original inode without changing the parent process working directory or
 reopening the named path. The capability is immutable, rejects copying and
-serialization, is process/thread-affine, and is closed after the invocation;
-it is never stored on a provider binding, adapter, durable record, or deferred
-callback.
+serialization, and is process/thread-affine. An immediate call closes it after
+the invocation. Deferred Lead publication instead transfers the entered
+execution and provider contexts to the active in-memory continuation
+transaction and closes them when publication resolves; the authority is never
+stored on a provider binding, adapter, or durable record.
 
 Codex process creation requires Darwin's `sandbox-exec` and canonicalized
 resource paths. The compiled SBPL profile denies by default. It admits reads of
@@ -232,16 +234,23 @@ provider-native state subtree. Resolved `CODEX_HOME` is accepted only when it
 was configured as an absolute path and already names a directory owned by the
 effective user with no group/other write bits. It must be neither the
 filesystem root nor the user home, and it may not overlap in either direction
-with the exact control root, selected session, prompt staging, or response-
-output directory. Invalid or unsafe state fails before launch. Instructions are
-injected after a prelaunch staging read;
-schema and output stay in external temporary storage. The call therefore
-creates no provider-definition or output residue in the story Git tree.
+with the exact control root, the schema-derived sibling-worktree container
+(including the selected session), prompt staging, or response-output directory.
+Invalid or unsafe state fails before launch. Instructions are injected after a
+prelaunch staging read; schema and output stay in external temporary storage.
+The response is opened with no-follow semantics, must be a regular file, and is
+read only up to 8 MiB. Its identity, mode, size, and modification metadata must
+remain stable during the read, and its bytes must decode as strict UTF-8. The
+call therefore creates no provider-definition or output residue in the story
+Git tree.
 
 The generation is checked before descriptor duplication, after child creation,
 after process return, around reference/SEARCH/READ host observation and
 provider-call acceptance, before and after context-checkpoint commit, after
-adapter temporary cleanup, and on contextual invocation exit. Loss after a
+adapter temporary cleanup, and on contextual invocation exit. When publication
+is deferred, retained provider and execution contexts close in reverse order,
+the execution generation is revalidated before its close, and only clean
+completion accepts the provider-call finalizer. Loss or cleanup failure after a
 checkpoint commit invalidates that exact ledger generation. Exit loss taints
 the exact generation-bound thread; an existing body failure stays primary and
 receives only a content-free validation note. A deleted, replaced, or symlinked

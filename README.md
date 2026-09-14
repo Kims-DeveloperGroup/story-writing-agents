@@ -312,14 +312,20 @@ context, explicit-reference, SEARCH, and READ services select and deliver story
 content through the provider payload instead. Closed exceptions admit only
 the literal canonical Codex executable, required system runtime files,
 transport, outbound network access, and an existing absolute owner-controlled
-`CODEX_HOME` that cannot overlap the control root, session, staging, or output
-transport. Bound instructions, schema, and response transport remain outside
-story Git. The
+`CODEX_HOME` that cannot overlap the control root, the schema-derived sibling-
+worktree container, staging, or output transport. Bound instructions, schema,
+and response transport remain outside story Git. The response is accepted only
+from a no-follow, identity-stable regular file containing strict UTF-8 and no
+more than 8 MiB. The
 deprecated Darwin sandbox facility is fail-closed when unavailable, and an
 unsupported host does not fall back to an unconfined Codex story call.
 Codex also rejects a fully encoded `developer_instructions=` argument above
 512 KiB before submission; large custom bindings should deliver story material
 through host-owned context, references, or SEARCH/READ instead.
+Deferred Lead publication retains its execution and provider contexts until
+publication resolves. Cleanup and generation revalidation finish before the
+provider-call finalizer is accepted; failure after checkpoint commit invalidates
+that exact committed generation.
 Antigravity adopts the corresponding worktree boundary separately in
 [Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
 Create or reopen the session through the lifecycle first.

@@ -1125,10 +1125,11 @@ network/system sockets, and one validated provider-native state subtree.
 Configured `CODEX_HOME` must be absolute before canonical resolution. Its
 resolved path must already be a directory owned by the effective user without
 group/other write bits. It cannot be the filesystem root or user home, and it
-may neither contain nor be contained by the control root, selected session,
-prompt staging, or response-output directory. An unsafe value produces a fixed
-pre-submission provider failure. This is filesystem confinement, not a claim
-that the executable, broker-delivered content, or remote provider is trusted.
+may neither contain nor be contained by the control root, the schema-derived
+sibling-worktree container (including the selected session), prompt staging,
+or response-output directory. An unsafe value produces a fixed pre-submission
+provider failure. This is filesystem confinement, not a claim that the
+executable, broker-delivered content, or remote provider is trusted.
 
 Stable instructions are prepared outside story Git, read before launch, and
 passed as a `developer_instructions` configuration argument; their text can be
@@ -1136,8 +1137,10 @@ visible to local process inspection. The fully JSON-encoded argument, including
 its `developer_instructions=` prefix, is capped at 512 KiB; a larger value is
 rejected before submission and does not taint an existing thread. The schema
 has one exact external read path and the result one exact external write path.
-Codex cannot read its prompt staging after launch, and none of those definition
-or output files is created in the story worktree or committed as story residue.
+The result is consumed without following links only when it is an identity-
+stable regular file containing strict UTF-8 and no more than 8 MiB. Codex cannot
+read its prompt staging after launch, and none of those definition or output
+files is created in the story worktree or committed as story residue.
 Installation-level or vendor-global instructions can still apply, and the
 vendor may retain remote conversations. Apple's `sandbox-exec` facility is
 deprecated; if it is missing, the host is unsupported, or exact sandbox inputs

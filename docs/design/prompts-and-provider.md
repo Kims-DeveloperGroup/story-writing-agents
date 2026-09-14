@@ -499,11 +499,16 @@ control/initialization roots, siblings, traversal, and symlink escapes.
 Runtime-owned context capture,
 explicit references, and SEARCH/READ handlers deliver selected story content
 through the request or observation rather than provider filesystem access.
+The external response transport is accepted only through a no-follow read of
+one identity-stable regular file containing strict UTF-8 and at most 8 MiB.
 Generation checks bracket process creation, return, host observation and
 provider-call acceptance, checkpoint commit, adapter cleanup, and contextual
-exit. Post-commit loss invalidates the exact context checkpoint;
-post-submission or exit loss rejects the result and taints the compatible
-generation-bound continuation. An active body failure remains primary.
+exit. Deferred Lead publication retains the execution and provider contexts
+through the publication decision, closes and revalidates them before accepting
+the provider-call finalizer, and invalidates an exact checkpoint already
+committed if that cleanup fails. Post-submission or exit loss rejects the result
+and taints the compatible generation-bound continuation. An active body failure
+remains primary.
 The exact sandbox, approval, tool, configuration, and instruction controls live
 in
 [Privacy and provider exposure](../operations/privacy-and-provider.md#provider-processes-and-credentials).

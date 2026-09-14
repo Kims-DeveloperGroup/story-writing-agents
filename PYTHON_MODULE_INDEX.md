@@ -18,12 +18,12 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 143.
 
-Direct internal dependency edges indexed: 585.
+Direct internal dependency edges indexed: 586.
 
 Directed internal dependency cycles indexed: 0.
 
 Edge and cycle totals exclude annotation-only `TYPE_CHECKING` imports. The
-all-import AST graph has 587 edges. Its two annotation-only edges are
+all-import AST graph has 588 edges. Its two annotation-only edges are
 `config -> workspace` and `interactive_terminal._core -> conversations`; the
 workspace cycle was already present in the 135-unit baseline
 (528 all-import / 526 runtime edges).
@@ -61,7 +61,7 @@ __main__ -> cli -> conversation_rag_cli
                  |          |                        -> provider_adapter
                  |          |                        -> provider_process
                  |          -> codex_adapter -> agent_context/agents/config
-                 |          |                 -> errors/models
+                 |          |                 -> errors/git.session_contracts/models
                  |          |                 -> provider_adapter/provider_execution_workspace/provider_process
                  |          -> config/conversation_retrieval/debug_log
                  |          -> git.session_contracts
@@ -711,13 +711,21 @@ every intermediate arrow. The current runtime graph is acyclic.
   continuation commitment until authoritative reply publication.
 - **Supported surface:** Direct-module internal `ContextContinuationTransaction`;
   no facade export. The service lends the async context manager; the active task
-  may stage exactly one synchronous commit/abort/publication-validation triple.
+  may stage exactly one synchronous commit/abort/publication-validation group
+  with an optional post-resource completion callback, and may transfer already-
+  entered synchronous or asynchronous context managers into the transaction.
 - **Direct internal dependencies:** `agent_context.manifest`.
 - **State, resources, and side effects:** A weak, mutex-protected process-local
   asyncio-lock registry keys on workspace/session/agent, independent of provider
   and conversation. Import creates only in-memory coordination objects; it
-  performs no I/O, creates no task, and claims no cross-process authority.
-  Exit validates publication and commits or aborts before releasing the lease.
+  performs no I/O, creates no task, and claims no cross-process authority. An
+  active transaction owns the exit callbacks of explicitly transferred
+  contexts, rejects duplicate manager identities, and closes them in LIFO order
+  after publication commit or abort but before successful completion. A
+  synchronous retained context may provide one pre-close validator. Cleanup or
+  completion failure after commit invokes the staged abort path, while
+  cleanup failures preserve an existing primary failure. Exit then clears the
+  retained callbacks and releases the lease.
   Backend session-access claims remain the process-exclusion authority.
 - **Primary verification/documentation:** `tests/test_lead_orchestration.py`,
   `tests/test_agent_context_execution.py`, `docs/design/agent-context.md`, and
@@ -1001,13 +1009,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   validates an explicit workspace's exact session identity at admission and
   revalidates either form after provider results, before accepting SEARCH/READ
   actions or references, and before and after immediate or deferred checkpoint
-  commitment without retaining the capability. Generation loss after a ledger
-  commit invalidates that just-committed checkpoint before failure propagates.
+  commitment without persistent service ownership. For a deferred Codex call
+  whose provider invocation minted the workspace, the service transfers its
+  popped asynchronous provider stack to the active continuation so the provider
+  context and capability remain live through authoritative publication and
+  checkpoint commitment. Generation loss or transferred-context cleanup after
+  a ledger commit invalidates that just-committed checkpoint before failure
+  propagates.
   Every physical call is appended in order; only a
   revalidated and synchronously domain-validated terminal answer may commit
   READY. For an explicit session continuation, `session_continuation()` lends
-  a transaction and `invoke()` stages READY/coverage/finalizer commitment until
-  the caller proves durable authoritative reply publication. Pending results
+  a transaction and `invoke()` stages READY/coverage commitment until the caller
+  proves durable authoritative reply publication; checkpoint-advanced delivery
+  and accepted finalization occur only after retained contexts close cleanly.
+  Pending results
   are marked `checkpoint_pending`; failed publication or commitment taints the
   attempt. Invocation scope remains conversation-bound for references, evidence,
   correlation, source authority, and exchange attribution. Only checkpoint and
@@ -1783,8 +1798,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   retain no fabricated native output. Default event parsing and argv remain
   unchanged. Native login and any recovery decision belong to other owners.
 - **Direct internal dependencies:** `agent_context`, `agents`, `config`,
-  `errors`, `models`, `provider_adapter`, `provider_execution_workspace`, and
-  `provider_process`.
+  `errors`, `git.session_contracts`, `models`, `provider_adapter`,
+  `provider_execution_workspace`, and `provider_process`.
 - **State, resources, and side effects:** Owns construction-time Codex
   executable/model/reasoning settings, isolated binding directories and their
   generated `AGENTS.md` files plus exact same-snapshot content-free component
@@ -1821,12 +1836,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   compatibility fallback for direct adapter construction. Exact per-binding
   release removes only that binding's tracked ephemeral staging idempotently; close
   removes any remaining tracked bindings. Each invocation requires the exact
-  call-local provider workspace, embeds the staged `AGENTS.md` bytes in native
-  developer instructions without exposing the staging path to the child, and
+  call-local provider workspace and requires its canonical root to be the exact
+  session-named child of the control workspace's stable Git worktree sibling
+  container. Its allowed native-state root cannot overlap that whole container.
+  The adapter embeds the staged `AGENTS.md` bytes in native developer
+  instructions without exposing the staging path to the child, and
   requests descriptor-relative `--cd .` execution plus exact Codex resource
   requirements from `provider_process`; no staging-directory or path-only
   launch fallback remains. It creates and removes temporary schema/response
-  files, then revalidates the workspace on every invocation exit. Standalone
+  files. Final output is accepted only from one no-follow, bounded eight-MiB
+  regular-file descriptor whose device, inode, mode, size, and modification and
+  change times remain stable across the complete strict-UTF-8 read; symlinked,
+  nonregular, oversized, or changing output fails closed. The adapter then
+  revalidates the workspace on every invocation exit. Standalone
   exit loss retains prepared/submitted accounting and becomes the invocation
   failure; loss during another failure is attached without replacing that
   primary failure. `close()` removes all
@@ -7260,7 +7282,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   backend overrides, provider-route generation, persona selection, and the
   runtime policy overlay remain control-owned. After concrete binding, only
   Codex consensus, collaboration, and Lead calls borrow a call-local execution
-  workspace and pass it through the named backend/context seams; Antigravity
+  workspace and pass it through the named backend/context seams. Active Lead
+  continuations take ownership of the entered workspace manager and its
+  currentness validator until authoritative publication and checkpoint
+  completion; non-Lead operations retain their local cleanup. Antigravity
   receives `None` and retains its established CWD and project-root behavior.
 - **Direct internal dependencies:** `agent_context.accounting`,
   `agent_context.continuation`, `agent_context.manifest`, `agent_context.planning`, `agent_context.service`,

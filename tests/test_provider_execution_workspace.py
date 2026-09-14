@@ -56,8 +56,11 @@ class ProviderExecutionWorkspaceTests(unittest.TestCase):
         super().setUp()
         self.temporary = tempfile.TemporaryDirectory(prefix="provider-workspace-")
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name).resolve() / "session"
-        self.root.mkdir()
+        base = Path(self.temporary.name).resolve()
+        self.control_root = base / "control"
+        self.control_root.mkdir()
+        self.root = base / "control.story-worktrees" / "session"
+        self.root.mkdir(parents=True)
         self.pin = object.__new__(GitSessionGenerationPin)
         self.require_pin = mock.patch.object(
             GitSessionGenerationPin,
@@ -267,9 +270,8 @@ class ProviderExecutionWorkspaceTests(unittest.TestCase):
             executable="codex",
             _which=mock.Mock(return_value=mock.Mock(return_value=str(executable))),
             invocation_settings=mock.Mock(return_value=(None, None)),
-            _control_root=base / "control",
+            _control_root=self.control_root,
         )
-        owner._control_root.mkdir()
         owner._native_state_directory = lambda **arguments: (
             CodexAdapter._native_state_directory(owner, **arguments)
         )
@@ -311,8 +313,11 @@ class ProviderExecutionWorkspaceTests(unittest.TestCase):
         output_parent = base / "output"
         safe = base / "native"
         control = base / "control"
+        session_container = base / "control.story-worktrees"
         for directory in (staging, output_parent, safe, control):
-            directory.mkdir(mode=0o700)
+            directory.mkdir(mode=0o700, exist_ok=True)
+        sibling_native = session_container / "sibling" / "codex-home"
+        sibling_native.mkdir(parents=True, mode=0o700)
         output = output_parent / "response.json"
         owner = SimpleNamespace(_control_root=control)
 
@@ -325,6 +330,7 @@ class ProviderExecutionWorkspaceTests(unittest.TestCase):
             CodexAdapter._native_state_directory(
                 owner,
                 session_root=self.root,
+                session_container=session_container,
                 staging=staging,
                 output=output,
             )
@@ -334,6 +340,7 @@ class ProviderExecutionWorkspaceTests(unittest.TestCase):
                 CodexAdapter._native_state_directory(
                     owner,
                     session_root=self.root,
+                    session_container=session_container,
                     staging=staging,
                     output=output,
                 ),
@@ -346,6 +353,7 @@ class ProviderExecutionWorkspaceTests(unittest.TestCase):
             self.root,
             staging,
             output_parent,
+            sibling_native,
             base / "missing",
         )
         for candidate in unsafe:
@@ -359,6 +367,7 @@ class ProviderExecutionWorkspaceTests(unittest.TestCase):
                 CodexAdapter._native_state_directory(
                     owner,
                     session_root=self.root,
+                    session_container=session_container,
                     staging=staging,
                     output=output,
                 )
@@ -372,6 +381,7 @@ class ProviderExecutionWorkspaceTests(unittest.TestCase):
             CodexAdapter._native_state_directory(
                 owner,
                 session_root=self.root,
+                session_container=session_container,
                 staging=staging,
                 output=output,
             )
@@ -387,7 +397,7 @@ class ProviderExecutionWorkspaceTests(unittest.TestCase):
         native = base / "native"
         control = base / "control"
         for directory in (staging, output_parent, native, control):
-            directory.mkdir(mode=0o700)
+            directory.mkdir(mode=0o700, exist_ok=True)
         definition_path = staging / "AGENTS.md"
         schema = base / "schema.json"
         schema.write_text("{}", encoding="utf-8")

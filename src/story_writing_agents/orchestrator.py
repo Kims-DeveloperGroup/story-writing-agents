@@ -5583,6 +5583,14 @@ class StoryRuntime:
             )
             if execution_workspace_manager is not None:
                 execution_workspace = execution_workspace_manager.__enter__()
+                if agent_id == LEAD_ORCHESTRATOR:
+                    continuation = self._lead_continuations.get(session_id)
+                    if continuation is not None:
+                        continuation.retain_context_manager(
+                            execution_workspace_manager,
+                            validator=execution_workspace.require_current,
+                        )
+                        execution_workspace_manager = None
             reference_read = reference_operation.begin_invocation(
                 agent_id=agent_id,
                 phase=context_invocation_kind.value,
@@ -7914,6 +7922,13 @@ class StoryRuntime:
             if candidate_workspace_manager is not None:
                 execution_workspace = candidate_workspace_manager.__enter__()
                 execution_workspace_manager = candidate_workspace_manager
+                continuation = self._lead_continuations.get(session_id)
+                if continuation is not None:
+                    continuation.retain_context_manager(
+                        execution_workspace_manager,
+                        validator=execution_workspace.require_current,
+                    )
+                    execution_workspace_manager = None
             reference_read = reference_operation.begin_invocation(
                 agent_id=LEAD_ORCHESTRATOR,
                 phase=ContextInvocationKind.LEAD.value,

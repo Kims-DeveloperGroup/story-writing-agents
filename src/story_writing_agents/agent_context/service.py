@@ -11,6 +11,7 @@ import json
 import math
 import secrets
 import threading
+from contextlib import AsyncExitStack
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -4355,7 +4356,8 @@ class AgentContextService:
         key = ContextLedgerKey(checkpoint_scope, provider_id)
         result: ContextInvocationResult | None = None
         try:
-            async with context_manager:
+            async with AsyncExitStack() as provider_stack:
+                await provider_stack.enter_async_context(context_manager)
                 async with lock:
                     if abandoned_operation_ids:
                         assert continuation is not None
@@ -4405,6 +4407,15 @@ class AgentContextService:
                         session_history=session_history,
                         publication_validator=publication_validator,
                     )
+                    if (
+                        continuation is not None
+                        and provider_id == "codex"
+                        and request.execution_workspace is None
+                        and result.checkpoint_pending
+                    ):
+                        continuation.retain_async_context_manager(
+                            provider_stack.pop_all()
+                        )
         except BaseException as failure:
             if result is not None and not result.checkpoint_pending:
                 try:
@@ -5414,9 +5425,11 @@ class AgentContextService:
                     deferred_finalizer = call_finalizer
                     call_finalizer = None
                     deferred_committed = False
+                    deferred_generation: int | None = None
+                    deferred_aborted = False
 
                     def commit_published() -> None:
-                        nonlocal deferred_committed
+                        nonlocal deferred_committed, deferred_generation
                         require_execution_workspace_current()
                         commit = self._ledger.commit_attempt(
                             key,
@@ -5440,23 +5453,35 @@ class AgentContextService:
                                 except BaseException:
                                     pass
                             raise
+                        deferred_generation = commit.generation
                         deferred_committed = True
-                        if deferred_finalizer is not None:
-                            _accept_provider_call_without_replacing(deferred_finalizer)
+
+                    def complete_published() -> None:
                         _emit_context_event(event_sink, execution_event(
                             ContextExecutionEventKind.CHECKPOINT_ADVANCED,
                             provider_input_tokens=_provider_input_token_total(submitted_accountings),
                         ))
+                        if deferred_finalizer is not None:
+                            _accept_provider_call_without_replacing(deferred_finalizer)
 
                     def abort_unpublished() -> None:
-                        if deferred_committed:
+                        nonlocal deferred_aborted
+                        if deferred_aborted:
                             return
+                        deferred_aborted = True
                         try:
-                            self._ledger.taint_attempt(
-                                key, expected_generation=generation,
-                                attempt_id=attempt_id,
-                                outcome=ContextLedgerAttemptOutcome.FAILED,
-                            )
+                            if deferred_committed:
+                                assert deferred_generation is not None
+                                self._ledger.invalidate(
+                                    key,
+                                    expected_generation=deferred_generation,
+                                )
+                            else:
+                                self._ledger.taint_attempt(
+                                    key, expected_generation=generation,
+                                    attempt_id=attempt_id,
+                                    outcome=ContextLedgerAttemptOutcome.FAILED,
+                                )
                         except BaseException:
                             pass
                         if deferred_finalizer is not None:
@@ -5468,7 +5493,12 @@ class AgentContextService:
                             ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED,
                         ))
 
-                    continuation.stage(commit_published, abort_unpublished, publication_validator)
+                    continuation.stage(
+                        commit_published,
+                        abort_unpublished,
+                        publication_validator,
+                        complete_published,
+                    )
                     require_execution_workspace_current()
                     return ContextInvocationResult(
                         action.answer, authorization, projection.accounting,

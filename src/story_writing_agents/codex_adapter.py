@@ -25,6 +25,7 @@ from .agent_context import (
 from .agents import ROSTER
 from .config import ConfigurationSnapshot
 from .errors import ConfigurationError, ProviderAuthenticationRequiredError
+from .git.session_contracts import GIT_SESSION_WORKTREE_SIBLING_SUFFIX
 from .models import AgentDefinition
 from .provider_adapter import (
     AgentExecutionProfile,
@@ -51,6 +52,72 @@ from .provider_execution_workspace import ProviderExecutionWorkspace
 _SAFE_THREAD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 # Leave substantial headroom below Darwin's aggregate process-argument ceiling.
 _MAX_DEVELOPER_INSTRUCTIONS_ARGUMENT_UTF8_BYTES = 512 * 1_024
+_MAX_CODEX_RESPONSE_UTF8_BYTES = 8 * 1_024 * 1_024
+
+
+def _regular_output_exists(path: Path) -> bool:
+    """Return whether the exact output name is currently a regular file."""
+
+    try:
+        observed = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return False
+    return stat.S_ISREG(observed.st_mode)
+
+
+def _read_regular_output(path: Path) -> str:
+    """Read one bounded, identity-stable regular output without following links."""
+
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
+    )
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise OSError("Codex response output is not a regular file")
+        if before.st_size > _MAX_CODEX_RESPONSE_UTF8_BYTES:
+            raise ProviderInvocationError(
+                "Codex CLI returned oversized structured output",
+                taint_existing_thread=True,
+            )
+        content = bytearray()
+        while len(content) <= _MAX_CODEX_RESPONSE_UTF8_BYTES:
+            chunk = os.read(
+                descriptor,
+                min(
+                    64 * 1_024,
+                    _MAX_CODEX_RESPONSE_UTF8_BYTES + 1 - len(content),
+                ),
+            )
+            if not chunk:
+                break
+            content.extend(chunk)
+        if len(content) > _MAX_CODEX_RESPONSE_UTF8_BYTES:
+            raise ProviderInvocationError(
+                "Codex CLI returned oversized structured output",
+                taint_existing_thread=True,
+            )
+        after = os.fstat(descriptor)
+        if (
+            before.st_dev,
+            before.st_ino,
+            before.st_mode,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_mode,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        ):
+            raise OSError("Codex response output changed while being read")
+        return bytes(content).decode("utf-8", errors="strict")
+    finally:
+        os.close(descriptor)
 
 
 class CodexAdapter:
@@ -435,7 +502,7 @@ class CodexAdapter:
 
             try:
                 authentication = (
-                    None if result.returncode == 0 and output_path.is_file()
+                    None if result.returncode == 0 and _regular_output_exists(output_path)
                     else self._authentication_failure(result.stdout)
                 )
                 if authentication is not None:
@@ -472,7 +539,7 @@ class CodexAdapter:
                         )
                 try:
                     execution_workspace.require_current()
-                    response_text = output_path.read_text(encoding="utf-8")
+                    response_text = _read_regular_output(output_path)
                 except OSError as exc:
                     raise ProviderInvocationError(
                         "Codex CLI did not write its final response",
@@ -552,8 +619,17 @@ class CodexAdapter:
         schema = Path(os.path.realpath(schema_path))
         output = Path(os.path.realpath(output_path))
         session_root = Path(os.path.realpath(execution_workspace.worktree_root))
+        session_container = self._control_root.with_name(
+            self._control_root.name + GIT_SESSION_WORKTREE_SIBLING_SUFFIX
+        )
+        if session_root != session_container / execution_workspace.session_id:
+            raise ProviderInvocationError(
+                "Codex execution workspace is unavailable",
+                taint_existing_thread=False,
+            )
         native_state = self._native_state_directory(
             session_root=session_root,
+            session_container=session_container,
             staging=staging,
             output=output,
         )
@@ -644,6 +720,7 @@ class CodexAdapter:
         self,
         *,
         session_root: Path,
+        session_container: Path,
         staging: Path,
         output: Path,
     ) -> Path:
@@ -684,6 +761,7 @@ class CodexAdapter:
                 overlaps(native_state, protected)
                 for protected in (
                     session_root,
+                    session_container,
                     staging,
                     output.parent,
                     self._control_root,

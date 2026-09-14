@@ -372,6 +372,8 @@ class _ScriptedProvider:
             tuple[tuple[tuple[str, ContextProviderTerminalCode | None], ...], ...]
         ] = []
         self.currentness_hook: Callable[[], None] | None = None
+        self.invocation_depth = 0
+        self.invocation_exits = 0
         self._next_thread = 1
 
     @asynccontextmanager
@@ -385,9 +387,14 @@ class _ScriptedProvider:
     ):
         del continuation_identity, execution_workspace
         self.invocation_entries += 1
+        self.invocation_depth += 1
         if self.invocation_entries >= 2:
             self.second_invocation_entered.set()
-        yield
+        try:
+            yield
+        finally:
+            self.invocation_depth -= 1
+            self.invocation_exits += 1
 
     @staticmethod
     def _key(scope: object, policy_fingerprint: str) -> tuple[object, str]:
@@ -403,6 +410,8 @@ class _ScriptedProvider:
         _scope: object,
         _policy_fingerprint: str,
     ) -> None:
+        if self.invocation_depth <= 0:
+            raise AssertionError("execution workspace escaped its invocation")
         self.currentness_observations.append(
             tuple(tuple(finalizer.calls) for finalizer in self.finalizers)
         )
@@ -2402,6 +2411,52 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
         self.assertIsNone(committed_inspection.record.ready_checkpoint)
         self.assertEqual(
             committed_provider.finalizers[0].calls,
+            [
+                (
+                    "post_response_runtime_failure",
+                    ContextProviderTerminalCode.CONTEXT_RUNTIME_FAILED,
+                )
+            ],
+        )
+
+    async def test_deferred_fallback_retains_auto_minted_provider_until_abort(
+        self,
+    ) -> None:
+        provider = _ScriptedProvider((_answer,))
+        request = self.request(
+            operation_id="deferred-fallback",
+            result_correlation_id="deferred-fallback-result",
+        )
+        continuation = self.service.session_continuation(
+            request.session_id,
+            request.agent_id,
+        )
+
+        async with continuation:
+            result = await self.service.invoke(
+                request,
+                provider,
+                continuation=continuation,
+                session_history=SessionHistorySnapshot(request.session_id, ()),
+                publication_validator=lambda: False,
+                **self.authorities(request),
+            )
+            self.assertTrue(result.checkpoint_pending)
+            self.assertEqual(provider.invocation_depth, 1)
+            self.assertEqual(provider.invocation_exits, 0)
+
+        self.assertEqual(provider.invocation_depth, 0)
+        self.assertEqual(provider.invocation_exits, 1)
+        inspection = ContextLedger(self.workspace).inspect(
+            ContextLedgerKey(
+                continuation.identity.checkpoint_scope(),
+                provider.provider_id,
+            )
+        )
+        self.assertIs(inspection.record.state, ContextLedgerRecordState.TAINTED)
+        self.assertIsNone(inspection.record.ready_checkpoint)
+        self.assertEqual(
+            provider.finalizers[0].calls,
             [
                 (
                     "post_response_runtime_failure",

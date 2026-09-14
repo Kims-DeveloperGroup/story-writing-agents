@@ -272,7 +272,9 @@ if mode == "nonzero" or (
     raise SystemExit(7)
 
 output_path = Path(argv[argv.index("--output-last-message") + 1])
-if reference_prelude and "STORY_FAKE_CODEX_REFERENCE_ACTION" in os.environ:
+if mode == "symlink_output":
+    output_path.symlink_to(os.environ["STORY_FAKE_CODEX_SYMLINK_TARGET"])
+elif reference_prelude and "STORY_FAKE_CODEX_REFERENCE_ACTION" in os.environ:
     output_path.write_text(
         os.environ["STORY_FAKE_CODEX_REFERENCE_ACTION"],
         encoding="utf-8",
@@ -2846,6 +2848,29 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 self.assertIs(accounting.state, ProviderCallState.SUBMITTED)
                 self.assertGreater(accounting.actual_transport_utf8_bytes or 0, 0)
                 taint.assert_called_once()
+                manifest = physical_workspace.read_json(
+                    "agent_states/orchestrator_state/provider_sessions/"
+                    f"{session_id}.json"
+                )
+                self.assertIs(
+                    manifest["provider_threads"][f"codex:{PLOT_ARCHITECT}"][
+                        "tainted"
+                    ],
+                    True,
+                )
+                outcomes = [
+                    json.loads(record["content"])
+                    for record in _agent_exchange_records(physical_workspace)
+                    if record.get("session_id") == session_id
+                    and record.get("request_type") == "outcome"
+                ]
+                self.assertEqual(
+                    outcomes[-1],
+                    {
+                        "code": "provider_invocation_failed",
+                        "outcome": "provider_failure",
+                    },
+                )
 
     async def test_direct_context_auto_mint_retires_on_failure_and_cancellation(
         self,
@@ -6528,6 +6553,53 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         0,
                     )
                 backend.close()
+
+    async def test_codex_response_symlink_is_rejected_without_reading_target(
+        self,
+    ) -> None:
+        session_id = "symlink_response"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        self.create_provisioned_session_with_access(backend, session_id)
+        bound = await backend.bind(self.definition())
+        await bound.invoke(self.request(session_id=session_id))
+        target = self.fake_directory / "private-response-target.json"
+        target_bytes = json.dumps(
+            {
+                "kind": "candidate",
+                "revision_id": "r0",
+                "content": "symlink target must not be consumed",
+            }
+        ).encode("utf-8")
+        target.write_bytes(target_bytes)
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "STORY_FAKE_CODEX_MODE": "symlink_output",
+                "STORY_FAKE_CODEX_SYMLINK_TARGET": str(target),
+            },
+        ), self.assertRaisesRegex(
+            BackendProtocolError,
+            "did not write its final response",
+        ):
+            await bound.invoke(self.request(session_id=session_id))
+
+        self.assertEqual(target.read_bytes(), target_bytes)
+        self.assertIs(self.thread(session_id)["tainted"], True)
+        outcomes = [
+            json.loads(record["content"])
+            for record in _agent_exchange_records(self.workspace)
+            if record.get("session_id") == session_id
+            and record.get("request_type") == "outcome"
+        ]
+        self.assertEqual(
+            outcomes[-1],
+            {
+                "code": "provider_invocation_failed",
+                "outcome": "provider_failure",
+            },
+        )
 
     async def test_timeout_terminates_the_codex_process(self) -> None:
         backend = AgentBackend(
