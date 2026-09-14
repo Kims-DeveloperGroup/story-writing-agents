@@ -397,7 +397,9 @@ provider behavior as suite evidence.
 For fast feedback, run the exact policy-owned fast lane:
 
 ```bash
-python -m tests.runner run --tier fast --json /tmp/story-tests-fast.json
+report_dir="$(mktemp -d "${TMPDIR:-/tmp}/story-tests.XXXXXXXXXX")"
+chmod 700 "$report_dir"
+python -m tests.runner run --tier fast --json "$report_dir/fast.json"
 ```
 
 Run one or more affected groups by repeating `--group`. Available groups are
@@ -405,9 +407,11 @@ Run one or more affected groups by repeating `--group`. Available groups are
 `artifact-storage`, `provider-process`, and `interactive-terminal`:
 
 ```bash
+report_dir="$(mktemp -d "${TMPDIR:-/tmp}/story-tests.XXXXXXXXXX")"
+chmod 700 "$report_dir"
 python -m tests.runner run \
   --group workspace-core \
-  --json /tmp/story-tests-affected.json
+  --json "$report_dir/affected.json"
 ```
 
 For complete-suite evidence, run exactly two complementary shards. Start no
@@ -415,19 +419,26 @@ more than these two test processes concurrently, preserve both reports, and
 then reconcile them:
 
 ```bash
-python -m tests.runner run --shard 1/2 --json /tmp/story-tests-shard-1.json &
+report_dir="$(mktemp -d "${TMPDIR:-/tmp}/story-tests.XXXXXXXXXX")"
+chmod 700 "$report_dir"
+python -m tests.runner run --shard 1/2 --json "$report_dir/shard-1.json" &
 shard_one_pid=$!
-python -m tests.runner run --shard 2/2 --json /tmp/story-tests-shard-2.json &
+python -m tests.runner run --shard 2/2 --json "$report_dir/shard-2.json" &
 shard_two_pid=$!
 shard_status=0
 wait "$shard_one_pid" || shard_status=1
 wait "$shard_two_pid" || shard_status=1
 test "$shard_status" -eq 0
 python -m tests.runner reconcile \
-  /tmp/story-tests-shard-1.json \
-  /tmp/story-tests-shard-2.json \
-  --json /tmp/story-tests-reconciliation.json
+  "$report_dir/shard-1.json" \
+  "$report_dir/shard-2.json" \
+  --json "$report_dir/reconciliation.json"
 ```
+
+Each example creates a fresh, unpredictable, owner-only report directory. Keep
+every report filename absent before its command runs: runner JSON output uses
+exclusive creation, and reconciliation accepts only owner-controlled regular
+files as shard inputs.
 
 An unknown or empty selector is a visible configuration error and exits
 nonzero instead of silently passing. A failing or interrupted report records
