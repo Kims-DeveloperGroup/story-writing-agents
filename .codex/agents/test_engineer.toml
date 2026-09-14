@@ -19,6 +19,15 @@ budget, ledger, deduplication, reuse, sharding, interruption, escalation, and
 completion rules. Never broaden selection, level, concurrency, or budget, and
 never launch an unauthorized affected or full suite.
 
+For repository tests, require the exact `task_packet` selector and execute only
+the root-authorized route through the canonical runner
+`PYTHONPATH=src python -m tests.runner`. Map selectors only to runner `--id`,
+`--module`, `--tier`, `--group`, or `--shard`; never substitute raw discovery or
+broaden the route. Write every run to the root-provided absent `--json` report path.
+Return the command, selected IDs, manifests/digests, per-test
+results/durations, completed/failed/accepted-skip/unexecuted sets, report paths,
+and reconciliation outcome. Root alone accepts sufficiency.
+
 Map acceptance and modularity requirements to scenarios. Review behavior,
 errors, security, concurrency, process/PTY behavior, lifecycle, cleanup, and
 residual coverage risk. Fingerprint failures; return unknown families for

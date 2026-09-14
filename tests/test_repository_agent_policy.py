@@ -26,9 +26,9 @@ SKILL_PATHS = {
     )
 }
 POLICY_WORD_CEILINGS = {
-    AGENTS_PATH: 412,
+    AGENTS_PATH: 440,
     WORKFLOW_PATH: 715,
-    SKILL_PATHS["adaptive-verification"]: 399,
+    SKILL_PATHS["adaptive-verification"]: 560,
     SKILL_PATHS["github-task-lifecycle"]: 400,
     SKILL_PATHS["subagent-model-selection"]: 174,
     SKILL_PATHS["subagent-routing"]: 292,
@@ -189,6 +189,16 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
         for term in terms:
             with self.subTest(term=term):
                 self.assertIn(term, source)
+
+    def assertRunnerRoute(self, source: str, *parts: str) -> None:
+        commands = re.findall(
+            r"`([^`]*PYTHONPATH=src python -m tests\.runner[^`]*)`",
+            normalized(source),
+        )
+        self.assertTrue(
+            any(all(part in command for part in parts) for command in commands),
+            f"missing canonical runner route containing {parts!r}",
+        )
 
     def test_agent_roster_parses_and_names_match(self) -> None:
         self.assertEqual(set(self.agent_data), EXPECTED_AGENTS)
@@ -723,11 +733,84 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
             "Full-suite triggers",
         )
 
+    def test_agents_points_repository_work_to_the_canonical_runner(self) -> None:
+        self.assertTerms(
+            self.agents_source,
+            "canonical repository test runner",
+            "`PYTHONPATH=src python -m tests.runner`",
+        )
+        self.assertRunnerRoute(self.agents_source)
+
+    def test_adaptive_verification_names_every_canonical_runner_route_and_gate(self) -> None:
+        for parts in (
+            ("run", "--id"),
+            ("run", "--tier fast"),
+            ("run", "--group"),
+            ("run", "--shard 1/2"),
+            ("run", "--shard 2/2"),
+        ):
+            with self.subTest(route=parts):
+                self.assertRunnerRoute(self.verification_source, *parts)
+        self.assertTerms(
+            self.verification_source,
+            "#679",
+            "fast lane <=300 seconds",
+            "affected group <=600 seconds",
+            "sequential-equivalent <=5102.566 seconds",
+            "two-shard wall <=3300 seconds",
+        )
+
+    def test_runner_selection_and_execution_remain_root_owned_and_packet_exact(self) -> None:
+        self.assertTerms(
+            self.verification_source,
+            "Root exclusively owns selection/authorization/budget/ concurrency/dedup/reuse/escalation/sufficiency",
+            "maximum two",
+        )
+        instructions = self.agent_data["test_engineer"]["developer_instructions"]
+        self.assertRunnerRoute(instructions)
+        self.assertTerms(
+            instructions,
+            "exact `task_packet`",
+            "`--id`",
+            "`--module`",
+            "`--tier`",
+            "`--group`",
+            "`--shard`",
+            "Never broaden selection, level, concurrency, or budget",
+        )
+
+    def test_runner_reports_use_fresh_owner_only_paths_and_structured_evidence(self) -> None:
+        self.assertTerms(
+            self.verification_source,
+            "`umask 077`",
+            "`mktemp -d`",
+            "owner-only",
+            "`0700`",
+            "absent JSON leaf",
+            "`0600`",
+            "`canonical_manifest`",
+            "`selection_manifest`",
+            "`digest`",
+            "`tests`",
+            "`durations`",
+            "`unexecuted_ids`",
+        )
+
+    def test_diagnostic_ids_cannot_replace_disjoint_exhaustive_shard_evidence(self) -> None:
+        self.assertRunnerRoute(self.verification_source, "reconcile")
+        self.assertTerms(
+            self.verification_source,
+            "Diagnostic `--id` output is not complete-shard evidence",
+            "reconciliation proves shard ID sets are disjoint",
+            "union exactly equals the canonical manifest",
+            "both shard reports are terminal",
+        )
+
     def test_compact_policy_files_meet_independent_half_baseline_limits(self) -> None:
         expected = {
-            "AGENTS.md": 412,
+            "AGENTS.md": 440,
             "GITHUB_WORKFLOW.md": 715,
-            ".agents/skills/adaptive-verification/SKILL.md": 399,
+            ".agents/skills/adaptive-verification/SKILL.md": 560,
             ".agents/skills/github-task-lifecycle/SKILL.md": 400,
             ".agents/skills/subagent-model-selection/SKILL.md": 174,
             ".agents/skills/subagent-routing/SKILL.md": 292,

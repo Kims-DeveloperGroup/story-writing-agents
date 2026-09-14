@@ -52,6 +52,25 @@ Assign one `evidence_execution_owner`; deduplicate exactly by
 venue/wrapper never justify reruns. Run exact/cluster locally, affected/full in CI; duplicate
 broad venues only for an environment criterion.
 
+## Canonical Runner
+
+Exact repeated `--id`:
+`PYTHONPATH=src python -m tests.runner run --id <ID> --id <ID> --json REPORT`.
+Fast: `PYTHONPATH=src python -m tests.runner run --tier fast --json REPORT`.
+Repeated `--group`:
+`PYTHONPATH=src python -m tests.runner run --group <GROUP> --group <GROUP> --json REPORT`.
+Full exactly:
+`PYTHONPATH=src python -m tests.runner run --shard 1/2 --json REPORT1` and
+`PYTHONPATH=src python -m tests.runner run --shard 2/2 --json REPORT2`, then
+`PYTHONPATH=src python -m tests.runner reconcile REPORT1 REPORT2 --json RECONCILED_REPORT`.
+
+#679 targets: fast lane <=300 seconds; affected group <=600 seconds;
+sequential-equivalent <=5102.566 seconds; two-shard wall <=3300 seconds.
+
+Reports: `umask 077`; fresh owner-only `mktemp -d` `0700` directory; an
+absent JSON leaf created `0600`. Record `canonical_manifest`, `selection_manifest`,
+`digest`, `tests`, `durations`, and `unexecuted_ids`.
+
 ## Execution
 
 Above `max_shard_seconds`, partition deterministic disjoint portable IDs: union equals
@@ -66,6 +85,8 @@ neither pass nor assertion-failure: classify; stop only owned process; preserve
 completed/failed/accepted-skip/unexecuted sets; resume
 valid unexecuted/invalidated IDs. Partial evidence
 never completes; one bounded repeat may diagnose flakiness; relabeling cannot evade dedup.
+Diagnostic `--id` output is not complete-shard evidence; both shard reports are terminal,
+reconciliation proves shard ID sets are disjoint, and their union exactly equals the canonical manifest.
 
 Full-suite triggers: explicit Issue/parent/release criterion; unbounded inventory; changed
 package-wide/public/cross-domain invariant; unreliable global discovery/bootstrap/packaging/
