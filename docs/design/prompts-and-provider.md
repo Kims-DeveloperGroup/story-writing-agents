@@ -500,15 +500,17 @@ Runtime-owned context capture,
 explicit references, and SEARCH/READ handlers deliver selected story content
 through the request or observation rather than provider filesystem access.
 The external response transport is accepted only through a no-follow read of
-one identity-stable regular file containing strict UTF-8 and at most 8 MiB.
+one identity-stable, singly linked regular file containing strict UTF-8 and at
+most 8 MiB.
 Generation checks bracket process creation, return, host observation and
 provider-call acceptance, checkpoint commit, adapter cleanup, and contextual
-exit. Deferred Lead publication retains the execution and provider contexts
-through the publication decision, closes and revalidates them before accepting
-the provider-call finalizer, and invalidates an exact checkpoint already
-committed if that cleanup fails. Post-submission or exit loss rejects the result
-and taints the compatible generation-bound continuation. An active body failure
-remains primary.
+or direct execution-workspace exit. Deferred Lead publication retains the
+execution and provider contexts through the publication decision, closes and
+revalidates them before accepting the provider-call finalizer, and invalidates
+an exact checkpoint already committed if that cleanup fails. Post-submission or
+contextual exit loss rejects the result and taints the compatible generation-
+bound continuation. Direct owner-exit loss prevents an apparent success from
+returning. An active body failure remains primary.
 The exact sandbox, approval, tool, configuration, and instruction controls live
 in
 [Privacy and provider exposure](../operations/privacy-and-provider.md#provider-processes-and-credentials).
@@ -592,9 +594,12 @@ payload; the content-free prelude uses its own payload and schema.
 
 Neither boundary makes a provider or executable trusted. Hashes detect change
 but do not encrypt or authorize content. Provider transcripts may be retained,
-and ending a story session keeps local thread references. Antigravity-native
-state is retained on backend close; a tainted thread or changed definition
-starts a fresh provider conversation without deleting prior provider data.
+and ending a story session keeps local thread references. The schema-v2
+provider-session manifest can retain a legacy base record and multiple
+fingerprint-qualified generations; qualified state takes precedence and
+ordinary thread updates do not prune the older records. Antigravity-native state
+is retained on backend close; a tainted thread or changed definition starts a
+fresh provider conversation without deleting prior provider data.
 
 Exact models are in [Agent contracts](../reference/agent-contracts.md); privacy
 implications are in [Privacy and provider exposure](../operations/privacy-and-provider.md),

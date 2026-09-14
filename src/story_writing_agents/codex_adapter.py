@@ -74,7 +74,7 @@ def _read_regular_output(path: Path) -> str:
     )
     try:
         before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode):
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
             raise OSError("Codex response output is not a regular file")
         if before.st_size > _MAX_CODEX_RESPONSE_UTF8_BYTES:
             raise ProviderInvocationError(
@@ -99,10 +99,13 @@ def _read_regular_output(path: Path) -> str:
                 taint_existing_thread=True,
             )
         after = os.fstat(descriptor)
+        if not stat.S_ISREG(after.st_mode) or after.st_nlink != 1:
+            raise OSError("Codex response output is not a regular file")
         if (
             before.st_dev,
             before.st_ino,
             before.st_mode,
+            before.st_nlink,
             before.st_size,
             before.st_mtime_ns,
             before.st_ctime_ns,
@@ -110,6 +113,7 @@ def _read_regular_output(path: Path) -> str:
             after.st_dev,
             after.st_ino,
             after.st_mode,
+            after.st_nlink,
             after.st_size,
             after.st_mtime_ns,
             after.st_ctime_ns,

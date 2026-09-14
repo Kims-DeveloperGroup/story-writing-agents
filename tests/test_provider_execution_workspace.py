@@ -559,15 +559,21 @@ class ProviderDescriptorExecutionTests(unittest.IsolatedAsyncioTestCase):
         executable = Path(os.path.realpath(located))
         with tempfile.TemporaryDirectory(prefix="provider-codex-help-") as temporary:
             base = Path(temporary).resolve()
-            root = base / "session"
+            control = base / "story"
+            control.mkdir(mode=0o700)
+            root = base / "story.story-worktrees" / "session"
             native = base / "native"
             staging = base / "staging"
             output_parent = base / "output"
             for directory in (root, native, staging, output_parent):
-                directory.mkdir(mode=0o700)
+                directory.mkdir(mode=0o700, parents=True)
             schema = base / "schema.json"
             output = output_parent / "response.json"
             schema.write_text('{"type":"object"}', encoding="utf-8")
+            (staging / "AGENTS.md").write_text(
+                "Synthetic provider-free startup probe.\n",
+                encoding="utf-8",
+            )
             descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
             identity = os.fstat(descriptor)
             pin = object.__new__(GitSessionGenerationPin)
@@ -580,34 +586,12 @@ class ProviderDescriptorExecutionTests(unittest.IsolatedAsyncioTestCase):
                 generation_pin=pin,
                 failure_factory=_BindingLost,
             )
-            requirements = DarwinSandboxRequirements(
-                executable=executable,
-                read_subpaths=(executable.parent,),
-                read_paths=(schema,),
-                write_subpaths=(native,),
-                write_paths=(output,),
-                deny_subpaths=(root / ".git", staging),
-                deny_write_subpaths=(root,),
-                network=True,
-            )
-            command = (
-                str(executable),
-                "--ask-for-approval",
-                "never",
-                "--sandbox",
-                "read-only",
-                "--cd",
-                ".",
-                "exec",
-                "--json",
-                "--skip-git-repo-check",
-                "--ignore-user-config",
-                "--ignore-rules",
-                "--output-schema",
-                str(schema),
-                "--output-last-message",
-                str(output),
-                "--help",
+            owner = SimpleNamespace(
+                executable=os.fspath(executable),
+                _control_root=control,
+                _which=lambda: lambda _name: os.fspath(executable),
+                _native_state_directory=lambda **_kwargs: native,
+                invocation_settings=lambda _agent_id: (None, None),
             )
             environment = dict(os.environ)
             environment["CODEX_HOME"] = str(native)
@@ -617,9 +601,24 @@ class ProviderDescriptorExecutionTests(unittest.IsolatedAsyncioTestCase):
                 GitSessionGenerationPin, "close", autospec=True,
             ):
                 try:
+                    command, requirements = CodexAdapter._confined_command(
+                        owner,
+                        staging,
+                        schema,
+                        output,
+                        None,
+                        None,
+                        workspace,
+                    )
+                    command[-1] = "--help"
+                    self.assertEqual(requirements.read_subpaths, ())
+                    self.assertEqual(requirements.read_paths, (executable, schema))
+                    self.assertNotIn(root, requirements.read_subpaths)
+                    self.assertNotIn(root, requirements.read_paths)
+                    self.assertEqual(command[command.index("--cd") + 1], ".")
                     result = await run_process(
                         ProcessRequest(
-                            command,
+                            tuple(command),
                             b"",
                             10,
                             env=environment,

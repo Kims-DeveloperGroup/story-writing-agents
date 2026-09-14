@@ -315,8 +315,8 @@ transport, outbound network access, and an existing absolute owner-controlled
 `CODEX_HOME` that cannot overlap the control root, the schema-derived sibling-
 worktree container, staging, or output transport. Bound instructions, schema,
 and response transport remain outside story Git. The response is accepted only
-from a no-follow, identity-stable regular file containing strict UTF-8 and no
-more than 8 MiB. The
+from a no-follow, identity-stable, singly linked regular file containing strict
+UTF-8 and no more than 8 MiB. The
 deprecated Darwin sandbox facility is fail-closed when unavailable, and an
 unsupported host does not fall back to an unconfined Codex story call.
 Codex also rejects a fully encoded `developer_instructions=` argument above
@@ -325,7 +325,9 @@ through host-owned context, references, or SEARCH/READ instead.
 Deferred Lead publication retains its execution and provider contexts until
 publication resolves. Cleanup and generation revalidation finish before the
 provider-call finalizer is accepted; failure after checkpoint commit invalidates
-that exact committed generation.
+that exact committed generation. Direct execution-workspace ownership also
+revalidates currentness on exit; exit loss prevents an apparent success from
+returning, while an active body failure remains primary.
 Antigravity adopts the corresponding worktree boundary separately in
 [Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
 Create or reopen the session through the lifecycle first.

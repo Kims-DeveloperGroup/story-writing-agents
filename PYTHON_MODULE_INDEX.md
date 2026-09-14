@@ -1350,7 +1350,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   serializes claim creation and proved-dead local replacement; live local,
   remote, inaccessible, unsupported-platform, and ambiguous ownership is
   handled conservatively, and release removes only the exact locally held
-  token. Version-1 manifests, access sidecars, and access guards are rejected
+  token. Each definition's configured fingerprint retains the legacy
+  `<backend>:<agent-id>` provider-thread key. A validated non-base effective
+  fingerprint instead uses the strict
+  `<backend>:<agent-id>:<lowercase-64-hex-fingerprint>` key. Reads prefer that
+  exact qualified key and fall back to the legacy base key only when the
+  qualified key is absent and the base record has the exact requested
+  fingerprint and is untainted; a present tainted qualified record blocks
+  fallback. Stores and taints write the exact derived key, so tainting a legacy
+  fallback lazily creates a qualified taint record while retaining the base
+  record. The V2 schema performs no eager migration or pruning and retains
+  qualified history. Current readers accept legacy base records; binaries that
+  predate qualified keys reject a V2 manifest after its first qualified write,
+  consistent with the forward-only no-downgrade migration policy. Version-1
+  manifests, access sidecars, and access guards are rejected
   with `WorkspaceVersionUnsupportedError` without migration, deletion, or
   rewriting. The backend also owns
   coordination of one exact provision-plus-ready-verification call pair for
@@ -1844,10 +1857,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   requests descriptor-relative `--cd .` execution plus exact Codex resource
   requirements from `provider_process`; no staging-directory or path-only
   launch fallback remains. It creates and removes temporary schema/response
-  files. Final output is accepted only from one no-follow, bounded eight-MiB
-  regular-file descriptor whose device, inode, mode, size, and modification and
-  change times remain stable across the complete strict-UTF-8 read; symlinked,
-  nonregular, oversized, or changing output fails closed. The adapter then
+  files. Final output is accepted only from one no-follow, bounded eight-MiB,
+  singly linked regular-file descriptor whose device, inode, mode, link count,
+  size, and modification and change times remain stable across the complete
+  strict-UTF-8 read; symlinked, hardlinked, nonregular, oversized, or changing
+  output fails closed. The adapter then
   revalidates the workspace on every invocation exit. Standalone
   exit loss retains prepared/submitted accounting and becomes the invocation
   failure; loss during another failure is attached without replacing that
@@ -8164,7 +8178,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ProviderExecutionWorkspace`: `open_provider_execution_workspace()` acquires
   a fresh Git generation pin, opens and identity-checks the exact session root,
   transfers both resources to the opaque capability, and closes them at context
-  exit without retaining a Git repository lease across provider work. The
+  exit without retaining a Git repository lease across provider work. Context
+  exit first revalidates capability currentness: standalone generation loss
+  propagates after close, while a concurrent body failure remains primary and
+  receives only a content-free validation-type note. The
   binding and wrapper pin retain the creator process and non-recyclable thread token, reject
   cross-process or cross-thread acquisition/recheck before any copied lock or
   lower-level I/O, and close a fork child's copied pin without entering an

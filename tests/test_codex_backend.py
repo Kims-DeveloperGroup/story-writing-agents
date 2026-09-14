@@ -274,6 +274,8 @@ if mode == "nonzero" or (
 output_path = Path(argv[argv.index("--output-last-message") + 1])
 if mode == "symlink_output":
     output_path.symlink_to(os.environ["STORY_FAKE_CODEX_SYMLINK_TARGET"])
+elif mode == "hardlink_output":
+    os.link(os.environ["STORY_FAKE_CODEX_HARDLINK_TARGET"], output_path)
 elif reference_prelude and "STORY_FAKE_CODEX_REFERENCE_ACTION" in os.environ:
     output_path.write_text(
         os.environ["STORY_FAKE_CODEX_REFERENCE_ACTION"],
@@ -1946,6 +1948,17 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             agent_id=agent_id,
         )
 
+    def test_populated_core_fixture_produces_nonempty_direct_definition(self) -> None:
+        workspace = initialized_workspace(self)
+        definition = PromptAssembler(workspace).build_definition(
+            session_id="populated_definition",
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertTrue(definition.context_document_files)
+        self.assertTrue(
+            all(component.content for component in definition.context_document_files)
+        )
+
     def create_provisioned_session_with_access(
         self,
         backend: AgentBackend,
@@ -1953,6 +1966,15 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     ) -> SessionLifecycleState:
         provision_session_resources(self.workspace.root, session_id)
         return backend.create_session_with_access(session_id)
+
+    def direct_execution_workspace(
+        self,
+        bound: object,
+        session_id: str,
+    ) -> ProviderExecutionWorkspace:
+        return self.enterContext(
+            bound._direct_codex_execution_workspace(session_id, None)  # type: ignore[attr-defined]
+        )
 
     async def test_both_native_backends_preserve_session_continuation_and_legacy_namespaces(self):
         for provider_id in ("codex", "antigravity"):
@@ -2251,7 +2273,15 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         manifest = self.workspace.read_json(
             f"agent_states/orchestrator_state/provider_sessions/{session_id}.json"
         )
-        return manifest["provider_threads"][f"codex:{PLOT_ARCHITECT}"]
+        matches = [
+            thread
+            for thread in manifest["provider_threads"].values()
+            if thread["backend"] == "codex"
+            and thread["agent_id"] == PLOT_ARCHITECT
+        ]
+        if not matches:
+            raise KeyError(f"codex:{PLOT_ARCHITECT}")
+        return max(matches, key=lambda thread: thread["updated_at"])
 
     def write_codex_defaults(
         self,
@@ -2872,6 +2902,106 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     },
                 )
 
+    async def test_direct_workspace_exit_revalidates_after_logical_success(
+        self,
+    ) -> None:
+        physical_workspace = pristine_initialized_workspace(self)
+        session_id = "direct_exit_generation_loss"
+        provision_session_resources(physical_workspace.root, session_id)
+        backend = AgentBackend(
+            physical_workspace,
+            executable=str(self.executable),
+        )
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        captured = []
+
+        async def succeed_then_lose(
+            _bound,
+            _request,
+            *,
+            reference_read=None,
+            execution_workspace=None,
+        ):
+            self.assertIsNone(reference_read)
+            self.assertIsNotNone(execution_workspace)
+            captured.append(execution_workspace)
+            execution_workspace.close()
+            return AgentReply.candidate("r0", "apparently successful reply")
+
+        with mock.patch.object(
+            backend,
+            "_invoke_provider",
+            new=succeed_then_lose,
+        ):
+            with self.assertRaises(SessionArtifactBindingError):
+                await bound.invoke(self.request(session_id=session_id))
+
+        self.assertEqual(len(captured), 1)
+        with self.assertRaises(SessionArtifactBindingError):
+            captured[0].require_current()
+
+    async def test_final_workspace_validation_failure_taints_and_terminalizes(
+        self,
+    ) -> None:
+        physical_workspace = pristine_initialized_workspace(self)
+        session_id = "final_workspace_validation"
+        provision_session_resources(physical_workspace.root, session_id)
+        backend = AgentBackend(
+            physical_workspace,
+            executable=str(self.executable),
+        )
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        await bound.invoke(self.request(session_id=session_id))
+        original = backend._require_postsubmission_workspace
+        currentness_calls = 0
+
+        def lose_at_final_check(invocation) -> None:
+            nonlocal currentness_calls
+            currentness_calls += 1
+            if currentness_calls == 3:
+                assert invocation.execution_workspace is not None
+                invocation.execution_workspace.close()
+            original(invocation)
+
+        with mock.patch.object(
+            backend,
+            "_require_postsubmission_workspace",
+            side_effect=lose_at_final_check,
+        ):
+            with self.assertRaises(SessionArtifactBindingError):
+                await bound.invoke(self.request(session_id=session_id))
+
+        self.assertEqual(currentness_calls, 3)
+        manifest = physical_workspace.read_json(
+            "agent_states/orchestrator_state/provider_sessions/"
+            f"{session_id}.json"
+        )
+        matching_threads = [
+            thread
+            for thread in manifest["provider_threads"].values()
+            if thread["backend"] == "codex"
+            and thread["agent_id"] == PLOT_ARCHITECT
+        ]
+        self.assertEqual(len(matching_threads), 1)
+        self.assertIs(matching_threads[0]["tainted"], True)
+        outcomes = [
+            json.loads(record["content"])
+            for record in _agent_exchange_records(physical_workspace)
+            if record.get("session_id") == session_id
+            and record.get("request_type") == "outcome"
+        ]
+        self.assertEqual(
+            outcomes[-1],
+            {
+                "code": "thread_persistence_failed",
+                "outcome": "post_response_runtime_failure",
+            },
+        )
+
     async def test_direct_context_auto_mint_retires_on_failure_and_cancellation(
         self,
     ) -> None:
@@ -3020,6 +3150,171 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(invocations[1].thread_id)
         self.assertIs(invocations[0].execution_workspace, generation_a)
         self.assertIs(invocations[1].execution_workspace, generation_b)
+
+    async def test_legacy_threads_are_qualified_per_physical_generation(self) -> None:
+        session_id = "legacy_generation_records"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        self.create_provisioned_session_with_access(backend, session_id)
+        definition = self.definition()
+        bound = await backend.bind(definition)
+        pin = object.__new__(GitSessionGenerationPin)
+
+        def mint(label: str, marker: str) -> ProviderExecutionWorkspace:
+            root = self.fake_directory / label
+            root.mkdir()
+            descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            identity = os.fstat(descriptor)
+            return mint_provider_execution_workspace(
+                session_id=session_id,
+                worktree_root=root,
+                root_identity=(identity.st_dev, identity.st_ino),
+                generation_provenance="sha256:" + marker * 64,
+                root_descriptor=descriptor,
+                generation_pin=pin,
+                failure_factory=lambda: SessionArtifactBindingError(
+                    "session artifact resources are unavailable"
+                ),
+            )
+
+        generation_a = mint("legacy-generation-a", "a")
+        generation_b = mint("legacy-generation-b", "b")
+        invocations = []
+
+        async def invoke(_binding, invocation):
+            invocations.append(invocation)
+            expected = (None, None, "thread-generation-a-1")
+            self.assertEqual(invocation.thread_id, expected[len(invocations) - 1])
+            thread_id = (
+                "thread-generation-b"
+                if len(invocations) == 2
+                else f"thread-generation-a-{len(invocations)}"
+            )
+            return ProviderResult(
+                thread_id,
+                "{}",
+                actual_transport_utf8_bytes=len(invocation.payload_json),
+            )
+
+        with mock.patch.object(
+            GitSessionGenerationPin,
+            "require_current",
+            autospec=True,
+        ), mock.patch.object(
+            GitSessionGenerationPin,
+            "close",
+            autospec=True,
+        ), mock.patch.object(backend._codex_adapter, "invoke", new=invoke):
+            try:
+                for execution_workspace in (
+                    generation_a,
+                    generation_b,
+                    generation_a,
+                ):
+                    await backend._invoke_provider_structured(
+                        bound,
+                        session_id=session_id,
+                        schema={},
+                        payload={},
+                        decode=lambda _response: AgentReply.candidate(
+                            "r0",
+                            "generation-qualified reply",
+                        ),
+                        execution_workspace=execution_workspace,
+                    )
+
+                fingerprint_a = backend._legacy_continuation_fingerprint(
+                    bound,
+                    generation_a,
+                )
+                fingerprint_b = backend._legacy_continuation_fingerprint(
+                    bound,
+                    generation_b,
+                )
+                key_a = backend._thread_key(
+                    definition,
+                    fingerprint=fingerprint_a,
+                )
+                key_b = backend._thread_key(
+                    definition,
+                    fingerprint=fingerprint_b,
+                )
+                manifest = backend._read_manifest(session_id, missing_ok=False)
+                assert manifest is not None
+                self.assertEqual(
+                    {
+                        key: manifest["provider_threads"][key]["thread_id"]
+                        for key in (key_a, key_b)
+                    },
+                    {
+                        key_a: "thread-generation-a-3",
+                        key_b: "thread-generation-b",
+                    },
+                )
+
+                backend._taint_thread(
+                    session_id,
+                    definition,
+                    fingerprint=fingerprint_b,
+                )
+                self.assertEqual(
+                    backend._load_thread(
+                        session_id,
+                        definition,
+                        fingerprint=fingerprint_a,
+                    )["thread_id"],
+                    "thread-generation-a-3",
+                )
+                self.assertIsNone(
+                    backend._load_thread(
+                        session_id,
+                        definition,
+                        fingerprint=fingerprint_b,
+                    )
+                )
+
+                manifest = backend._read_manifest(session_id, missing_ok=False)
+                assert manifest is not None
+                base_key = backend._thread_key(definition)
+                manifest["provider_threads"][base_key] = manifest[
+                    "provider_threads"
+                ].pop(key_a)
+                backend._write_manifest(session_id, manifest)
+                self.assertEqual(
+                    backend._load_thread(
+                        session_id,
+                        definition,
+                        fingerprint=fingerprint_a,
+                    )["thread_id"],
+                    "thread-generation-a-3",
+                )
+
+                manifest = backend._read_manifest(session_id, missing_ok=False)
+                assert manifest is not None
+                manifest["provider_threads"][base_key]["fingerprint"] = fingerprint_b
+                backend._write_manifest(session_id, manifest)
+                self.assertIsNone(
+                    backend._load_thread(
+                        session_id,
+                        definition,
+                        fingerprint=fingerprint_a,
+                    )
+                )
+
+                manifest = backend._read_manifest(session_id, missing_ok=False)
+                assert manifest is not None
+                manifest["provider_threads"][
+                    f"{base_key}:{'f' * 64}"
+                ] = dict(manifest["provider_threads"][base_key])
+                backend._write_manifest(session_id, manifest)
+                with self.assertRaisesRegex(
+                    WorkspaceFormatError,
+                    "thread key does not match",
+                ):
+                    backend._read_manifest(session_id, missing_ok=False)
+            finally:
+                generation_a.close()
+                generation_b.close()
 
     async def test_reference_handler_failure_taints_generation_bound_thread(self) -> None:
         backend = AgentBackend(self.workspace, executable=str(self.executable))
@@ -6065,6 +6360,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.create_provisioned_session_with_access(backend, session_id)
         definition = self.definition()
         bound = await backend.bind(definition)
+        execution_workspace = self.direct_execution_workspace(bound, session_id)
+        continuation_fingerprint = backend._legacy_continuation_fingerprint(
+            bound,
+            execution_workspace,
+        )
         unchained = ProviderInvocationError(
             "safe unchained provider failure",
             taint_existing_thread=False,
@@ -6090,6 +6390,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     definition,
                     thread_id,
                     tainted=False,
+                    fingerprint=continuation_fingerprint,
                 )
                 invoke = mock.AsyncMock(side_effect=provider_error)
                 decode = mock.Mock()
@@ -6118,6 +6419,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                             schema={},
                             payload={},
                             decode=decode,
+                            execution_workspace=execution_workspace,
                         )
 
                 self.assertIs(type(caught.exception), BackendProtocolError)
@@ -6130,7 +6432,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 store_thread.assert_not_called()
                 self.assertIs(self.thread(session_id)["tainted"], should_taint)
                 if should_taint:
-                    taint.assert_called_once_with(session_id, definition)
+                    taint.assert_called_once_with(
+                        session_id,
+                        definition,
+                        fingerprint=continuation_fingerprint,
+                    )
                     write_manifest.assert_called_once()
                 else:
                     taint.assert_not_called()
@@ -6578,6 +6884,60 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             {
                 "STORY_FAKE_CODEX_MODE": "symlink_output",
                 "STORY_FAKE_CODEX_SYMLINK_TARGET": str(target),
+            },
+        ), self.assertRaisesRegex(
+            BackendProtocolError,
+            "did not write its final response",
+        ):
+            await bound.invoke(self.request(session_id=session_id))
+
+        self.assertEqual(target.read_bytes(), target_bytes)
+        self.assertIs(self.thread(session_id)["tainted"], True)
+        outcomes = [
+            json.loads(record["content"])
+            for record in _agent_exchange_records(self.workspace)
+            if record.get("session_id") == session_id
+            and record.get("request_type") == "outcome"
+        ]
+        self.assertEqual(
+            outcomes[-1],
+            {
+                "code": "provider_invocation_failed",
+                "outcome": "provider_failure",
+            },
+        )
+
+    async def test_codex_response_hardlink_is_rejected_without_reading_target(
+        self,
+    ) -> None:
+        session_id = "hardlink_response"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        self.create_provisioned_session_with_access(backend, session_id)
+        bound = await backend.bind(self.definition())
+        await bound.invoke(self.request(session_id=session_id))
+        target = self.fake_directory / "private-hardlink-target.json"
+        target_bytes = json.dumps(
+            {
+                "kind": "candidate",
+                "revision_id": "r0",
+                "content": "hard-linked target must not be consumed",
+            }
+        ).encode("utf-8")
+        target.write_bytes(target_bytes)
+        probe = self.fake_directory / "hardlink-support-probe"
+        try:
+            os.link(target, probe)
+        except OSError as failure:
+            self.skipTest(f"hard links are unavailable: {failure}")
+        else:
+            probe.unlink()
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "STORY_FAKE_CODEX_MODE": "hardlink_output",
+                "STORY_FAKE_CODEX_HARDLINK_TARGET": str(target),
             },
         ), self.assertRaisesRegex(
             BackendProtocolError,
@@ -9396,6 +9756,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             "utf-8", b"\xff", 0, 1, "invalid completed response"
         )
         self.create_provisioned_session_with_access(backend, unicode_session)
+        unicode_workspace = self.direct_execution_workspace(
+            bound,
+            unicode_session,
+        )
 
         def fail_unicode(_response: str) -> ConversationReply:
             raise unicode_failure
@@ -9420,6 +9784,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 schema={},
                 payload={},
                 decode=fail_unicode,
+                execution_workspace=unicode_workspace,
             )
         self.assertIs(unicode_caught.exception.__cause__, unicode_failure)
         self.assertEqual(
@@ -9450,6 +9815,16 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     session_id = f"capture_failure_{suffix}"
                     debate_id = f"capture_debate_{suffix}"
                     self.create_provisioned_session_with_access(backend, session_id)
+                    execution_workspace = self.direct_execution_workspace(
+                        bound,
+                        session_id,
+                    )
+                    continuation_fingerprint = (
+                        backend._legacy_continuation_fingerprint(
+                            bound,
+                            execution_workspace,
+                        )
+                    )
                     stored_thread = f"stored-{suffix}"
                     rejected_thread = f"rejected-{suffix}"
                     backend._store_thread(
@@ -9457,6 +9832,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         definition,
                         stored_thread,
                         tainted=False,
+                        fingerprint=continuation_fingerprint,
                     )
                     prior_cause = RuntimeError(f"prior-cause-{suffix}")
                     if decode_kind == "protocol":
@@ -9522,6 +9898,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                                 schema={},
                                 payload={},
                                 decode=fail_decode,
+                                execution_workspace=execution_workspace,
                             )
                         except BackendProtocolError as raised:
                             caught_exception = raised
@@ -9538,7 +9915,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         response_text=f"PRIVATE_RESPONSE_{suffix}",
                         failure_category=PROVIDER_ERROR_ARTIFACT_FAILURE_CATEGORY,
                     )
-                    taint.assert_called_once_with(session_id, definition)
+                    taint.assert_called_once_with(
+                        session_id,
+                        definition,
+                        fingerprint=continuation_fingerprint,
+                    )
                     store.assert_not_called()
                     self.assertEqual(
                         self.thread(session_id)["thread_id"], stored_thread
@@ -9571,6 +9952,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
         success_session = "capture_noneligible_success"
         self.create_provisioned_session_with_access(backend, success_session)
+        success_workspace = self.direct_execution_workspace(bound, success_session)
         success_reply = AgentReply.candidate("r0", "validated response")
         with (
             mock.patch.object(
@@ -9595,6 +9977,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 schema={},
                 payload={},
                 decode=lambda _response: success_reply,
+                execution_workspace=success_workspace,
             )
         self.assertIs(actual, success_reply)
         record.assert_not_called()
@@ -9613,6 +9996,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             with self.subTest(decode_control=type(failure).__name__):
                 session_id = f"capture_decode_control_{index}"
                 self.create_provisioned_session_with_access(backend, session_id)
+                execution_workspace = self.direct_execution_workspace(
+                    bound,
+                    session_id,
+                )
                 invoke = mock.AsyncMock(
                     return_value=ProviderResult(
                         thread_id=f"decode-control-thread-{index}",
@@ -9638,12 +10025,14 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         schema={},
                         payload={},
                         decode=fail_decode,
+                        execution_workspace=execution_workspace,
                     )
                 self.assertIs(caught.exception, failure)
                 record.assert_not_called()
 
         provider_session = "capture_provider_pre_result"
         self.create_provisioned_session_with_access(backend, provider_session)
+        provider_workspace = self.direct_execution_workspace(bound, provider_session)
         provider_failure = ProviderInvocationError(
             "fixed pre-result failure",
             taint_existing_thread=False,
@@ -9667,12 +10056,17 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 schema={},
                 payload={},
                 decode=lambda _response: success_reply,
+                execution_workspace=provider_workspace,
             )
         self.assertEqual(str(caught.exception), "fixed pre-result failure")
         record.assert_not_called()
 
         adapter_cancel_session = "capture_adapter_cancel"
         self.create_provisioned_session_with_access(backend, adapter_cancel_session)
+        adapter_cancel_workspace = self.direct_execution_workspace(
+            bound,
+            adapter_cancel_session,
+        )
         adapter_cancel = asyncio.CancelledError("PRIVATE_ADAPTER_CANCEL")
         with (
             mock.patch.object(
@@ -9693,12 +10087,17 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 schema={},
                 payload={},
                 decode=lambda _response: success_reply,
+                execution_workspace=adapter_cancel_workspace,
             )
         self.assertIs(caught.exception, adapter_cancel)
         record.assert_not_called()
 
         persistence_session = "capture_persistence_failure"
         self.create_provisioned_session_with_access(backend, persistence_session)
+        persistence_workspace = self.direct_execution_workspace(
+            bound,
+            persistence_session,
+        )
         persistence_failure = OSError("PRIVATE_THREAD_PERSISTENCE_FAILURE")
         with (
             mock.patch.object(
@@ -9729,6 +10128,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 schema={},
                 payload={},
                 decode=lambda _response: success_reply,
+                execution_workspace=persistence_workspace,
             )
         self.assertIs(caught.exception, persistence_failure)
         record.assert_not_called()

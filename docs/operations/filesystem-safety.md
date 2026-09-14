@@ -238,27 +238,30 @@ with the exact control root, the schema-derived sibling-worktree container
 (including the selected session), prompt staging, or response-output directory.
 Invalid or unsafe state fails before launch. Instructions are injected after a
 prelaunch staging read; schema and output stay in external temporary storage.
-The response is opened with no-follow semantics, must be a regular file, and is
-read only up to 8 MiB. Its identity, mode, size, and modification metadata must
-remain stable during the read, and its bytes must decode as strict UTF-8. The
-call therefore creates no provider-definition or output residue in the story
-Git tree.
+The response is opened with no-follow semantics, must be a singly linked
+regular file before and after the read, and is read only up to 8 MiB. Its
+identity, mode, link count, size, and modification metadata must remain stable
+during the read, and its bytes must decode as strict UTF-8. The call therefore
+creates no provider-definition or output residue in the story Git tree.
 
 The generation is checked before descriptor duplication, after child creation,
 after process return, around reference/SEARCH/READ host observation and
 provider-call acceptance, before and after context-checkpoint commit, after
-adapter temporary cleanup, and on contextual invocation exit. When publication
-is deferred, retained provider and execution contexts close in reverse order,
-the execution generation is revalidated before its close, and only clean
-completion accepts the provider-call finalizer. Loss or cleanup failure after a
-checkpoint commit invalidates that exact ledger generation. Exit loss taints
-the exact generation-bound thread; an existing body failure stays primary and
-receives only a content-free validation note. A deleted, replaced, or symlinked
-named session root cannot acquire the old descriptor authority or redirect a
-call. Unsupported hosts, a missing deprecated sandbox facility, an executable
-mismatch, or a noncanonical exception path fail before provider submission;
-there is no path-only working-directory or unconfined fallback. This Codex
-boundary does not cover the separately tracked Antigravity adapter.
+adapter temporary cleanup, and when either a direct execution-workspace owner or
+contextual invocation exits. The owner revalidates even while unwinding: exit
+loss after a clean body fails the apparent return, while an active body failure
+stays primary and receives only a content-free validation note. When
+publication is deferred, retained provider and execution contexts close in
+reverse order, the execution generation is revalidated before its close, and
+only clean completion accepts the provider-call finalizer. Loss or cleanup
+failure after a checkpoint commit invalidates that exact ledger generation.
+Exit loss taints the exact generation-bound thread where one is governed by the
+continuation. A deleted, replaced, or symlinked named session root cannot
+acquire the old descriptor authority or redirect a call. Unsupported hosts, a
+missing deprecated sandbox facility, an executable mismatch, or a noncanonical
+exception path fail before provider submission; there is no path-only working-
+directory or unconfined fallback. This Codex boundary does not cover the
+separately tracked Antigravity adapter.
 
 Ordinary artifact access retains the stronger semantic boundary: one outer
 synchronous transaction performs a complete READY validation before and after

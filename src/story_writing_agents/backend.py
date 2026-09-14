@@ -4853,7 +4853,6 @@ class AgentBackend:
                         AgentExchangeTerminalCode.THREAD_PERSISTENCE_FAILED,
                     )
                 raise
-            self._require_postsubmission_workspace(invocation)
             self._capture_accepted_without_replacing(exchange)
             return reply
         except (json.JSONDecodeError, UnicodeError) as exc:
@@ -7243,17 +7242,23 @@ class AgentBackend:
         *,
         fingerprint: str | None = None,
     ) -> dict[str, Any] | None:
+        effective_fingerprint = (
+            definition.fingerprint if fingerprint is None else fingerprint
+        )
+        key = self._thread_key(
+            definition,
+            fingerprint=effective_fingerprint,
+        )
         manifest = self._read_manifest(session_id, missing_ok=False)
         assert manifest is not None
-        raw = manifest["provider_threads"].get(self._thread_key(definition))
+        raw = manifest["provider_threads"].get(key)
+        if raw is None and key != self._thread_key(definition):
+            raw = manifest["provider_threads"].get(self._thread_key(definition))
         if raw is None:
             return None
         validated = self._validate_thread(raw)
-        expected_fingerprint = (
-            definition.fingerprint if fingerprint is None else fingerprint
-        )
         if (
-            validated["fingerprint"] != expected_fingerprint
+            validated["fingerprint"] != effective_fingerprint
             or validated["tainted"]
         ):
             return None
@@ -7282,7 +7287,11 @@ class AgentBackend:
             raise BackendProtocolError("provider thread fingerprint is invalid")
         manifest = self._read_manifest(session_id, missing_ok=False)
         assert manifest is not None
-        manifest["provider_threads"][self._thread_key(definition)] = {
+        key = self._thread_key(
+            definition,
+            fingerprint=effective_fingerprint,
+        )
+        manifest["provider_threads"][key] = {
             "backend": definition.backend,
             "agent_id": definition.agent_id,
             "fingerprint": effective_fingerprint,
@@ -7302,14 +7311,19 @@ class AgentBackend:
     ) -> None:
         manifest = self._read_manifest(session_id, missing_ok=False)
         assert manifest is not None
-        key = self._thread_key(definition)
-        raw = manifest["provider_threads"].get(key)
-        if raw is None:
-            return
-        thread = self._validate_thread(raw)
         expected_fingerprint = (
             definition.fingerprint if fingerprint is None else fingerprint
         )
+        key = self._thread_key(
+            definition,
+            fingerprint=expected_fingerprint,
+        )
+        raw = manifest["provider_threads"].get(key)
+        if raw is None and key != self._thread_key(definition):
+            raw = manifest["provider_threads"].get(self._thread_key(definition))
+        if raw is None:
+            return
+        thread = self._validate_thread(raw)
         if thread["fingerprint"] != expected_fingerprint:
             return
         thread["tainted"] = True
@@ -7445,8 +7459,12 @@ class AgentBackend:
             if not isinstance(key, str) or not key:
                 raise WorkspaceFormatError("provider thread key is invalid")
             validated = self._validate_thread(thread)
-            expected_key = f"{validated['backend']}:{validated['agent_id']}"
-            if key != expected_key:
+            base_key = f"{validated['backend']}:{validated['agent_id']}"
+            qualified_key = f"{base_key}:{validated['fingerprint']}"
+            if key != base_key and (
+                _SAFE_FINGERPRINT.fullmatch(validated["fingerprint"]) is None
+                or key != qualified_key
+            ):
                 raise WorkspaceFormatError(
                     "provider thread key does not match its backend and agent"
                 )
@@ -7514,8 +7532,20 @@ class AgentBackend:
         )
 
     @staticmethod
-    def _thread_key(definition: AgentDefinition) -> str:
-        return f"{definition.backend}:{definition.agent_id}"
+    def _thread_key(
+        definition: AgentDefinition,
+        *,
+        fingerprint: str | None = None,
+    ) -> str:
+        effective_fingerprint = (
+            definition.fingerprint if fingerprint is None else fingerprint
+        )
+        if _SAFE_FINGERPRINT.fullmatch(effective_fingerprint) is None:
+            raise BackendProtocolError("provider thread fingerprint is invalid")
+        base_key = f"{definition.backend}:{definition.agent_id}"
+        if effective_fingerprint == definition.fingerprint:
+            return base_key
+        return f"{base_key}:{effective_fingerprint}"
 
     @staticmethod
     def _manifest_relative(session_id: str) -> str:

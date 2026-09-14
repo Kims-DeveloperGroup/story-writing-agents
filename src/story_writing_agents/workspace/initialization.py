@@ -733,7 +733,23 @@ class SessionArtifactBinding:
                 body_failure = failure
                 raise
         finally:
-            execution_workspace.close(failure=body_failure)
+            exit_failure = body_failure
+            try:
+                execution_workspace.require_current()
+            except BaseException as validation_failure:
+                if body_failure is None:
+                    exit_failure = validation_failure
+                else:
+                    try:
+                        body_failure.add_note(
+                            "provider execution workspace exit validation failed: "
+                            f"{type(validation_failure).__name__}"
+                        )
+                    except BaseException:
+                        pass
+            execution_workspace.close(failure=exit_failure)
+            if body_failure is None and exit_failure is not None:
+                raise exit_failure
 
     def require_generation_pin(self, pin: SessionArtifactGenerationPin) -> None:
         """Require one opaque pin to match this binding's current generation."""

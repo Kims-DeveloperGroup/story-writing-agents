@@ -132,10 +132,14 @@ refer to the selected original inode rather than a reopened path, prompt
 staging, the initialization root, or the controller's current directory.
 Capability checks run before launch, immediately after process creation, after
 the process returns, before result acceptance, after adapter cleanup, and when
-the contextual invocation exits. Reference, SEARCH, and READ paths also
-revalidate after host observation construction and before accepting their
-provider-call finalizers. A missing, replaced, or aliased named root fails the
-invocation rather than transferring authority to another generation.
+the direct execution-workspace owner or contextual invocation exits. Direct
+BoundAgent methods keep that owner around their complete logical call; exit
+loss prevents an apparent body success from returning. If the body is already
+failing, it remains primary and receives only a content-free validation note.
+Reference, SEARCH, and READ paths also revalidate after host observation
+construction and before accepting their provider-call finalizers. A missing,
+replaced, or aliased named root fails the invocation rather than transferring
+authority to another generation.
 
 On Darwin the native process is additionally wrapped by a default-deny SBPL
 profile and retains Codex's own `--sandbox read-only` setting. The profile
@@ -168,10 +172,11 @@ move story material into host-owned context, explicit references, or
 SEARCH/READ sources rather than enlarging the binding instruction.
 
 The response transport is opened without following links and must remain the
-same regular file, including its identity and relevant metadata, throughout a
-bounded read. It must contain strict UTF-8 and may be at most 8 MiB. A missing,
-linked, non-regular, changing, oversized, or invalidly encoded response is
-rejected rather than read through an alternate transport.
+same singly linked regular file, including its identity, link count, and
+relevant metadata, throughout a bounded read. It must contain strict UTF-8 and
+may be at most 8 MiB. A missing, symlinked, multiply linked, non-regular,
+changing, oversized, or invalidly encoded response is rejected rather than read
+through an alternate transport.
 
 Apple's `sandbox-exec` facility is deprecated. A missing facility, non-Darwin
 host, unsafe native-state directory, noncanonical resource, or executable
@@ -209,11 +214,15 @@ for exact history/current-state delivery and capacity limits.
 For Codex, the compatibility fingerprints also include a domain-separated
 digest of the exact session physical generation. Replacing the worktree at the
 same pathname therefore makes the retained continuation incompatible and
-selects a fresh bootstrap without rewriting the old record. Missing, tainted,
-or otherwise incompatible continuation bootstraps on the next safe authorized
-work. If generation authority is lost after submission, the apparent provider
-success is not accepted, the exact continuation is tainted where present, and
-the binding failure remains primary. An eligible failed read-only Lead attempt exposes
+selects a fresh bootstrap without rewriting the old record. The schema-v2
+provider-session manifest retains legacy base and generation-qualified records;
+qualified lookup and taint take precedence, and an exact-fingerprint base
+record is fallback only when its qualified key is absent. Ordinary thread
+updates do not prune earlier generation records. Missing, tainted, or otherwise
+incompatible continuation bootstraps on the next safe authorized work. If
+generation authority is lost after submission, the apparent provider success
+is not accepted, the exact continuation is tainted where present, and the
+binding failure remains primary. An eligible failed read-only Lead attempt exposes
 `retry_lead_turn`, including an exact unstarted, prepared-only, or unmatched
 submitted request recovered after restart. Explicit new input in that same
 conversation closes any unclosed prior attempt before starting a fresh turn;

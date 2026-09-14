@@ -1696,6 +1696,17 @@ call bootstraps a fresh provider thread while retaining the old content-free
 record for history. It does not relabel the old checkpoint or treat path
 equality as generation equality.
 
+The schema-v2 provider-session manifest retains legacy base records and
+fingerprint-qualified records for successive generations. For an effective
+generation fingerprint, lookup and taint use its qualified record first and
+fall back to an exact-fingerprint base record only when that qualified key is
+absent. A fallback taint materializes the qualified tainted record without
+deleting the base, and ordinary thread updates do not prune any earlier
+generation record. Once a qualified key has been written, the manifest is
+forward-only: an older binary that accepts base keys alone rejects it. Do not
+downgrade in place or hand-delete retained records; stop all writers and restore
+a verified pre-upgrade workspace backup, or use a compatible newer runtime.
+
 If generation authority is lost after process submission, or after a response
 returns but before acceptance/publication, the binding failure outranks the
 apparent provider result. The call retains submitted accounting where known,
@@ -1719,12 +1730,12 @@ are outside this story boundary.
 Antigravity recovery remains unchanged until
 [Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
 
-Treat a missing, linked, non-regular, changing, oversized, or invalid-UTF-8
-response output as a failed submitted call, not as recoverable transport to
-follow or reread. The runtime opens the exact result name without following
-links, verifies one stable regular-file identity and metadata across the read,
-and accepts at most 8 MiB. Preserve the existing thread's tainted state and use
-fresh top-level authority for any explicit retry.
+Treat a missing, symlinked, multiply linked, non-regular, changing, oversized,
+or invalid-UTF-8 response output as a failed submitted call, not as recoverable
+transport to follow or reread. The runtime opens the exact result name without
+following links, verifies one stable singly linked regular-file identity and
+metadata across the read, and accepts at most 8 MiB. Preserve the existing
+thread's tainted state and use fresh top-level authority for any explicit retry.
 
 Codex also rejects a fully encoded `developer_instructions=` process argument
 larger than 512 KiB before submission and without tainting an existing thread.
@@ -1736,7 +1747,10 @@ references, or SEARCH/READ sources. Do not weaken the limit or place that
 material in the session tree for provider filesystem access.
 
 Generation is revalidated after provider adapter cleanup and when contextual
-invocation ownership exits, not only before accepting the decoded result.
+invocation ownership exits, not only before accepting the decoded result. A
+direct BoundAgent execution-workspace owner also revalidates as it exits after
+the logical body: loss prevents an apparent successful return, while an active
+body failure remains primary and receives only a content-free validation note.
 Reference, SEARCH, and READ work revalidates after the host constructs its
 observation and before the provider-call finalizer is accepted. Context-ledger
 checkpoint commit is checked immediately before and after publication. A
@@ -1745,10 +1759,10 @@ that decision, closes and revalidates them before accepting the provider-call
 finalizer, and publishes checkpoint advancement only after clean completion.
 Loss or cleanup failure after publication invalidates that exact checkpoint
 generation. A later exit failure similarly taints the generation-bound thread
-and invalidates an already committed non-pending checkpoint. If another body
-failure is active, it remains primary and receives only a content-free
-validation note. Do not resume from an invalidated checkpoint; restore exact
-READY resources and begin the next safe authorized bootstrap.
+and invalidates an already committed non-pending checkpoint. If another
+continuation body failure is active, it remains primary and receives only a
+content-free validation note. Do not resume from an invalidated checkpoint;
+restore exact READY resources and begin the next safe authorized bootstrap.
 
 ## Controller cancellation proof
 

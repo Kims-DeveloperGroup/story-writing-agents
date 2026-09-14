@@ -345,7 +345,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         modules = _module_inventory()
         edges = _internal_edges(modules)
         self.assertEqual(len(modules), 143)
-        self.assertEqual(len(edges), 585)
+        self.assertEqual(len(edges), 586)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
@@ -404,6 +404,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.git.session_history",
                 "story_writing_agents.git.session_resources",
                 "story_writing_agents.git.story_commits",
+                "story_writing_agents.provider_execution_workspace",
                 "story_writing_agents.runtime_state_paths",
                 "story_writing_agents.workspace._policy_baselines",
                 "story_writing_agents.workspace.schema",
@@ -468,6 +469,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.git.session_contracts",
                 "story_writing_agents.git.session_history",
                 "story_writing_agents.git.session_history_contracts",
+                "story_writing_agents.git.session_resources",
                 "story_writing_agents.git.story_commit_candidates",
                 "story_writing_agents.git.story_commit_contracts",
             },
@@ -724,6 +726,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.conversations.session_context",
                 "story_writing_agents.errors",
                 "story_writing_agents.provider_auth_recovery",
+                "story_writing_agents.provider_execution_workspace",
                 "story_writing_agents.workspace",
             },
         )

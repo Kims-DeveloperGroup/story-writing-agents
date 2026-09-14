@@ -754,17 +754,36 @@ backup when the record is damaged.
 ```
 
 `durable_state` is `ready` or `paused`; `absent` has no manifest. Timestamps
-include UTC offsets and are ordered. Thread keys are `<backend>:<agent_id>`.
-Each thread value has exactly `backend`, `agent_id`, `fingerprint`, `thread_id`,
-`tainted`, and `updated_at`; its key must match its backend and agent. Thread
-IDs use the documented safe pattern and `tainted` is boolean. Opening ready
-state and releasing access do not rewrite the manifest.
+include UTC offsets and are ordered. A thread key is either the base
+`<backend>:<agent_id>` form or the fingerprint-qualified
+`<backend>:<agent_id>:<fingerprint>` form. Each thread value has exactly
+`backend`, `agent_id`, `fingerprint`, `thread_id`, `tainted`, and `updated_at`;
+its key must match its backend, agent, and, when qualified, its safe
+fingerprint. Thread IDs use the documented safe pattern and `tainted` is
+boolean. Opening ready state and releasing access do not rewrite the manifest.
+
+The base key is used when the effective continuation fingerprint is the bound
+definition fingerprint. A different effective fingerprint, including a Codex
+session-generation fingerprint, uses the qualified key. Lookup and taint check
+that qualified record first. Only when it is absent may an exact-fingerprint
+legacy base record act as fallback; a present qualified record never falls
+back because it is tainted or incompatible. A successful store or fallback
+taint writes the qualified record while retaining the legacy base record.
+Other qualified generations are retained as well: ordinary load, store, and
+taint operations do not prune provider-thread history.
 
 Codex and Antigravity threads may coexist in one manifest and remain distinct
-because the backend is part of the key. A compatible thread requires the same
-backend, agent, and definition fingerprint and must not be tainted. A mismatch
-or taint starts a fresh provider conversation after the next successful call;
-it does not delete the older provider-native data.
+because the backend is part of the key; multiple qualified fingerprints for one
+backend and agent may coexist as well. A compatible thread requires the same
+backend, agent, and effective continuation fingerprint and must not be tainted.
+A mismatch or taint starts a fresh provider conversation after the next
+successful call; it does not delete the older provider-native data.
+
+This qualified-key extension retains schema version 2 but is forward-only once
+a qualified record has been written. Older binaries that accept only base keys
+reject such a manifest; do not downgrade in place or delete individual thread
+records to make it open. Stop all writers and restore a verified pre-upgrade
+workspace backup, or run a version that understands qualified records.
 
 ## Antigravity-native state
 
