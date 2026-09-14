@@ -1247,12 +1247,16 @@ canonical control workspace, outside the session tree. An overlap is rejected
 before per-invocation directories or provider work, while provider CWD remains
 the session worktree. The session role projection instead uses descriptor-
 relative, no-follow validation: owner-controlled directories, exact bytes, and
-one singly linked role file with exact mode `0400`. Content-qualified versions are
-published create-only, coexist, and are never replaced or pruned. A concurrent
-winner is adopted only after exact validation; differing content, symbolic
-links, FIFOs, other nonregular entries, multiply linked files, writable roles,
-foreign topology, and pre-existing empty qualified directories are rejected
-and preserved. If required effective-user, descriptor-relative, no-follow,
+one singly linked role file with exact mode `0400`. Selected-role content is
+validated within the exact planned size; older unselected qualified leaves are
+metadata-validated without reading their content. Content-qualified versions
+are published create-only, coexist, and are never replaced or pruned. The
+complete `.agents` tree must remain untracked; any tracked path fails closed
+before projection mutation or provider submission. A concurrent winner is
+adopted only after exact validation; differing content, symbolic links, FIFOs,
+other nonregular entries, multiply linked files, writable roles, foreign
+topology, and pre-existing empty qualified directories are rejected and
+preserved. If required effective-user, descriptor-relative, no-follow,
 nonblocking, or create-only link support is missing, projection fails before
 filesystem access. Nonblocking file opens make FIFO and special-file failures
 prompt rather than waiting for content. Protect the complete workspace and

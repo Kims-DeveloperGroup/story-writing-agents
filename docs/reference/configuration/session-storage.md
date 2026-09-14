@@ -814,16 +814,22 @@ and has owner-controlled directories. Content-qualified versions are published
 create-only, coexist, and are never replaced or pruned. An exact safe concurrent
 winner may be adopted only after full validation; a differing or unsafe winner
 is preserved and rejected. A pre-existing empty qualified directory is
-preserved and rejected before Git-exclusion or role-tree mutation.
+preserved and rejected before Git-exclusion or role-tree mutation. Selected-
+role content validation is bounded by the exact planned size; unselected
+qualified leaves are metadata-validated without content reads. The complete
+`.agents` tree must remain untracked; any tracked path fails closed before
+projection mutation or provider submission.
 
 The common Git exclusion contains `/.agents/`; its parser recognizes LF and
 CRLF records, not lone CR separators, and fails closed without rewriting when
 a missing entry follows a terminal lone CR. Intended final bytes may not exceed
-64 KiB. If `exclude` is absent, it is published create-only. If present, runtime
-appends through the retained no-follow inode after exact identity, size, and
-named-path checks, normalizes it to `0600`, syncs it, and requires exact final
-named-path content and identity readback. A normal append preserves the inode;
-a concurrent pathname winner is preserved and never overwritten.
+64 KiB. If `exclude` is absent, it is published create-only. If a present safe
+file is readable by its effective owner, runtime opens it no-follow. After
+exact identity, size, and named-path checks, the retained inode may be
+normalized to `0600` before the suffix append; runtime then syncs it and
+requires exact final named-path content and identity readback. A normal append
+preserves the inode; a concurrent pathname winner is preserved and never
+overwritten.
 
 Story references, SEARCH/READ sources, and artifact paths also exclude this
 tree. It is therefore unversioned protected control data, not mutable provider-

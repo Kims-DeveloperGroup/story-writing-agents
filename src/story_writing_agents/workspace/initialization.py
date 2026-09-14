@@ -68,6 +68,7 @@ from ..git.session_resources import (
     inspect_git_session_resources as _inspect_git_session_resources,
     list_git_session_resources as _list_git_session_resources,
     provision_git_session_resources as _provision_git_session_resources,
+    require_locked_git_session_untracked_prefix,
     require_ready_git_session_resources as _require_ready_git_session_resources,
     require_ready_locked_git_session_resources as _require_ready_locked_git_session_resources,
 )
@@ -1052,13 +1053,25 @@ class SessionArtifactAccess:
                 "session artifact resources are unavailable"
             )
         try:
+            expected_generation = self._binding._generation_identity
+            if expected_generation is None:
+                raise SessionArtifactBindingError(
+                    "session artifact resources are unavailable"
+                )
+            require_locked_git_session_untracked_prefix(
+                self._lease,
+                self._binding.resources,
+                expected_generation,
+                prefix=".agents",
+            )
+            self.require_active()
             install_session_role_projection(
                 self._descriptor,
                 self._lease.common_descriptor,
                 plan=plan,
             )
             self.require_active()
-        except OSError:
+        except _SESSION_ARTIFACT_BINDING_FAILURES:
             raise SessionArtifactBindingError(
                 "session artifact resources are unavailable"
             ) from None

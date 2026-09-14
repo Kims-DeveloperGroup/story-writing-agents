@@ -281,7 +281,11 @@ the selected role must be regular, singly linked, byte-exact, and have exact
 mode `0400`. Pre-launch and post-return checks require that same exact file
 identity, so replacing the role with equal bytes still fails closed. Only
 `.agents/agents`, content-qualified canonical-role directories, and their
-`agent.md` leaves are admitted. A pre-existing empty qualified directory is
+`agent.md` leaves are admitted. Selected-role content validation is bounded by
+the exact planned size, while unselected qualified role leaves are validated by
+topology and metadata without content reads. The complete `.agents` tree must
+remain untracked; any tracked path under it fails closed before projection
+mutation or provider submission. A pre-existing empty qualified directory is
 preserved and rejected during preflight, before the Git exclusion or role tree
 is mutated.
 
@@ -297,11 +301,12 @@ split only on LF; one CR immediately before LF is treated as CRLF, while every
 other CR remains data. A terminal lone CR therefore fails closed when insertion
 is required, preserving the original bytes. The intended final bytes—including
 any separator and the appended line—must remain at or below 64 KiB. An absent
-`exclude` is published create-only. An existing file is opened no-follow and
-appended through its retained inode after exact initial identity, size, and
-named-path checks. It is normalized to `0600`, synced, and accepted only after
-exact final named-path content and identity readback. A normal append therefore
-preserves its inode. If another actor replaces the pathname, runtime never
+`exclude` is published create-only. An existing safe file that its effective
+owner can read is opened no-follow and retained. After exact initial identity,
+size, and named-path checks, that inode may be normalized to `0600` before the
+suffix append; it is synced and accepted only after exact final named-path
+content and identity readback. A normal append therefore preserves its inode.
+If another actor replaces the pathname, runtime never
 replaces that winner; it preserves the winner and fails closed. Differing
 bytes, unsafe or foreign entries, symlinks, hard links, FIFOs, devices,
 identity replacement, an oversized intended exclusion, and topology drift
