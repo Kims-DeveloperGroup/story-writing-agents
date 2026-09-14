@@ -1729,18 +1729,24 @@ are outside this story boundary.
 For Antigravity, verify the exact protected
 `.agents/agents/<native-selector>/agent.md` projection. The selector is derived
 from the semantic agent ID and deterministic base role bytes and must match the
-role YAML name and `--agent` value. Differing bytes, unsafe modes, links,
-FIFOs/devices, or foreign entries block provider work and are preserved; do not
-overwrite or normalize them as retry. Exact `0400` role versions coexist,
-publication is create-only, and runtime never replaces or prunes a leaf. A
-concurrent winner is accepted only after full exact validation. A failed fresh
-installation cleans only unchanged empty directories created by that call. If
-effective-user, descriptor-relative, no-follow, or create-only link support is
-missing, projection fails before path access. Mutable native history remains
-external under its generation-qualified state path. Unproved history is
-retained but never resumed; restore the exact READY generation or allow a fresh
-bootstrap. Missing Darwin confinement fails closed without an adapter-control
-CWD fallback.
+role YAML name and `--agent` value. Runtime independently revalidates that
+semantic/native/final-byte plan and recomputes the staged file and binding
+accounting from the immutable definition snapshot before setup. Differing
+bytes or accounting, unsafe modes, links, FIFOs/devices, foreign entries, or a
+pre-existing empty qualified directory block provider work and are preserved;
+do not overwrite or normalize them as retry. The empty-directory case fails
+before the Git exclusion or role tree is mutated. Exact `0400` role versions
+coexist, publication is create-only, and runtime never replaces or prunes a
+leaf. A concurrent winner is accepted only after full exact validation. A
+failed fresh installation cleans only unchanged empty directories created by
+that call. If effective-user, descriptor-relative, no-follow, nonblocking, or
+create-only link support is missing, projection fails before path access.
+Staged definitions and mutable native history remain beneath the canonical
+control workspace under generation-qualified state paths. An overlap with the
+session worktree rejects the call before per-invocation directories are
+created. Unproved history is retained but never resumed; restore the exact
+READY generation or allow a fresh bootstrap. Missing Darwin confinement fails
+closed without an adapter-control CWD fallback.
 
 For Codex, treat a missing, symlinked, multiply linked, non-regular, changing, oversized,
 or invalid-UTF-8 response output as a failed submitted call, not as recoverable

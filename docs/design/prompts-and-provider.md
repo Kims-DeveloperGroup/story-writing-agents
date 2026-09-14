@@ -520,15 +520,25 @@ in
 
 The Antigravity adapter binds the same verified definition and request models
 to the invocation-local session-generation capability. Before launch, runtime
-derives a content-qualified native selector from the semantic story-agent ID
-and deterministic base definition bytes. It substitutes that selector as the
-role's YAML name, projects the resulting exact bytes as protected, unversioned
-control data at `.agents/agents/<native-selector>/agent.md`, and supplies the
-same selector through `--agent`. The semantic ID continues to own runtime
-settings, state, and accounting. `agy` launches without a shell from the
-descriptor-selected exact session worktree. That CWD is Antigravity's native
-project root; there is no adapter-owned working-directory fallback and Story
-does not pass `--project`.
+prepares and independently revalidates one immutable projection plan tying the
+semantic story-agent ID, its content-qualified native selector, and the exact
+final role bytes. The selector is derived from deterministic base definition
+bytes and substituted as the role's YAML name. The adapter also recomputes the
+final file and complete component-byte accounting from the immutable bound
+definition snapshot and requires both the staged file and binding accounting to
+match before provider workspace setup. Runtime projects the final bytes as
+protected, unversioned control data at
+`.agents/agents/<native-selector>/agent.md` and supplies the same selector
+through `--agent`. The semantic ID continues to own runtime settings, state,
+and accounting.
+
+Adapter definitions and provider-native state are rooted under the canonical
+control workspace, even when a backend was constructed from a session
+worktree. Before it creates any per-invocation state directory, runtime rejects
+that state path if it overlaps the selected session root. `agy` then launches
+without a shell from the descriptor-selected exact session worktree. That CWD
+is Antigravity's native project root; there is no adapter-owned working-
+directory fallback and Story does not pass `--project`.
 A fresh thread uses `--new-project`; exact compatible generation-bound resume
 uses `--conversation <id>`.
 Story passes the exact payload as one `--print` argument with empty stdin,

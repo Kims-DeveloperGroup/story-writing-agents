@@ -34,42 +34,95 @@ class SessionRoleProjection:
     _file_identity: _RegularFileIdentity
 
 
-def qualify_session_role_id(agent_id: str, base_content: bytes) -> str:
-    """Derive one strict native selector from semantic ID and base bytes."""
+@dataclass(frozen=True, slots=True)
+class SessionRoleProjectionPlan:
+    """Canonical semantic/native identities and exact final role bytes."""
+
+    semantic_agent_id: str
+    native_agent_id: str
+    content: bytes
+
+
+def prepare_session_role_projection(
+    semantic_agent_id: str,
+    base_content: bytes,
+) -> SessionRoleProjectionPlan:
+    """Qualify one canonical semantic-name rendering without other edits."""
 
     if (
-        agent_id not in ROSTER
+        semantic_agent_id not in ROSTER
         or type(base_content) is not bytes
         or not base_content
     ):
-        raise OSError("session role projection is invalid")
+        raise OSError("session role projection plan is invalid")
+    semantic_name = _canonical_yaml_name(semantic_agent_id)
+    if not base_content.startswith(semantic_name):
+        raise OSError("session role projection plan is invalid")
     digest = hashlib.sha256(_ROLE_SELECTOR_DOMAIN + base_content).hexdigest()
-    selector = f"{agent_id}-{digest}"
-    if _semantic_role_id(selector) != agent_id:
-        raise OSError("session role projection is invalid")
-    return selector
+    native_agent_id = f"{semantic_agent_id}-{digest}"
+    native_name = _canonical_yaml_name(native_agent_id)
+    plan = SessionRoleProjectionPlan(
+        semantic_agent_id=semantic_agent_id,
+        native_agent_id=native_agent_id,
+        content=native_name + base_content[len(semantic_name):],
+    )
+    _require_projection_plan(plan)
+    return plan
+
+
+def qualify_session_role_id(agent_id: str, base_content: bytes) -> str:
+    """Compatibility accessor for one prepared native selector."""
+
+    return prepare_session_role_projection(agent_id, base_content).native_agent_id
+
+
+def _canonical_yaml_name(agent_id: str) -> bytes:
+    """Return the one canonical wrapper prefix accepted by Antigravity."""
+
+    try:
+        encoded = agent_id.encode("ascii", errors="strict")
+    except (AttributeError, UnicodeError):
+        raise OSError("session role projection plan is invalid") from None
+    return b'---\nname: "' + encoded + b'"\n'
+
+
+def _require_projection_plan(plan: SessionRoleProjectionPlan) -> None:
+    """Independently rederive and validate one immutable projection plan."""
+
+    if (
+        type(plan) is not SessionRoleProjectionPlan
+        or plan.semantic_agent_id not in ROSTER
+        or type(plan.native_agent_id) is not str
+        or type(plan.content) is not bytes
+        or not plan.content
+        or _semantic_role_id(plan.native_agent_id) != plan.semantic_agent_id
+    ):
+        raise OSError("session role projection plan is invalid")
+    semantic_name = _canonical_yaml_name(plan.semantic_agent_id)
+    native_name = _canonical_yaml_name(plan.native_agent_id)
+    if not plan.content.startswith(native_name):
+        raise OSError("session role projection plan is invalid")
+    base_content = semantic_name + plan.content[len(native_name):]
+    digest = hashlib.sha256(_ROLE_SELECTOR_DOMAIN + base_content).hexdigest()
+    if plan.native_agent_id != f"{plan.semantic_agent_id}-{digest}":
+        raise OSError("session role projection plan is invalid")
 
 
 def install_session_role_projection(
     worktree_descriptor: int,
     common_git_descriptor: int,
     *,
-    native_agent_id: str,
-    content: bytes,
+    plan: SessionRoleProjectionPlan,
 ) -> None:
     """Install one exact role and its Git exclusion through retained roots."""
 
+    _require_projection_plan(plan)
     _require_projection_operations()
-    _validate_inputs(
-        worktree_descriptor,
-        common_git_descriptor,
-        native_agent_id,
-        content,
-    )
+    _validate_inputs(worktree_descriptor, common_git_descriptor)
     _preflight_projection(
         worktree_descriptor,
-        native_agent_id=native_agent_id,
-        content=content,
+        native_agent_id=plan.native_agent_id,
+        content=plan.content,
     )
     _ensure_git_exclusion(common_git_descriptor)
     created: list[tuple[tuple[str, ...], tuple[int, int]]] = []
@@ -99,20 +152,31 @@ def install_session_role_projection(
                     )
                 selected = _open_projection_directory(
                     agents,
-                    native_agent_id,
+                    plan.native_agent_id,
                     parts=(
                         _AGENTS_ROOT,
                         _AGENTS_DIRECTORY,
-                        native_agent_id,
+                        plan.native_agent_id,
                     ),
                     created=created,
                 )
                 try:
-                    _require_selected_directory(selected)
+                    selected_parts = (
+                        _AGENTS_ROOT,
+                        _AGENTS_DIRECTORY,
+                        plan.native_agent_id,
+                    )
+                    selected_created = any(
+                        parts == selected_parts for parts, _identity in created
+                    )
+                    _require_selected_directory(
+                        selected,
+                        allow_empty=selected_created,
+                    )
                     _install_immutable_regular(
                         selected,
                         _ROLE_FILE,
-                        content,
+                        plan.content,
                         mode=0o400,
                     )
                 finally:
@@ -135,18 +199,15 @@ def install_session_role_projection(
 def require_session_role_projection(
     execution_workspace: ProviderExecutionWorkspace,
     *,
-    native_agent_id: str,
-    content: bytes,
+    plan: SessionRoleProjectionPlan,
     expected: SessionRoleProjection | None = None,
 ) -> SessionRoleProjection:
     """Require exact projected bytes through the retained session capability."""
 
+    _require_projection_plan(plan)
     _require_projection_operations()
     if (
         type(execution_workspace) is not ProviderExecutionWorkspace
-        or _semantic_role_id(native_agent_id) is None
-        or type(content) is not bytes
-        or not content
         or (
             expected is not None
             and type(expected) is not SessionRoleProjection
@@ -160,7 +221,7 @@ def require_session_role_projection(
         try:
             agents = _open_existing_directory(root, _AGENTS_DIRECTORY)
             try:
-                selected = _open_existing_directory(agents, native_agent_id)
+                selected = _open_existing_directory(agents, plan.native_agent_id)
                 try:
                     _require_selected_directory(selected)
                     observed, file_identity = _read_regular_identity(
@@ -183,15 +244,15 @@ def require_session_role_projection(
         execution_workspace.worktree_root
         / _AGENTS_ROOT
         / _AGENTS_DIRECTORY
-        / native_agent_id
+        / plan.native_agent_id
         / _ROLE_FILE
     )
     if (
-        observed != content
+        observed != plan.content
         or (
             expected is not None
             and (
-                expected.native_agent_id != native_agent_id
+                expected.native_agent_id != plan.native_agent_id
                 or expected.path != projected_path
                 or expected._file_identity != file_identity
             )
@@ -200,7 +261,7 @@ def require_session_role_projection(
         raise OSError("session role projection changed")
     execution_workspace.require_current()
     return SessionRoleProjection(
-        native_agent_id=native_agent_id,
+        native_agent_id=plan.native_agent_id,
         path=projected_path,
         _file_identity=file_identity,
     )
@@ -209,15 +270,10 @@ def require_session_role_projection(
 def _validate_inputs(
     worktree_descriptor: int,
     common_git_descriptor: int,
-    native_agent_id: str,
-    content: bytes,
 ) -> None:
     if (
         type(worktree_descriptor) is not int
         or type(common_git_descriptor) is not int
-        or _semantic_role_id(native_agent_id) is None
-        or type(content) is not bytes
-        or not content
         or not _safe_directory(os.fstat(worktree_descriptor))
         or not _safe_directory(os.fstat(common_git_descriptor))
     ):
@@ -256,7 +312,6 @@ def _require_projection_operations() -> None:
             "mkdir",
             "open",
             "read",
-            "replace",
             "rmdir",
             "set_inheritable",
             "stat",
@@ -266,8 +321,10 @@ def _require_projection_operations() -> None:
     }
     required_flags = (
         getattr(os, "O_WRONLY", None),
+        getattr(os, "O_APPEND", None),
         getattr(os, "O_DIRECTORY", None),
         getattr(os, "O_NOFOLLOW", None),
+        getattr(os, "O_NONBLOCK", None),
         getattr(os, "O_CREAT", None),
         getattr(os, "O_EXCL", None),
     )
@@ -319,9 +376,10 @@ def _ensure_git_exclusion(common_git_descriptor: int) -> None:
     info = _open_or_create_directory(common_git_descriptor, "info")
     try:
         try:
-            current = _read_regular(info, "exclude")
+            current, initial_identity = _read_regular_identity(info, "exclude")
         except FileNotFoundError:
             current = b""
+            initial_identity = None
         except OSError:
             raise OSError("session role Git exclusion is unsafe") from None
         lines = _git_exclude_lines(current)
@@ -333,12 +391,11 @@ def _ensure_git_exclusion(common_git_descriptor: int) -> None:
         replacement = current + separator + _EXCLUDE_LINE + b"\n"
         if len(replacement) > _MAX_EXCLUDE_BYTES:
             raise OSError("session role Git exclusion is unsafe")
-        _install_regular(
+        _install_git_exclusion(
             info,
-            "exclude",
-            replacement,
-            mode=0o600,
-            replace_existing=True,
+            current=current,
+            initial_identity=initial_identity,
+            replacement=replacement,
         )
     finally:
         os.close(info)
@@ -375,16 +432,14 @@ def _preflight_projection(
                 selected = _open_existing_directory(agents, name)
                 try:
                     _require_selected_directory(selected)
-                    entries = set(os.listdir(selected))
-                    if _ROLE_FILE in entries:
-                        observed = _read_regular(
-                            selected,
-                            _ROLE_FILE,
-                            immutable=True,
-                            exact_mode=0o400,
-                        )
-                        if name == native_agent_id and observed != content:
-                            raise OSError("session role projection target differs")
+                    observed = _read_regular(
+                        selected,
+                        _ROLE_FILE,
+                        immutable=True,
+                        exact_mode=0o400,
+                    )
+                    if name == native_agent_id and observed != content:
+                        raise OSError("session role projection target differs")
                 finally:
                     os.close(selected)
         finally:
@@ -411,8 +466,13 @@ def _require_agents_directory(descriptor: int) -> None:
             os.close(child)
 
 
-def _require_selected_directory(descriptor: int) -> None:
-    if set(os.listdir(descriptor)) not in (set(), {_ROLE_FILE}):
+def _require_selected_directory(
+    descriptor: int,
+    *,
+    allow_empty: bool = False,
+) -> None:
+    accepted = (set(), {_ROLE_FILE}) if allow_empty else ({_ROLE_FILE},)
+    if set(os.listdir(descriptor)) not in accepted:
         raise OSError("session role projection contains unexpected entries")
 
 
@@ -573,8 +633,8 @@ def _read_regular_identity(
     immutable: bool = False,
     exact_mode: int | None = None,
 ) -> tuple[bytes, _RegularFileIdentity]:
-    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-    flags |= getattr(os, "O_NONBLOCK", 0)
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    flags |= getattr(os, "O_CLOEXEC", 0)
     try:
         descriptor = os.open(name, flags, dir_fd=parent)
     except FileNotFoundError:
@@ -678,11 +738,30 @@ def _install_immutable_regular(
 ) -> None:
     """Publish one immutable leaf with atomic create-only semantics."""
 
+    _install_create_only_regular(
+        parent,
+        name,
+        content,
+        mode=mode,
+        immutable=True,
+    )
+
+
+def _install_create_only_regular(
+    parent: int,
+    name: str,
+    content: bytes,
+    *,
+    mode: int,
+    immutable: bool,
+) -> None:
+    """Publish or validate one exact regular leaf without replacement."""
+
     try:
         current = _read_regular(
             parent,
             name,
-            immutable=True,
+            immutable=immutable,
             exact_mode=mode,
         )
     except FileNotFoundError:
@@ -713,7 +792,7 @@ def _install_immutable_regular(
         if (
             not _safe_regular(
                 value,
-                immutable=True,
+                immutable=immutable,
                 exact_mode=mode,
             )
             or value.st_size != len(content)
@@ -737,7 +816,7 @@ def _install_immutable_regular(
                 winner = _read_regular(
                     parent,
                     name,
-                    immutable=True,
+                    immutable=immutable,
                     exact_mode=mode,
                 )
             except OSError:
@@ -753,7 +832,7 @@ def _install_immutable_regular(
         if _read_regular(
             parent,
             name,
-            immutable=True,
+            immutable=immutable,
             exact_mode=mode,
         ) != content:
             raise OSError("session role projection install failed")
@@ -767,73 +846,84 @@ def _install_immutable_regular(
                 pass
 
 
-def _install_regular(
+def _install_git_exclusion(
     parent: int,
-    name: str,
-    content: bytes,
     *,
-    mode: int,
-    replace_existing: bool = False,
+    current: bytes,
+    initial_identity: _RegularFileIdentity | None,
+    replacement: bytes,
 ) -> None:
-    try:
-        current, initial_identity = _read_regular_identity(
+    """Create or append one exclusion without overwriting a race winner."""
+
+    if (
+        type(current) is not bytes
+        or type(replacement) is not bytes
+        or not replacement.startswith(current)
+        or len(replacement) <= len(current)
+        or len(replacement) > _MAX_EXCLUDE_BYTES
+    ):
+        raise OSError("session role Git exclusion is unsafe")
+    if initial_identity is None:
+        _install_create_only_regular(
             parent,
-            name,
-            immutable=not replace_existing,
-            exact_mode=None if replace_existing else mode,
+            "exclude",
+            replacement,
+            mode=0o600,
+            immutable=False,
         )
-    except FileNotFoundError:
-        current = None
-        initial_identity = None
-    except OSError:
-        raise OSError("session role projection target is unsafe") from None
-    if current is not None and not replace_existing:
-        if current == content:
-            return
-        raise OSError("session role projection target differs")
-    temporary = f".{name}.{uuid4().hex}.tmp"
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+        return
+
+    suffix = replacement[len(current):]
+    flags = os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW
     flags |= getattr(os, "O_CLOEXEC", 0)
-    descriptor = os.open(temporary, flags, 0o600, dir_fd=parent)
-    present = True
+    descriptor = os.open("exclude", flags, dir_fd=parent)
+    final_identity: _RegularFileIdentity | None = None
     try:
         os.set_inheritable(descriptor, False)
-        remaining = memoryview(content)
-        while remaining:
-            written = os.write(descriptor, remaining)
-            if written <= 0:
-                raise OSError("session role projection write failed")
-            remaining = remaining[written:]
-        os.fchmod(descriptor, mode)
-        os.fsync(descriptor)
         value = os.fstat(descriptor)
-        if not stat.S_ISREG(value.st_mode) or value.st_nlink != 1:
-            raise OSError("session role projection temporary is unsafe")
-        try:
-            current_identity = _regular_identity(
-                os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if (
+            not _safe_regular(value, immutable=False, exact_mode=None)
+            or _regular_identity(value) != initial_identity
+            or value.st_size != len(current)
+        ):
+            raise OSError("session role Git exclusion changed")
+        os.fchmod(descriptor, 0o600)
+        prepared = os.fstat(descriptor)
+        if (
+            not _safe_regular(
+                prepared,
+                immutable=False,
+                exact_mode=0o600,
             )
-        except FileNotFoundError:
-            current_identity = None
-        if current_identity != initial_identity:
-            raise OSError("session role projection target changed")
-        os.close(descriptor)
-        descriptor = -1
-        os.replace(temporary, name, src_dir_fd=parent, dst_dir_fd=parent)
-        present = False
-        if _read_regular(
-            parent,
-            name,
-            immutable=not replace_existing,
-            exact_mode=mode,
-        ) != content:
-            raise OSError("session role projection install failed")
-        os.fsync(parent)
+            or prepared.st_size != len(current)
+            or _regular_identity(
+                os.stat("exclude", dir_fd=parent, follow_symlinks=False)
+            )
+            != _regular_identity(prepared)
+        ):
+            raise OSError("session role Git exclusion changed")
+        written = os.write(descriptor, suffix)
+        if written != len(suffix):
+            raise OSError("session role Git exclusion write failed")
+        os.fsync(descriptor)
+        installed = os.fstat(descriptor)
+        if (
+            not _safe_regular(
+                installed,
+                immutable=False,
+                exact_mode=0o600,
+            )
+            or installed.st_size != len(replacement)
+        ):
+            raise OSError("session role Git exclusion changed")
+        final_identity = _regular_identity(installed)
     finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-        if present:
-            try:
-                os.unlink(temporary, dir_fd=parent)
-            except OSError:
-                pass
+        os.close(descriptor)
+    observed, observed_identity = _read_regular_identity(
+        parent,
+        "exclude",
+        exact_mode=0o600,
+    )
+    if observed != replacement or observed_identity != final_identity:
+        raise OSError("session role Git exclusion changed")
+    os.fsync(parent)

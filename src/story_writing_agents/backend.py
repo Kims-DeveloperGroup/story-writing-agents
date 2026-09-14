@@ -1904,7 +1904,11 @@ class AgentBackend:
             self._antigravity_adapter = AntigravityAdapter(
                 executable=antigravity_executable,
                 timeout_seconds=float(timeout_seconds),
-                state_root=self.workspace.path(f"{_SESSION_DIRECTORY}/.antigravity"),
+                state_root=(
+                    self._control_workspace_root
+                    / _SESSION_DIRECTORY
+                    / ".antigravity"
+                ),
                 explicit_model=explicit_antigravity_model,
                 explicit_effort=explicit_antigravity_effort,
                 system_model=configuration.system_defaults.antigravity_model,
@@ -2479,7 +2483,11 @@ class AgentBackend:
         antigravity = AntigravityAdapter(
             executable=self.antigravity_executable,
             timeout_seconds=self.timeout_seconds,
-            state_root=self.workspace.path(f"{_SESSION_DIRECTORY}/.antigravity"),
+            state_root=(
+                self._control_workspace_root
+                / _SESSION_DIRECTORY
+                / ".antigravity"
+            ),
             explicit_model=self._explicit_antigravity_model,
             explicit_effort=self._explicit_antigravity_effort,
             system_model=configuration.system_defaults.antigravity_model,
@@ -7773,10 +7781,7 @@ def provider_execution_workspace_manager(
                 bound_agent._provider_binding
             )
             with binding.open_ready_resources() as access:
-                access.install_provider_role(
-                    role.native_agent_id,
-                    role.content,
-                )
+                access.install_provider_role(role)
         except OSError as failure:
             raise BackendProtocolError(
                 "Antigravity session role projection is unavailable"

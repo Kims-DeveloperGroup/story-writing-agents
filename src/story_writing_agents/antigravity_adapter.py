@@ -55,7 +55,8 @@ from .provider_process import (
 )
 from .provider_execution_workspace import ProviderExecutionWorkspace
 from .workspace.session_role_projection import (
-    qualify_session_role_id,
+    SessionRoleProjectionPlan,
+    prepare_session_role_projection,
     require_session_role_projection,
 )
 
@@ -145,14 +146,6 @@ class _NativeRecoveryBaseline:
     prefix_bytes: int = 0
     prefix_sha256: str | None = None
     prior_steps: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class AntigravitySessionRole:
-    """Exact staged native selector and its content-qualified role bytes."""
-
-    native_agent_id: str
-    content: bytes
 
 
 class AntigravityAdapter:
@@ -752,20 +745,24 @@ class AntigravityAdapter:
     def session_role_projection(
         cls,
         binding: ProviderBinding,
-    ) -> AntigravitySessionRole:
+    ) -> SessionRoleProjectionPlan:
         """Return one validated content-qualified native session role."""
 
         if type(binding) is not ProviderBinding or binding.vendor != cls.vendor:
             raise OSError("Antigravity provider binding is invalid")
+        try:
+            expected_plan, expected_components = cls._custom_agent_projection(
+                binding.definition
+            )
+        except (TypeError, ValueError, UnicodeError) as exc:
+            raise OSError("Antigravity provider binding is invalid") from exc
         content = cls._read_rules_source(binding.staging_directory / "agent.md")
-        native_agent_id = cls._projected_native_agent_id(
-            binding.definition.agent_id,
-            content,
-        )
-        return AntigravitySessionRole(
-            native_agent_id=native_agent_id,
-            content=content,
-        )
+        if (
+            content != expected_plan.content
+            or binding.binding_components != expected_components
+        ):
+            raise OSError("Antigravity provider binding changed")
+        return expected_plan
 
     @classmethod
     def _write_definition(
@@ -775,11 +772,11 @@ class AntigravityAdapter:
     ) -> tuple[ContextComponentBytes, ...]:
         """Write one deterministic selectable custom-main-agent definition."""
 
-        content, components = cls._custom_agent_file(definition)
+        plan, components = cls._custom_agent_projection(definition)
         target = directory / "agent.md"
         cls._install_rules(
             target,
-            content,
+            plan.content,
         )
         return components
 
@@ -788,20 +785,30 @@ class AntigravityAdapter:
         cls,
         definition: AgentDefinition,
     ) -> tuple[bytes, tuple[ContextComponentBytes, ...]]:
-        """Wrap the canonical bound body once in static safe YAML framing."""
+        """Return exact final role bytes and their accounting partition."""
+
+        plan, components = cls._custom_agent_projection(definition)
+        return plan.content, components
+
+    @classmethod
+    def _custom_agent_projection(
+        cls,
+        definition: AgentDefinition,
+    ) -> tuple[SessionRoleProjectionPlan, tuple[ContextComponentBytes, ...]]:
+        """Prepare one canonical role plan and exact byte accounting."""
 
         body, body_components = cls._definition_file(definition)
         base_wrapper = cls._custom_agent_wrapper(definition.agent_id)
-        native_agent_id = qualify_session_role_id(
+        plan = prepare_session_role_projection(
             definition.agent_id,
             base_wrapper + body,
         )
-        wrapper = cls._custom_agent_wrapper(native_agent_id)
+        wrapper_bytes = len(plan.content) - len(body)
         components = tuple(
             ContextComponentBytes(
                 kind=component.kind,
                 serialized_utf8_bytes=(
-                    component.serialized_utf8_bytes + len(wrapper)
+                    component.serialized_utf8_bytes + wrapper_bytes
                     if component.kind is ContextComponentKind.BINDING_STRUCTURE
                     and component.identity is None
                     else component.serialized_utf8_bytes
@@ -813,10 +820,13 @@ class AntigravityAdapter:
             )
             for component in body_components
         )
-        content = wrapper + body
-        if sum(item.serialized_utf8_bytes for item in components) != len(content):
+        if (
+            wrapper_bytes <= 0
+            or sum(item.serialized_utf8_bytes for item in components)
+            != len(plan.content)
+        ):
             raise ValueError("Antigravity custom-agent accounting is invalid")
-        return content, components
+        return plan, components
 
     @staticmethod
     def _custom_agent_wrapper(agent_id: str) -> bytes:
@@ -835,51 +845,6 @@ class AntigravityAdapter:
             "commandExecutionPolicy: off\n"
             "---\n\n"
         ).encode("utf-8", errors="strict")
-
-    @classmethod
-    def _projected_native_agent_id(
-        cls,
-        semantic_agent_id: str,
-        content: bytes,
-    ) -> str:
-        prefix = b"---\nname: "
-        if not content.startswith(prefix):
-            raise OSError("Antigravity projected role is invalid")
-        end = content.find(b"\n", len(prefix))
-        if end < 0:
-            raise OSError("Antigravity projected role is invalid")
-        encoded_identity = content[len(prefix):end]
-        try:
-            native_agent_id = json.loads(
-                encoded_identity.decode("ascii", errors="strict")
-            )
-        except (UnicodeError, json.JSONDecodeError):
-            raise OSError("Antigravity projected role is invalid") from None
-        if (
-            type(native_agent_id) is not str
-            or encoded_identity
-            != json.dumps(
-                native_agent_id,
-                ensure_ascii=True,
-                separators=(",", ":"),
-            ).encode("ascii")
-        ):
-            raise OSError("Antigravity projected role is invalid")
-        base_content = (
-            prefix
-            + json.dumps(
-                semantic_agent_id,
-                ensure_ascii=True,
-                separators=(",", ":"),
-            ).encode("ascii")
-            + content[end:]
-        )
-        if native_agent_id != qualify_session_role_id(
-            semantic_agent_id,
-            base_content,
-        ):
-            raise OSError("Antigravity projected role is invalid")
-        return native_agent_id
 
     @staticmethod
     def _definition_file(
@@ -1090,7 +1055,7 @@ class AntigravityAdapter:
             ) from None
         try:
             staged_role = self.session_role_projection(binding)
-        except OSError as exc:
+        except (OSError, RuntimeError) as exc:
             failure = ProviderInvocationError(
                 "Antigravity provider workspace could not be prepared",
                 taint_existing_thread=False,
@@ -1130,6 +1095,10 @@ class AntigravityAdapter:
                 taint_existing_thread=False,
             ) from None
         try:
+            self._require_state_workspace_disjoint(
+                provider_state_directory,
+                execution_workspace,
+            )
             self._prepare_owned_directory_chain(
                 "sessions",
                 invocation.session_id,
@@ -1140,8 +1109,7 @@ class AntigravityAdapter:
             self._prepare_owned_directory(provider_state_directory)
             projected_role = require_session_role_projection(
                 execution_workspace,
-                native_agent_id=staged_role.native_agent_id,
-                content=staged_role.content,
+                plan=staged_role,
             )
             command, darwin_sandbox = self._confined_command(
                 command,
@@ -1156,7 +1124,7 @@ class AntigravityAdapter:
                 actual_transport_utf8_bytes=None,
             )
             raise
-        except OSError as exc:
+        except (OSError, RuntimeError) as exc:
             failure = ProviderInvocationError(
                 "Antigravity provider workspace could not be prepared",
                 taint_existing_thread=False,
@@ -1519,8 +1487,7 @@ class AntigravityAdapter:
         try:
             require_session_role_projection(
                 execution_workspace,
-                native_agent_id=staged_role.native_agent_id,
-                content=staged_role.content,
+                plan=staged_role,
                 expected=projected_role,
             )
         except (OSError, RuntimeError) as exc:
@@ -1880,7 +1847,10 @@ class AntigravityAdapter:
     ) -> tuple[list[str], DarwinSandboxRequirements]:
         """Resolve one native command and compile its fail-closed boundary."""
 
-        execution_workspace.require_current()
+        session_root, native_state = self._require_state_workspace_disjoint(
+            provider_state_directory,
+            execution_workspace,
+        )
         resolved = self._which()(self.executable)
         if resolved is None:
             raise ProviderInvocationError(
@@ -1888,8 +1858,6 @@ class AntigravityAdapter:
                 taint_existing_thread=False,
             )
         executable = Path(os.path.realpath(resolved))
-        session_root = Path(os.path.realpath(execution_workspace.worktree_root))
-        native_state = Path(os.path.realpath(provider_state_directory))
         role = Path(os.path.realpath(projected_role))
         agents_root = session_root / ".agents"
         agents_directory = agents_root / "agents"
@@ -1898,9 +1866,6 @@ class AntigravityAdapter:
             session_root != execution_workspace.worktree_root
             or role != projected_role
             or role != selected_agent_directory / "agent.md"
-            or native_state == session_root
-            or session_root in native_state.parents
-            or native_state in session_root.parents
         ):
             raise ProviderInvocationError(
                 "Antigravity execution workspace is unavailable",
@@ -1923,6 +1888,28 @@ class AntigravityAdapter:
             deny_write_subpaths=(session_root,),
             network=True,
         )
+
+    @staticmethod
+    def _require_state_workspace_disjoint(
+        provider_state_directory: Path,
+        execution_workspace: ProviderExecutionWorkspace,
+    ) -> tuple[Path, Path]:
+        """Require canonical provider state outside the live session root."""
+
+        execution_workspace.require_current()
+        session_root = Path(os.path.realpath(execution_workspace.worktree_root))
+        native_state = Path(os.path.realpath(provider_state_directory))
+        if (
+            session_root != execution_workspace.worktree_root
+            or native_state == session_root
+            or session_root in native_state.parents
+            or native_state in session_root.parents
+        ):
+            raise ProviderInvocationError(
+                "Antigravity execution workspace is unavailable",
+                taint_existing_thread=False,
+            )
+        return session_root, native_state
 
     def invocation_settings(
         self,

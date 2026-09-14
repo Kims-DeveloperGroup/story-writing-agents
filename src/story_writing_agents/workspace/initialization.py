@@ -89,7 +89,10 @@ from .schema import (
     validate_workspace_identifier,
     validate_workspace_template_name,
 )
-from .session_role_projection import install_session_role_projection
+from .session_role_projection import (
+    SessionRoleProjectionPlan,
+    install_session_role_projection,
+)
 
 
 _LEGACY_SENTINELS = (
@@ -1039,8 +1042,7 @@ class SessionArtifactAccess:
 
     def install_provider_role(
         self,
-        native_agent_id: str,
-        content: bytes,
+        plan: SessionRoleProjectionPlan,
     ) -> None:
         """Project one provider role through live Git and worktree authority."""
 
@@ -1053,8 +1055,7 @@ class SessionArtifactAccess:
             install_session_role_projection(
                 self._descriptor,
                 self._lease.common_descriptor,
-                native_agent_id=native_agent_id,
-                content=content,
+                plan=plan,
             )
             self.require_active()
         except OSError:

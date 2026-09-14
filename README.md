@@ -351,13 +351,17 @@ returning, while an active body failure remains primary.
 Antigravity derives a content-qualified native selector from the semantic
 story-agent ID and deterministic base role bytes. That exact selector is the
 role's YAML name, `.agents/agents/<native-selector>/agent.md` directory, and
-`--agent` value. Semantic agent identity still owns routing, settings,
-accounting, and external provider state. Each protected `0400` role leaf is
-published create-only, remains unversioned, and can coexist with older role
-versions; runtime never replaces or prunes it. Mutable provider state remains
-external and generation-qualified, while schema/output transport also stays
-external. Codex continues to inject developer instructions directly and
-requires no worktree configuration file.
+`--agent` value. Runtime revalidates this semantic/native/final-byte plan and
+recomputes the staged file and binding byte accounting from the immutable bound
+definition before provider workspace setup. Semantic agent identity still owns
+routing, settings, accounting, and external provider state. Each protected
+`0400` role leaf is published create-only, remains unversioned, and can coexist
+with older role versions; runtime never replaces or prunes it. Definitions and
+mutable provider state remain external beneath the canonical control workspace;
+provider state is generation-qualified, while provider CWD stays in the session
+worktree and schema/output transport also stays external. Codex continues to
+inject developer instructions directly and requires no worktree configuration
+file.
 Create or reopen the session through the lifecycle first.
 
 ```python

@@ -861,14 +861,19 @@ class CallEvidence:
         record['prior_thread_id'] = (argv[argv.index('--conversation') + 1]
                                      if '--conversation' in argv else
                                      argv[-2] if 'resume' in argv else None)
+        execution_workspace = request.execution_workspace
+        effective_cwd = (execution_workspace.worktree_root
+                         if vendor == 'antigravity' and execution_workspace is not None
+                         else request.cwd)
         self.calls.append(record)
         save(directory / 'summary.sanitized.json', record)
-        save(directory / 'command.private.json', dict(argv=argv, cwd=str(request.cwd), timeout=request.timeout_seconds))
+        save(directory / 'command.private.json', dict(argv=argv, cwd=str(effective_cwd), timeout=request.timeout_seconds))
         (directory / 'stdin.bin').write_bytes(request.stdin)
         if vendor == 'antigravity':
             require(argv[argv.index('--output-format') + 1] == 'json', 'Antigravity JSON transport absent')
             require(request.stdin == b'', 'Unexpected Antigravity stdin transport')
-            staged = Path(request.cwd) / '.agents/agents' / native_agent / 'agent.md'
+            require(execution_workspace is not None, 'Antigravity execution workspace absent')
+            staged = effective_cwd / '.agents/agents' / native_agent / 'agent.md'
             body = staged.read_bytes()
             require(b'through finish' in body, 'Current provider-local finish prompt absent')
             save(directory / 'staged.sanitized.json', {'sha256': digest(body), 'bytes': len(body)})
@@ -1431,10 +1436,7 @@ class ConversationCase:
             binding = adapter.bind(definition)
             role = adapter.session_role_projection(binding)
             with session_binding.open_ready_resources() as access:
-                access.install_provider_role(
-                    role.native_agent_id,
-                    role.content,
-                )
+                access.install_provider_role(role)
             with session_binding.open_provider_execution_workspace() as execution_workspace:
                 payload = {'c': 'synthetic-correlation', 'q': 'Return exactly the schema-selected outer answer. action.result must contain assessment supports, assignment_id synthetic-assignment, input_ids [synthetic-input], and a short visible message. Set used_handles to [].'}
                 invocation = ProviderInvocation(session_id=self.session, schema=antigravity_adapter.AntigravityAdapter.native_output_schema(schema), payload=payload, thread_id=None, binding_components=binding.binding_components, execution_workspace=execution_workspace)

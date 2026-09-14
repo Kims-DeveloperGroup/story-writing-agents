@@ -787,37 +787,51 @@ workspace backup, or run a version that understands qualified records.
 
 ## Antigravity-native state
 
-Antigravity owns a stable root below `provider_sessions/.antigravity/` and
-partitions bound definitions by agent and definition fingerprint. Invocation
-state is separately partitioned by session, physical session-generation digest,
-agent, and definition fingerprint at
+Antigravity owns a stable root below the canonical control workspace's
+`provider_sessions/.antigravity/`, including when `AgentBackend` was constructed
+from a session worktree. It partitions bound definitions by agent and
+definition fingerprint. Invocation state is separately partitioned by session,
+physical session-generation digest, agent, and definition fingerprint at
 `sessions/<session>/<generation>/<agent>/<definition>/provider`. It remains
-outside the selected session worktree. The runtime deliberately retains this
-plaintext state across switch, pause, quit, EOF, and `AgentBackend.close()` so a
-compatible, proved-generation provider conversation can resume later. Foreign
-or unproved generation state is retained but starts fresh rather than being
-adopted.
+outside the selected session worktree, while provider CWD remains that exact
+worktree. Any overlap is rejected before per-invocation state directories or
+provider work. The runtime deliberately retains this plaintext state across
+switch, pause, quit, EOF, and `AgentBackend.close()` so a compatible, proved-
+generation provider conversation can resume later. Foreign or unproved
+generation state is retained but starts fresh rather than being adopted.
 
 The selected session worktree contains persistent runtime-control projections
 at `.agents/agents/<native-selector>/agent.md`. A domain-separated SHA-256
 selector is derived from the semantic agent ID and deterministic base role
-bytes, then used as the role YAML name, directory, and `--agent` value. The
+bytes, then used as the role YAML name, directory, and `--agent` value.
+Projection owns and revalidates an immutable plan tying the semantic ID, native
+selector, and exact final bytes. Before setup, the adapter recomputes that plan,
+the staged role, and component-byte accounting from the immutable definition
+snapshot and requires the staged file and binding accounting to match. The
 semantic ID still owns runtime state, settings, and accounting. Each projected
 file exactly matches the staged role, is singly linked with exact mode `0400`,
 and has owner-controlled directories. Content-qualified versions are published
 create-only, coexist, and are never replaced or pruned. An exact safe concurrent
 winner may be adopted only after full validation; a differing or unsafe winner
-is preserved and rejected.
+is preserved and rejected. A pre-existing empty qualified directory is
+preserved and rejected before Git-exclusion or role-tree mutation.
 
 The common Git exclusion contains `/.agents/`; its parser recognizes LF and
 CRLF records, not lone CR separators, and fails closed without rewriting when
-a missing entry follows a terminal lone CR. Story references, SEARCH/READ
-sources, and artifact paths also exclude this tree. It is therefore unversioned
-protected control data, not mutable provider-native residue or story content.
-If required effective-user, descriptor-relative, no-follow, or create-only link
-support is missing, projection fails before access. Differing/unsafe bytes or
-foreign topology fail closed and are preserved. Failed fresh setup removes
-only still-empty, identity-matching directories created by that call.
+a missing entry follows a terminal lone CR. Intended final bytes may not exceed
+64 KiB. If `exclude` is absent, it is published create-only. If present, runtime
+appends through the retained no-follow inode after exact identity, size, and
+named-path checks, normalizes it to `0600`, syncs it, and requires exact final
+named-path content and identity readback. A normal append preserves the inode;
+a concurrent pathname winner is preserved and never overwritten.
+
+Story references, SEARCH/READ sources, and artifact paths also exclude this
+tree. It is therefore unversioned protected control data, not mutable provider-
+native residue or story content. If required effective-user, descriptor-
+relative, no-follow, nonblocking, or create-only link support is missing,
+projection fails before access. Differing/unsafe bytes or foreign topology fail
+closed and are preserved. Failed fresh setup removes only still-empty,
+identity-matching directories created by that call.
 
 Each successful invocation supplies one JSON result with a safe
 `conversation_id`; resume requires it to equal the retained reference. The
