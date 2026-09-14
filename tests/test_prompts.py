@@ -117,7 +117,7 @@ class PromptAssemblerTests(unittest.TestCase):
             "untrusted evidence",
             "SEARCH finds a locator and READ obtains",
             "Return only the one invocation-specific structured result",
-            '"kind": "answer | question | critique | recommendation | proposal"',
+            '"kind": "question | critique | recommendation | proposal (omit for a default answer)"',
             "no surrounding prose",
             "hidden reasoning",
             "For `lead_synthesis`",
@@ -165,6 +165,20 @@ class PromptAssemblerTests(unittest.TestCase):
         lead = changed[LEAD_ORCHESTRATOR]
         self.assertIn(retained.strip(), lead)
         self.assertIn(b"Runtime Lead contract overlay (lead-outcome-v5)", lead)
+        overlay = lead[lead.index(b"Runtime Lead contract overlay (lead-outcome-v5)"):]
+        self.assertIn(
+            b"context action envelope retains its required outer kind",
+            overlay,
+        )
+        self.assertIn(b"Inside the final action.result", overlay)
+        self.assertIn(
+            b"default direct-answer variant omits the inner kind",
+            overlay,
+        )
+        self.assertNotIn(
+            b"Every front-channel result includes kind, message, and authoring_scope.",
+            lead,
+        )
         self.assertIn(b"objective_intent", lead)
         self.assertIn(b"recommended_action", lead)
         self.assertIn(b"omits objective_intent", lead)
