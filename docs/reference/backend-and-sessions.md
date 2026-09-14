@@ -56,6 +56,15 @@ transcripts and retrieval authorization; backend owns provider metadata,
 processes, access claims, per-thread serialization, and exact binding-staging
 retirement.
 
+A direct Codex `BoundAgent` story call additionally requires the request's
+exact Git session branch/ref/worktree resources to have been provisioned and
+verified READY. `create_session_with_access()` creates only lifecycle manifest
+state and its access claim; it does not create those Git resources. Call
+`provision_session_resources(session_id)` separately before lifecycle creation,
+or use the installed session-create workflow that performs both in order.
+Missing or non-READY Git resources fail before provider submission rather than
+falling back to another root.
+
 The backend is the sole authority for each active agent's provider, model,
 effort, and their sources: `launch_override`, `agent_config`, `system_default`,
 `built_in_default`, or `provider_default`. Its profile also drives adapter argv,
@@ -98,6 +107,99 @@ capability removal. See the
 [sanitized command and JSON result](../guides/antigravity.md#sanitized-provider-call-and-json-result),
 including process-argument visibility and plan-mode limitations.
 
+<a id="codex-session-execution-boundary"></a>
+
+## Codex session execution boundary
+
+Every Codex story invocation uses the exact READY session named by its request.
+This includes `BoundAgent.invoke()`, `converse()`,
+`converse_with_retrieval()`, the contextual Lead and specialist paths, every
+synthesis phase, and consensus calls without artifact input. The
+`SessionArtifactBinding` is the sole minter of an immutable, opaque,
+nonserializable, process- and thread-affine execution capability. The
+capability is created for one call, is never cached on a binding or adapter,
+and retains the content-free physical-generation proof without retaining a Git
+lease across the provider await. Deferred Lead publication transfers the
+entered execution and provider contexts to its active in-memory continuation
+transaction, which retains them only until that publication resolves; no such
+authority enters a durable record.
+
+Launch transfers a non-inheritable duplicate of the pinned session-root
+descriptor to a fixed isolated helper. The helper enters that directory with
+`fchdir`, closes the descriptor, and replaces itself with the provider. Codex
+receives `--cd .`; therefore its OS working directory and native project root
+refer to the selected original inode rather than a reopened path, prompt
+staging, the initialization root, or the controller's current directory.
+Capability checks run before launch, immediately after process creation, after
+the process returns, before result acceptance, after adapter cleanup, and when
+the direct execution-workspace owner or contextual invocation exits. Direct
+BoundAgent methods keep that owner around their complete logical call; exit
+loss prevents an apparent body success from returning, taints its exact
+generation-bound continuation, and records a post-response runtime failure
+instead of an accepted exchange. If the body is already failing, it remains
+primary and receives only a content-free validation note.
+Reference, SEARCH, and READ paths also revalidate after host observation
+construction and before accepting their provider-call finalizers. A missing,
+replaced, or aliased named root fails the invocation rather than transferring
+authority to another generation.
+
+On Darwin the native process is additionally wrapped by a default-deny SBPL
+profile and retains Codex's own `--sandbox read-only` setting. The profile
+grants no session-tree file reads or writes; the session `.git` subtree and all
+session writes are also explicit denies. The descriptor-selected CWD is process
+placement and generation identity, not story-content access. Host-owned context
+capture, explicit-reference delivery, and SEARCH/READ handlers perform their
+own guarded reads and place only the selected content in provider payloads or
+observations. Unspecified paths remain denied, including the initialization
+and control roots, sibling worktrees, traversal and symlink escape targets, and
+provider-definition staging.
+
+Closed external allowances cover only the literal canonical resolved Codex
+executable, the exact schema read and response write, required system runtime
+files, outbound network/system sockets, and one validated provider-native state
+subtree. Configured `CODEX_HOME` must be absolute before canonical resolution.
+The resolved path must already be a directory owned by the effective user,
+must not be group- or other-writable, and must be neither the filesystem root
+nor the user's home. It may neither contain nor be contained by the control
+root, schema-derived sibling-worktree container (including the selected session
+root), prompt staging, or response-output directory. An unsafe value fails
+before provider submission. Staged instructions are read
+before launch and supplied as native developer instructions; neither staging
+nor response transport becomes a Codex project or story-Git residue. The
+complete UTF-8 process argument—including the
+`developer_instructions=` prefix and JSON encoding—may be at most 512 KiB.
+Exceeding that bound fails before submission without tainting an existing
+thread. A custom definition that previously fit file-based staging may need to
+move story material into host-owned context, explicit references, or
+SEARCH/READ sources rather than enlarging the binding instruction.
+
+The response transport is opened without following links and must remain the
+same singly linked regular file, including its identity, link count, and
+relevant metadata, throughout a bounded read. It must contain strict UTF-8 and
+may be at most 8 MiB. A missing, symlinked, multiply linked, non-regular,
+changing, oversized, or invalidly encoded response is rejected rather than read
+through an alternate transport.
+
+Apple's `sandbox-exec` facility is deprecated. A missing facility, non-Darwin
+host, unsafe native-state directory, noncanonical resource, or executable
+mismatch fails before provider submission; there is no path-only or unconfined
+fallback. Authentication,
+model-catalog discovery, help, and other management probes are not story
+invocations and retain their separately documented process boundaries.
+Antigravity is intentionally unchanged here and remains tracked by
+[Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
+
+Context-ledger publication is generation-checked immediately before and after
+checkpoint commit. For deferred publication, retained provider and execution
+contexts are then closed in reverse ownership order, with execution generation
+revalidated before its close; only successful cleanup permits the provider-call
+finalizer and checkpoint-advanced event. Loss or cleanup failure after a commit
+invalidates that exact checkpoint generation before the failure escapes. A
+later contextual exit failure also taints the exact generation-bound provider
+thread and invalidates an already committed non-pending checkpoint. When
+another body failure is active, it stays primary and receives only a content-
+free exit-validation note.
+
 ## Lead session continuation
 
 The runtime's ordinary Lead turns and consultation/artifact-review syntheses
@@ -111,8 +213,18 @@ scoped. The new session namespace bootstraps while old conversation namespace
 bytes remain untouched. See [Lead session memory](../guides/agent-context.md#lead-session-memory)
 for exact history/current-state delivery and capacity limits.
 
-Missing, tainted, or incompatible continuation bootstraps on the next safe
-authorized work. An eligible failed read-only Lead attempt exposes
+For Codex, the compatibility fingerprints also include a domain-separated
+digest of the exact session physical generation. Replacing the worktree at the
+same pathname therefore makes the retained continuation incompatible and
+selects a fresh bootstrap without rewriting the old record. The schema-v2
+provider-session manifest retains legacy base and generation-qualified records;
+qualified lookup and taint take precedence, and an exact-fingerprint base
+record is fallback only when its qualified key is absent. Ordinary thread
+updates do not prune earlier generation records. Missing, tainted, or otherwise
+incompatible continuation bootstraps on the next safe authorized work. If
+generation authority is lost after submission, the apparent provider success
+is not accepted, the exact continuation is tainted where present, and the
+binding failure remains primary. An eligible failed read-only Lead attempt exposes
 `retry_lead_turn`, including an exact unstarted, prepared-only, or unmatched
 submitted request recovered after restart. Explicit new input in that same
 conversation closes any unclosed prior attempt before starting a fresh turn;

@@ -16,6 +16,10 @@ from uuid import uuid4
 
 from ..agent_exchange_paths import is_agent_exchange_runtime_directory
 from ..runtime_state_paths import is_orchestrator_runtime_directory
+from ..provider_execution_workspace import (
+    ProviderExecutionWorkspace,
+    mint_provider_execution_workspace,
+)
 from ..config import validate_persisted_configuration_bytes
 from ..errors import (
     ConfigurationError,
@@ -662,6 +666,123 @@ class SessionArtifactBinding:
                 raise primary from None
             raise
 
+    @contextmanager
+    def open_provider_execution_workspace(
+        self,
+    ) -> Iterator[ProviderExecutionWorkspace]:
+        """Mint one call-local process workspace without retaining a Git lock."""
+
+        self._require_creator()
+        identity = self._generation_identity
+        if identity is None:
+            raise SessionArtifactBindingError(
+                "session artifact resources are unavailable"
+            )
+        descriptor = -1
+        pin: GitSessionGenerationPin | None = None
+        execution_workspace: ProviderExecutionWorkspace | None = None
+        try:
+            pin = acquire_git_session_generation_pin(identity)
+            pin.require_current()
+            descriptor = _open_existing_root(
+                self.resources.identity.worktree_root,
+                self.worktree_identity,
+            )
+            _verify_named_identity(
+                self.resources.identity.worktree_root,
+                descriptor,
+                self.worktree_identity,
+            )
+            execution_workspace = mint_provider_execution_workspace(
+                session_id=self.resources.identity.session_id,
+                worktree_root=self.resources.identity.worktree_root,
+                root_identity=self.worktree_identity,
+                generation_provenance=(
+                    _provider_execution_generation_provenance(identity)
+                ),
+                root_descriptor=descriptor,
+                generation_pin=pin,
+                failure_factory=lambda: SessionArtifactBindingError(
+                    "session artifact resources are unavailable"
+                ),
+            )
+            descriptor = -1
+            pin = None
+            execution_workspace.require_current()
+        except BaseException as failure:
+            if execution_workspace is not None:
+                execution_workspace.close(failure=failure)
+                execution_workspace = None
+            _close_untransferred_artifact_descriptor(descriptor, failure)
+            if pin is not None:
+                try:
+                    pin.close()
+                except BaseException as cleanup_failure:
+                    _add_session_artifact_cleanup_note(failure, cleanup_failure)
+            if isinstance(failure, _SESSION_ARTIFACT_BINDING_FAILURES):
+                raise SessionArtifactBindingError(
+                    "session artifact resources are unavailable"
+                ) from None
+            raise
+
+        body_failure: BaseException | None = None
+        try:
+            try:
+                yield execution_workspace
+            except BaseException as failure:
+                body_failure = failure
+                raise
+        finally:
+            exit_failure = body_failure
+            try:
+                execution_workspace.require_current()
+            except BaseException as validation_failure:
+                if body_failure is None:
+                    exit_failure = validation_failure
+                else:
+                    try:
+                        body_failure.add_note(
+                            "provider execution workspace exit validation failed: "
+                            f"{type(validation_failure).__name__}"
+                        )
+                    except BaseException:
+                        pass
+            execution_workspace.close(failure=exit_failure)
+            if body_failure is None and exit_failure is not None:
+                raise exit_failure
+
+    def transfer_to_current_thread(self) -> SessionArtifactBinding:
+        """Recreate immutable binding facts for a new event-loop thread.
+
+        The source binding owns no opened artifact or generation descriptors;
+        this transfer deliberately copies only validated immutable topology.
+        """
+
+        identity = self._generation_identity
+        if identity is None:
+            raise SessionArtifactBindingError(
+                "session artifact resources are unavailable"
+            )
+        transferred_identity = GitSessionGenerationIdentity(
+            session=identity.session,
+            administrative_root=identity.administrative_root,
+            control_root_identity=identity.control_root_identity,
+            common_git_identity=identity.common_git_identity,
+            administrative_identity=identity.administrative_identity,
+            worktree_identity=identity.worktree_identity,
+            git_indirection_facts=identity.git_indirection_facts,
+            common_indirection_facts=identity.common_indirection_facts,
+            git_indirection_sha256=identity.git_indirection_sha256,
+            common_indirection_sha256=identity.common_indirection_sha256,
+        )
+        return SessionArtifactBinding(
+            resources=self.resources,
+            worktree_identity=self.worktree_identity,
+            manifest=self.manifest,
+            allowed_worktree_changes=self.allowed_worktree_changes,
+            _generation_identity=transferred_identity,
+        )
+
     def require_generation_pin(self, pin: SessionArtifactGenerationPin) -> None:
         """Require one opaque pin to match this binding's current generation."""
 
@@ -1165,6 +1286,32 @@ def _close_untransferred_artifact_descriptor(
             pass
 
 
+def _provider_execution_generation_provenance(
+    identity: GitSessionGenerationIdentity,
+) -> str:
+    """Digest exact content-free generation facts without persisting them."""
+
+    if type(identity) is not GitSessionGenerationIdentity:
+        raise TypeError("session artifact generation identity is invalid")
+    fields: tuple[object, ...] = (
+        identity.session.session_id,
+        *identity.control_root_identity,
+        *identity.common_git_identity,
+        *identity.administrative_identity,
+        *identity.worktree_identity,
+        *identity.git_indirection_facts,
+        *identity.common_indirection_facts,
+        identity.git_indirection_sha256,
+        identity.common_indirection_sha256,
+    )
+    digest = hashlib.sha256(b"story-provider-execution-generation-v1\0")
+    for field_value in fields:
+        encoded = str(field_value).encode("ascii", errors="strict")
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+    return f"sha256:{digest.hexdigest()}"
+
+
 class SessionArtifactBindingError(SessionArtifactGuardFailure, RuntimeError):
     """A content-free failure to bind exact READY session artifact resources."""
 
@@ -1536,6 +1683,12 @@ def _main_root(root: Path) -> Path:
     lexical = _require_lexical_root(root)
     _role, _session_id, main_root = _workspace_role(lexical)
     return main_root
+
+
+def main_workspace_root(root: Path) -> Path:
+    """Return the canonical main workspace that owns one workspace root."""
+
+    return _main_root(root)
 
 
 def _validate_initializing_root(

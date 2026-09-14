@@ -92,10 +92,14 @@ not continuous protection against arbitrary external Git that mutates and
 restores state between checks. Stop workspace processes before external
 recovery work.
 
-This artifact-source continuity does not assign or confine the story-runtime
-provider's working directory or project root. That separate execution boundary
-is tracked by
-[Issue #670](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/670).
+The continuity pin itself grants no provider process authority. For each Codex
+story call, the same session binding separately mints an opaque call-local
+capability that selects the retained session-root descriptor as OS working
+directory and native project root `--cd .` under the fail-closed Darwin
+boundary. See the
+[Codex session execution boundary](../reference/backend-and-sessions.md#codex-session-execution-boundary).
+Antigravity adoption remains
+[Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
 
 ## The normal request flow
 

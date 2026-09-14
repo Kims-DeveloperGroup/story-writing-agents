@@ -340,9 +340,11 @@ and is not shipped behavior here. Direct recovery-topology validation now
 normalizes a delegated session-resource failure to the history-owned
 `recovery_required` / `operator_recovery` contract, without mutation or an
 exposed lower-layer exception chain.
-Issue #661 does not confine the provider working directory or project root;
-that separate boundary remains tracked by
-[Issue #670](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/670).
+The same session binding now mints the call-local Codex execution-worktree
+capability described in
+[Codex execution-worktree recovery](#codex-execution-worktree-recovery).
+Antigravity adoption remains separately tracked by
+[Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
 
 Resource loss during local closure does not replay known provider work. A
 completed artifact-review result that cannot be finalized against its bound
@@ -1600,10 +1602,12 @@ transient owner, and does not include its operation ID in the replacement root's
 live-owner exclusion set. Terminal success or failure, reconciled completion,
 stale-owner abandonment, and every unretained preparation path each close the
 pin exactly once. The original durable history remains
-unchanged. A candidate-only consensus call enters this boundary only for known
-same-process pending cleanup and otherwise stays worktree-free. After restart,
-the next artifact-sensitive boundary inventories durable histories and
-reconciles unowned nonterminal operations. It terminates every unfinished
+unchanged. A candidate-only consensus call enters this reference-cleanup
+boundary only for known same-process pending cleanup and otherwise performs no
+artifact/reference worktree read. It still opens the exact session execution
+capability for each Codex provider call. After restart, the next artifact-
+sensitive boundary inventories durable histories and reconciles unowned
+nonterminal operations. It terminates every unfinished
 invocation before the operation, is idempotent after interruption, and leaves
 already terminal evidence unchanged. A restart candidate-only consensus call
 does not scan the worktree, so an orphan waits for an artifact-sensitive
@@ -1671,6 +1675,96 @@ reference history and the Lead attempt allows `retry_lead_turn`, including
 after reference content was delivered. The failure and open authoring
 objective remain durable. A new turn creates a new reference operation;
 uncertain cleanup or corrupt accounting keeps the existing recovery block.
+
+<a id="codex-execution-worktree-recovery"></a>
+
+## Codex execution-worktree recovery
+
+Every Codex story call binds its provider continuation to a domain-separated
+digest of the exact session physical generation. If the named worktree is
+missing, replaced, symlinked, or otherwise no longer matches before launch,
+the call fails without a provider process and without falling back to the
+control root, current directory, staging, or another session. Restore or
+reopen the exact READY session resources, then submit fresh authorized work;
+the runtime does not replay the failed call automatically. The descriptor CWD
+does not authorize session filesystem reads: host-owned context, reference,
+SEARCH, and READ services remain the only story-content delivery path.
+
+A valid replacement generation at the same pathname is intentionally
+incompatible with prior Codex continuation state. The next safe authorized
+call bootstraps a fresh provider thread while retaining the old content-free
+record for history. It does not relabel the old checkpoint or treat path
+equality as generation equality.
+
+The schema-v2 provider-session manifest retains legacy base records and
+fingerprint-qualified records for successive generations. For an effective
+generation fingerprint, lookup and taint use its qualified record first and
+fall back to an exact-fingerprint base record only when that qualified key is
+absent. A fallback taint materializes the qualified tainted record without
+deleting the base, and ordinary thread updates do not prune any earlier
+generation record. Once a qualified key has been written, the manifest is
+forward-only: an older binary that accepts base keys alone rejects it. Do not
+downgrade in place or hand-delete retained records; stop all writers and restore
+a verified pre-upgrade workspace backup, or use a compatible newer runtime.
+
+If generation authority is lost after process submission, or after a response
+returns but before acceptance/publication, the binding failure outranks the
+apparent provider result. The call retains submitted accounting where known,
+does not durably accept the response, and best-effort taints the exact existing
+continuation so later work cannot assume it is clean. An explicit retry needs
+new top-level authority and, for references, a new operation, capture,
+coordinator, and capability. Never infer non-execution from a missing accepted
+result.
+
+Darwin sandbox unavailability, an unsupported host, invalid canonical
+resources, or unsafe native state fails before submission and has no
+unconfined fallback. For `CODEX_HOME`, verify an existing effective-user-owned
+directory configured by an absolute path, with no group/other write bits, that
+is not filesystem root or user home and does not contain or sit beneath the
+control root, schema-derived sibling-worktree container (including every
+session), staging, or response-output directory. Apple's underlying
+`sandbox-exec` facility is
+deprecated, so deployment checks must treat its absence as loss of Codex story-
+call capability. Authentication, catalog, help, and other management probes
+are outside this story boundary.
+Antigravity recovery remains unchanged until
+[Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
+
+Treat a missing, symlinked, multiply linked, non-regular, changing, oversized,
+or invalid-UTF-8 response output as a failed submitted call, not as recoverable
+transport to follow or reread. The runtime opens the exact result name without
+following links, verifies one stable singly linked regular-file identity and
+metadata across the read, and accepts at most 8 MiB. Preserve the existing
+thread's tainted state and use fresh top-level authority for any explicit retry.
+
+Codex also rejects a fully encoded `developer_instructions=` process argument
+larger than 512 KiB before submission and without tainting an existing thread.
+The limit includes the prefix, JSON quotes, escapes, and UTF-8 bytes, so raw
+instruction-file size is not the acceptance measure. For an older custom
+definition that depended on larger file staging, keep stable role constraints
+in the binding and migrate story material to host-owned context, explicit
+references, or SEARCH/READ sources. Do not weaken the limit or place that
+material in the session tree for provider filesystem access.
+
+Generation is revalidated after provider adapter cleanup and when contextual
+invocation ownership exits, not only before accepting the decoded result. A
+direct BoundAgent execution-workspace owner also revalidates as it exits after
+the logical body: loss prevents an apparent successful return, taints the exact
+generation-bound continuation, and terminalizes the response as a runtime
+failure rather than accepted, while an active body failure remains primary and
+receives only a content-free validation note.
+Reference, SEARCH, and READ work revalidates after the host constructs its
+observation and before the provider-call finalizer is accepted. Context-ledger
+checkpoint commit is checked immediately before and after publication. A
+deferred Lead continuation retains the execution and provider contexts through
+that decision, closes and revalidates them before accepting the provider-call
+finalizer, and publishes checkpoint advancement only after clean completion.
+Loss or cleanup failure after publication invalidates that exact checkpoint
+generation. A later exit failure similarly taints the generation-bound thread
+and invalidates an already committed non-pending checkpoint. If another
+continuation body failure is active, it remains primary and receives only a
+content-free validation note. Do not resume from an invalidated checkpoint;
+restore exact READY resources and begin the next safe authorized bootstrap.
 
 ## Controller cancellation proof
 

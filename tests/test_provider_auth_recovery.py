@@ -218,7 +218,7 @@ class AuthClassificationTests(unittest.IsolatedAsyncioTestCase):
         workspace = initialized_workspace(self)
         adapter = CodexAdapter(executable="synthetic-codex", timeout_seconds=2,
                               configuration=ConfigManager(workspace).load_configuration_baseline().configuration,
-                              explicit_model=None)
+                              explicit_model=None, control_root=workspace.root)
         binding = adapter.bind(PromptAssembler(workspace).build_definition(
             session_id="auth", agent_id=PLOT_ARCHITECT))
         self.addCleanup(adapter.release, binding)

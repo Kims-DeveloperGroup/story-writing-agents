@@ -225,6 +225,7 @@ class WorkspacePolicyCompatibilityTests(DisposableGitTestCase):
             timeout_seconds=1,
             configuration=ConfigManager(Workspace(session).require_ready()).load_configuration_snapshot(),
             explicit_model=None,
+            control_root=root,
             make_temporary_directory=lambda: lambda **kwargs: tempfile.mkdtemp(dir=self.test_root, **kwargs),
         )
         self.addCleanup(adapter.close)

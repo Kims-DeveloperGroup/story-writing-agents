@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import contextvars
 import errno
 import hashlib
 import inspect
@@ -18,7 +19,7 @@ import threading
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import ExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -150,12 +151,14 @@ from .provider_adapter import (
     ProviderInvocationError,
     ProviderResult,
     provider_failure_accounting,
+    record_provider_failure_accounting,
 )
 from .provider_error_artifacts import (
     PROVIDER_ERROR_ARTIFACT_FAILURE_CATEGORY,
     WorkspaceProviderErrorArtifacts,
 )
 from .provider_process import ProcessTimedOut, stop_process
+from .provider_execution_workspace import ProviderExecutionWorkspace
 from .session_lifecycle import (
     SessionAccessState,
     SessionDurableState,
@@ -186,6 +189,9 @@ from .writing_artifacts.read_actions import (
 from .workspace import Workspace
 from .runtime_state_paths import CONTEXTUAL_PROVIDER_DIRECTORY
 from .workspace.initialization import (
+    SessionArtifactBinding,
+    compose_session_artifact_binding as _compose_session_artifact_binding,
+    main_workspace_root as _main_workspace_root,
     provision_session_resources as _provision_session_resources,
     require_ready_session_resources as _require_ready_session_resources,
 )
@@ -204,6 +210,19 @@ _ACCESS_DIAGNOSTIC_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
 _SAFE_THREAD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _SAFE_FINGERPRINT = re.compile(r"[0-9a-f]{64}")
 _SAFE_CONTEXT_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+@dataclass(frozen=True, slots=True)
+class _DeferredDirectCodexAcceptance:
+    """Delay one successful direct-call terminal until workspace exit is safe."""
+
+    accept: Callable[[], None]
+    reject: Callable[[], None]
+
+
+_DEFERRED_DIRECT_CODEX_ACCEPTANCES: contextvars.ContextVar[
+    list[_DeferredDirectCodexAcceptance] | None
+] = contextvars.ContextVar("deferred_direct_codex_acceptances", default=None)
 
 _CONVERSATION_RETRIEVAL_RULES = (
     "Return exactly one structured retrieval action with the supplied "
@@ -365,6 +384,7 @@ class _BoundContextProvider:
         self._active_scope: ContextScope | None = None
         self._continuation_identity: ContextContinuationIdentity | None = None
         self._active_policy_fingerprint: str | None = None
+        self._active_execution_workspace: ProviderExecutionWorkspace | None = None
         if reference_read is None:
             self.reference_operation_id = None
         else:
@@ -414,6 +434,7 @@ class _BoundContextProvider:
         policy_fingerprint: str,
         *,
         continuation_identity: ContextContinuationIdentity | None = None,
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> AsyncIterator[None]:
         if (
             type(scope) is not ContextScope
@@ -422,42 +443,101 @@ class _BoundContextProvider:
             or self._active_scope is not None
         ):
             raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
-        with self._bound_agent._reference_call_use(self._reference_read):
-            if continuation_identity is not None and (
-                type(continuation_identity) is not ContextContinuationIdentity
-                or not continuation_identity.accepts(scope)
-            ):
-                raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
-            storage_scope = (
-                scope if continuation_identity is None
-                else continuation_identity.checkpoint_scope()
-            )
-            try:
-                lock = self._bound_agent.backend._context_thread_lock(
-                    storage_scope,
-                    self.provider_id,
-                    self.definition_fingerprint,
-                    policy_fingerprint,
+        entered = False
+        try:
+            with ExitStack() as workspace_stack:
+                active_execution_workspace = execution_workspace
+                if (
+                    self.provider_id == "codex"
+                    and active_execution_workspace is None
+                ):
+                    binding = _compose_session_artifact_binding(
+                        self._bound_agent.backend.workspace.root,
+                        scope.session_id,
+                    )
+                    active_execution_workspace = workspace_stack.enter_context(
+                        binding.open_provider_execution_workspace()
+                    )
+                definition_fingerprint, effective_policy_fingerprint = (
+                    self._effective_context_fingerprints(
+                        policy_fingerprint,
+                        active_execution_workspace,
+                    )
                 )
-            except BaseException as failure:
+                with self._bound_agent._reference_call_use(self._reference_read):
+                    if continuation_identity is not None and (
+                        type(continuation_identity)
+                        is not ContextContinuationIdentity
+                        or not continuation_identity.accepts(scope)
+                    ):
+                        raise ContextExecutionError(
+                            ContextExecutionErrorCode.PROVIDER_CONTRACT
+                        )
+                    storage_scope = (
+                        scope
+                        if continuation_identity is None
+                        else continuation_identity.checkpoint_scope()
+                    )
+                    lock = self._bound_agent.backend._context_thread_lock(
+                        storage_scope,
+                        self.provider_id,
+                        definition_fingerprint,
+                        effective_policy_fingerprint,
+                    )
+                    async with self._bound_agent._reference_thread_lock(
+                        lock,
+                        self._reference_read,
+                    ):
+                        self._active_scope = scope
+                        self._continuation_identity = continuation_identity
+                        self._active_policy_fingerprint = policy_fingerprint
+                        self._active_execution_workspace = (
+                            active_execution_workspace
+                        )
+                        entered = True
+                        body_failure: BaseException | None = None
+                        try:
+                            try:
+                                yield
+                            except BaseException as failure:
+                                body_failure = failure
+                                raise
+                        finally:
+                            try:
+                                if active_execution_workspace is not None:
+                                    active_execution_workspace.require_current()
+                            except BaseException as validation_failure:
+                                try:
+                                    self._bound_agent.backend._taint_context_thread(
+                                        storage_scope,
+                                        self.provider_id,
+                                        definition_fingerprint,
+                                        effective_policy_fingerprint,
+                                    )
+                                except BaseException:
+                                    pass
+                                if body_failure is None:
+                                    raise
+                                try:
+                                    body_failure.add_note(
+                                        "provider execution workspace exit validation "
+                                        "failed: "
+                                        f"{type(validation_failure).__name__}"
+                                    )
+                                except BaseException:
+                                    pass
+                            finally:
+                                self._active_scope = None
+                                self._continuation_identity = None
+                                self._active_policy_fingerprint = None
+                                self._active_execution_workspace = None
+        except BaseException as failure:
+            if not entered:
                 self._bound_agent._terminate_reference_before_provider(
                     self._reference_read,
                     failure,
                 )
-                raise
-            async with self._bound_agent._reference_thread_lock(
-                lock,
-                self._reference_read,
-            ):
-                self._active_scope = scope
-                self._continuation_identity = continuation_identity
-                self._active_policy_fingerprint = policy_fingerprint
-                try:
-                    yield
-                finally:
-                    self._active_scope = None
-                    self._continuation_identity = None
-                    self._active_policy_fingerprint = None
+            raise
 
     def _require_active(
         self,
@@ -470,19 +550,54 @@ class _BoundContextProvider:
         ):
             raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
 
+    def _active_workspace(
+        self,
+        supplied: ProviderExecutionWorkspace | None,
+    ) -> ProviderExecutionWorkspace | None:
+        """Resolve only the capability owned by this active invocation."""
+
+        active = self._active_execution_workspace
+        if self.provider_id != "codex":
+            return supplied
+        if type(active) is not ProviderExecutionWorkspace or (
+            supplied is not None and supplied is not active
+        ):
+            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+        active.require_current()
+        return active
+
     def inspect_context_thread(
         self,
         scope: ContextScope,
         policy_fingerprint: str,
+        *,
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> str | None:
         self._require_active(scope, policy_fingerprint)
+        execution_workspace = self._active_workspace(execution_workspace)
+        definition_fingerprint, effective_policy_fingerprint = (
+            self._effective_context_fingerprints(
+                policy_fingerprint,
+                execution_workspace,
+            )
+        )
         return self._bound_agent.backend._load_context_thread(
             scope if self._continuation_identity is None
             else self._continuation_identity.checkpoint_scope(),
             self.provider_id,
-            self.definition_fingerprint,
-            policy_fingerprint,
+            definition_fingerprint,
+            effective_policy_fingerprint,
         )
+
+    def require_current_execution_workspace(
+        self,
+        scope: ContextScope,
+        policy_fingerprint: str,
+    ) -> None:
+        """Revalidate the capability retained by this active invocation."""
+
+        self._require_active(scope, policy_fingerprint)
+        self._active_workspace(None)
 
     async def prepare_references(
         self,
@@ -491,6 +606,12 @@ class _BoundContextProvider:
         self._require_active(request.scope, request.policy_fingerprint)
         if request.continuation_identity != self._continuation_identity:
             raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+        execution_workspace = self._active_workspace(request.execution_workspace)
+        if execution_workspace is not request.execution_workspace:
+            request = replace(
+                request,
+                execution_workspace=execution_workspace,
+            )
         if (
             self._reference_read is None
             or self._reference_prepared
@@ -517,6 +638,7 @@ class _BoundContextProvider:
             ):
                 self._reference_terminal = True
             raise
+        self._active_workspace(execution_workspace)
         self._reference_prepared = True
         return result
 
@@ -527,7 +649,8 @@ class _BoundContextProvider:
         self._require_active(request.scope, request.policy_fingerprint)
         if request.continuation_identity != self._continuation_identity:
             raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
-        return await self._bound_agent.backend._invoke_context_physical(
+        execution_workspace = self._active_workspace(request.execution_workspace)
+        result = await self._bound_agent.backend._invoke_context_physical(
             self._bound_agent,
             scope=request.scope,
             policy_fingerprint=request.policy_fingerprint,
@@ -538,7 +661,10 @@ class _BoundContextProvider:
             component_paths=request.component_paths,
             mandatory_reference_paths=request.mandatory_reference_paths,
             continuation_identity=request.continuation_identity,
+            execution_workspace=execution_workspace,
         )
+        self._active_workspace(execution_workspace)
+        return result
 
     def complete_references(
         self,
@@ -546,6 +672,7 @@ class _BoundContextProvider:
         policy_fingerprint: str,
     ) -> None:
         self._require_active(scope, policy_fingerprint)
+        execution_workspace = self._active_workspace(None)
         if self._reference_read is None:
             return
         if not self._reference_prepared or self._reference_terminal:
@@ -554,6 +681,8 @@ class _BoundContextProvider:
             )
         try:
             for name in ("record_result_received", "accept"):
+                if execution_workspace is not None:
+                    execution_workspace.require_current()
                 outcome = getattr(self._reference_read, name)()
                 if inspect.isawaitable(outcome):
                     if inspect.iscoroutine(outcome):
@@ -583,6 +712,7 @@ class _BoundContextProvider:
         provider_failure: bool,
     ) -> None:
         self._require_active(scope, policy_fingerprint)
+        self._active_workspace(None)
         if self._reference_read is None or self._reference_terminal:
             return
         if cancelled:
@@ -608,14 +738,36 @@ class _BoundContextProvider:
         self,
         scope: ContextScope,
         policy_fingerprint: str,
+        *,
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> None:
         self._require_active(scope, policy_fingerprint)
+        execution_workspace = self._active_workspace(execution_workspace)
+        definition_fingerprint, effective_policy_fingerprint = (
+            self._effective_context_fingerprints(
+                policy_fingerprint,
+                execution_workspace,
+            )
+        )
         self._bound_agent.backend._taint_context_thread(
             scope if self._continuation_identity is None
             else self._continuation_identity.checkpoint_scope(),
             self.provider_id,
-            self.definition_fingerprint,
+            definition_fingerprint,
+            effective_policy_fingerprint,
+        )
+
+    def _effective_context_fingerprints(
+        self,
+        policy_fingerprint: str,
+        execution_workspace: ProviderExecutionWorkspace | None,
+    ) -> tuple[str, str]:
+        """Bind Codex continuation compatibility to one session generation."""
+
+        return AgentBackend._effective_context_continuation_fingerprints(
+            self._bound_agent,
             policy_fingerprint,
+            execution_workspace,
         )
 
 
@@ -746,6 +898,83 @@ class BoundAgent:
 
         return _BoundContextProvider(self, reference_read)
 
+    @asynccontextmanager
+    async def _direct_codex_execution_workspace(
+        self,
+        session_id: str,
+        reference_read: ReferenceReadInvocation | None,
+    ) -> AsyncIterator[ProviderExecutionWorkspace]:
+        """Open direct-call authority and retire pre-entry references on loss."""
+
+        entered = False
+        body_failed = False
+        generation_lost = False
+        deferred: list[_DeferredDirectCodexAcceptance] = []
+        token: contextvars.Token[list[_DeferredDirectCodexAcceptance] | None] | None = (
+            None
+        )
+        try:
+            binding = await asyncio.to_thread(
+                self._compose_direct_codex_binding,
+                session_id,
+            )
+            binding = binding.transfer_to_current_thread()
+            with binding.open_provider_execution_workspace() as workspace:
+                entered = True
+                token = _DEFERRED_DIRECT_CODEX_ACCEPTANCES.set(deferred)
+                try:
+                    yield workspace
+                except BaseException:
+                    body_failed = True
+                    try:
+                        workspace.require_current()
+                    except BaseException:
+                        generation_lost = True
+                    raise
+                finally:
+                    _DEFERRED_DIRECT_CODEX_ACCEPTANCES.reset(token)
+                    token = None
+        except BaseException as failure:
+            for acceptance in deferred:
+                if body_failed and not generation_lost:
+                    acceptance.accept()
+                else:
+                    acceptance.reject()
+            if not entered:
+                self._terminate_reference_before_provider(reference_read, failure)
+            raise
+        else:
+            for acceptance in deferred:
+                acceptance.accept()
+
+    def _preflight_direct_codex_workspace(self, session_id: str) -> None:
+        """Reject unavailable logical work before opening a physical workspace."""
+
+        self.backend._ensure_open()
+        self.backend._assert_provider_work_ready(session_id)
+
+    def _compose_direct_codex_binding(self, session_id: str) -> SessionArtifactBinding:
+        """Run blocking direct-call preflight and binding off the event loop."""
+
+        self._preflight_direct_codex_workspace(session_id)
+        return _compose_session_artifact_binding(
+            self.backend.workspace.root,
+            session_id,
+        )
+
+    @staticmethod
+    def _defer_direct_codex_acceptance(
+        accept: Callable[[], None],
+        reject: Callable[[], None],
+    ) -> None:
+        """Run a logical terminal action only after direct authority validates."""
+
+        deferred = _DEFERRED_DIRECT_CODEX_ACCEPTANCES.get()
+        if deferred is None:
+            accept()
+            return
+        deferred.append(_DeferredDirectCodexAcceptance(accept=accept, reject=reject))
+
     def _context_provider(
         self,
         reference_read: ReferenceReadInvocation | None = None,
@@ -825,6 +1054,65 @@ class BoundAgent:
     ) -> AgentReply:
         """Invoke the selected vendor while serializing its persistent thread."""
 
+        if self.vendor == "codex":
+            if type(request) is not AgentRequest:
+                failure = TypeError("request must be an AgentRequest")
+                self._terminate_reference_before_provider(reference_read, failure)
+                raise failure
+            if request.agent_id != self.definition.agent_id:
+                if reference_read is not None:
+                    AgentBackend._terminate_reference_read_without_replacing(
+                        reference_read,
+                        ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
+                    )
+                raise BackendProtocolError(
+                    "request was routed through the wrong bound agent: "
+                    f"{request.agent_id} != {self.definition.agent_id}"
+                )
+            if reference_read is not None:
+                if (
+                    type(request.phase) is not Phase
+                    or type(request.round_number) is not int
+                    or request.round_number < 0
+                    or request.agent_id not in ROSTER
+                ):
+                    AgentBackend._terminate_reference_read_without_replacing(
+                        reference_read,
+                        ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
+                    )
+                    raise BackendProtocolError(
+                        "agent request is invalid for reference routing"
+                    )
+                self._validated_reference_read_invocation(
+                    reference_read,
+                    agent_id=request.agent_id,
+                    phase=request.phase.value,
+                    round_number=request.round_number,
+                )
+            async with self._direct_codex_execution_workspace(
+                request.session_id,
+                reference_read,
+            ) as workspace:
+                return await self._invoke_logical(
+                    request,
+                    reference_read=reference_read,
+                    execution_workspace=workspace,
+                )
+        return await self._invoke_logical(
+            request,
+            reference_read=reference_read,
+            execution_workspace=None,
+        )
+
+    async def _invoke_logical(
+        self,
+        request: AgentRequest,
+        *,
+        reference_read: ReferenceReadInvocation | None,
+        execution_workspace: ProviderExecutionWorkspace | None,
+    ) -> AgentReply:
+        """Implement the unchanged public invocation under private authority."""
+
         with self._reference_call_use(reference_read):
             if reference_read is not None and type(request) is not AgentRequest:
                 failure = TypeError("request must be an AgentRequest")
@@ -880,12 +1168,14 @@ class BoundAgent:
                 thread_disposition = self.backend._logical_thread_disposition(
                     self,
                     request.session_id,
+                    execution_workspace=execution_workspace,
                 )
                 try:
                     reply = await self.backend._invoke_provider(
                         self,
                         request,
                         reference_read=reference_read,
+                        execution_workspace=execution_workspace,
                     )
                 except asyncio.CancelledError as exc:
                     self.backend._record_debug_error(
@@ -907,18 +1197,25 @@ class BoundAgent:
                         agent_id=self.definition.agent_id,
                     )
                     raise
-                self.backend._confirm_execution_profile(
-                    self,
-                    context_rehydrated=request.story_session_context is not None,
-                    thread_disposition=thread_disposition,
-                )
-                self.backend._trace_debug(
-                    DebugOperation.PROVIDER_INVOCATION,
-                    DebugPhase.SUCCEEDED,
-                    session_id=request.session_id,
-                    debate_id=request.debate_id,
-                    agent_id=self.definition.agent_id,
-                    outcome=DebugOutcome.COMPLETED,
+                self._defer_direct_codex_acceptance(
+                    lambda: (
+                        self.backend._confirm_execution_profile(
+                            self,
+                            context_rehydrated=(
+                                request.story_session_context is not None
+                            ),
+                            thread_disposition=thread_disposition,
+                        ),
+                        self.backend._trace_debug(
+                            DebugOperation.PROVIDER_INVOCATION,
+                            DebugPhase.SUCCEEDED,
+                            session_id=request.session_id,
+                            debate_id=request.debate_id,
+                            agent_id=self.definition.agent_id,
+                            outcome=DebugOutcome.COMPLETED,
+                        ),
+                    ),
+                    lambda: None,
                 )
                 return reply
 
@@ -929,6 +1226,43 @@ class BoundAgent:
         reference_read: ReferenceReadInvocation | None = None,
     ) -> ConversationReply:
         """Run one validated visible conversation turn on this agent thread."""
+
+        if self.vendor == "codex":
+            try:
+                validated = self._validated_conversation_request(request)
+            except BaseException as failure:
+                self._terminate_reference_before_provider(reference_read, failure)
+                raise
+            if reference_read is not None:
+                self._validated_reference_read_invocation(
+                    reference_read,
+                    agent_id=validated.agent_id,
+                    phase="conversation",
+                    round_number=None,
+                )
+            async with self._direct_codex_execution_workspace(
+                validated.session_id,
+                reference_read,
+            ) as workspace:
+                return await self._converse_logical(
+                    validated,
+                    reference_read=reference_read,
+                    execution_workspace=workspace,
+                )
+        return await self._converse_logical(
+            request,
+            reference_read=reference_read,
+            execution_workspace=None,
+        )
+
+    async def _converse_logical(
+        self,
+        request: ConversationRequest,
+        *,
+        reference_read: ReferenceReadInvocation | None,
+        execution_workspace: ProviderExecutionWorkspace | None,
+    ) -> ConversationReply:
+        """Implement one conversation under optional internal authority."""
 
         with self._reference_call_use(reference_read):
             try:
@@ -963,12 +1297,14 @@ class BoundAgent:
                 thread_disposition = self.backend._logical_thread_disposition(
                     self,
                     validated.session_id,
+                    execution_workspace=execution_workspace,
                 )
                 try:
                     reply = await self.backend._converse_provider(
                         self,
                         validated,
                         reference_read=reference_read,
+                        execution_workspace=execution_workspace,
                     )
                 except asyncio.CancelledError as exc:
                     self.backend._record_debug_error(
@@ -990,18 +1326,25 @@ class BoundAgent:
                         agent_id=self.definition.agent_id,
                     )
                     raise
-                self.backend._confirm_execution_profile(
-                    self,
-                    context_rehydrated=(validated.story_session_context is not None),
-                    thread_disposition=thread_disposition,
-                )
-                self.backend._trace_debug(
-                    DebugOperation.PROVIDER_INVOCATION,
-                    DebugPhase.SUCCEEDED,
-                    session_id=validated.session_id,
-                    conversation_id=validated.conversation_id,
-                    agent_id=self.definition.agent_id,
-                    outcome=DebugOutcome.COMPLETED,
+                self._defer_direct_codex_acceptance(
+                    lambda: (
+                        self.backend._confirm_execution_profile(
+                            self,
+                            context_rehydrated=(
+                                validated.story_session_context is not None
+                            ),
+                            thread_disposition=thread_disposition,
+                        ),
+                        self.backend._trace_debug(
+                            DebugOperation.PROVIDER_INVOCATION,
+                            DebugPhase.SUCCEEDED,
+                            session_id=validated.session_id,
+                            conversation_id=validated.conversation_id,
+                            agent_id=self.definition.agent_id,
+                            outcome=DebugOutcome.COMPLETED,
+                        ),
+                    ),
+                    lambda: None,
                 )
                 return reply
 
@@ -1020,6 +1363,46 @@ class BoundAgent:
         provider, protocol, handler, timeout, and cancellation failures
         propagate with incomplete observation state tainted when required.
         """
+
+        if self.vendor == "codex":
+            try:
+                validated = self._validated_conversation_retrieval_request(request)
+            except BaseException as failure:
+                self._terminate_reference_before_provider(reference_read, failure)
+                raise
+            if reference_read is not None:
+                self._validated_reference_read_invocation(
+                    reference_read,
+                    agent_id=validated.agent_id,
+                    phase="conversation_retrieval",
+                    round_number=None,
+                )
+            async with self._direct_codex_execution_workspace(
+                validated.session_id,
+                reference_read,
+            ) as workspace:
+                return await self._converse_with_retrieval_logical(
+                    validated,
+                    handler,
+                    reference_read=reference_read,
+                    execution_workspace=workspace,
+                )
+        return await self._converse_with_retrieval_logical(
+            request,
+            handler,
+            reference_read=reference_read,
+            execution_workspace=None,
+        )
+
+    async def _converse_with_retrieval_logical(
+        self,
+        request: ConversationRetrievalRequest,
+        handler: ConversationRetrievalActionHandler,
+        *,
+        reference_read: ReferenceReadInvocation | None,
+        execution_workspace: ProviderExecutionWorkspace | None,
+    ) -> ConversationRetrievalReply:
+        """Implement one retrieval loop under optional internal authority."""
 
         with self._reference_call_use(reference_read):
             try:
@@ -1073,6 +1456,7 @@ class BoundAgent:
                 thread_disposition = self.backend._logical_thread_disposition(
                     self,
                     validated.session_id,
+                    execution_workspace=execution_workspace,
                 )
                 try:
                     reply = await self.backend._converse_with_retrieval_provider(
@@ -1080,6 +1464,7 @@ class BoundAgent:
                         validated,
                         handler_method,
                         reference_read=reference_read,
+                        execution_workspace=execution_workspace,
                     )
                 except asyncio.CancelledError as exc:
                     self.backend._record_debug_error(
@@ -1101,18 +1486,25 @@ class BoundAgent:
                         agent_id=self.definition.agent_id,
                     )
                     raise
-                self.backend._confirm_execution_profile(
-                    self,
-                    context_rehydrated=(validated.story_session_context is not None),
-                    thread_disposition=thread_disposition,
-                )
-                self.backend._trace_debug(
-                    DebugOperation.PROVIDER_INVOCATION,
-                    DebugPhase.SUCCEEDED,
-                    session_id=validated.session_id,
-                    conversation_id=validated.conversation_id,
-                    agent_id=self.definition.agent_id,
-                    outcome=DebugOutcome.COMPLETED,
+                self._defer_direct_codex_acceptance(
+                    lambda: (
+                        self.backend._confirm_execution_profile(
+                            self,
+                            context_rehydrated=(
+                                validated.story_session_context is not None
+                            ),
+                            thread_disposition=thread_disposition,
+                        ),
+                        self.backend._trace_debug(
+                            DebugOperation.PROVIDER_INVOCATION,
+                            DebugPhase.SUCCEEDED,
+                            session_id=validated.session_id,
+                            conversation_id=validated.conversation_id,
+                            agent_id=self.definition.agent_id,
+                            outcome=DebugOutcome.COMPLETED,
+                        ),
+                    ),
+                    lambda: None,
                 )
                 return reply
 
@@ -1334,6 +1726,7 @@ class AgentBackend:
         self.workspace = (
             workspace if isinstance(workspace, Workspace) else Workspace(workspace)
         )
+        self._control_workspace_root = _main_workspace_root(self.workspace.root)
         self._debug_log = WorkspaceDebugLog(
             self.workspace,
             defer_until_session=True,
@@ -1442,6 +1835,7 @@ class AgentBackend:
                 timeout_seconds=float(timeout_seconds),
                 configuration=configuration,
                 explicit_model=explicit_model,
+                control_root=self._control_workspace_root,
                 execution_profiles={
                     agent_id: profile
                     for agent_id, profile in profiles.items()
@@ -1712,12 +2106,21 @@ class AgentBackend:
         self,
         bound_agent: BoundAgent,
         session_id: str,
+        *,
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> str:
         """Capture logical-turn thread state before any reference prelude."""
 
         generation = bound_agent._adapter_generation
         try:
-            stored = self._load_thread(session_id, bound_agent.definition)
+            stored = self._load_thread(
+                session_id,
+                bound_agent.definition,
+                fingerprint=self._legacy_continuation_fingerprint(
+                    bound_agent,
+                    execution_workspace,
+                ),
+            )
         except SessionNotFoundError:
             stored = None
         if (
@@ -2007,6 +2410,7 @@ class AgentBackend:
             timeout_seconds=self.timeout_seconds,
             configuration=configuration,
             explicit_model=self._explicit_model,
+            control_root=self._control_workspace_root,
             execution_profiles={
                 agent_id: profile
                 for agent_id, profile in profiles.items()
@@ -2779,9 +3183,14 @@ class AgentBackend:
         decode: Callable[[str], _StructuredReply],
         provider_name: str,
         call_kind: ProviderCallKind,
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> _StructuredReply:
         """Run one mandatory read prelude and one substantive provider call."""
 
+        continuation_fingerprint = self._legacy_continuation_fingerprint(
+            bound_agent,
+            execution_workspace,
+        )
         context = await self._perform_reference_read_prelude(
             bound_agent,
             session_id=session_id,
@@ -2789,6 +3198,8 @@ class AgentBackend:
             conversation_id=conversation_id,
             reference_read=reference_read,
             provider_name=provider_name,
+            execution_workspace=execution_workspace,
+            continuation_fingerprint=continuation_fingerprint,
         )
         framed_payload = dict(payload)
         framed_payload["untrusted_writing_artifact_context"] = context
@@ -2803,6 +3214,7 @@ class AgentBackend:
                 decode=decode,
                 best_effort_taint=True,
                 call_kind=call_kind,
+                execution_workspace=execution_workspace,
             )
         except BaseException as exc:
             self._fail_reference_read_without_replacing(
@@ -2811,12 +3223,15 @@ class AgentBackend:
                 session_id=session_id,
                 definition=bound_agent.definition,
                 provider_failure=True,
+                continuation_fingerprint=continuation_fingerprint,
             )
             raise
         self._complete_reference_read(
             reference_read,
             session_id=session_id,
             definition=bound_agent.definition,
+            continuation_fingerprint=continuation_fingerprint,
+            execution_workspace=execution_workspace,
         )
         return reply
 
@@ -2829,6 +3244,8 @@ class AgentBackend:
         conversation_id: str | None = None,
         reference_read: ReferenceReadInvocation,
         provider_name: str,
+        execution_workspace: ProviderExecutionWorkspace | None = None,
+        continuation_fingerprint: str,
     ) -> list[dict[str, object]]:
         """Obtain one exact provider action, then transiently frame its bytes."""
 
@@ -2847,7 +3264,10 @@ class AgentBackend:
                 ),
                 best_effort_taint=True,
                 call_kind=ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
+                execution_workspace=execution_workspace,
             )
+            if execution_workspace is not None:
+                execution_workspace.require_current()
         except BaseException as exc:
             self._fail_reference_read_without_replacing(
                 reference_read,
@@ -2856,6 +3276,7 @@ class AgentBackend:
                 definition=bound_agent.definition,
                 provider_failure=True,
                 taint=False,
+                continuation_fingerprint=continuation_fingerprint,
             )
             raise
 
@@ -2888,7 +3309,10 @@ class AgentBackend:
                     "reference read handler returned an invalid result"
                 )
             with result:
-                return self._reference_read_context(result)
+                context = self._reference_read_context(result)
+            if execution_workspace is not None:
+                execution_workspace.require_current()
+            return context
         except BaseException as exc:
             self._fail_reference_read_without_replacing(
                 reference_read,
@@ -2896,6 +3320,7 @@ class AgentBackend:
                 session_id=session_id,
                 definition=bound_agent.definition,
                 provider_failure=False,
+                continuation_fingerprint=continuation_fingerprint,
             )
             raise
 
@@ -2905,11 +3330,15 @@ class AgentBackend:
         *,
         session_id: str,
         definition: AgentDefinition,
+        continuation_fingerprint: str,
+        execution_workspace: ProviderExecutionWorkspace | None,
     ) -> None:
         """Record and accept one structurally valid substantive result."""
 
         try:
             for name in ("record_result_received", "accept"):
+                if execution_workspace is not None:
+                    execution_workspace.require_current()
                 outcome = getattr(reference_read, name)()
                 if inspect.isawaitable(outcome):
                     if inspect.iscoroutine(outcome):
@@ -2934,6 +3363,7 @@ class AgentBackend:
                 session_id=session_id,
                 definition=definition,
                 provider_failure=False,
+                continuation_fingerprint=continuation_fingerprint,
             )
             raise
 
@@ -2945,6 +3375,7 @@ class AgentBackend:
         session_id: str,
         definition: AgentDefinition,
         provider_failure: bool,
+        continuation_fingerprint: str,
         taint: bool = True,
     ) -> None:
         """Best-effort terminate and taint while preserving a primary failure."""
@@ -2966,6 +3397,7 @@ class AgentBackend:
                 reference_read,
                 session_id=session_id,
                 definition=definition,
+                continuation_fingerprint=continuation_fingerprint,
             )
 
     @staticmethod
@@ -2992,12 +3424,17 @@ class AgentBackend:
         *,
         session_id: str,
         definition: AgentDefinition,
+        continuation_fingerprint: str,
     ) -> None:
         """Best-effort taint a thread after a successful persisted prelude."""
 
         del reference_read
         try:
-            self._taint_thread(session_id, definition)
+            self._taint_thread(
+                session_id,
+                definition,
+                fingerprint=continuation_fingerprint,
+            )
         except BaseException:
             pass
 
@@ -3283,6 +3720,7 @@ class AgentBackend:
         request: AgentRequest,
         *,
         reference_read: ReferenceReadInvocation | None = None,
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> AgentReply:
         """Route one debate turn through the selected private adapter."""
 
@@ -3291,12 +3729,14 @@ class AgentBackend:
                 bound_agent,
                 request,
                 reference_read=reference_read,
+                execution_workspace=execution_workspace,
             )
         if bound_agent.vendor == "antigravity":
             return await self._invoke_antigravity(
                 bound_agent,
                 request,
                 reference_read=reference_read,
+                execution_workspace=execution_workspace,
             )
         if reference_read is not None:
             self._terminate_reference_read_without_replacing(
@@ -3313,6 +3753,7 @@ class AgentBackend:
         request: AgentRequest,
         *,
         reference_read: ReferenceReadInvocation | None = None,
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> AgentReply:
         """Invoke Antigravity through the shared structured-turn contract."""
 
@@ -3321,6 +3762,7 @@ class AgentBackend:
             request,
             reference_read=reference_read,
             _provider_name="Antigravity",
+            execution_workspace=execution_workspace,
         )
 
     async def _invoke_codex(
@@ -3330,6 +3772,7 @@ class AgentBackend:
         *,
         reference_read: ReferenceReadInvocation | None = None,
         _provider_name: str = "Codex",
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> AgentReply:
         """Invoke Codex with conditional context projection and safe diagnostics.
 
@@ -3390,6 +3833,7 @@ class AgentBackend:
                 payload=payload,
                 decode=decode,
                 call_kind=ProviderCallKind.DEBATE,
+                execution_workspace=execution_workspace,
             )
         return await self._invoke_codex_after_reference_read(
             bound_agent,
@@ -3401,6 +3845,7 @@ class AgentBackend:
             decode=decode,
             provider_name=_provider_name,
             call_kind=ProviderCallKind.DEBATE,
+            execution_workspace=execution_workspace,
         )
 
     async def _converse_provider(
@@ -3409,6 +3854,7 @@ class AgentBackend:
         request: ConversationRequest,
         *,
         reference_read: ReferenceReadInvocation | None = None,
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> ConversationReply:
         """Route one conversation turn through the selected private adapter."""
 
@@ -3426,12 +3872,14 @@ class AgentBackend:
                 bound_agent,
                 request,
                 reference_read=reference_read,
+                execution_workspace=execution_workspace,
             )
         if bound_agent.vendor == "antigravity":
             return await self._converse_antigravity(
                 bound_agent,
                 request,
                 reference_read=reference_read,
+                execution_workspace=execution_workspace,
             )
         raise ConfigurationError(
             f"agent backend is not implemented: {bound_agent.vendor}"
@@ -3443,6 +3891,7 @@ class AgentBackend:
         request: ConversationRequest,
         *,
         reference_read: ReferenceReadInvocation | None = None,
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> ConversationReply:
         """Run one Antigravity turn through the shared conversation contract."""
 
@@ -3451,6 +3900,7 @@ class AgentBackend:
             request,
             reference_read=reference_read,
             _provider_name="Antigravity",
+            execution_workspace=execution_workspace,
         )
 
     async def _converse_codex(
@@ -3460,6 +3910,7 @@ class AgentBackend:
         *,
         reference_read: ReferenceReadInvocation | None = None,
         _provider_name: str = "Codex",
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> ConversationReply:
         """Run one Codex turn with the exact conversation payload and schema.
 
@@ -3487,6 +3938,7 @@ class AgentBackend:
                 payload=payload,
                 decode=decode,
                 call_kind=ProviderCallKind.CONVERSATION,
+                execution_workspace=execution_workspace,
             )
         return await self._invoke_codex_after_reference_read(
             bound_agent,
@@ -3498,6 +3950,7 @@ class AgentBackend:
             decode=decode,
             provider_name=_provider_name,
             call_kind=ProviderCallKind.CONVERSATION,
+            execution_workspace=execution_workspace,
         )
 
     async def _converse_with_retrieval_provider(
@@ -3510,6 +3963,7 @@ class AgentBackend:
         ],
         *,
         reference_read: ReferenceReadInvocation | None = None,
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> ConversationRetrievalReply:
         """Route one retrieval loop through the selected private adapter."""
 
@@ -3528,6 +3982,7 @@ class AgentBackend:
                 request,
                 handler_method,
                 reference_read=reference_read,
+                execution_workspace=execution_workspace,
             )
         if bound_agent.vendor == "antigravity":
             return await self._converse_with_retrieval_antigravity(
@@ -3535,6 +3990,7 @@ class AgentBackend:
                 request,
                 handler_method,
                 reference_read=reference_read,
+                execution_workspace=execution_workspace,
             )
         raise ConfigurationError(
             f"agent backend is not implemented: {bound_agent.vendor}"
@@ -3550,6 +4006,7 @@ class AgentBackend:
         ],
         *,
         reference_read: ReferenceReadInvocation | None = None,
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> ConversationRetrievalReply:
         """Run the bounded retrieval loop through Antigravity."""
 
@@ -3559,6 +4016,7 @@ class AgentBackend:
             handler_method,
             reference_read=reference_read,
             _provider_name="Antigravity",
+            execution_workspace=execution_workspace,
         )
 
     async def _converse_with_retrieval_codex(
@@ -3572,6 +4030,7 @@ class AgentBackend:
         *,
         reference_read: ReferenceReadInvocation | None = None,
         _provider_name: str = "Codex",
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> ConversationRetrievalReply:
         """Run the fixed Codex action loop without inter-call lock changes.
 
@@ -3584,6 +4043,10 @@ class AgentBackend:
         """
 
         self._ensure_open()
+        continuation_fingerprint = self._legacy_continuation_fingerprint(
+            bound_agent,
+            execution_workspace,
+        )
         reference_context: list[dict[str, object]] | None = None
         if reference_read is not None:
             reference_context = await self._perform_reference_read_prelude(
@@ -3592,6 +4055,8 @@ class AgentBackend:
                 conversation_id=request.conversation_id,
                 reference_read=reference_read,
                 provider_name=_provider_name,
+                execution_workspace=execution_workspace,
+                continuation_fingerprint=continuation_fingerprint,
             )
         observation_frame: str | None = None
         after_read = False
@@ -3641,6 +4106,7 @@ class AgentBackend:
                     ),
                     best_effort_taint=reference_read is not None,
                     call_kind=call_kind,
+                    execution_workspace=execution_workspace,
                 )
                 reference_provider_failure = False
                 if type(action) in {
@@ -3699,6 +4165,8 @@ class AgentBackend:
                             reference_read,
                             session_id=request.session_id,
                             definition=bound_agent.definition,
+                            continuation_fingerprint=continuation_fingerprint,
+                            execution_workspace=execution_workspace,
                         )
                     return outcome
 
@@ -3742,6 +4210,7 @@ class AgentBackend:
                 self._taint_retrieval_thread_without_replacing_failure(
                     request.session_id,
                     bound_agent.definition,
+                    fingerprint=continuation_fingerprint,
                 )
             if reference_read is not None:
                 self._fail_reference_read_without_replacing(
@@ -3750,6 +4219,7 @@ class AgentBackend:
                     session_id=request.session_id,
                     definition=bound_agent.definition,
                     provider_failure=reference_provider_failure,
+                    continuation_fingerprint=continuation_fingerprint,
                 )
             raise
 
@@ -3839,11 +4309,17 @@ class AgentBackend:
         self,
         session_id: str,
         definition: AgentDefinition,
+        *,
+        fingerprint: str | None = None,
     ) -> None:
         """Best-effort taint an incomplete retrieval thread without masking failure."""
 
         try:
-            self._taint_thread(session_id, definition)
+            self._taint_thread(
+                session_id,
+                definition,
+                fingerprint=fingerprint,
+            )
         except BaseException:
             pass
 
@@ -4189,6 +4665,46 @@ class AgentBackend:
         except BaseException:
             pass
 
+    @staticmethod
+    def _legacy_continuation_fingerprint(
+        bound_agent: BoundAgent,
+        execution_workspace: ProviderExecutionWorkspace | None,
+    ) -> str:
+        """Bind legacy Codex thread compatibility without changing its schema."""
+
+        fingerprint = bound_agent.definition.fingerprint
+        if bound_agent.vendor != "codex":
+            return fingerprint
+        if type(execution_workspace) is not ProviderExecutionWorkspace:
+            raise BackendProtocolError("Codex execution workspace is unavailable")
+        return execution_workspace.continuation_digest(
+            "legacy-definition-policy",
+            fingerprint,
+        ).removeprefix("sha256:")
+
+    @staticmethod
+    def _require_postsubmission_workspace(
+        invocation: ProviderInvocation,
+    ) -> None:
+        """Override apparent transport success when workspace authority was lost."""
+
+        workspace = invocation.execution_workspace
+        if workspace is None:
+            return
+        try:
+            workspace.require_current()
+        except BaseException as failure:
+            record_provider_failure_accounting(
+                failure,
+                state=ProviderCallState.SUBMITTED,
+                actual_transport_utf8_bytes=(
+                    None
+                    if invocation.payload_json is None
+                    else len(invocation.payload_json)
+                ),
+            )
+            raise
+
     async def _invoke_provider_structured(
         self,
         bound_agent: BoundAgent,
@@ -4201,6 +4717,7 @@ class AgentBackend:
         decode: Callable[[str], _StructuredReply],
         best_effort_taint: bool = False,
         call_kind: ProviderCallKind = ProviderCallKind.UNCLASSIFIED,
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> _StructuredReply:
         """Coordinate one structured call through the selected provider adapter.
 
@@ -4213,15 +4730,31 @@ class AgentBackend:
         self._ensure_open()
         session = session_id
         self._assert_provider_work_ready(session)
-        stored = self._load_thread(session, bound_agent.definition)
+        continuation_fingerprint = self._legacy_continuation_fingerprint(
+            bound_agent,
+            execution_workspace,
+        )
+        stored = self._load_thread(
+            session,
+            bound_agent.definition,
+            fingerprint=continuation_fingerprint,
+        )
         thread_id = stored["thread_id"] if stored is not None else None
 
         def taint_thread() -> None:
             if not best_effort_taint:
-                self._taint_thread(session, bound_agent.definition)
+                self._taint_thread(
+                    session,
+                    bound_agent.definition,
+                    fingerprint=continuation_fingerprint,
+                )
                 return
             try:
-                self._taint_thread(session, bound_agent.definition)
+                self._taint_thread(
+                    session,
+                    bound_agent.definition,
+                    fingerprint=continuation_fingerprint,
+                )
             except BaseException:
                 pass
 
@@ -4248,6 +4781,7 @@ class AgentBackend:
             component_paths=component_paths,
             mandatory_reference_paths=mandatory_reference_paths,
             binding_components=(bound_agent._provider_binding.binding_components),
+            execution_workspace=execution_workspace,
         )
         provider_diagnostic: str | None = None
         provider_cause: BaseException | None = None
@@ -4264,6 +4798,7 @@ class AgentBackend:
                     bound_agent._provider_binding,
                     invocation,
                 )
+                self._require_postsubmission_workspace(invocation)
             self._capture_provider_return_without_replacing(exchange, result)
         except ProviderInvocationError as exc:
             timed_out = self._context_failure_timed_out(exc)
@@ -4299,6 +4834,12 @@ class AgentBackend:
         except BaseException as exc:
             try:
                 self._observe_provider_failure(invocation, exc)
+                accounting = provider_failure_accounting(exc)
+                if (
+                    stored is not None
+                    and accounting.state is ProviderCallState.SUBMITTED
+                ):
+                    taint_thread()
             finally:
                 self._capture_provider_failure_without_replacing(
                     exchange,
@@ -4332,6 +4873,7 @@ class AgentBackend:
             raise translated from provider_cause
         try:
             try:
+                self._require_postsubmission_workspace(invocation)
                 reply = decode(result.response_text)
             except BackendProtocolError as failure:
                 try:
@@ -4368,29 +4910,63 @@ class AgentBackend:
             except asyncio.CancelledError:
                 self._capture_cancelled_without_replacing(exchange)
                 raise
-            except BaseException:
-                self._capture_runtime_failure_without_replacing(
-                    exchange,
-                    AgentExchangeTerminalCode.CONTEXT_RUNTIME_FAILED,
-                )
+            except BaseException as failure:
+                try:
+                    if (
+                        stored is not None
+                        and provider_failure_accounting(failure).state
+                        is ProviderCallState.SUBMITTED
+                    ):
+                        taint_thread()
+                finally:
+                    self._capture_runtime_failure_without_replacing(
+                        exchange,
+                        AgentExchangeTerminalCode.CONTEXT_RUNTIME_FAILED,
+                    )
                 raise
             try:
+                self._require_postsubmission_workspace(invocation)
                 self._store_thread(
                     session,
                     bound_agent.definition,
                     result.thread_id,
                     tainted=False,
+                    fingerprint=continuation_fingerprint,
                 )
+                self._require_postsubmission_workspace(invocation)
             except asyncio.CancelledError:
                 self._capture_cancelled_without_replacing(exchange)
                 raise
             except BaseException:
-                self._capture_runtime_failure_without_replacing(
-                    exchange,
-                    AgentExchangeTerminalCode.THREAD_PERSISTENCE_FAILED,
-                )
+                try:
+                    taint_thread()
+                finally:
+                    self._capture_runtime_failure_without_replacing(
+                        exchange,
+                        AgentExchangeTerminalCode.THREAD_PERSISTENCE_FAILED,
+                    )
                 raise
-            self._capture_accepted_without_replacing(exchange)
+            deferred = _DEFERRED_DIRECT_CODEX_ACCEPTANCES.get()
+            if deferred is None:
+                self._capture_accepted_without_replacing(exchange)
+            else:
+                def reject_deferred_acceptance() -> None:
+                    try:
+                        taint_thread()
+                    finally:
+                        self._capture_runtime_failure_without_replacing(
+                            exchange,
+                            AgentExchangeTerminalCode.THREAD_PERSISTENCE_FAILED,
+                        )
+
+                deferred.append(
+                    _DeferredDirectCodexAcceptance(
+                        accept=lambda: self._capture_accepted_without_replacing(
+                            exchange
+                        ),
+                        reject=reject_deferred_acceptance,
+                    )
+                )
             return reply
         except (json.JSONDecodeError, UnicodeError) as exc:
             try:
@@ -4466,6 +5042,7 @@ class AgentBackend:
         self,
         bound_agent: BoundAgent,
         scope: ContextScope,
+        definition_fingerprint: str,
         policy_fingerprint: str,
         expected_thread_id: str | None,
     ) -> Callable[[], bool]:
@@ -4503,12 +5080,36 @@ class AgentBackend:
                 and bound_agent.execution_profile == profile
                 and self._load_context_thread(
                     scope, bound_agent.vendor,
-                    f"sha256:{bound_agent.definition.fingerprint}",
+                    definition_fingerprint,
                     policy_fingerprint,
                 ) == expected_thread_id
             )
 
         return unchanged
+
+    @staticmethod
+    def _effective_context_continuation_fingerprints(
+        bound_agent: BoundAgent,
+        policy_fingerprint: str,
+        execution_workspace: ProviderExecutionWorkspace | None,
+    ) -> tuple[str, str]:
+        """Return existing-shaped context keys proven for this generation."""
+
+        definition_fingerprint = f"sha256:{bound_agent.definition.fingerprint}"
+        if bound_agent.vendor != "codex":
+            return definition_fingerprint, policy_fingerprint
+        if type(execution_workspace) is not ProviderExecutionWorkspace:
+            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+        return (
+            execution_workspace.continuation_digest(
+                "context-definition",
+                definition_fingerprint,
+            ),
+            execution_workspace.continuation_digest(
+                "context-policy",
+                policy_fingerprint,
+            ),
+        )
 
     async def _invoke_context_physical(
         self,
@@ -4523,6 +5124,7 @@ class AgentBackend:
         component_paths: Mapping[JsonPath, ContextComponentKind],
         mandatory_reference_paths: tuple[JsonPath, ...],
         continuation_identity: ContextContinuationIdentity | None = None,
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> ContextProviderCallResult:
         """Build and submit one exact contextual ProviderInvocation."""
 
@@ -4544,12 +5146,19 @@ class AgentBackend:
             scope if continuation_identity is None
             else continuation_identity.checkpoint_scope()
         )
+        definition_fingerprint, effective_policy_fingerprint = (
+            self._effective_context_continuation_fingerprints(
+                bound_agent,
+                policy_fingerprint,
+                execution_workspace,
+            )
+        )
         self._assert_provider_work_ready(session)
         stored_thread_id = self._load_context_thread(
             storage_scope,
             bound_agent.vendor,
-            f"sha256:{bound_agent.definition.fingerprint}",
-            policy_fingerprint,
+            definition_fingerprint,
+            effective_policy_fingerprint,
         )
         if stored_thread_id != expected_thread_id:
             raise ContextExecutionError(ContextExecutionErrorCode.CONTINUATION_MISMATCH)
@@ -4573,6 +5182,7 @@ class AgentBackend:
             component_paths=component_paths,
             mandatory_reference_paths=mandatory_reference_paths,
             binding_components=bound_agent._provider_binding.binding_components,
+            execution_workspace=execution_workspace,
         )
         if invocation.call_accounting is None or invocation.payload_json is None:
             raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
@@ -4582,9 +5192,12 @@ class AgentBackend:
         ):
             raise SessionContextCapacityError()
 
-        definition_fingerprint = f"sha256:{bound_agent.definition.fingerprint}"
         replay_validator = self._context_replay_validator(
-            bound_agent, storage_scope, policy_fingerprint, expected_thread_id,
+            bound_agent,
+            storage_scope,
+            definition_fingerprint,
+            effective_policy_fingerprint,
+            expected_thread_id,
         )
         exchange = None
         try:
@@ -4594,6 +5207,7 @@ class AgentBackend:
                     bound_agent, scope=scope, invocation=invocation,
                 )
                 result = await adapter.invoke(bound_agent._provider_binding, invocation)
+                self._require_postsubmission_workspace(invocation)
             self._capture_provider_return_without_replacing(exchange, result)
         except ProviderInvocationError as failure:
             accounting = self._context_failure_accounting(invocation, failure)
@@ -4617,7 +5231,7 @@ class AgentBackend:
                     storage_scope,
                     bound_agent.vendor,
                     definition_fingerprint,
-                    policy_fingerprint,
+                    effective_policy_fingerprint,
                 )
             translated = authentication or BackendProtocolError(failure.diagnostic)
             if authentication is not None:
@@ -4670,7 +5284,7 @@ class AgentBackend:
                     storage_scope,
                     bound_agent.vendor,
                     definition_fingerprint,
-                    policy_fingerprint,
+                    effective_policy_fingerprint,
                 )
             record_context_provider_failure(
                 failure,
@@ -4693,7 +5307,7 @@ class AgentBackend:
                     storage_scope,
                     bound_agent.vendor,
                     definition_fingerprint,
-                    policy_fingerprint,
+                    effective_policy_fingerprint,
                 )
             record_context_provider_failure(
                 failure,
@@ -4739,7 +5353,7 @@ class AgentBackend:
                 storage_scope,
                 bound_agent.vendor,
                 definition_fingerprint,
-                policy_fingerprint,
+                effective_policy_fingerprint,
             )
             if type(result) is ProviderResult:
                 self._capture_rejected_without_replacing(
@@ -4763,7 +5377,7 @@ class AgentBackend:
                 storage_scope,
                 bound_agent.vendor,
                 definition_fingerprint,
-                policy_fingerprint,
+                effective_policy_fingerprint,
             )
             self._capture_rejected_without_replacing(
                 exchange,
@@ -4785,7 +5399,7 @@ class AgentBackend:
                 storage_scope,
                 bound_agent.vendor,
                 definition_fingerprint,
-                policy_fingerprint,
+                effective_policy_fingerprint,
             )
             self._capture_rejected_without_replacing(
                 exchange,
@@ -4793,14 +5407,16 @@ class AgentBackend:
             )
             raise failure
         try:
+            self._require_postsubmission_workspace(invocation)
             self._store_context_thread(
                 storage_scope,
                 bound_agent.vendor,
                 definition_fingerprint,
-                policy_fingerprint,
+                effective_policy_fingerprint,
                 result.thread_id,
                 tainted=False,
             )
+            self._require_postsubmission_workspace(invocation)
         except BaseException as failure:
             try:
                 record_context_provider_failure(
@@ -4814,7 +5430,7 @@ class AgentBackend:
                     storage_scope,
                     bound_agent.vendor,
                     definition_fingerprint,
-                    policy_fingerprint,
+                    effective_policy_fingerprint,
                 )
             finally:
                 if isinstance(failure, asyncio.CancelledError):
@@ -4826,6 +5442,7 @@ class AgentBackend:
                     )
             raise
         try:
+            self._require_postsubmission_workspace(invocation)
             return ContextProviderCallResult(
                 result.response_text,
                 result.thread_id,
@@ -4835,11 +5452,26 @@ class AgentBackend:
         except asyncio.CancelledError:
             self._capture_cancelled_without_replacing(exchange)
             raise
-        except BaseException:
-            self._capture_runtime_failure_without_replacing(
-                exchange,
-                AgentExchangeTerminalCode.CONTEXT_RUNTIME_FAILED,
-            )
+        except BaseException as failure:
+            try:
+                record_context_provider_failure(
+                    failure,
+                    ContextProviderFailureFacts(
+                        accounting,
+                        taint_existing_thread=True,
+                    ),
+                )
+                self._taint_context_thread_without_replacing(
+                    storage_scope,
+                    bound_agent.vendor,
+                    definition_fingerprint,
+                    effective_policy_fingerprint,
+                )
+            finally:
+                self._capture_runtime_failure_without_replacing(
+                    exchange,
+                    AgentExchangeTerminalCode.CONTEXT_RUNTIME_FAILED,
+                )
             raise
 
     async def _prepare_context_references(
@@ -4865,6 +5497,13 @@ class AgentBackend:
             payload,
             call_kind=ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
         )
+        definition_fingerprint, effective_policy_fingerprint = (
+            self._effective_context_continuation_fingerprints(
+                bound_agent,
+                request.policy_fingerprint,
+                request.execution_workspace,
+            )
+        )
         result = await self._invoke_context_physical(
             bound_agent,
             scope=request.scope,
@@ -4876,6 +5515,7 @@ class AgentBackend:
             component_paths=component_paths,
             mandatory_reference_paths=mandatory_paths,
             continuation_identity=request.continuation_identity,
+            execution_workspace=request.execution_workspace,
         )
         finalizer = result.finalizer
         reference_stage = "decode"
@@ -4926,6 +5566,8 @@ class AgentBackend:
                 result.thread_id,
                 result.accounting,
             )
+            if request.execution_workspace is not None:
+                request.execution_workspace.require_current()
             self._accept_context_finalizer_without_replacing(finalizer)
             return prelude
         except BaseException as failure:
@@ -4940,8 +5582,8 @@ class AgentBackend:
                 request.scope if request.continuation_identity is None
                 else request.continuation_identity.checkpoint_scope(),
                 bound_agent.vendor,
-                f"sha256:{bound_agent.definition.fingerprint}",
-                request.policy_fingerprint,
+                definition_fingerprint,
+                effective_policy_fingerprint,
             )
             if isinstance(failure, asyncio.CancelledError):
                 outcome = ReferenceAuthorizationErrorCode.CANCELLED
@@ -6710,14 +7352,28 @@ class AgentBackend:
         self,
         session_id: str,
         definition: AgentDefinition,
+        *,
+        fingerprint: str | None = None,
     ) -> dict[str, Any] | None:
+        effective_fingerprint = (
+            definition.fingerprint if fingerprint is None else fingerprint
+        )
+        key = self._thread_key(
+            definition,
+            fingerprint=effective_fingerprint,
+        )
         manifest = self._read_manifest(session_id, missing_ok=False)
         assert manifest is not None
-        raw = manifest["provider_threads"].get(self._thread_key(definition))
+        raw = manifest["provider_threads"].get(key)
+        if raw is None and key != self._thread_key(definition):
+            raw = manifest["provider_threads"].get(self._thread_key(definition))
         if raw is None:
             return None
         validated = self._validate_thread(raw)
-        if validated["fingerprint"] != definition.fingerprint or validated["tainted"]:
+        if (
+            validated["fingerprint"] != effective_fingerprint
+            or validated["tainted"]
+        ):
             return None
         return validated
 
@@ -6728,6 +7384,7 @@ class AgentBackend:
         thread_id: str,
         *,
         tainted: bool,
+        fingerprint: str | None = None,
     ) -> None:
         if (
             not isinstance(thread_id, str)
@@ -6736,12 +7393,21 @@ class AgentBackend:
             provider_name = "Codex" if definition.backend == "codex" else "Antigravity"
             raise BackendProtocolError(f"{provider_name} thread ID is invalid")
         self._assert_owned_access(session_id)
+        effective_fingerprint = (
+            definition.fingerprint if fingerprint is None else fingerprint
+        )
+        if _SAFE_FINGERPRINT.fullmatch(effective_fingerprint) is None:
+            raise BackendProtocolError("provider thread fingerprint is invalid")
         manifest = self._read_manifest(session_id, missing_ok=False)
         assert manifest is not None
-        manifest["provider_threads"][self._thread_key(definition)] = {
+        key = self._thread_key(
+            definition,
+            fingerprint=effective_fingerprint,
+        )
+        manifest["provider_threads"][key] = {
             "backend": definition.backend,
             "agent_id": definition.agent_id,
-            "fingerprint": definition.fingerprint,
+            "fingerprint": effective_fingerprint,
             "thread_id": thread_id,
             "tainted": tainted,
             "updated_at": _now(),
@@ -6753,14 +7419,26 @@ class AgentBackend:
         self,
         session_id: str,
         definition: AgentDefinition,
+        *,
+        fingerprint: str | None = None,
     ) -> None:
         manifest = self._read_manifest(session_id, missing_ok=False)
         assert manifest is not None
-        key = self._thread_key(definition)
+        expected_fingerprint = (
+            definition.fingerprint if fingerprint is None else fingerprint
+        )
+        key = self._thread_key(
+            definition,
+            fingerprint=expected_fingerprint,
+        )
         raw = manifest["provider_threads"].get(key)
+        if raw is None and key != self._thread_key(definition):
+            raw = manifest["provider_threads"].get(self._thread_key(definition))
         if raw is None:
             return
         thread = self._validate_thread(raw)
+        if thread["fingerprint"] != expected_fingerprint:
+            return
         thread["tainted"] = True
         thread["updated_at"] = _now()
         manifest["provider_threads"][key] = thread
@@ -6894,8 +7572,12 @@ class AgentBackend:
             if not isinstance(key, str) or not key:
                 raise WorkspaceFormatError("provider thread key is invalid")
             validated = self._validate_thread(thread)
-            expected_key = f"{validated['backend']}:{validated['agent_id']}"
-            if key != expected_key:
+            base_key = f"{validated['backend']}:{validated['agent_id']}"
+            qualified_key = f"{base_key}:{validated['fingerprint']}"
+            if key != base_key and (
+                _SAFE_FINGERPRINT.fullmatch(validated["fingerprint"]) is None
+                or key != qualified_key
+            ):
                 raise WorkspaceFormatError(
                     "provider thread key does not match its backend and agent"
                 )
@@ -6963,8 +7645,20 @@ class AgentBackend:
         )
 
     @staticmethod
-    def _thread_key(definition: AgentDefinition) -> str:
-        return f"{definition.backend}:{definition.agent_id}"
+    def _thread_key(
+        definition: AgentDefinition,
+        *,
+        fingerprint: str | None = None,
+    ) -> str:
+        effective_fingerprint = (
+            definition.fingerprint if fingerprint is None else fingerprint
+        )
+        if _SAFE_FINGERPRINT.fullmatch(effective_fingerprint) is None:
+            raise BackendProtocolError("provider thread fingerprint is invalid")
+        base_key = f"{definition.backend}:{definition.agent_id}"
+        if effective_fingerprint == definition.fingerprint:
+            return base_key
+        return f"{base_key}:{effective_fingerprint}"
 
     @staticmethod
     def _manifest_relative(session_id: str) -> str:
@@ -6977,6 +7671,26 @@ class AgentBackend:
         """Return the access-claim path for a validated session ID."""
 
         return f"{_SESSION_DIRECTORY}/{session_id}.access.json"
+
+
+async def invoke_story_bound_agent(
+    bound_agent: BoundAgent,
+    request: AgentRequest,
+    execution_workspace: ProviderExecutionWorkspace,
+    *,
+    reference_read: ReferenceReadInvocation | None = None,
+) -> AgentReply:
+    """Invoke one StoryRuntime call through the internal capability seam."""
+
+    if type(bound_agent) is not BoundAgent:
+        raise TypeError("bound_agent must be exact")
+    if type(execution_workspace) is not ProviderExecutionWorkspace:
+        raise TypeError("execution_workspace must be exact")
+    return await bound_agent._invoke_logical(
+        request,
+        reference_read=reference_read,
+        execution_workspace=execution_workspace,
+    )
 
 
 def release_bound_agent(bound_agent: object) -> None:

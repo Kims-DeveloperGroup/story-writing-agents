@@ -202,6 +202,70 @@ I/O. Close is still idempotent; after a fork, the child-safe close path releases
 only the child's inherited descriptor copies without entering inherited locks
 or granting generation authority.
 
+For each Codex story call, and only for that call, the session-artifact owner
+uses the same physical facts to mint an opaque provider-execution capability.
+It opens the exact session root, retains the full lower generation pin, and
+transfers one non-inheritable duplicate to a fixed isolated exec helper. The
+helper uses descriptor-relative `fchdir`, closes the transfer descriptor, and
+executes Codex with `--cd .`. The child therefore starts on the retained
+original inode without changing the parent process working directory or
+reopening the named path. The capability is immutable, rejects copying and
+serialization, and is process/thread-affine. An immediate call closes it after
+the invocation. Deferred Lead publication instead transfers the entered
+execution and provider contexts to the active in-memory continuation
+transaction and closes them when publication resolves; the authority is never
+stored on a provider binding, adapter, or durable record.
+
+Codex process creation requires Darwin's `sandbox-exec` and canonicalized
+resource paths. The compiled SBPL profile denies by default. It admits reads of
+only the literal canonical resolved Codex executable and required system
+runtime files, but none of the exact session subtree. Session `.git`
+reads/writes and every session
+write remain explicit denies. The initialization/control root, sibling
+worktrees, lexical traversal, symlink escape targets, and prompt staging are
+also denied. Descriptor-selected CWD therefore supplies process placement and
+generation identity without granting story-content access. Context capture,
+explicit references, and SEARCH/READ remain host-owned guarded reads whose
+selected bytes enter only provider payloads or observations.
+
+The remaining closed allowances cover the exact schema read and output write,
+null/random devices, process support, outbound network/system sockets, and one
+provider-native state subtree. Resolved `CODEX_HOME` is accepted only when it
+was configured as an absolute path and already names a directory owned by the
+effective user with no group/other write bits. It must be neither the
+filesystem root nor the user home, and it may not overlap in either direction
+with the exact control root, the schema-derived sibling-worktree container
+(including the selected session), prompt staging, or response-output directory.
+Invalid or unsafe state fails before launch. Instructions are injected after a
+prelaunch staging read; schema and output stay in external temporary storage.
+The response is opened with no-follow semantics, must be a singly linked
+regular file before and after the read, and is read only up to 8 MiB. Its
+identity, mode, link count, size, and modification metadata must remain stable
+during the read, and its bytes must decode as strict UTF-8. The call therefore
+creates no provider-definition or output residue in the story Git tree.
+
+The launch descriptor is non-inheritable in the parent and is always numbered
+at least three before the helper receives it, so replacement of standard input,
+output, or error with provider pipes cannot redirect the helper's `fchdir`.
+The generation is checked before descriptor duplication, after child creation,
+after process return, around reference/SEARCH/READ host observation and
+provider-call acceptance, before and after context-checkpoint commit, after
+adapter temporary cleanup, and when either a direct execution-workspace owner or
+contextual invocation exits. The owner revalidates even while unwinding: exit
+loss after a clean body fails the apparent return, while an active body failure
+stays primary and receives only a content-free validation note. When
+publication is deferred, retained provider and execution contexts close in
+reverse order, the execution generation is revalidated before its close, and
+only clean completion accepts the provider-call finalizer. Loss or cleanup
+failure after a checkpoint commit invalidates that exact ledger generation.
+Exit loss taints the exact generation-bound thread where one is governed by the
+continuation. A deleted, replaced, or symlinked named session root cannot
+acquire the old descriptor authority or redirect a call. Unsupported hosts, a
+missing deprecated sandbox facility, an executable mismatch, or a noncanonical
+exception path fail before provider submission; there is no path-only working-
+directory or unconfined fallback. This Codex boundary does not cover the
+separately tracked Antigravity adapter.
+
 Ordinary artifact access retains the stronger semantic boundary: one outer
 synchronous transaction performs a complete READY validation before and after
 its body. Nested access and repository calls reuse that transaction with only

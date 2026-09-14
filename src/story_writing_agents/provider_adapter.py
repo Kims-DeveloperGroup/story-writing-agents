@@ -22,6 +22,7 @@ from .agent_context import (
 )
 from .errors import ProviderAuthenticationRequiredError
 from .models import AgentDefinition
+from .provider_execution_workspace import ProviderExecutionWorkspace
 
 
 DEFAULT_PROVIDER_TIMEOUT_SECONDS = 900.0
@@ -108,6 +109,11 @@ class ProviderInvocation:
         default=(),
         repr=False,
     )
+    execution_workspace: ProviderExecutionWorkspace | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
     payload_json: bytes | None = field(init=False, repr=False)
     payload_accounting: ProviderPayloadAccounting | None = field(init=False)
     call_accounting: ProviderCallAccounting | None = field(init=False)
@@ -123,6 +129,12 @@ class ProviderInvocation:
             raise TypeError(
                 "provider invocation binding components must be "
                 "ContextComponentBytes values"
+            )
+        if self.execution_workspace is not None and type(
+            self.execution_workspace
+        ) is not ProviderExecutionWorkspace:
+            raise TypeError(
+                "provider invocation execution workspace has an invalid type"
             )
         try:
             payload_json, accounting = account_provider_payload(

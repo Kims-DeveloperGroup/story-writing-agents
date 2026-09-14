@@ -33,7 +33,10 @@ from story_writing_agents.consensus.contracts import (
 )
 from story_writing_agents.consensus.material_store import ConsensusMaterialStore
 from story_writing_agents.models import AgentReplyNextPhase
-from story_writing_agents.workspace.initialization import provision_session_resources
+from story_writing_agents.workspace.initialization import (
+    SessionArtifactBindingError,
+    provision_session_resources,
+)
 from story_writing_agents.writing_artifacts.read_actions import (
     ReferenceReadAction,
     ReferenceReadActionKind,
@@ -52,6 +55,7 @@ class _BoundAgent:
     def __init__(self, backend: "_Backend", definition: object) -> None:
         self.backend = backend
         self.definition = definition
+        self.vendor = backend.vendor
 
     def context_provider(self, _reference_read=None):
         raise AssertionError("consensus bridge must use the bound invoke seam")
@@ -94,7 +98,8 @@ class _BoundAgent:
 class _Backend:
     backend_overrides: dict[str, str] = {}
 
-    def __init__(self, handler=None) -> None:
+    def __init__(self, handler=None, *, vendor="antigravity") -> None:
+        self.vendor = vendor
         self.handler = handler
         self.requests = []
         self.reference_reads = []
@@ -462,6 +467,19 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_phase_mapping_is_exact_and_finalization_is_read_only(self) -> None:
+        self.workspace = pristine_initialized_workspace(self)
+        provision_session_resources(self.workspace.root, "story_session")
+        self.backend = _Backend(vendor="codex")
+        self.runtime = StoryRuntime(self.workspace, self.backend)  # type: ignore[arg-type]
+        self.materials = ConsensusMaterialStore(self.workspace.root)
+        execution_workspaces = []
+
+        async def invoke_with_workspace(
+            bound_agent, request, execution_workspace, *, reference_read=None,
+        ):
+            execution_workspaces.append(execution_workspace)
+            return await bound_agent.invoke(request, reference_read=reference_read)
+
         input_material = self.materials.put_text("source request")
         candidate = self.materials.put_text("candidate revision")
         expected = {
@@ -501,34 +519,43 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
             for path in self.workspace.path("manuscript").rglob("*")
             if path.is_file()
         }
-        for phase, (
-            agent_id,
-            ordinal,
-            expected_phase,
-            phase_candidate,
-        ) in expected.items():
-            with self.subTest(phase=phase):
-                invocation = ConsensusPhaseInvocation(
-                    workflow_id="workflow-routes",
-                    phase_request_id=f"request-{phase.value}",
-                    proposal_id="proposal-routes",
-                    execution_identity=ConsensusExecutionIdentity(
-                        "story_session", "conversation-routes"
-                    ),
-                    phase=phase,
-                    revision_id="r0",
-                    input_material=input_material,
-                    candidate_material=phase_candidate,
-                    agent_id=agent_id,
-                    ordinal=ordinal,
-                )
-                await self.runtime.invoke_provider(invocation)
-                request = self.backend.requests[-1]
-                self.assertIs(request.phase, expected_phase)
-                self.assertEqual(
-                    request.candidate_payload,
-                    None if phase_candidate is None else "candidate revision",
-                )
+        with mock.patch(
+            "story_writing_agents.orchestrator.invoke_story_bound_agent",
+            side_effect=invoke_with_workspace,
+        ):
+            for phase, (
+                agent_id,
+                ordinal,
+                expected_phase,
+                phase_candidate,
+            ) in expected.items():
+                with self.subTest(phase=phase):
+                    invocation = ConsensusPhaseInvocation(
+                        workflow_id="workflow-routes",
+                        phase_request_id=f"request-{phase.value}",
+                        proposal_id="proposal-routes",
+                        execution_identity=ConsensusExecutionIdentity(
+                            "story_session", "conversation-routes"
+                        ),
+                        phase=phase,
+                        revision_id="r0",
+                        input_material=input_material,
+                        candidate_material=phase_candidate,
+                        agent_id=agent_id,
+                        ordinal=ordinal,
+                    )
+                    await self.runtime.invoke_provider(invocation)
+                    request = self.backend.requests[-1]
+                    self.assertIs(request.phase, expected_phase)
+                    self.assertEqual(
+                        request.candidate_payload,
+                        None if phase_candidate is None else "candidate revision",
+                    )
+        self.assertEqual(len(execution_workspaces), len(expected))
+        self.assertEqual(len({id(item) for item in execution_workspaces}), len(expected))
+        for execution_workspace in execution_workspaces:
+            with self.assertRaises(SessionArtifactBindingError):
+                execution_workspace.require_current()
         self.assertEqual(
             {
                 path.name: path.read_bytes()

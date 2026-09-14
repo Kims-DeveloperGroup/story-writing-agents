@@ -1403,7 +1403,9 @@ replacement's live-owner exclusion set; the original root's durable history is
 unchanged. Terminal success or failure, reconciled completion, stale-owner
 abandonment, and every unretained preparation path each close the pin exactly
 once. A candidate-only consensus call enters this boundary only when the
-registry reports pending cleanup; otherwise it remains worktree-free.
+registry reports pending cleanup; otherwise it performs no artifact/reference
+worktree access. Each Codex provider call still opens its own exact session
+execution capability.
 
 Reference descriptor cleanup is `BaseException`-safe and primary-aware.
 Preparation relinquishes each local descriptor before attempting its close,

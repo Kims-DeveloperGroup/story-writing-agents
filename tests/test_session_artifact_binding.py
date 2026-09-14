@@ -51,6 +51,9 @@ from story_writing_agents.git.session_contracts import (
 )
 from story_writing_agents.git.process import GitProcessRunner
 from story_writing_agents.models import AgentStateEntry, DebateMessage
+from story_writing_agents.provider_execution_workspace import (
+    ProviderExecutionWorkspace,
+)
 from story_writing_agents.workspace import Workspace
 from story_writing_agents.workspace import core as workspace_core
 from story_writing_agents.workspace.core import SessionSourceWorkspace
@@ -437,6 +440,7 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
             actions = (
                 ready_access,
                 story_commit_access,
+                lambda: binding.open_provider_execution_workspace().__enter__(),
                 direct_access,
                 repository_callback,
                 lambda: binding._repository.read_text(_OUTLINE),
@@ -486,7 +490,8 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                 failures = executor.submit(reject).result(timeout=10)
         finally:
             object.__setattr__(binding, "_operation_lock", original_lock)
-        self.assertEqual(len(failures), 7)
+        self.assertEqual(len(failures), 8)
+
         for failure in failures:
             self.assertIs(type(failure), SessionArtifactBindingError)
             self.assertEqual(
@@ -520,13 +525,54 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
         ) as repository:
             self.assertEqual(repository.read_text(_OUTLINE).splitlines()[0],
                              "Outline first line.")
-        self.assertEqual(validations, 2)
+        self.assertEqual(validations, 4)
         service = compose_story_commit_service(
             self.control_workspace.root,
             self.session_id,
             binding,
         )
         self.assertEqual(service._session_id, self.session_id)
+
+    def test_provider_workspace_mint_postcheck_failure_closes_owned_resources(
+        self,
+    ) -> None:
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        captured: dict[str, object] = {}
+        original_mint = initialization_module.mint_provider_execution_workspace
+
+        def capture_mint(**arguments):
+            captured["descriptor"] = arguments["root_descriptor"]
+            captured["pin"] = arguments["generation_pin"]
+            workspace = original_mint(**arguments)
+            captured["workspace"] = workspace
+            return workspace
+
+        failure = SessionArtifactBindingError("synthetic final postcheck loss")
+        with mock.patch.object(
+            initialization_module,
+            "mint_provider_execution_workspace",
+            side_effect=capture_mint,
+        ), mock.patch.object(
+            ProviderExecutionWorkspace,
+            "require_current",
+            autospec=True,
+            side_effect=failure,
+        ):
+            with self.assertRaises(SessionArtifactBindingError):
+                binding.open_provider_execution_workspace().__enter__()
+
+        descriptor = captured["descriptor"]
+        self.assertIsInstance(descriptor, int)
+        with self.assertRaises(OSError):
+            os.fstat(descriptor)
+        pin = captured["pin"]
+        self.assertEqual(pin._descriptors, ())
+        workspace = captured["workspace"]
+        self.assertEqual(workspace._root_descriptor, -1)
+        self.assertIsNone(workspace._generation_pin)
 
     def test_forked_binding_factories_fail_before_copied_lock_and_revoke_safely(
         self,
@@ -1352,7 +1398,8 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
         postcheck_failure = asyncio.CancelledError("body cancelled")
         postcheck_cleanup = KeyboardInterrupt("postcheck interrupted")
         access = SimpleNamespace(
-            require_ready=mock.Mock(side_effect=postcheck_cleanup)
+            require_ready=mock.Mock(side_effect=postcheck_cleanup),
+            _is_translated_binding_failure=mock.Mock(return_value=False),
         )
         initialization_module._postvalidate_session_artifact_access(
             access,
@@ -1368,7 +1415,8 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
             "confirmed generation changed"
         )
         access = SimpleNamespace(
-            require_ready=mock.Mock(side_effect=confirmed_loss)
+            require_ready=mock.Mock(side_effect=confirmed_loss),
+            _is_translated_binding_failure=mock.Mock(return_value=True),
         )
         with self.assertRaises(SessionArtifactBindingError) as caught:
             initialization_module._postvalidate_session_artifact_access(
@@ -2022,9 +2070,9 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
             closed_chains: list[tuple[int, ...]] = []
             original_close = SessionSourceWorkspace._close_directory_chain
 
-            def capture_close(descriptors):
+            def capture_close(descriptors, *, failure=None):
                 closed_chains.append(tuple(descriptors))
-                original_close(descriptors)
+                original_close(descriptors, failure=failure)
 
             try:
                 with mock.patch.object(

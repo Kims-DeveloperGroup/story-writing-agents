@@ -91,6 +91,7 @@ from story_writing_agents.agents import EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR
 from story_writing_agents.conversation_storage import (
     compose_filesystem_conversation_storage,
 )
+from story_writing_agents.conversations.session_context import SessionHistorySnapshot
 from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
@@ -367,14 +368,33 @@ class _ScriptedProvider:
         self.second_invocation_entered = asyncio.Event()
         self.inspections: list[tuple[object, str, str | None]] = []
         self.finalizers: list[_RecordingFinalizer] = []
+        self.currentness_observations: list[
+            tuple[tuple[tuple[str, ContextProviderTerminalCode | None], ...], ...]
+        ] = []
+        self.currentness_hook: Callable[[], None] | None = None
+        self.invocation_depth = 0
+        self.invocation_exits = 0
         self._next_thread = 1
 
     @asynccontextmanager
-    async def invocation(self, _scope: object, _policy: str):
+    async def invocation(
+        self,
+        _scope: object,
+        _policy: str,
+        *,
+        continuation_identity: object | None = None,
+        execution_workspace: object | None = None,
+    ):
+        del continuation_identity, execution_workspace
         self.invocation_entries += 1
+        self.invocation_depth += 1
         if self.invocation_entries >= 2:
             self.second_invocation_entered.set()
-        yield
+        try:
+            yield
+        finally:
+            self.invocation_depth -= 1
+            self.invocation_exits += 1
 
     @staticmethod
     def _key(scope: object, policy_fingerprint: str) -> tuple[object, str]:
@@ -384,6 +404,19 @@ class _ScriptedProvider:
         value = self.threads.get(self._key(scope, policy_fingerprint))
         self.inspections.append((scope, policy_fingerprint, value))
         return value
+
+    def require_current_execution_workspace(
+        self,
+        _scope: object,
+        _policy_fingerprint: str,
+    ) -> None:
+        if self.invocation_depth <= 0:
+            raise AssertionError("execution workspace escaped its invocation")
+        self.currentness_observations.append(
+            tuple(tuple(finalizer.calls) for finalizer in self.finalizers)
+        )
+        if self.currentness_hook is not None:
+            self.currentness_hook()
 
     def _accounting(
         self,
@@ -646,6 +679,7 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
                 "physical_call_limit",
                 "include_core_statuses",
                 "session_state_json",
+                "execution_workspace",
             ),
         )
         request = self.request()
@@ -1086,6 +1120,11 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.assertEqual(
             [finalizer.calls for finalizer in provider.finalizers],
             [[("accepted", None)]] * 3,
+        )
+        self.assertIn(((),), provider.currentness_observations)
+        self.assertIn(
+            ((("accepted", None),), ()),
+            provider.currentness_observations,
         )
 
     async def test_compatible_ready_is_delta_and_provider_history_loss_bootstraps(
@@ -2273,6 +2312,158 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
         self.assertEqual(provider.aborted_references, [])
         self.assertIs(
             self.inspect(provider, request).record.state, ContextLedgerRecordState.READY
+        )
+
+    async def test_generation_loss_blocks_deferred_and_invalidates_committed_checkpoint(
+        self,
+    ) -> None:
+        failure = RuntimeError("synthetic execution-workspace generation loss")
+
+        deferred_provider = _ScriptedProvider((_answer,))
+        deferred_lost = False
+
+        def require_deferred_current() -> None:
+            if deferred_lost:
+                raise failure
+
+        deferred_provider.currentness_hook = require_deferred_current
+        deferred_request = self.request(
+            operation_id="deferred-generation-loss",
+            result_correlation_id="deferred-generation-loss-result",
+        )
+        continuation = self.service.session_continuation(
+            deferred_request.session_id,
+            deferred_request.agent_id,
+        )
+        with self.assertRaises(RuntimeError) as caught:
+            async with continuation:
+                result = await self.service.invoke(
+                    deferred_request,
+                    deferred_provider,
+                    continuation=continuation,
+                    session_history=SessionHistorySnapshot(
+                        deferred_request.session_id,
+                        (),
+                    ),
+                    publication_validator=lambda: True,
+                    **self.authorities(deferred_request),
+                )
+                self.assertTrue(result.checkpoint_pending)
+                deferred_lost = True
+        self.assertIs(caught.exception, failure)
+        deferred_inspection = ContextLedger(self.workspace).inspect(
+            ContextLedgerKey(
+                continuation.identity.checkpoint_scope(),
+                deferred_provider.provider_id,
+            )
+        )
+        self.assertIs(
+            deferred_inspection.record.state,
+            ContextLedgerRecordState.TAINTED,
+        )
+        self.assertIsNone(deferred_inspection.record.ready_checkpoint)
+        self.assertEqual(
+            deferred_provider.finalizers[0].calls,
+            [
+                (
+                    "post_response_runtime_failure",
+                    ContextProviderTerminalCode.CONTEXT_RUNTIME_FAILED,
+                )
+            ],
+        )
+
+        committed_provider = _ScriptedProvider((_answer,))
+        committed_lost = False
+
+        def require_committed_current() -> None:
+            if committed_lost:
+                raise failure
+
+        committed_provider.currentness_hook = require_committed_current
+        committed_request = self.request(
+            operation_id="committed-generation-loss",
+            result_correlation_id="committed-generation-loss-result",
+        )
+        original_commit = ContextLedger.commit_attempt
+
+        def lose_after_commit(
+            ledger: ContextLedger,
+            *args: object,
+            **kwargs: object,
+        ):
+            nonlocal committed_lost
+            commit = original_commit(ledger, *args, **kwargs)
+            committed_lost = True
+            return commit
+
+        with mock.patch.object(
+            ContextLedger,
+            "commit_attempt",
+            autospec=True,
+            side_effect=lose_after_commit,
+        ), self.assertRaises(RuntimeError) as caught:
+            await self.invoke(committed_provider, committed_request)
+        self.assertIs(caught.exception, failure)
+        committed_inspection = self.inspect(committed_provider, committed_request)
+        self.assertIs(
+            committed_inspection.record.state,
+            ContextLedgerRecordState.STALE,
+        )
+        self.assertIsNone(committed_inspection.record.ready_checkpoint)
+        self.assertEqual(
+            committed_provider.finalizers[0].calls,
+            [
+                (
+                    "post_response_runtime_failure",
+                    ContextProviderTerminalCode.CONTEXT_RUNTIME_FAILED,
+                )
+            ],
+        )
+
+    async def test_deferred_fallback_retains_auto_minted_provider_until_abort(
+        self,
+    ) -> None:
+        provider = _ScriptedProvider((_answer,))
+        request = self.request(
+            operation_id="deferred-fallback",
+            result_correlation_id="deferred-fallback-result",
+        )
+        continuation = self.service.session_continuation(
+            request.session_id,
+            request.agent_id,
+        )
+
+        async with continuation:
+            result = await self.service.invoke(
+                request,
+                provider,
+                continuation=continuation,
+                session_history=SessionHistorySnapshot(request.session_id, ()),
+                publication_validator=lambda: False,
+                **self.authorities(request),
+            )
+            self.assertTrue(result.checkpoint_pending)
+            self.assertEqual(provider.invocation_depth, 1)
+            self.assertEqual(provider.invocation_exits, 0)
+
+        self.assertEqual(provider.invocation_depth, 0)
+        self.assertEqual(provider.invocation_exits, 1)
+        inspection = ContextLedger(self.workspace).inspect(
+            ContextLedgerKey(
+                continuation.identity.checkpoint_scope(),
+                provider.provider_id,
+            )
+        )
+        self.assertIs(inspection.record.state, ContextLedgerRecordState.TAINTED)
+        self.assertIsNone(inspection.record.ready_checkpoint)
+        self.assertEqual(
+            provider.finalizers[0].calls,
+            [
+                (
+                    "post_response_runtime_failure",
+                    ContextProviderTerminalCode.CONTEXT_RUNTIME_FAILED,
+                )
+            ],
         )
 
     async def test_authoritative_failure_remains_primary_when_terminal_sink_fails(
