@@ -6,7 +6,6 @@ import json
 import multiprocessing
 import os
 import stat
-import tempfile
 import threading
 import unittest
 from contextlib import contextmanager
@@ -52,12 +51,11 @@ from tests.collaboration_contract_fixture import (
     SESSION_ID,
     contract_batches,
 )
-from tests.helpers import initialize_test_workspace
+from tests.helpers import pristine_initialized_workspace
 
 
 @dataclass(slots=True)
 class _Harness:
-    temporary: tempfile.TemporaryDirectory[str]
     workspace: Workspace
     catalog: FilesystemConversationCatalog
     conversation_id: str
@@ -67,31 +65,26 @@ class _Harness:
 
 
 @contextmanager
-def _harness():
-    temporary = tempfile.TemporaryDirectory()
-    try:
-        workspace = initialize_test_workspace(temporary.name)
-        catalog = FilesystemConversationCatalog(workspace)
-        metadata = catalog.create(SESSION_ID, "Filesystem v2 contract")
-        directory = (
-            workspace.root
-            / "discussion_logs"
-            / SESSION_ID
-            / "interactive"
-            / "conversations"
-            / metadata.conversation_id
-        )
-        yield _Harness(
-            temporary=temporary,
-            workspace=workspace,
-            catalog=catalog,
-            conversation_id=metadata.conversation_id,
-            store=FilesystemCollaborationEventStore(workspace, catalog=catalog),
-            history_path=directory / "collaboration-history.jsonl",
-            lock_path=directory / ".collaboration-history.lock",
-        )
-    finally:
-        temporary.cleanup()
+def _harness(test_case: unittest.TestCase):
+    workspace = pristine_initialized_workspace(test_case)
+    catalog = FilesystemConversationCatalog(workspace)
+    metadata = catalog.create(SESSION_ID, "Filesystem v2 contract")
+    directory = (
+        workspace.root
+        / "discussion_logs"
+        / SESSION_ID
+        / "interactive"
+        / "conversations"
+        / metadata.conversation_id
+    )
+    yield _Harness(
+        workspace=workspace,
+        catalog=catalog,
+        conversation_id=metadata.conversation_id,
+        store=FilesystemCollaborationEventStore(workspace, catalog=catalog),
+        history_path=directory / "collaboration-history.jsonl",
+        lock_path=directory / ".collaboration-history.lock",
+    )
 
 
 def _encode_history(events: tuple[CollaborationEvent, ...]) -> bytes:
@@ -140,7 +133,7 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
     def test_construction_absent_read_and_first_append_are_exact_and_isolated(
         self,
     ) -> None:
-        with _harness() as value:
+        with _harness(self) as value:
             before = tuple(
                 sorted(
                     path.relative_to(value.workspace.root)
@@ -225,7 +218,7 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
             )
 
     def test_catalog_failures_and_wrong_identity_do_not_create_history(self) -> None:
-        with _harness() as value:
+        with _harness(self) as value:
             batch = contract_batches(value.conversation_id)["proposal"]
             wrong = SimpleNamespace(
                 session_id=SESSION_ID,
@@ -253,7 +246,7 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
     def test_retry_precedes_tail_cas_and_semantic_failures_preserve_bytes(
         self,
     ) -> None:
-        with _harness() as value:
+        with _harness(self) as value:
             batches = contract_batches(value.conversation_id)
             original = value.store.append_batch(batches["proposal"])
             value.store.append_batch(batches["confirmation"])
@@ -316,7 +309,7 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
     def test_all_required_co_batches_append_and_split_forms_are_atomic(
         self,
     ) -> None:
-        with _harness() as value:
+        with _harness(self) as value:
             batches = contract_batches(value.conversation_id)
             _append_prefix(
                 value.store,
@@ -337,7 +330,7 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
                 CollaborationStepState.COMPLETED,
             )
 
-        with _harness() as value:
+        with _harness(self) as value:
             batches = contract_batches(value.conversation_id)
             _append_prefix(
                 value.store,
@@ -372,7 +365,7 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
             ),
         )
         for prefix, name, selected in split_cases:
-            with self.subTest(batch=name), _harness() as value:
+            with self.subTest(batch=name), _harness(self) as value:
                 batches = contract_batches(value.conversation_id)
                 _append_prefix(value.store, batches, prefix)
                 before = (
@@ -435,7 +428,7 @@ class FilesystemCollaborationEventStoreCorruptionTests(unittest.TestCase):
             "batch_drift",
             "wrong_identity",
         ):
-            with self.subTest(corruption=name), _harness() as value:
+            with self.subTest(corruption=name), _harness(self) as value:
                 batch = contract_batches(value.conversation_id)["proposal"]
                 value.store.append_batch(batch)
                 history = value.store.read(SESSION_ID, value.conversation_id)
@@ -541,7 +534,7 @@ class FilesystemCollaborationEventStoreConcurrencyTests(unittest.TestCase):
         )
 
     def _run_thread_race(self, *, identical: bool) -> list[object]:
-        with _harness() as value:
+        with _harness(self) as value:
             first = contract_batches(value.conversation_id)["proposal"]
             second = first if identical else self._different_batch(first)
             barrier = threading.Barrier(3)
@@ -600,7 +593,7 @@ class FilesystemCollaborationEventStoreConcurrencyTests(unittest.TestCase):
         self.assertEqual(receipts[0].timestamps, receipts[1].timestamps)
 
     def _run_process_race(self, *, identical: bool) -> list[tuple[object, ...]]:
-        with _harness() as value:
+        with _harness(self) as value:
             first = contract_batches(value.conversation_id)["proposal"]
             second = first if identical else self._different_batch(first)
             context = multiprocessing.get_context("spawn")
@@ -664,7 +657,7 @@ class FilesystemCollaborationEventStoreFailureTests(unittest.TestCase):
         self,
     ) -> None:
         for failure in ("file_fsync", "replace"):
-            with self.subTest(failure=failure), _harness() as value:
+            with self.subTest(failure=failure), _harness(self) as value:
                 batches = contract_batches(value.conversation_id)
                 value.store.append_batch(batches["proposal"])
                 before = value.history_path.read_bytes()
@@ -695,7 +688,7 @@ class FilesystemCollaborationEventStoreFailureTests(unittest.TestCase):
     def test_directory_fsync_failure_is_uncertain_and_retry_resolves_original(
         self,
     ) -> None:
-        with _harness() as value:
+        with _harness(self) as value:
             batch = contract_batches(value.conversation_id)["proposal"]
             real_fsync = filesystem_module.os.fsync
 
@@ -725,7 +718,7 @@ class FilesystemCollaborationEventStoreFailureTests(unittest.TestCase):
     def test_lock_unsupported_unsafe_acquire_and_unlock_fail_closed_or_retry(
         self,
     ) -> None:
-        with _harness() as value:
+        with _harness(self) as value:
             batch = contract_batches(value.conversation_id)["proposal"]
             with mock.patch.object(filesystem_module, "_fcntl", None):
                 with self.assertRaises(OSError):
@@ -733,7 +726,7 @@ class FilesystemCollaborationEventStoreFailureTests(unittest.TestCase):
             self.assertFalse(value.history_path.exists())
             self.assertFalse(value.lock_path.exists())
 
-        with _harness() as value:
+        with _harness(self) as value:
             batch = contract_batches(value.conversation_id)["proposal"]
             outside = value.workspace.root / "outside-lock-target"
             outside.write_text("untouched", encoding="utf-8")
@@ -743,7 +736,7 @@ class FilesystemCollaborationEventStoreFailureTests(unittest.TestCase):
             self.assertEqual(outside.read_text(encoding="utf-8"), "untouched")
             self.assertFalse(value.history_path.exists())
 
-        with _harness() as value:
+        with _harness(self) as value:
             batch = contract_batches(value.conversation_id)["proposal"]
             assert filesystem_module._fcntl is not None
             real_flock = filesystem_module._fcntl.flock
@@ -764,7 +757,7 @@ class FilesystemCollaborationEventStoreFailureTests(unittest.TestCase):
                 value.store.append_batch(batch)
             self.assertFalse(value.history_path.exists())
 
-        with _harness() as value:
+        with _harness(self) as value:
             batch = contract_batches(value.conversation_id)["proposal"]
             assert filesystem_module._fcntl is not None
             real_flock = filesystem_module._fcntl.flock
@@ -812,7 +805,7 @@ class FilesystemCollaborationEventStoreBoundaryTests(unittest.TestCase):
         )
         self.assertFalse(hasattr(workspace_facade, "FilesystemConversationEventStore"))
 
-        with _harness() as value:
+        with _harness(self) as value:
             services = compose_filesystem_conversation_storage(value.workspace)
             self.assertIsInstance(
                 services.event_store,
