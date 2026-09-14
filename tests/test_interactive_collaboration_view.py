@@ -494,7 +494,6 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
                 check=True,
             )
             case.doCleanups()
-            case.temporary.cleanup()
 
 
     async def test_objective_event_discloses_transition_without_claiming_current_state(self):
