@@ -56,6 +56,15 @@ transcripts and retrieval authorization; backend owns provider metadata,
 processes, access claims, per-thread serialization, and exact binding-staging
 retirement.
 
+A direct Codex `BoundAgent` story call additionally requires the request's
+exact Git session branch/ref/worktree resources to have been provisioned and
+verified READY. `create_session_with_access()` creates only lifecycle manifest
+state and its access claim; it does not create those Git resources. Call
+`provision_session_resources(session_id)` separately before lifecycle creation,
+or use the installed session-create workflow that performs both in order.
+Missing or non-READY Git resources fail before provider submission rather than
+falling back to another root.
+
 The backend is the sole authority for each active agent's provider, model,
 effort, and their sources: `launch_override`, `agent_config`, `system_default`,
 `built_in_default`, or `provider_default`. Its profile also drives adapter argv,
@@ -125,19 +134,36 @@ another generation.
 
 On Darwin the native process is additionally wrapped by a default-deny SBPL
 profile and retains Codex's own `--sandbox read-only` setting. The profile
-allows session-tree reads but explicitly denies session `.git` reads and all
-session writes. Unspecified paths are denied, including the initialization and
-control roots, sibling worktrees, traversal targets, symlink escape targets,
-and provider-definition staging. Its closed external allowances cover the
-resolved provider executable/runtime, the exact schema read and response write,
-the provider-native state subtree, required system runtime files, and outbound
-network/system sockets. Staged instructions are read before launch and supplied
-as native developer instructions; neither the staging directory nor response
-transport becomes a Codex project or story-Git residue.
+grants no session-tree file reads or writes; the session `.git` subtree and all
+session writes are also explicit denies. The descriptor-selected CWD is process
+placement and generation identity, not story-content access. Host-owned context
+capture, explicit-reference delivery, and SEARCH/READ handlers perform their
+own guarded reads and place only the selected content in provider payloads or
+observations. Unspecified paths remain denied, including the initialization
+and control roots, sibling worktrees, traversal and symlink escape targets, and
+provider-definition staging.
+
+Closed external allowances cover the resolved provider executable/runtime, the
+exact schema read and response write, required system runtime files, outbound
+network/system sockets, and one validated provider-native state subtree. The
+resolved `CODEX_HOME` must already be a directory owned by the effective user,
+must not be group- or other-writable, and must be neither the filesystem root
+nor the user's home. It may neither contain nor be contained by the control
+root, selected session root, prompt staging, or response-output directory. An
+unsafe value fails before provider submission. Staged instructions are read
+before launch and supplied as native developer instructions; neither staging
+nor response transport becomes a Codex project or story-Git residue. The
+complete UTF-8 process argument—including the
+`developer_instructions=` prefix and JSON encoding—may be at most 512 KiB.
+Exceeding that bound fails before submission without tainting an existing
+thread. A custom definition that previously fit file-based staging may need to
+move story material into host-owned context, explicit references, or
+SEARCH/READ sources rather than enlarging the binding instruction.
 
 Apple's `sandbox-exec` facility is deprecated. A missing facility, non-Darwin
-host, noncanonical resource, or executable mismatch fails before provider
-submission; there is no path-only or unconfined fallback. Authentication,
+host, unsafe native-state directory, noncanonical resource, or executable
+mismatch fails before provider submission; there is no path-only or unconfined
+fallback. Authentication,
 model-catalog discovery, help, and other management probes are not story
 invocations and retain their separately documented process boundaries.
 Antigravity is intentionally unchanged here and remains tracked by

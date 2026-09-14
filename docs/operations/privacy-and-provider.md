@@ -1111,25 +1111,37 @@ Codex story calls run without shell evaluation from the descriptor-selected
 exact READY session worktree, with native project root `--cd .`: read-only
 sandbox, no approvals, ignored project/user configuration, and disabled shell,
 web, app, and multi-agent tools. On Darwin, a second default-deny process
-sandbox permits reads beneath the session worktree except `.git`, denies every
-session write, and denies unspecified locations such as the initialization and
-control roots, sibling worktrees, traversal targets, symlink escape targets,
-and prompt staging. Exact opaque exceptions admit the resolved executable and
-runtime, schema/result transport, provider-native state, required system files,
-and outbound network/system sockets. This is filesystem confinement, not a
-claim that the executable or remote provider is trusted: all readable session
-content is locally exposed to that provider process.
+sandbox grants no reads or writes beneath the session worktree and explicitly
+denies `.git`, every session write, and prompt staging. It also denies
+unspecified locations such as the initialization and control roots, sibling
+worktrees, traversal targets, and symlink escape targets. Host-owned context
+capture, explicit-reference delivery, and SEARCH/READ handlers perform guarded
+story reads and place only selected content in request payloads or observations;
+the provider receives no session filesystem read authority from its CWD.
+
+Exact external exceptions admit the resolved executable/runtime, schema/result
+transport, required system files, outbound network/system sockets, and one
+validated provider-native state subtree. The resolved `CODEX_HOME` must already
+be a directory owned by the effective user without group/other write bits. It
+cannot be the filesystem root or user home, and it may neither contain nor be
+contained by the control root, selected session, prompt staging, or response-
+output directory. An unsafe value produces a fixed pre-submission provider
+failure. This is filesystem confinement, not a claim that the executable,
+broker-delivered content, or remote provider is trusted.
 
 Stable instructions are prepared outside story Git, read before launch, and
 passed as a `developer_instructions` configuration argument; their text can be
-visible to local process inspection. The schema has one exact external read
-path and the result one exact external write path. Codex cannot read its prompt
-staging after launch, and none of those definition or output files is created
-in the story worktree or committed as story residue. Installation-level or
-vendor-global instructions can still apply, and the vendor may retain remote
-conversations. Apple's `sandbox-exec` facility is deprecated; if it is missing,
-the host is unsupported, or exact sandbox inputs are invalid, the story call
-fails before submission instead of running without confinement.
+visible to local process inspection. The fully JSON-encoded argument, including
+its `developer_instructions=` prefix, is capped at 512 KiB; a larger value is
+rejected before submission and does not taint an existing thread. The schema
+has one exact external read path and the result one exact external write path.
+Codex cannot read its prompt staging after launch, and none of those definition
+or output files is created in the story worktree or committed as story residue.
+Installation-level or vendor-global instructions can still apply, and the
+vendor may retain remote conversations. Apple's `sandbox-exec` facility is
+deprecated; if it is missing, the host is unsupported, or exact sandbox inputs
+are invalid, the story call fails before submission instead of running without
+confinement.
 
 These controls apply to provider-bound story calls, including direct bound-
 agent, Lead, specialist, synthesis, and consensus paths. Native authentication,

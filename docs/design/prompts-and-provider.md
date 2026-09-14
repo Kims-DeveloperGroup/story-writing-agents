@@ -234,7 +234,10 @@ A direct custom `AgentDefinition` can still bind explicit
 fingerprint, staging, and provider behavior for compatibility, but it is not how
 `StoryRuntime` constructs the four built-in roles. Core publication therefore
 changes contextual source revision/delta facts instead of permanently restaging
-mutable story bytes as a new built-in definition.
+mutable story bytes as a new built-in definition. For Codex, compatibility is
+now bounded by the 512-KiB fully encoded `developer_instructions=` process
+argument ceiling. Oversized legacy custom bindings must move story material to
+host-owned context, explicit references, or SEARCH/READ sources.
 
 ## Binding resource lifecycle
 
@@ -480,17 +483,25 @@ instructions nor output are written to the session worktree. OpenAI Structured
 Outputs requires a supported root object schema, required fields, closed
 objects, and explicitly typed array items; Story generates those constraints
 for every nested action/result node.
+The staged instruction snapshot is JSON-encoded into the complete
+`developer_instructions=` configuration argument. Story measures that final
+UTF-8 argument, not the raw file, and rejects values above 512 KiB before
+provider submission without tainting an existing thread.
 See the official
 [Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
 Replies still pass Story's correlation, handle, evidence, semantic, and phase
 checks.
-On Darwin, a default-deny outer sandbox admits the exact runtime, transport,
-native-state, session-read, and network resources while denying session writes,
-session `.git`, staging, the control/initialization roots, siblings, traversal,
-and symlink escapes. Generation checks bracket process creation, return, and
-acceptance; post-submission loss rejects the result and taints the compatible
-continuation. The exact sandbox, approval, tool, configuration, and instruction
-controls live in
+On Darwin, a default-deny outer sandbox admits only the exact runtime,
+transport, validated provider-native state, required system, and network
+resources. It grants the provider no session-tree file reads or writes and
+explicitly denies session `.git`, staging, the control/initialization roots,
+siblings, traversal, and symlink escapes. Runtime-owned context capture,
+explicit references, and SEARCH/READ handlers deliver selected story content
+through the request or observation rather than provider filesystem access.
+Generation checks bracket process creation, return, and acceptance;
+post-submission loss rejects the result and taints the compatible continuation.
+The exact sandbox, approval, tool, configuration, and instruction controls live
+in
 [Privacy and provider exposure](../operations/privacy-and-provider.md#provider-processes-and-credentials).
 
 The Antigravity adapter binds the same verified definition and request models

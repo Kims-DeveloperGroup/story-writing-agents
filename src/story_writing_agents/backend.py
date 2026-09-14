@@ -1698,6 +1698,7 @@ class AgentBackend:
                 timeout_seconds=float(timeout_seconds),
                 configuration=configuration,
                 explicit_model=explicit_model,
+                control_root=self.workspace.root,
                 execution_profiles={
                     agent_id: profile
                     for agent_id, profile in profiles.items()
@@ -2272,6 +2273,7 @@ class AgentBackend:
             timeout_seconds=self.timeout_seconds,
             configuration=configuration,
             explicit_model=self._explicit_model,
+            control_root=self.workspace.root,
             execution_profiles={
                 agent_id: profile
                 for agent_id, profile in profiles.items()
@@ -3048,6 +3050,10 @@ class AgentBackend:
     ) -> _StructuredReply:
         """Run one mandatory read prelude and one substantive provider call."""
 
+        continuation_fingerprint = self._legacy_continuation_fingerprint(
+            bound_agent,
+            execution_workspace,
+        )
         context = await self._perform_reference_read_prelude(
             bound_agent,
             session_id=session_id,
@@ -3056,6 +3062,7 @@ class AgentBackend:
             reference_read=reference_read,
             provider_name=provider_name,
             execution_workspace=execution_workspace,
+            continuation_fingerprint=continuation_fingerprint,
         )
         framed_payload = dict(payload)
         framed_payload["untrusted_writing_artifact_context"] = context
@@ -3079,12 +3086,14 @@ class AgentBackend:
                 session_id=session_id,
                 definition=bound_agent.definition,
                 provider_failure=True,
+                continuation_fingerprint=continuation_fingerprint,
             )
             raise
         self._complete_reference_read(
             reference_read,
             session_id=session_id,
             definition=bound_agent.definition,
+            continuation_fingerprint=continuation_fingerprint,
         )
         return reply
 
@@ -3098,6 +3107,7 @@ class AgentBackend:
         reference_read: ReferenceReadInvocation,
         provider_name: str,
         execution_workspace: ProviderExecutionWorkspace | None = None,
+        continuation_fingerprint: str,
     ) -> list[dict[str, object]]:
         """Obtain one exact provider action, then transiently frame its bytes."""
 
@@ -3126,6 +3136,7 @@ class AgentBackend:
                 definition=bound_agent.definition,
                 provider_failure=True,
                 taint=False,
+                continuation_fingerprint=continuation_fingerprint,
             )
             raise
 
@@ -3166,6 +3177,7 @@ class AgentBackend:
                 session_id=session_id,
                 definition=bound_agent.definition,
                 provider_failure=False,
+                continuation_fingerprint=continuation_fingerprint,
             )
             raise
 
@@ -3175,6 +3187,7 @@ class AgentBackend:
         *,
         session_id: str,
         definition: AgentDefinition,
+        continuation_fingerprint: str,
     ) -> None:
         """Record and accept one structurally valid substantive result."""
 
@@ -3204,6 +3217,7 @@ class AgentBackend:
                 session_id=session_id,
                 definition=definition,
                 provider_failure=False,
+                continuation_fingerprint=continuation_fingerprint,
             )
             raise
 
@@ -3215,6 +3229,7 @@ class AgentBackend:
         session_id: str,
         definition: AgentDefinition,
         provider_failure: bool,
+        continuation_fingerprint: str,
         taint: bool = True,
     ) -> None:
         """Best-effort terminate and taint while preserving a primary failure."""
@@ -3236,6 +3251,7 @@ class AgentBackend:
                 reference_read,
                 session_id=session_id,
                 definition=definition,
+                continuation_fingerprint=continuation_fingerprint,
             )
 
     @staticmethod
@@ -3262,12 +3278,17 @@ class AgentBackend:
         *,
         session_id: str,
         definition: AgentDefinition,
+        continuation_fingerprint: str,
     ) -> None:
         """Best-effort taint a thread after a successful persisted prelude."""
 
         del reference_read
         try:
-            self._taint_thread(session_id, definition)
+            self._taint_thread(
+                session_id,
+                definition,
+                fingerprint=continuation_fingerprint,
+            )
         except BaseException:
             pass
 
@@ -3876,6 +3897,10 @@ class AgentBackend:
         """
 
         self._ensure_open()
+        continuation_fingerprint = self._legacy_continuation_fingerprint(
+            bound_agent,
+            execution_workspace,
+        )
         reference_context: list[dict[str, object]] | None = None
         if reference_read is not None:
             reference_context = await self._perform_reference_read_prelude(
@@ -3885,6 +3910,7 @@ class AgentBackend:
                 reference_read=reference_read,
                 provider_name=_provider_name,
                 execution_workspace=execution_workspace,
+                continuation_fingerprint=continuation_fingerprint,
             )
         observation_frame: str | None = None
         after_read = False
@@ -3993,6 +4019,7 @@ class AgentBackend:
                             reference_read,
                             session_id=request.session_id,
                             definition=bound_agent.definition,
+                            continuation_fingerprint=continuation_fingerprint,
                         )
                     return outcome
 
@@ -4036,10 +4063,7 @@ class AgentBackend:
                 self._taint_retrieval_thread_without_replacing_failure(
                     request.session_id,
                     bound_agent.definition,
-                    fingerprint=self._legacy_continuation_fingerprint(
-                        bound_agent,
-                        execution_workspace,
-                    ),
+                    fingerprint=continuation_fingerprint,
                 )
             if reference_read is not None:
                 self._fail_reference_read_without_replacing(
@@ -4048,6 +4072,7 @@ class AgentBackend:
                     session_id=request.session_id,
                     definition=bound_agent.definition,
                     provider_failure=reference_provider_failure,
+                    continuation_fingerprint=continuation_fingerprint,
                 )
             raise
 
@@ -5305,6 +5330,13 @@ class AgentBackend:
             payload,
             call_kind=ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
         )
+        definition_fingerprint, effective_policy_fingerprint = (
+            self._effective_context_continuation_fingerprints(
+                bound_agent,
+                request.policy_fingerprint,
+                request.execution_workspace,
+            )
+        )
         result = await self._invoke_context_physical(
             bound_agent,
             scope=request.scope,
@@ -5381,8 +5413,8 @@ class AgentBackend:
                 request.scope if request.continuation_identity is None
                 else request.continuation_identity.checkpoint_scope(),
                 bound_agent.vendor,
-                f"sha256:{bound_agent.definition.fingerprint}",
-                request.policy_fingerprint,
+                definition_fingerprint,
+                effective_policy_fingerprint,
             )
             if isinstance(failure, asyncio.CancelledError):
                 outcome = ReferenceAuthorizationErrorCode.CANCELLED

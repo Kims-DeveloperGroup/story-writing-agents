@@ -7,6 +7,7 @@ import copy
 import json
 import os
 import pickle
+import shutil
 import sys
 import tempfile
 import threading
@@ -16,12 +17,14 @@ from pathlib import Path
 from unittest import mock
 
 from story_writing_agents.git.session_resources import GitSessionGenerationPin
+from story_writing_agents import codex_adapter as codex_module
 from story_writing_agents.codex_adapter import CodexAdapter
 from story_writing_agents.orchestrator import _codex_execution_workspace_manager
 from story_writing_agents.provider_execution_workspace import (
     ProviderExecutionWorkspace,
     mint_provider_execution_workspace,
 )
+from story_writing_agents.provider_adapter import ProviderInvocationError
 from story_writing_agents import provider_process as process_module
 from story_writing_agents.provider_process import (
     DarwinSandboxRequirements,
@@ -254,13 +257,21 @@ class ProviderExecutionWorkspaceTests(unittest.TestCase):
         instructions = "Exact staged instructions"
         (staging / "AGENTS.md").write_text(instructions, encoding="utf-8")
         schema = base / "schema.json"
-        output = base / "response.json"
+        output_parent = base / "output"
+        output_parent.mkdir()
+        output = output_parent / "response.json"
         schema.write_text("{}", encoding="utf-8")
         native = base / "codex-home"
+        native.mkdir(mode=0o700)
         owner = SimpleNamespace(
             executable="codex",
             _which=mock.Mock(return_value=mock.Mock(return_value=str(executable))),
             invocation_settings=mock.Mock(return_value=(None, None)),
+            _control_root=base / "control",
+        )
+        owner._control_root.mkdir()
+        owner._native_state_directory = lambda **arguments: (
+            CodexAdapter._native_state_directory(owner, **arguments)
         )
         with mock.patch.dict(os.environ, {"CODEX_HOME": str(native)}):
             command, sandbox = CodexAdapter._confined_command(
@@ -281,13 +292,131 @@ class ProviderExecutionWorkspaceTests(unittest.TestCase):
         self.assertNotIn(str(staging), command)
         self.assertNotIn("project_doc_max_bytes=", "\n".join(command))
         self.assertEqual(sandbox.executable, executable)
-        self.assertEqual(sandbox.read_subpaths, (executable.parent, self.root))
+        self.assertEqual(sandbox.read_subpaths, (executable.parent,))
+        self.assertNotIn(self.root, sandbox.read_subpaths)
         self.assertEqual(sandbox.read_paths, (schema,))
         self.assertEqual(sandbox.write_subpaths, (native,))
         self.assertEqual(sandbox.write_paths, (output,))
         self.assertEqual(sandbox.deny_subpaths, (self.root / ".git", staging))
         self.assertEqual(sandbox.deny_write_subpaths, (self.root,))
         self.assertTrue(sandbox.network)
+
+    def test_codex_native_state_must_be_narrow_owned_and_outside_protected_roots(
+        self,
+    ) -> None:
+        base = Path(self.temporary.name).resolve()
+        staging = base / "staging"
+        output_parent = base / "output"
+        safe = base / "native"
+        control = base / "control"
+        for directory in (staging, output_parent, safe, control):
+            directory.mkdir(mode=0o700)
+        output = output_parent / "response.json"
+        owner = SimpleNamespace(_control_root=control)
+
+        with mock.patch.dict(os.environ, {"CODEX_HOME": str(safe)}):
+            self.assertEqual(
+                CodexAdapter._native_state_directory(
+                    owner,
+                    session_root=self.root,
+                    staging=staging,
+                    output=output,
+                ),
+                safe,
+            )
+
+        unsafe = (
+            Path("/"),
+            control,
+            self.root,
+            staging,
+            output_parent,
+            base / "missing",
+        )
+        for candidate in unsafe:
+            with self.subTest(candidate=candidate), mock.patch.dict(
+                os.environ,
+                {"CODEX_HOME": str(candidate)},
+            ), self.assertRaisesRegex(
+                ProviderInvocationError,
+                "native state directory is unsafe",
+            ):
+                CodexAdapter._native_state_directory(
+                    owner,
+                    session_root=self.root,
+                    staging=staging,
+                    output=output,
+                )
+
+        broad = base / "group-writable"
+        broad.mkdir(mode=0o770)
+        broad.chmod(0o770)
+        with mock.patch.dict(os.environ, {"CODEX_HOME": str(broad)}), self.assertRaises(
+            ProviderInvocationError
+        ):
+            CodexAdapter._native_state_directory(
+                owner,
+                session_root=self.root,
+                staging=staging,
+                output=output,
+            )
+
+    def test_codex_instruction_argument_limit_is_applied_to_encoded_value(self) -> None:
+        workspace = self.mint()
+        self.addCleanup(workspace.close)
+        base = Path(self.temporary.name).resolve()
+        executable = base / "native-codex"
+        executable.write_bytes(b"native-placeholder")
+        staging = base / "staging"
+        output_parent = base / "output"
+        native = base / "native"
+        control = base / "control"
+        for directory in (staging, output_parent, native, control):
+            directory.mkdir(mode=0o700)
+        definition_path = staging / "AGENTS.md"
+        schema = base / "schema.json"
+        schema.write_text("{}", encoding="utf-8")
+        output = output_parent / "response.json"
+        owner = SimpleNamespace(
+            executable="codex",
+            _which=mock.Mock(return_value=mock.Mock(return_value=str(executable))),
+            invocation_settings=mock.Mock(return_value=(None, None)),
+            _control_root=control,
+        )
+        owner._native_state_directory = lambda **arguments: (
+            CodexAdapter._native_state_directory(owner, **arguments)
+        )
+        limit = codex_module._MAX_DEVELOPER_INSTRUCTIONS_ARGUMENT_UTF8_BYTES
+        overhead = len('developer_instructions=""'.encode("utf-8"))
+
+        with mock.patch.dict(os.environ, {"CODEX_HOME": str(native)}):
+            definition_path.write_text("x" * (limit - overhead), encoding="utf-8")
+            command, _sandbox = CodexAdapter._confined_command(
+                owner, staging, schema, output, None, "plot_architect", workspace,
+            )
+            argument = next(
+                item for item in command if item.startswith("developer_instructions=")
+            )
+            self.assertEqual(len(argument.encode("utf-8")), limit)
+
+            definition_path.write_text(
+                "x" * (limit - overhead + 1),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                ProviderInvocationError,
+                "safe process argument limit",
+            ) as caught:
+                CodexAdapter._confined_command(
+                    owner,
+                    staging,
+                    schema,
+                    output,
+                    None,
+                    "plot_architect",
+                    workspace,
+                )
+        self.assertFalse(caught.exception.taint_existing_thread)
 
 
 class ProviderDescriptorExecutionTests(unittest.IsolatedAsyncioTestCase):
@@ -348,6 +477,136 @@ class ProviderDescriptorExecutionTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(observed["passed_open"])
             self.assertEqual(os.getcwd(), parent_cwd)
 
+    async def test_broker_only_profile_denies_named_replacement_bytes(self) -> None:
+        if sys.platform != "darwin":
+            self.skipTest("Darwin SBPL is platform-specific")
+        with tempfile.TemporaryDirectory(prefix="provider-replacement-") as temporary:
+            base = Path(temporary).resolve()
+            root = base / "session"
+            moved = base / "moved"
+            root.mkdir()
+            descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            root.rename(moved)
+            root.mkdir()
+            replacement = root / "replacement.txt"
+            replacement.write_text("replacement bytes", encoding="utf-8")
+            executable = Path("/bin/cat")
+            requirements = DarwinSandboxRequirements(
+                executable=executable,
+                read_subpaths=(executable.parent,),
+                deny_subpaths=(root / ".git",),
+                deny_write_subpaths=(root,),
+            )
+            sandboxed = process_module._darwin_confined_command(
+                (str(executable), str(replacement)),
+                requirements,
+            )
+            command = (
+                os.path.realpath(sys.executable),
+                "-I",
+                "-c",
+                process_module._DESCRIPTOR_EXEC_HELPER,
+                str(descriptor),
+                *sandboxed,
+            )
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *command,
+                    pass_fds=(descriptor,),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await process.communicate()
+            finally:
+                os.close(descriptor)
+            self.assertNotEqual(process.returncode, 0)
+            self.assertEqual(stdout, b"")
+            self.assertNotIn(b"replacement bytes", stderr)
+
+    async def test_native_codex_exec_help_starts_without_session_tree_read(
+        self,
+    ) -> None:
+        if sys.platform != "darwin":
+            self.skipTest("Darwin SBPL is platform-specific")
+        located = shutil.which("codex")
+        if located is None:
+            self.skipTest("Codex CLI is unavailable")
+        executable = Path(os.path.realpath(located))
+        with tempfile.TemporaryDirectory(prefix="provider-codex-help-") as temporary:
+            base = Path(temporary).resolve()
+            root = base / "session"
+            native = base / "native"
+            staging = base / "staging"
+            output_parent = base / "output"
+            for directory in (root, native, staging, output_parent):
+                directory.mkdir(mode=0o700)
+            schema = base / "schema.json"
+            output = output_parent / "response.json"
+            schema.write_text('{"type":"object"}', encoding="utf-8")
+            descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            identity = os.fstat(descriptor)
+            pin = object.__new__(GitSessionGenerationPin)
+            workspace = mint_provider_execution_workspace(
+                session_id="session",
+                worktree_root=root,
+                root_identity=(identity.st_dev, identity.st_ino),
+                generation_provenance=_PROVENANCE,
+                root_descriptor=descriptor,
+                generation_pin=pin,
+                failure_factory=_BindingLost,
+            )
+            requirements = DarwinSandboxRequirements(
+                executable=executable,
+                read_subpaths=(executable.parent,),
+                read_paths=(schema,),
+                write_subpaths=(native,),
+                write_paths=(output,),
+                deny_subpaths=(root / ".git", staging),
+                deny_write_subpaths=(root,),
+                network=True,
+            )
+            command = (
+                str(executable),
+                "--ask-for-approval",
+                "never",
+                "--sandbox",
+                "read-only",
+                "--cd",
+                ".",
+                "exec",
+                "--json",
+                "--skip-git-repo-check",
+                "--ignore-user-config",
+                "--ignore-rules",
+                "--output-schema",
+                str(schema),
+                "--output-last-message",
+                str(output),
+                "--help",
+            )
+            environment = dict(os.environ)
+            environment["CODEX_HOME"] = str(native)
+            with mock.patch.object(
+                GitSessionGenerationPin, "require_current", autospec=True,
+            ), mock.patch.object(
+                GitSessionGenerationPin, "close", autospec=True,
+            ):
+                try:
+                    result = await run_process(
+                        ProcessRequest(
+                            command,
+                            b"",
+                            10,
+                            env=environment,
+                            execution_workspace=workspace,
+                            darwin_sandbox=requirements,
+                        )
+                    )
+                finally:
+                    workspace.close()
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertIn(b"Usage:", result.stdout)
+
 
 class DarwinSandboxCompilationTests(unittest.TestCase):
     def test_profile_has_exact_allows_and_deny_overrides(self) -> None:
@@ -386,7 +645,15 @@ class DarwinSandboxCompilationTests(unittest.TestCase):
     def test_confinement_rejects_wrong_executable_and_noncanonical_inputs(self) -> None:
         executable = Path(os.path.realpath(sys.executable))
         requirements = DarwinSandboxRequirements(executable=executable)
-        with mock.patch.object(process_module.sys, "platform", "darwin"):
+        with mock.patch.object(
+            process_module.sys,
+            "platform",
+            "darwin",
+        ), mock.patch.object(
+            process_module,
+            "_DARWIN_SANDBOX_EXECUTABLE",
+            executable,
+        ):
             with self.assertRaisesRegex(ProcessStartFailed, "InvalidDarwinSandboxExecutable"):
                 process_module._darwin_confined_command(("wrong",), requirements)
         with self.assertRaisesRegex(ValueError, "canonical paths"):

@@ -51,6 +51,9 @@ from story_writing_agents.git.session_contracts import (
 )
 from story_writing_agents.git.process import GitProcessRunner
 from story_writing_agents.models import AgentStateEntry, DebateMessage
+from story_writing_agents.provider_execution_workspace import (
+    ProviderExecutionWorkspace,
+)
 from story_writing_agents.workspace import Workspace
 from story_writing_agents.workspace import core as workspace_core
 from story_writing_agents.workspace.core import SessionSourceWorkspace
@@ -488,6 +491,7 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
         finally:
             object.__setattr__(binding, "_operation_lock", original_lock)
         self.assertEqual(len(failures), 8)
+
         for failure in failures:
             self.assertIs(type(failure), SessionArtifactBindingError)
             self.assertEqual(
@@ -528,6 +532,47 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
             binding,
         )
         self.assertEqual(service._session_id, self.session_id)
+
+    def test_provider_workspace_mint_postcheck_failure_closes_owned_resources(
+        self,
+    ) -> None:
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        captured: dict[str, object] = {}
+        original_mint = initialization_module.mint_provider_execution_workspace
+
+        def capture_mint(**arguments):
+            captured["descriptor"] = arguments["root_descriptor"]
+            captured["pin"] = arguments["generation_pin"]
+            workspace = original_mint(**arguments)
+            captured["workspace"] = workspace
+            return workspace
+
+        failure = SessionArtifactBindingError("synthetic final postcheck loss")
+        with mock.patch.object(
+            initialization_module,
+            "mint_provider_execution_workspace",
+            side_effect=capture_mint,
+        ), mock.patch.object(
+            ProviderExecutionWorkspace,
+            "require_current",
+            autospec=True,
+            side_effect=failure,
+        ):
+            with self.assertRaises(SessionArtifactBindingError):
+                binding.open_provider_execution_workspace().__enter__()
+
+        descriptor = captured["descriptor"]
+        self.assertIsInstance(descriptor, int)
+        with self.assertRaises(OSError):
+            os.fstat(descriptor)
+        pin = captured["pin"]
+        self.assertEqual(pin._descriptors, ())
+        workspace = captured["workspace"]
+        self.assertEqual(workspace._root_descriptor, -1)
+        self.assertIsNone(workspace._generation_pin)
 
     def test_forked_binding_factories_fail_before_copied_lock_and_revoke_safely(
         self,

@@ -1686,7 +1686,9 @@ missing, replaced, symlinked, or otherwise no longer matches before launch,
 the call fails without a provider process and without falling back to the
 control root, current directory, staging, or another session. Restore or
 reopen the exact READY session resources, then submit fresh authorized work;
-the runtime does not replay the failed call automatically.
+the runtime does not replay the failed call automatically. The descriptor CWD
+does not authorize session filesystem reads: host-owned context, reference,
+SEARCH, and READ services remain the only story-content delivery path.
 
 A valid replacement generation at the same pathname is intentionally
 incompatible with prior Codex continuation state. The next safe authorized
@@ -1703,13 +1705,26 @@ new top-level authority and, for references, a new operation, capture,
 coordinator, and capability. Never infer non-execution from a missing accepted
 result.
 
-Darwin sandbox unavailability, an unsupported host, or invalid canonical
-resources fails before submission and has no unconfined fallback. Apple's
-underlying `sandbox-exec` facility is deprecated, so deployment checks must
-treat its absence as loss of Codex story-call capability. Authentication,
-catalog, help, and other management probes are outside this story boundary.
+Darwin sandbox unavailability, an unsupported host, invalid canonical
+resources, or unsafe native state fails before submission and has no
+unconfined fallback. For `CODEX_HOME`, verify an existing effective-user-owned
+directory with no group/other write bits that is not filesystem root or user
+home and does not contain or sit beneath the control root, session, staging, or
+response-output directory. Apple's underlying `sandbox-exec` facility is
+deprecated, so deployment checks must treat its absence as loss of Codex story-
+call capability. Authentication, catalog, help, and other management probes
+are outside this story boundary.
 Antigravity recovery remains unchanged until
 [Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
+
+Codex also rejects a fully encoded `developer_instructions=` process argument
+larger than 512 KiB before submission and without tainting an existing thread.
+The limit includes the prefix, JSON quotes, escapes, and UTF-8 bytes, so raw
+instruction-file size is not the acceptance measure. For an older custom
+definition that depended on larger file staging, keep stable role constraints
+in the binding and migrate story material to host-owned context, explicit
+references, or SEARCH/READ sources. Do not weaken the limit or place that
+material in the session tree for provider filesystem access.
 
 ## Controller cancellation proof
 

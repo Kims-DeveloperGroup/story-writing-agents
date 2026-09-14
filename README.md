@@ -306,12 +306,19 @@ agent call, the runtime derives a call-local execution capability from that
 binding. The child enters the descriptor-selected exact session worktree and
 uses `--cd .`, so both its OS working directory and native project root are the
 same pinned generation, never prompt staging or the control workspace. On
-Darwin, a second default-deny sandbox admits read-only session content except
-`.git`, exact provider/runtime transport and native-state resources, and
-network access; it denies session writes and all other workspace paths. Bound
-instructions, schema, and response transport remain outside story Git. The
+Darwin, a second default-deny sandbox grants the provider no session-tree read
+or write access and explicitly denies `.git` and prompt staging. Host-owned
+context, explicit-reference, SEARCH, and READ services select and deliver story
+content through the provider payload instead. Closed exceptions admit only
+provider/runtime transport, outbound network access, and an existing
+owner-controlled `CODEX_HOME` that cannot overlap the control root, session,
+staging, or output transport. Bound instructions, schema, and response
+transport remain outside story Git. The
 deprecated Darwin sandbox facility is fail-closed when unavailable, and an
 unsupported host does not fall back to an unconfined Codex story call.
+Codex also rejects a fully encoded `developer_instructions=` argument above
+512 KiB before submission; large custom bindings should deliver story material
+through host-owned context, references, or SEARCH/READ instead.
 Antigravity adopts the corresponding worktree boundary separately in
 [Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
 Create or reopen the session through the lifecycle first.

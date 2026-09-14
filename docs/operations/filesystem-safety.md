@@ -216,17 +216,25 @@ callback.
 
 Codex process creation requires Darwin's `sandbox-exec` and canonicalized
 resource paths. The compiled SBPL profile denies by default. It admits reads of
-the exact session subtree, then overrides that allowance to deny session
-`.git` reads/writes and every session write. Because no other workspace path is
-allowed, the initialization/control root, sibling worktrees, lexical traversal,
-and symlink escape targets remain denied. Prompt staging is explicitly denied.
-The closed non-session allowances cover the resolved executable directory,
-required system runtime files, the exact schema read and output write, the
-provider-native state subtree, null/random devices, process support, and
-outbound network/system sockets. Instructions are injected after a prelaunch
-staging read; schema and output stay in external temporary storage. The call
-therefore creates no provider-definition or output residue in the story Git
-tree.
+the resolved executable directory and required system runtime files, but none
+of the exact session subtree. Session `.git` reads/writes and every session
+write remain explicit denies. The initialization/control root, sibling
+worktrees, lexical traversal, symlink escape targets, and prompt staging are
+also denied. Descriptor-selected CWD therefore supplies process placement and
+generation identity without granting story-content access. Context capture,
+explicit references, and SEARCH/READ remain host-owned guarded reads whose
+selected bytes enter only provider payloads or observations.
+
+The remaining closed allowances cover the exact schema read and output write,
+null/random devices, process support, outbound network/system sockets, and one
+provider-native state subtree. Resolved `CODEX_HOME` is accepted only when it
+already names a directory owned by the effective user with no group/other write
+bits. It must be neither the filesystem root nor the user home, and it may not
+overlap in either direction with the exact control root, selected session,
+prompt staging, or response-output directory. Invalid or unsafe state fails
+before launch. Instructions are injected after a prelaunch staging read;
+schema and output stay in external temporary storage. The call therefore
+creates no provider-definition or output residue in the story Git tree.
 
 The generation is checked before descriptor duplication, after child creation,
 after process return, and before result/ledger acceptance. A deleted, replaced,

@@ -131,7 +131,9 @@ The continuity pin alone grants no process working-directory authority. For
 each Codex story invocation, the same `SessionArtifactBinding` separately mints
 an opaque call-local execution capability: the provider enters the retained
 session-root descriptor and receives native project root `--cd .` under the
-fail-closed Darwin boundary. See the
+fail-closed Darwin boundary. That placement grants no session filesystem read
+authority; host-owned context, reference, SEARCH, and READ services deliver
+only selected story content in provider payloads and observations. See the
 [Codex session execution boundary](backend-and-sessions.md#codex-session-execution-boundary).
 Antigravity adoption remains
 [Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).

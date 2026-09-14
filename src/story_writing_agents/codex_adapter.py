@@ -8,6 +8,7 @@ import math
 import os
 import re
 import shutil
+import stat
 import tempfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -48,6 +49,8 @@ from .provider_execution_workspace import ProviderExecutionWorkspace
 
 
 _SAFE_THREAD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+# Leave substantial headroom below Darwin's aggregate process-argument ceiling.
+_MAX_DEVELOPER_INSTRUCTIONS_ARGUMENT_UTF8_BYTES = 512 * 1_024
 
 
 class CodexAdapter:
@@ -62,6 +65,7 @@ class CodexAdapter:
         timeout_seconds: float,
         configuration: ConfigurationSnapshot,
         explicit_model: str | None,
+        control_root: Path,
         execution_profiles: Mapping[str, AgentExecutionProfile] | None = None,
         create_process: Callable[[], CreateProcess] = (
             lambda: asyncio.create_subprocess_exec
@@ -72,8 +76,16 @@ class CodexAdapter:
         ),
         which: Callable[[], Callable[[str], str | None]] = lambda: shutil.which,
     ) -> None:
+        if (
+            not isinstance(control_root, Path)
+            or not control_root.is_absolute()
+            or Path(os.path.realpath(control_root)) != control_root
+            or not control_root.is_dir()
+        ):
+            raise ValueError("Codex control root must be a canonical directory")
         self.executable = executable
         self.timeout_seconds = timeout_seconds
+        self._control_root = control_root
         self._configuration = configuration
         self._explicit_model = explicit_model
         self._execution_profiles = (
@@ -511,12 +523,12 @@ class CodexAdapter:
         staging = Path(os.path.realpath(staging_directory))
         schema = Path(os.path.realpath(schema_path))
         output = Path(os.path.realpath(output_path))
-        native_state = Path(
-            os.path.realpath(
-                os.environ.get("CODEX_HOME", os.fspath(Path.home() / ".codex"))
-            )
-        )
         session_root = Path(os.path.realpath(execution_workspace.worktree_root))
+        native_state = self._native_state_directory(
+            session_root=session_root,
+            staging=staging,
+            output=output,
+        )
         definition_path = staging / "AGENTS.md"
         try:
             developer_instructions = definition_path.read_text(
@@ -528,9 +540,21 @@ class CodexAdapter:
                 "Codex bound instructions are unavailable",
                 taint_existing_thread=False,
             ) from exc
+        developer_instructions_argument = (
+            "developer_instructions="
+            + json.dumps(developer_instructions, ensure_ascii=False)
+        )
+        if (
+            len(developer_instructions_argument.encode("utf-8", errors="strict"))
+            > _MAX_DEVELOPER_INSTRUCTIONS_ARGUMENT_UTF8_BYTES
+        ):
+            raise ProviderInvocationError(
+                "Codex bound instructions exceed the safe process argument limit",
+                taint_existing_thread=False,
+            )
         sandbox = DarwinSandboxRequirements(
             executable=executable,
-            read_subpaths=(executable.parent, session_root),
+            read_subpaths=(executable.parent,),
             read_paths=(schema,),
             write_subpaths=(native_state,),
             write_paths=(output,),
@@ -576,10 +600,7 @@ class CodexAdapter:
                 "--config",
                 "project_root_markers=[]",
                 "--config",
-                "developer_instructions=" + json.dumps(
-                    developer_instructions,
-                    ensure_ascii=False,
-                ),
+                developer_instructions_argument,
                 "--output-schema",
                 os.fspath(schema),
                 "--output-last-message",
@@ -591,6 +612,58 @@ class CodexAdapter:
         command.append("-")
         execution_workspace.require_current()
         return command, sandbox
+
+    def _native_state_directory(
+        self,
+        *,
+        session_root: Path,
+        staging: Path,
+        output: Path,
+    ) -> Path:
+        """Return a narrow, owned Codex state root or fail before launch."""
+
+        native_state = Path(
+            os.path.realpath(
+                os.environ.get("CODEX_HOME", os.fspath(Path.home() / ".codex"))
+            )
+        )
+        home = Path(os.path.realpath(Path.home()))
+
+        def overlaps(first: Path, second: Path) -> bool:
+            return bool(
+                first == second
+                or first in second.parents
+                or second in first.parents
+            )
+
+        try:
+            observed = os.stat(native_state, follow_symlinks=False)
+        except OSError:
+            observed = None
+        effective_uid = os.geteuid() if hasattr(os, "geteuid") else None
+        if (
+            observed is None
+            or not stat.S_ISDIR(observed.st_mode)
+            or effective_uid is None
+            or observed.st_uid != effective_uid
+            or stat.S_IMODE(observed.st_mode) & 0o022
+            or native_state == Path(native_state.anchor)
+            or native_state == home
+            or any(
+                overlaps(native_state, protected)
+                for protected in (
+                    session_root,
+                    staging,
+                    output.parent,
+                    self._control_root,
+                )
+            )
+        ):
+            raise ProviderInvocationError(
+                "Codex native state directory is unsafe",
+                taint_existing_thread=False,
+            )
+        return native_state
 
     def command(
         self,

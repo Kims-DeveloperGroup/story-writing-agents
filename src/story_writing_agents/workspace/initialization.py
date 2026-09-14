@@ -710,6 +710,9 @@ class SessionArtifactBinding:
             pin = None
             execution_workspace.require_current()
         except BaseException as failure:
+            if execution_workspace is not None:
+                execution_workspace.close(failure=failure)
+                execution_workspace = None
             _close_untransferred_artifact_descriptor(descriptor, failure)
             if pin is not None:
                 try:
