@@ -846,7 +846,10 @@ class CallEvidence:
                 'Setup-only guard blocked a model invocation')
         number, directory = self.reserve()
         argv = list(request.command)
-        agent = argv[argv.index('--agent') + 1] if '--agent' in argv else 'lead_orchestrator'
+        native_agent = argv[argv.index('--agent') + 1] if '--agent' in argv else 'lead_orchestrator'
+        agent = next((semantic_id for semantic_id in ROSTER
+                      if native_agent == semantic_id or native_agent.startswith(semantic_id + '-')),
+                     native_agent)
         payload = argv[argv.index('--print') + 1].encode() if '--print' in argv else request.stdin
         record = dict(number=number, vendor=vendor, agent=agent, directory=str(directory), payload_bytes=len(payload), submitted=False, fault=None, model=argv[argv.index('--model') + 1] if '--model' in argv else None, resumed='--conversation' in argv or 'resume' in argv)
         schema = (json.loads(argv[argv.index('--json-schema') + 1])
@@ -865,7 +868,7 @@ class CallEvidence:
         if vendor == 'antigravity':
             require(argv[argv.index('--output-format') + 1] == 'json', 'Antigravity JSON transport absent')
             require(request.stdin == b'', 'Unexpected Antigravity stdin transport')
-            staged = Path(request.cwd) / '.agents/agents' / agent / 'agent.md'
+            staged = Path(request.cwd) / '.agents/agents' / native_agent / 'agent.md'
             body = staged.read_bytes()
             require(b'through finish' in body, 'Current provider-local finish prompt absent')
             save(directory / 'staged.sanitized.json', {'sha256': digest(body), 'bytes': len(body)})
@@ -1426,10 +1429,11 @@ class ConversationCase:
         for index, fault in enumerate((None, 'known_error', 'utf8', 'json', 'unrelated_error', 'schema')):
             adapter = antigravity_adapter.AntigravityAdapter(executable=os.environ.get('STORY_ANTIGRAVITY_EXECUTABLE', 'agy'), timeout_seconds=180, state_root=self.directory / f'diagnostic-state-{index}', explicit_model=self.model, explicit_effort=None)
             binding = adapter.bind(definition)
+            role = adapter.session_role_projection(binding)
             with session_binding.open_ready_resources() as access:
                 access.install_provider_role(
-                    'plot_architect',
-                    adapter.session_role_projection_bytes(binding),
+                    role.native_agent_id,
+                    role.content,
                 )
             with session_binding.open_provider_execution_workspace() as execution_workspace:
                 payload = {'c': 'synthetic-correlation', 'q': 'Return exactly the schema-selected outer answer. action.result must contain assessment supports, assignment_id synthetic-assignment, input_ids [synthetic-input], and a short visible message. Set used_handles to [].'}

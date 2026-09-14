@@ -54,7 +54,10 @@ from .provider_process import (
     run_process,
 )
 from .provider_execution_workspace import ProviderExecutionWorkspace
-from .workspace.session_role_projection import require_session_role_projection
+from .workspace.session_role_projection import (
+    qualify_session_role_id,
+    require_session_role_projection,
+)
 
 
 _SAFE_CONVERSATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
@@ -142,6 +145,14 @@ class _NativeRecoveryBaseline:
     prefix_bytes: int = 0
     prefix_sha256: str | None = None
     prior_steps: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class AntigravitySessionRole:
+    """Exact staged native selector and its content-qualified role bytes."""
+
+    native_agent_id: str
+    content: bytes
 
 
 class AntigravityAdapter:
@@ -735,9 +746,26 @@ class AntigravityAdapter:
     def session_role_projection_bytes(cls, binding: ProviderBinding) -> bytes:
         """Return exact adapter-owned role bytes for guarded host projection."""
 
+        return cls.session_role_projection(binding).content
+
+    @classmethod
+    def session_role_projection(
+        cls,
+        binding: ProviderBinding,
+    ) -> AntigravitySessionRole:
+        """Return one validated content-qualified native session role."""
+
         if type(binding) is not ProviderBinding or binding.vendor != cls.vendor:
             raise OSError("Antigravity provider binding is invalid")
-        return cls._read_rules_source(binding.staging_directory / "agent.md")
+        content = cls._read_rules_source(binding.staging_directory / "agent.md")
+        native_agent_id = cls._projected_native_agent_id(
+            binding.definition.agent_id,
+            content,
+        )
+        return AntigravitySessionRole(
+            native_agent_id=native_agent_id,
+            content=content,
+        )
 
     @classmethod
     def _write_definition(
@@ -763,21 +791,12 @@ class AntigravityAdapter:
         """Wrap the canonical bound body once in static safe YAML framing."""
 
         body, body_components = cls._definition_file(definition)
-        identity = json.dumps(
+        base_wrapper = cls._custom_agent_wrapper(definition.agent_id)
+        native_agent_id = qualify_session_role_id(
             definition.agent_id,
-            ensure_ascii=True,
-            separators=(",", ":"),
+            base_wrapper + body,
         )
-        wrapper = (
-            "---\n"
-            f"name: {identity}\n"
-            "description: Isolated story-writing runtime main agent.\n"
-            "tools: [finish]\n"
-            "mainAgent: true\n"
-            "subagent: false\n"
-            "commandExecutionPolicy: off\n"
-            "---\n\n"
-        ).encode("utf-8", errors="strict")
+        wrapper = cls._custom_agent_wrapper(native_agent_id)
         components = tuple(
             ContextComponentBytes(
                 kind=component.kind,
@@ -798,6 +817,69 @@ class AntigravityAdapter:
         if sum(item.serialized_utf8_bytes for item in components) != len(content):
             raise ValueError("Antigravity custom-agent accounting is invalid")
         return content, components
+
+    @staticmethod
+    def _custom_agent_wrapper(agent_id: str) -> bytes:
+        identity = json.dumps(
+            agent_id,
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
+        return (
+            "---\n"
+            f"name: {identity}\n"
+            "description: Isolated story-writing runtime main agent.\n"
+            "tools: [finish]\n"
+            "mainAgent: true\n"
+            "subagent: false\n"
+            "commandExecutionPolicy: off\n"
+            "---\n\n"
+        ).encode("utf-8", errors="strict")
+
+    @classmethod
+    def _projected_native_agent_id(
+        cls,
+        semantic_agent_id: str,
+        content: bytes,
+    ) -> str:
+        prefix = b"---\nname: "
+        if not content.startswith(prefix):
+            raise OSError("Antigravity projected role is invalid")
+        end = content.find(b"\n", len(prefix))
+        if end < 0:
+            raise OSError("Antigravity projected role is invalid")
+        encoded_identity = content[len(prefix):end]
+        try:
+            native_agent_id = json.loads(
+                encoded_identity.decode("ascii", errors="strict")
+            )
+        except (UnicodeError, json.JSONDecodeError):
+            raise OSError("Antigravity projected role is invalid") from None
+        if (
+            type(native_agent_id) is not str
+            or encoded_identity
+            != json.dumps(
+                native_agent_id,
+                ensure_ascii=True,
+                separators=(",", ":"),
+            ).encode("ascii")
+        ):
+            raise OSError("Antigravity projected role is invalid")
+        base_content = (
+            prefix
+            + json.dumps(
+                semantic_agent_id,
+                ensure_ascii=True,
+                separators=(",", ":"),
+            ).encode("ascii")
+            + content[end:]
+        )
+        if native_agent_id != qualify_session_role_id(
+            semantic_agent_id,
+            base_content,
+        ):
+            raise OSError("Antigravity projected role is invalid")
+        return native_agent_id
 
     @staticmethod
     def _definition_file(
@@ -1007,6 +1089,19 @@ class AntigravityAdapter:
                 taint_existing_thread=False,
             ) from None
         try:
+            staged_role = self.session_role_projection(binding)
+        except OSError as exc:
+            failure = ProviderInvocationError(
+                "Antigravity provider workspace could not be prepared",
+                taint_existing_thread=False,
+            )
+            record_provider_failure_accounting(
+                failure,
+                state=ProviderCallState.PREPARED,
+                actual_transport_utf8_bytes=None,
+            )
+            raise failure from exc
+        try:
             transport_schema = self.native_output_schema(invocation.schema)
             output_format = (
                 "stream-json"
@@ -1019,6 +1114,7 @@ class AntigravityAdapter:
                 thread_id=invocation.thread_id,
                 agent_id=binding.definition.agent_id,
                 output_format=output_format,
+                native_agent_id=staged_role.native_agent_id,
             )
             prompt = invocation.payload_json.decode("utf-8", errors="strict")
             command.extend(["--print", prompt])
@@ -1042,11 +1138,10 @@ class AntigravityAdapter:
                 binding.definition.fingerprint,
             )
             self._prepare_owned_directory(provider_state_directory)
-            staged_agent_content = self.session_role_projection_bytes(binding)
             projected_role = require_session_role_projection(
                 execution_workspace,
-                agent_id=binding.definition.agent_id,
-                content=staged_agent_content,
+                native_agent_id=staged_role.native_agent_id,
+                content=staged_role.content,
             )
             command, darwin_sandbox = self._confined_command(
                 command,
@@ -1424,8 +1519,8 @@ class AntigravityAdapter:
         try:
             require_session_role_projection(
                 execution_workspace,
-                agent_id=binding.definition.agent_id,
-                content=staged_agent_content,
+                native_agent_id=staged_role.native_agent_id,
+                content=staged_role.content,
                 expected=projected_role,
             )
         except (OSError, RuntimeError) as exc:
@@ -1734,10 +1829,14 @@ class AntigravityAdapter:
         thread_id: str | None,
         agent_id: str,
         output_format: str = "json",
+        native_agent_id: str,
     ) -> list[str]:
         """Build Antigravity options from the already rendered transport schema."""
 
-        if _SAFE_CONVERSATION_ID.fullmatch(agent_id) is None:
+        if (
+            _SAFE_CONVERSATION_ID.fullmatch(agent_id) is None
+            or _SAFE_CONVERSATION_ID.fullmatch(native_agent_id) is None
+        ):
             raise ValueError("Antigravity custom agent ID is invalid")
         command = [
             self.executable,
@@ -1752,7 +1851,7 @@ class AntigravityAdapter:
                 "utf-8", errors="strict"
             ),
             "--agent",
-            agent_id,
+            native_agent_id,
             "--sandbox",
             "--mode",
             "plan",

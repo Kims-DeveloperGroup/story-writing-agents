@@ -348,9 +348,13 @@ provider-call finalizer is accepted; failure after checkpoint commit invalidates
 that exact committed generation. Direct execution-workspace ownership also
 revalidates currentness on exit; exit loss prevents an apparent success from
 returning, while an active body failure remains primary.
-Antigravity projects exact runtime-owned role bytes to the unversioned,
-read-only `.agents/agents/<agent-id>/agent.md`. That protected control file is
-the only provider-readable session leaf; mutable provider state remains
+Antigravity derives a content-qualified native selector from the semantic
+story-agent ID and deterministic base role bytes. That exact selector is the
+role's YAML name, `.agents/agents/<native-selector>/agent.md` directory, and
+`--agent` value. Semantic agent identity still owns routing, settings,
+accounting, and external provider state. Each protected `0400` role leaf is
+published create-only, remains unversioned, and can coexist with older role
+versions; runtime never replaces or prunes it. Mutable provider state remains
 external and generation-qualified, while schema/output transport also stays
 external. Codex continues to inject developer instructions directly and
 requires no worktree configuration file.

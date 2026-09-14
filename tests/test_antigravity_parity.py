@@ -1619,9 +1619,9 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("--output-format", argv)
             self.assertIn("--json-schema", argv)
             self.assertEqual(argv.count("--agent"), 1)
-            self.assertEqual(
-                argv[argv.index("--agent") + 1],
-                item["agent_id"],
+            self.assertEqual(argv[argv.index("--agent") + 1], item["selected_agent"])
+            self.assertRegex(
+                item["selected_agent"], rf"^{item['agent_id']}-[0-9a-f]{{64}}$",
             )
             self.assertIn("--sandbox", argv)
             self.assertIn("--disable-slash-commands", argv)
@@ -1652,7 +1652,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 cwd
                 / ".agents"
                 / "agents"
-                / str(item["agent_id"])
+                / str(item["selected_agent"])
                 / "agent.md"
             )
             self.assertEqual(

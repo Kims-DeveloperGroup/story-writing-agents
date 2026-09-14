@@ -1037,7 +1037,11 @@ class SessionArtifactAccess:
             _close_untransferred_artifact_descriptor(descriptor, failure)
             raise
 
-    def install_provider_role(self, agent_id: str, content: bytes) -> None:
+    def install_provider_role(
+        self,
+        native_agent_id: str,
+        content: bytes,
+    ) -> None:
         """Project one provider role through live Git and worktree authority."""
 
         self.require_active()
@@ -1049,7 +1053,7 @@ class SessionArtifactAccess:
             install_session_role_projection(
                 self._descriptor,
                 self._lease.common_descriptor,
-                agent_id=agent_id,
+                native_agent_id=native_agent_id,
                 content=content,
             )
             self.require_active()

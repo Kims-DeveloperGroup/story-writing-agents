@@ -765,11 +765,10 @@ boolean. Opening ready state and releasing access do not rewrite the manifest.
 
 The base key is used when the effective continuation fingerprint is the bound
 definition fingerprint. A different effective fingerprint, including a Codex
-or Antigravity session-generation fingerprint, uses the qualified key. Lookup and taint check
-that qualified record first. Only when it is absent may an exact-fingerprint
-legacy base record act as fallback; a present qualified record never falls
-back because it is tainted or incompatible. A successful store or fallback
-taint writes the qualified record while retaining the legacy base record.
+or Antigravity session-generation fingerprint, uses the qualified key. Lookup
+and taint for that generation address only the exact qualified record; they
+never fall back to or mutate the legacy base record. A successful store writes
+the qualified record while retaining the legacy base record.
 Other qualified generations are retained as well: ordinary load, store, and
 taint operations do not prune provider-thread history.
 
@@ -799,13 +798,24 @@ compatible, proved-generation provider conversation can resume later. Foreign
 or unproved generation state is retained but starts fresh rather than being
 adopted.
 
-The selected session worktree contains one persistent runtime-control
-projection at `.agents/agents/<agent-id>/agent.md`. Its bytes exactly match the
-adapter's staged role, the file is singly linked and read-only, and its
-directories are owner-controlled. The common Git exclusion contains
-`/.agents/`; story references, SEARCH/READ sources, and artifact paths also
-exclude this tree. It is therefore unversioned protected control data, not
-mutable provider-native residue or story content. Differing/unsafe bytes or
+The selected session worktree contains persistent runtime-control projections
+at `.agents/agents/<native-selector>/agent.md`. A domain-separated SHA-256
+selector is derived from the semantic agent ID and deterministic base role
+bytes, then used as the role YAML name, directory, and `--agent` value. The
+semantic ID still owns runtime state, settings, and accounting. Each projected
+file exactly matches the staged role, is singly linked with exact mode `0400`,
+and has owner-controlled directories. Content-qualified versions are published
+create-only, coexist, and are never replaced or pruned. An exact safe concurrent
+winner may be adopted only after full validation; a differing or unsafe winner
+is preserved and rejected.
+
+The common Git exclusion contains `/.agents/`; its parser recognizes LF and
+CRLF records, not lone CR separators, and fails closed without rewriting when
+a missing entry follows a terminal lone CR. Story references, SEARCH/READ
+sources, and artifact paths also exclude this tree. It is therefore unversioned
+protected control data, not mutable provider-native residue or story content.
+If required effective-user, descriptor-relative, no-follow, or create-only link
+support is missing, projection fails before access. Differing/unsafe bytes or
 foreign topology fail closed and are preserved. Failed fresh setup removes
 only still-empty, identity-matching directories created by that call.
 

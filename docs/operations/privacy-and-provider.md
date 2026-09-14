@@ -1208,13 +1208,16 @@ adapter uses the prompt argument. OS argument-size limits may reject large
 requests before process creation with a typed start failure and no submitted
 transport count.
 
-It projects exact runtime-owned role bytes to the unversioned, read-only
-`.agents/agents/<agent-id>/agent.md` in the selected session worktree, uses
-`--new-project` for fresh history or the exact retained `--conversation` ID for
-compatible generation-bound resume, and passes sandbox, plan-mode, and disabled-
-slash flags without an approval bypass. The role is protected control data, not
-story content or mutable provider residue; Git, story references, SEARCH/READ
-sources, and artifact paths exclude `.agents`. CLI 1.1.27 warns that plan mode
+It derives a content-qualified native selector from the semantic agent ID and
+deterministic base role bytes, then uses that exact selector as the YAML name,
+`.agents/agents/<native-selector>/agent.md` directory, and `--agent` value in
+the selected session worktree. The semantic ID remains the runtime state,
+settings, and accounting identity. The adapter uses `--new-project` for fresh
+history or the exact retained `--conversation` ID for compatible generation-
+bound resume, and passes sandbox, plan-mode, and disabled-slash flags without
+an approval bypass. The role is protected control data, not story content or
+mutable provider residue; Git, story references, SEARCH/READ sources, and
+artifact paths exclude `.agents`. CLI 1.1.27 warns that plan mode
 has no effect when slash commands are disabled. The argument list also contains
 the output schema, external generation-qualified state path, optional model/
 effort, and conversation ID. The child inherits the runtime environment. Keep
@@ -1239,12 +1242,17 @@ generation history starts fresh without deleting prior provider data. The
 adapter keeps its staged definitions and mutable native state outside the
 session tree. The session role projection instead uses descriptor-relative,
 no-follow validation: owner-controlled directories, exact bytes, and one singly
-linked role file with no write bits. Differing content, symbolic links, FIFOs,
-other nonregular entries, multiply linked files, writable roles, and foreign
-topology are rejected and preserved. Nonblocking file opens make FIFO and
-special-file failures prompt rather than waiting for content. Protect the
-complete workspace and provider-state paths with OS-level controls; the runtime
-provides neither encryption nor secure erase.
+linked role file with exact mode `0400`. Content-qualified versions are
+published create-only, coexist, and are never replaced or pruned. A concurrent
+winner is adopted only after exact validation; differing content, symbolic
+links, FIFOs, other nonregular entries, multiply linked files, writable roles,
+and foreign topology are rejected and preserved. If required effective-user,
+descriptor-relative, no-follow, or create-only link support is missing,
+projection fails before filesystem access. Nonblocking file opens make FIFO and
+special-file failures prompt
+rather than waiting for content. Protect the complete workspace and provider-
+state paths with OS-level controls; the runtime provides neither encryption nor
+secure erase.
 
 The custom definition declares only `finish`, but earlier CLI 1.1.27 stream
 probes advertised a 57-tool main-agent catalog. Neither that declaration nor

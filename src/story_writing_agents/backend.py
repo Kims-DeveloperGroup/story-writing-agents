@@ -7442,8 +7442,6 @@ class AgentBackend:
         manifest = self._read_manifest(session_id, missing_ok=False)
         assert manifest is not None
         raw = manifest["provider_threads"].get(key)
-        if raw is None and key != self._thread_key(definition):
-            raw = manifest["provider_threads"].get(self._thread_key(definition))
         if raw is None:
             return None
         validated = self._validate_thread(raw)
@@ -7509,8 +7507,6 @@ class AgentBackend:
             fingerprint=expected_fingerprint,
         )
         raw = manifest["provider_threads"].get(key)
-        if raw is None and key != self._thread_key(definition):
-            raw = manifest["provider_threads"].get(self._thread_key(definition))
         if raw is None:
             return
         thread = self._validate_thread(raw)
@@ -7773,13 +7769,13 @@ def provider_execution_workspace_manager(
             )
             if type(adapter) is not AntigravityAdapter:
                 raise OSError("Antigravity provider adapter is invalid")
-            content = adapter.session_role_projection_bytes(
+            role = adapter.session_role_projection(
                 bound_agent._provider_binding
             )
             with binding.open_ready_resources() as access:
                 access.install_provider_role(
-                    bound_agent.definition.agent_id,
-                    content,
+                    role.native_agent_id,
+                    role.content,
                 )
         except OSError as failure:
             raise BackendProtocolError(

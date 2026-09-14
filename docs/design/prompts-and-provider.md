@@ -520,11 +520,15 @@ in
 
 The Antigravity adapter binds the same verified definition and request models
 to the invocation-local session-generation capability. Before launch, runtime
-projects the bound definition's exact bytes as protected, unversioned control
-data at `.agents/agents/<agent-id>/agent.md`, selects that custom main agent with
-`--agent`, and launches `agy` without a shell from the descriptor-selected
-exact session worktree. That CWD is Antigravity's native project root; there is
-no adapter-owned working-directory fallback and Story does not pass `--project`.
+derives a content-qualified native selector from the semantic story-agent ID
+and deterministic base definition bytes. It substitutes that selector as the
+role's YAML name, projects the resulting exact bytes as protected, unversioned
+control data at `.agents/agents/<native-selector>/agent.md`, and supplies the
+same selector through `--agent`. The semantic ID continues to own runtime
+settings, state, and accounting. `agy` launches without a shell from the
+descriptor-selected exact session worktree. That CWD is Antigravity's native
+project root; there is no adapter-owned working-directory fallback and Story
+does not pass `--project`.
 A fresh thread uses `--new-project`; exact compatible generation-bound resume
 uses `--conversation <id>`.
 Story passes the exact payload as one `--print` argument with empty stdin,
@@ -595,8 +599,9 @@ Neither boundary makes a provider or executable trusted. Hashes detect change
 but do not encrypt or authorize content. Provider transcripts may be retained,
 and ending a story session keeps local thread references. The schema-v2
 provider-session manifest can retain a legacy base record and multiple
-fingerprint-qualified generations; qualified state takes precedence and
-ordinary thread updates do not prune the older records. Antigravity-native state
+fingerprint-qualified generations. A generation-qualified load or taint
+addresses only its exact qualified key and never falls back to the base key;
+ordinary thread updates do not prune older records. Antigravity-native state
 is retained on backend close; a tainted thread or changed definition starts a
 fresh provider conversation without deleting prior provider data.
 

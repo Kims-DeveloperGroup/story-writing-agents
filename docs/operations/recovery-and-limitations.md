@@ -1697,11 +1697,10 @@ adopt foreign native history, or treat path equality as generation equality.
 
 The schema-v2 provider-session manifest retains legacy base records and
 fingerprint-qualified records for successive generations. For an effective
-generation fingerprint, lookup and taint use its qualified record first and
-fall back to an exact-fingerprint base record only when that qualified key is
-absent. A fallback taint materializes the qualified tainted record without
-deleting the base, and ordinary thread updates do not prune any earlier
-generation record. Once a qualified key has been written, the manifest is
+generation fingerprint, lookup and taint address only its exact qualified key;
+they never fall back to or mutate the legacy base record. Ordinary thread
+updates do not prune any earlier generation record. Once a qualified key has
+been written, the manifest is
 forward-only: an older binary that accepts base keys alone rejects it. Do not
 downgrade in place or hand-delete retained records; stop all writers and restore
 a verified pre-upgrade workspace backup, or use a compatible newer runtime.
@@ -1728,11 +1727,17 @@ call capability. Authentication, catalog, help, and other management probes
 are outside this story boundary.
 
 For Antigravity, verify the exact protected
-`.agents/agents/<agent-id>/agent.md` projection. Differing bytes, unsafe modes,
-links, FIFOs/devices, or foreign entries block provider work and are preserved;
-do not overwrite or normalize them as retry. A failed fresh installation cleans
-only unchanged empty directories created by that call. Mutable native history
-remains external under its generation-qualified state path. Unproved history is
+`.agents/agents/<native-selector>/agent.md` projection. The selector is derived
+from the semantic agent ID and deterministic base role bytes and must match the
+role YAML name and `--agent` value. Differing bytes, unsafe modes, links,
+FIFOs/devices, or foreign entries block provider work and are preserved; do not
+overwrite or normalize them as retry. Exact `0400` role versions coexist,
+publication is create-only, and runtime never replaces or prunes a leaf. A
+concurrent winner is accepted only after full exact validation. A failed fresh
+installation cleans only unchanged empty directories created by that call. If
+effective-user, descriptor-relative, no-follow, or create-only link support is
+missing, projection fails before path access. Mutable native history remains
+external under its generation-qualified state path. Unproved history is
 retained but never resumed; restore the exact READY generation or allow a fresh
 bootstrap. Missing Darwin confinement fails closed without an adapter-control
 CWD fallback.
