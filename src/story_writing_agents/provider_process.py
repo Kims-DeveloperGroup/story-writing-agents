@@ -77,13 +77,29 @@ async def _communicate_streaming(
     async def read_stdout() -> None:
         if process.stdout is None:
             return
+        buffer = bytearray()
         while True:
-            line = await process.stdout.readline()
-            if not line:
+            chunk = await process.stdout.read(65536)
+            if not chunk:
                 break
-            stdout_chunks.append(line)
+            stdout_chunks.append(chunk)
+            buffer.extend(chunk)
+            while True:
+                newline_index = buffer.find(b"\n")
+                if newline_index == -1:
+                    break
+                line = bytes(buffer[: newline_index + 1])
+                del buffer[: newline_index + 1]
+                try:
+                    callback_result = on_stdout_line(line)
+                    if asyncio.iscoroutine(callback_result):
+                        await callback_result
+                except BaseException:
+                    pass
+        if buffer:
+            trailing_line = bytes(buffer)
             try:
-                callback_result = on_stdout_line(line)
+                callback_result = on_stdout_line(trailing_line)
                 if asyncio.iscoroutine(callback_result):
                     await callback_result
             except BaseException:

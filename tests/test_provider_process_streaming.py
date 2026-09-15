@@ -99,6 +99,29 @@ class TestProviderProcessStreaming(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.stdout, b"one\ntwo\nthree\n")
         self.assertEqual(result.returncode, 0)
 
+    async def test_streaming_handles_lines_larger_than_64k_buffer(self) -> None:
+        """Verify lines exceeding the default 64 KiB buffer are drained without ValueError."""
+        # Write a line of 128 KiB (131072 bytes) plus newline, then a smaller line.
+        large_payload = "a" * 131072
+        code = (
+            f"import sys; sys.stdout.write('{large_payload}\\nshort\\n'); "
+            "sys.stdout.flush()"
+        )
+        received: list[bytes] = []
+
+        request = ProcessRequest(
+            command=[sys.executable, "-c", code],
+            stdin=b"",
+            timeout_seconds=5.0,
+            on_stdout_line=lambda line: received.append(line),
+        )
+        result = await run_process(request)
+        self.assertEqual(len(received), 2)
+        self.assertEqual(len(received[0]), 131073)  # 131072 'a's + '\n'
+        self.assertEqual(received[1], b"short\n")
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(len(result.stdout), 131072 + 1 + 6)
+
     async def test_streaming_timeout_terminates_process(self) -> None:
         """Verify streaming calls that exceed timeout raise ProcessTimedOut."""
         code = "import time; time.sleep(10)"

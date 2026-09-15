@@ -18,12 +18,12 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 143.
 
-Direct internal dependency edges indexed: 574.
+Direct internal dependency edges indexed: 575.
 
 Directed internal dependency cycles indexed: 0.
 
 Edge and cycle totals exclude annotation-only `TYPE_CHECKING` imports. The
-all-import AST graph has 576 edges. Its two annotation-only edges are
+all-import AST graph has 577 edges. Its two annotation-only edges are
 `config -> workspace` and `interactive_terminal._core -> conversations`; the
 workspace cycle was already present in the 135-unit baseline
 (528 all-import / 526 runtime edges).
@@ -8465,7 +8465,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- The combined runtime has 143 production units, 574 runtime edges, 576
+- The combined runtime has 143 production units, 575 runtime edges, 577
   all-import edges, and no directed runtime cycle. Whole-source path parity is
   exact. Specialist routing adds one pure module and five net inward runtime
   edges over the provider-recovery baseline: artifact proposals replace their

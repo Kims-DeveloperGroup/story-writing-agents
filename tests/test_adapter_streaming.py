@@ -248,6 +248,126 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(captured_requests[0].on_stdout_line)
         self.assertEqual(result.thread_id, "conv_no_stream")
 
+    def _make_agy_binding(self, session_id: str):
+        agy_backend = AgentBackend(
+            self.workspace,
+            backend_overrides={PLOT_ARCHITECT: "antigravity"},
+        )
+        self.addCleanup(agy_backend.close)
+        adapter = agy_backend._antigravity_adapter
+        agy_definition = PromptAssembler(
+            self.workspace,
+            backend_overrides={PLOT_ARCHITECT: "antigravity"},
+        ).build_definition(
+            session_id=session_id,
+            agent_id=PLOT_ARCHITECT,
+        )
+        binding = adapter.bind(agy_definition)
+        return adapter, binding
+
+    async def test_antigravity_adapter_preserves_full_stdout_in_response_diagnostic(
+        self,
+    ) -> None:
+        """Verify ProviderResponseDiagnostic retains full process stdout containing stream events."""
+        from story_writing_agents.provider_adapter import ProviderInvocationError
+
+        adapter, binding = self._make_agy_binding("session_diag_test")
+        events: list[ProviderStreamEvent] = []
+
+        schema = {
+            "type": "object",
+            "properties": {"outline": {"type": "string"}},
+            "required": ["outline"],
+            "additionalProperties": False,
+        }
+
+        invocation = ProviderInvocation(
+            session_id="session_diag",
+            schema=schema,
+            payload={},
+            thread_id=None,
+            stream_sink=events.append,
+        )
+
+        stream_lines = [
+            b'{"type":"turn_start"}\n',
+            b'{"type":"thought","text":"Thinking..."}\n',
+            (
+                b'{"conversation_id": "conv_diag", "status": "SUCCESS", '
+                b'"structured_output": {"outline": "Recovered"}, '
+                b'"json_schema": {"type": "object", "properties": {"outline": {"type": "string"}}, "required": ["outline"], "additionalProperties": false}}\n'
+            ),
+        ]
+        full_stdout = b"".join(stream_lines)
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=full_stdout,
+                stderr=b"[agy] print timeout after 10s with turn in progress; returning partial output\n",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            with mock.patch.object(adapter, "_has_current_finish", return_value=True):
+                result = await adapter.invoke(binding, invocation)
+
+        # Incomplete output attaches response_diagnostic with FULL process stdout
+        self.assertIsNotNone(result.response_diagnostic)
+        self.assertEqual(result.response_diagnostic.stdout, full_stdout)
+        self.assertIn(b'{"type":"turn_start"}', result.response_diagnostic.stdout)
+
+    async def test_antigravity_adapter_strictly_rejects_duplicate_fields_in_streamed_result(
+        self,
+    ) -> None:
+        """Verify duplicate fields in a streamed result object trigger strict malformed output rejection."""
+        from story_writing_agents.provider_adapter import ProviderInvocationError
+
+        adapter, binding = self._make_agy_binding("session_dup_test")
+
+        schema = {
+            "type": "object",
+            "properties": {"outline": {"type": "string"}},
+            "required": ["outline"],
+            "additionalProperties": False,
+        }
+
+        invocation = ProviderInvocation(
+            session_id="session_dup",
+            schema=schema,
+            payload={},
+            thread_id=None,
+            stream_sink=lambda _event: None,
+        )
+
+        # Streamed result wrapped in type=result with duplicate "status" field inside result
+        stream_lines = [
+            b'{"type":"turn_start"}\n',
+            (
+                b'{"type":"result","result":{"conversation_id":"c1",'
+                b'"status":"SUCCESS","status":"ERROR",'
+                b'"structured_output":{"outline":"test"},'
+                b'"json_schema":{"type":"object","properties":{"outline":{"type":"string"}},"required":["outline"],"additionalProperties":false}}}\n'
+            ),
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            with self.assertRaises(ProviderInvocationError) as cm:
+                await adapter.invoke(binding, invocation)
+            self.assertEqual(str(cm.exception), "Antigravity CLI returned malformed JSON")
+
 
 if __name__ == "__main__":
     unittest.main()

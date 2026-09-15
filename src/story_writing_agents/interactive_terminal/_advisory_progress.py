@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import unicodedata
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 
@@ -14,9 +15,34 @@ from ..agent_context.progress import (
     ProviderStreamEventKind,
     ProviderStreamSink,
 )
-from ._model import sanitize_terminal_text
 
 _FRAMES = ("█▓▒░░░░░", "░█▓▒░░░░", "░░█▓▒░░░", "░░░█▓▒░░", "░░░░█▓▒░")
+
+
+def _visible_escape(character: str) -> str:
+    value = ord(character)
+    if value <= 0xFF:
+        return f"\\x{value:02x}"
+    if value <= 0xFFFF:
+        return f"\\u{value:04x}"
+    return f"\\U{value:08x}"
+
+
+def _sanitize_preview_text(text: str) -> str:
+    """Format unsafe terminal control sequences as visible escapes."""
+    if not isinstance(text, str):
+        return ""
+    rendered: list[str] = []
+    for character in text:
+        if character == "\n":
+            rendered.append(character)
+            continue
+        category = unicodedata.category(character)
+        if category in {"Cc", "Cf", "Cs"} or character in {"\u2028", "\u2029"}:
+            rendered.append(_visible_escape(character))
+        else:
+            rendered.append(character)
+    return "".join(rendered)
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,13 +86,13 @@ class AdvisoryProgressState:
                     break
         key = (event.agent_id, op_id or "")
         if event.kind is ProviderStreamEventKind.STATUS:
-            self.stream_status[key] = sanitize_terminal_text(event.text)
+            self.stream_status[key] = _sanitize_preview_text(event.text)
         elif event.kind is ProviderStreamEventKind.THOUGHT_DELTA:
-            sanitized = sanitize_terminal_text(event.text)
+            sanitized = _sanitize_preview_text(event.text)
             self.stream_status[key] = f"Thinking: {sanitized}"
         elif event.kind is ProviderStreamEventKind.TEXT_DELTA:
             existing = self.stream_preview.get(key, "")
-            self.stream_preview[key] = existing + sanitize_terminal_text(event.text)
+            self.stream_preview[key] = existing + _sanitize_preview_text(event.text)
 
     def elapsed_seconds(self) -> int:
         return 0 if self.started_at is None else int(time.monotonic() - self.started_at)

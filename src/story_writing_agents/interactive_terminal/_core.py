@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import textwrap
 import time
 import unicodedata
-from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping
 from dataclasses import KW_ONLY, dataclass
 from enum import StrEnum
 from types import MappingProxyType
@@ -1897,6 +1898,16 @@ class InteractiveAdvisoryProgress:
         """Discard transient state and return the final elapsed duration."""
 
         return format_elapsed(self._state.finish())
+
+    @contextlib.contextmanager
+    def bound_stream_sink(self) -> Iterator[None]:
+        """Temporarily bind the active stream sink to the calling context."""
+
+        sink_token = bind_provider_stream_sink(self._state.observe_stream)
+        try:
+            yield
+        finally:
+            reset_provider_stream_sink(sink_token)
 
     async def run(self, operation: Awaitable[object]) -> object:
         """Join one advisory operation with the terminal-owned indicator."""

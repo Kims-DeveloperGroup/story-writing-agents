@@ -6,7 +6,7 @@ import asyncio
 import unittest
 from unittest import mock
 
-from story_writing_agents.agent_context import (
+from story_writing_agents.agent_context.progress import (
     ProviderStreamEvent,
     ProviderStreamEventKind,
     active_provider_stream_sink,
@@ -207,6 +207,68 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         progress.finish()
 
         # After run completes: active_provider_stream_sink() is reset to None
+        self.assertIsNone(active_provider_stream_sink())
+
+    async def test_bound_stream_sink_context_manager_and_task_propagation(self) -> None:
+        """Verify bound_stream_sink context manager propagates into asyncio.create_task."""
+        mock_terminal = mock.create_autospec(InteractiveTerminal, instance=True)
+        progress = InteractiveAdvisoryProgress(mock_terminal)
+
+        # Before binding: active sink is None
+        self.assertIsNone(active_provider_stream_sink())
+
+        task_captured_sink = None
+
+        async def subtask() -> None:
+            nonlocal task_captured_sink
+            task_captured_sink = active_provider_stream_sink()
+
+        with progress.bound_stream_sink():
+            # In caller context: active sink is set
+            self.assertEqual(active_provider_stream_sink(), progress._state.observe_stream)
+            # Spawn asyncio task inside with-block
+            task = asyncio.create_task(subtask())
+            await task
+
+        # Subtask inherited the active stream sink from copied context
+        self.assertEqual(task_captured_sink, progress._state.observe_stream)
+        # Exiting with-block resets sink
+        self.assertIsNone(active_provider_stream_sink())
+
+    def test_lead_policy_operation_task_inherits_stream_sink(self) -> None:
+        """Verify InteractiveLeadAdapter._run_operation passes active stream sink to task."""
+        from story_writing_agents.interactive_controller._lead_policy import InteractiveLeadAdapter
+        from story_writing_agents.orchestrator import RuntimeSession
+
+        runner = asyncio.Runner()
+        self.addCleanup(runner.close)
+
+        mock_terminal = mock.create_autospec(InteractiveTerminal, instance=True)
+        async def fake_advisory_progress(coro):
+            return await coro
+        mock_terminal._advisory_progress = fake_advisory_progress
+        progress = InteractiveAdvisoryProgress(mock_terminal)
+
+        adapter = InteractiveLeadAdapter(
+            RuntimeSession.__new__(RuntimeSession),
+            runner,
+            progress,
+            mock.MagicMock(),
+            mock.MagicMock(),
+            mock.MagicMock(),
+            recover_authentication=lambda _key: True,
+        )
+
+        observed_sink_in_operation = None
+
+        async def fake_operation() -> str:
+            nonlocal observed_sink_in_operation
+            observed_sink_in_operation = active_provider_stream_sink()
+            return "ok"
+
+        result = adapter._run_operation(fake_operation())
+        self.assertEqual(result, "ok")
+        self.assertEqual(observed_sink_in_operation, progress._state.observe_stream)
         self.assertIsNone(active_provider_stream_sink())
 
 

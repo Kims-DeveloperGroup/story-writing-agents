@@ -1049,9 +1049,7 @@ class AntigravityAdapter:
                     event.get("type") or event.get("event") or ""
                 ).lower()
                 if event_type == "result" and isinstance(event.get("result"), dict):
-                    captured_result_bytes.append(
-                        canonical_provider_json(event["result"])
-                    )
+                    captured_result_bytes.append(stripped)
                     return
 
                 if event_type in {
@@ -1199,7 +1197,7 @@ class AntigravityAdapter:
             else result.stdout
         )
         response_diagnostic = ProviderResponseDiagnostic(
-            stdout=effective_stdout,
+            stdout=result.stdout,
             stderr=result.stderr,
             exit_code=result.returncode,
         )
@@ -1498,6 +1496,8 @@ class AntigravityAdapter:
         """Decode one Antigravity JSON result with fixed diagnostics."""
 
         terminal = cls._parse_result(stdout)
+        if terminal.get("type") == "result" and isinstance(terminal.get("result"), dict):
+            terminal = terminal["result"]
         native_error = terminal.get("error")
         recoverable_error = (
             terminal.get("status") == "ERROR"

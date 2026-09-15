@@ -518,11 +518,20 @@ class InteractiveLeadAdapter:
             return self._runner.run(self._progress.run(operation))
         recovery = ProviderAuthRecovery()
 
+        bound_sink = getattr(self._progress, "bound_stream_sink", None)
+
         async def scoped_operation() -> object:
             with recovery.scope():
+                if bound_sink is not None:
+                    with bound_sink():
+                        return await operation
                 return await operation
 
-        task = self._runner.get_loop().create_task(scoped_operation())
+        if bound_sink is not None:
+            with bound_sink():
+                task = self._runner.get_loop().create_task(scoped_operation())
+        else:
+            task = self._runner.get_loop().create_task(scoped_operation())
 
         async def wait_for_operation_or_auth() -> None:
             ready = asyncio.create_task(recovery.wait_ready())
