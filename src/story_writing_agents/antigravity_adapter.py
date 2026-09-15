@@ -26,6 +26,8 @@ from .agent_context import (
     ContextComponentKind,
     ProviderCallState,
     ProviderJsonEncodingError,
+    ProviderStreamEvent,
+    ProviderStreamEventKind,
     ProviderUsage,
     canonical_provider_json,
 )
@@ -968,11 +970,13 @@ class AntigravityAdapter:
             ) from None
         try:
             transport_schema = self.native_output_schema(invocation.schema)
+            streaming = invocation.stream_sink is not None
             command = self.command(
                 provider_state_directory=provider_state_directory,
                 schema=transport_schema,
                 thread_id=invocation.thread_id,
                 agent_id=binding.definition.agent_id,
+                output_format="stream-json" if streaming else "json",
             )
             prompt = invocation.payload_json.decode("utf-8", errors="strict")
             command.extend(["--print", prompt])
@@ -1022,6 +1026,97 @@ class AntigravityAdapter:
             provider_state_directory,
             invocation.thread_id,
         )
+        captured_result_bytes: list[bytes] = []
+        agent_id = binding.definition.agent_id
+        stream_sink = invocation.stream_sink
+
+        def handle_stream_line(raw_line: bytes) -> None:
+            if stream_sink is None:
+                return
+            stripped = raw_line.strip()
+            if not stripped:
+                return
+            try:
+                event = json.loads(stripped.decode("utf-8", errors="replace"))
+                if not isinstance(event, dict):
+                    return
+                if "conversation_id" in event and (
+                    "status" in event or "structured_output" in event
+                ):
+                    captured_result_bytes.append(stripped)
+                    return
+                event_type = str(
+                    event.get("type") or event.get("event") or ""
+                ).lower()
+                if event_type == "result" and isinstance(event.get("result"), dict):
+                    captured_result_bytes.append(
+                        canonical_provider_json(event["result"])
+                    )
+                    return
+
+                if event_type in {
+                    "turn_start",
+                    "turn.started",
+                    "turn_started",
+                    "status",
+                }:
+                    msg = str(
+                        event.get("text")
+                        or event.get("message")
+                        or event.get("status")
+                        or "Generating response..."
+                    )
+                    stream_sink(
+                        ProviderStreamEvent(
+                            ProviderStreamEventKind.STATUS,
+                            agent_id,
+                            msg,
+                        )
+                    )
+                elif event_type in {
+                    "thought",
+                    "reasoning",
+                    "thought_delta",
+                    "reasoning_delta",
+                }:
+                    text = str(
+                        event.get("text")
+                        or event.get("delta")
+                        or event.get("thought")
+                        or event.get("reasoning")
+                        or ""
+                    )
+                    if text:
+                        stream_sink(
+                            ProviderStreamEvent(
+                                ProviderStreamEventKind.THOUGHT_DELTA,
+                                agent_id,
+                                text,
+                            )
+                        )
+                elif event_type in {
+                    "text_delta",
+                    "content_delta",
+                    "token",
+                    "agent_message",
+                    "text",
+                }:
+                    text = str(
+                        event.get("text")
+                        or event.get("delta")
+                        or event.get("content")
+                        or ""
+                    )
+                    if text:
+                        stream_sink(
+                            ProviderStreamEvent(
+                                ProviderStreamEventKind.TEXT_DELTA,
+                                agent_id,
+                                text,
+                            )
+                        )
+            except Exception:
+                pass
 
         async def tracked_create_process(
             *arguments: object,
@@ -1041,6 +1136,9 @@ class AntigravityAdapter:
                         self.timeout_seconds + PROVIDER_TIMEOUT_GRACE_SECONDS
                     ),
                     cwd=working_directory,
+                    on_stdout_line=(
+                        handle_stream_line if streaming else None
+                    ),
                 ),
                 create_process=tracked_create_process,
                 wait_for=self._wait_for(),
@@ -1095,8 +1193,13 @@ class AntigravityAdapter:
             raise
 
         submitted = True
+        effective_stdout = (
+            captured_result_bytes[-1]
+            if captured_result_bytes
+            else result.stdout
+        )
         response_diagnostic = ProviderResponseDiagnostic(
-            stdout=result.stdout,
+            stdout=effective_stdout,
             stderr=result.stderr,
             exit_code=result.returncode,
         )
@@ -1106,7 +1209,7 @@ class AntigravityAdapter:
         )
         try:
             authentication = self._authentication_failure(
-                result.stdout, result.returncode,
+                effective_stdout, result.returncode,
             )
             if authentication is not None:
                 raise ProviderInvocationError(
@@ -1120,7 +1223,7 @@ class AntigravityAdapter:
                     taint_existing_thread=True,
                 )
             provider_result = self._provider_result(
-                result.stdout,
+                effective_stdout,
                 expected_thread_id=invocation.thread_id,
                 expected_schema=transport_schema,
                 completion_check=lambda thread_id, output, error: self._has_current_finish(
@@ -1312,6 +1415,7 @@ class AntigravityAdapter:
         schema: Mapping[str, Any],
         thread_id: str | None,
         agent_id: str,
+        output_format: str = "json",
     ) -> list[str]:
         """Build Antigravity options from the already rendered transport schema."""
 
@@ -1324,7 +1428,7 @@ class AntigravityAdapter:
             "--input-format",
             "text",
             "--output-format",
-            "json",
+            output_format,
             "--json-schema",
             canonical_provider_json(schema).decode(
                 "utf-8", errors="strict"

@@ -70,7 +70,10 @@ from ._core import (  # noqa: F401
     transition_main_input,
     transition_main_command_input,
 )
-from ._advisory_progress import AdvisoryProgressRequest  # noqa: F401
+from ._advisory_progress import (  # noqa: F401
+    AdvisoryProgressRequest,
+    active_advisory_stream_sink,
+)
 
 
 _PUBLIC_TYPES = (

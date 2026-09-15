@@ -3440,7 +3440,11 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
         terminal_root = package_root / "interactive_terminal"
         expected_dependencies = {
             "__init__.py": {"._advisory_progress", "._core"},
-            "_advisory_progress.py": {"..agent_context.actions", "..agent_context.progress"},
+            "_advisory_progress.py": {
+                "..agent_context.actions",
+                "..agent_context.progress",
+                "._model",
+            },
             "_collaboration_view.py": {
                 "..conversations",
                 "..reply_trace",

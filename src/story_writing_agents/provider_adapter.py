@@ -17,8 +17,10 @@ from .agent_context import (
     ProviderCallState,
     ProviderJsonEncodingError,
     ProviderPayloadAccounting,
+    ProviderStreamSink,
     ProviderUsage,
     account_provider_payload,
+    active_provider_stream_sink,
 )
 from .errors import ProviderAuthenticationRequiredError
 from .models import AgentDefinition
@@ -108,11 +110,22 @@ class ProviderInvocation:
         default=(),
         repr=False,
     )
+    stream_sink: ProviderStreamSink | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
     payload_json: bytes | None = field(init=False, repr=False)
     payload_accounting: ProviderPayloadAccounting | None = field(init=False)
     call_accounting: ProviderCallAccounting | None = field(init=False)
 
     def __post_init__(self) -> None:
+        if self.stream_sink is None:
+            active_sink = active_provider_stream_sink()
+            if active_sink is not None:
+                object.__setattr__(self, "stream_sink", active_sink)
+        if self.stream_sink is not None and not callable(self.stream_sink):
+            raise TypeError("provider invocation stream sink must be callable or None")
         schema = MappingProxyType(dict(self.schema))
         payload = MappingProxyType(dict(self.payload))
         component_paths = MappingProxyType(dict(self.component_paths))

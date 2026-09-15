@@ -17,6 +17,8 @@ from .agent_context import (
     ContextComponentKind,
     ProviderCallState,
     ProviderJsonEncodingError,
+    ProviderStreamEvent,
+    ProviderStreamEventKind,
     ProviderUsage,
     canonical_provider_json,
 )
@@ -332,6 +334,54 @@ class CodexAdapter:
             stdin = invocation.payload_json
             submitted = False
             create_process = self._create_process()
+            agent_id = binding.definition.agent_id
+            stream_sink = invocation.stream_sink
+
+            def handle_stream_line(raw_line: bytes) -> None:
+                if stream_sink is None:
+                    return
+                stripped = raw_line.strip()
+                if not stripped:
+                    return
+                try:
+                    event = json.loads(stripped.decode("utf-8", errors="replace"))
+                    if type(event) is not dict:
+                        return
+                    event_type = event.get("type")
+                    if event_type == "turn.started":
+                        stream_sink(
+                            ProviderStreamEvent(
+                                ProviderStreamEventKind.STATUS,
+                                agent_id,
+                                "Generating response...",
+                            )
+                        )
+                    elif event_type in {"item.updated", "item.started", "item.completed"}:
+                        item = event.get("item")
+                        if type(item) is dict:
+                            item_type = item.get("type")
+                            if item_type == "reasoning":
+                                text = item.get("text") or item.get("summary") or ""
+                                if text:
+                                    stream_sink(
+                                        ProviderStreamEvent(
+                                            ProviderStreamEventKind.THOUGHT_DELTA,
+                                            agent_id,
+                                            text,
+                                        )
+                                    )
+                            elif item_type == "agent_message":
+                                text = item.get("text") or item.get("content") or ""
+                                if text:
+                                    stream_sink(
+                                        ProviderStreamEvent(
+                                            ProviderStreamEventKind.TEXT_DELTA,
+                                            agent_id,
+                                            text,
+                                        )
+                                    )
+                except Exception:
+                    pass
 
             async def tracked_create_process(
                 *arguments: object,
@@ -348,6 +398,9 @@ class CodexAdapter:
                         command=command,
                         stdin=stdin,
                         timeout_seconds=self.timeout_seconds,
+                        on_stdout_line=(
+                            handle_stream_line if stream_sink is not None else None
+                        ),
                     ),
                     create_process=tracked_create_process,
                     wait_for=self._wait_for(),

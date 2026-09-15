@@ -24,6 +24,9 @@ class ProcessTimedOut(Exception):
     """The bounded provider process exceeded its timeout."""
 
 
+StdoutLineCallback = Callable[[bytes], Awaitable[None] | None]
+
+
 @dataclass(frozen=True)
 class ProcessRequest:
     """Immutable launch and communication inputs for one subprocess."""
@@ -33,6 +36,7 @@ class ProcessRequest:
     timeout_seconds: float
     cwd: Path | None = None
     env: Mapping[str, str] | None = None
+    on_stdout_line: StdoutLineCallback | None = None
 
 
 @dataclass(frozen=True)
@@ -46,6 +50,61 @@ class ProcessResult:
 
 CreateProcess = Callable[..., Awaitable[asyncio.subprocess.Process]]
 WaitFor = Callable[..., Awaitable[object]]
+
+
+async def _communicate_streaming(
+    process: asyncio.subprocess.Process,
+    stdin: bytes,
+    on_stdout_line: StdoutLineCallback,
+) -> tuple[bytes, bytes]:
+    """Drain process streams while dispatching lines to a callback in real time."""
+
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+
+    async def write_stdin() -> None:
+        if process.stdin is None:
+            return
+        try:
+            if stdin:
+                process.stdin.write(stdin)
+                await process.stdin.drain()
+            process.stdin.close()
+            await process.stdin.wait_closed()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    async def read_stdout() -> None:
+        if process.stdout is None:
+            return
+        while True:
+            line = await process.stdout.readline()
+            if not line:
+                break
+            stdout_chunks.append(line)
+            try:
+                callback_result = on_stdout_line(line)
+                if asyncio.iscoroutine(callback_result):
+                    await callback_result
+            except BaseException:
+                pass
+
+    async def read_stderr() -> None:
+        if process.stderr is None:
+            return
+        while True:
+            chunk = await process.stderr.read(65536)
+            if not chunk:
+                break
+            stderr_chunks.append(chunk)
+
+    await asyncio.gather(
+        write_stdin(),
+        read_stdout(),
+        read_stderr(),
+        process.wait(),
+    )
+    return b"".join(stdout_chunks), b"".join(stderr_chunks)
 
 
 async def run_process(
@@ -73,10 +132,20 @@ async def run_process(
         raise ProcessStartFailed(type(exc).__name__) from exc
 
     try:
-        communicated = await wait_for(
-            process.communicate(request.stdin),
-            timeout=request.timeout_seconds,
-        )
+        if (
+            request.on_stdout_line is None
+            or getattr(process, "stdout", None) is None
+            or not hasattr(process.stdout, "readline")
+        ):
+            communicated = await wait_for(
+                process.communicate(request.stdin),
+                timeout=request.timeout_seconds,
+            )
+        else:
+            communicated = await wait_for(
+                _communicate_streaming(process, request.stdin, request.on_stdout_line),
+                timeout=request.timeout_seconds,
+            )
     except TimeoutError as exc:
         await stop_process(process, wait_for=wait_for)
         raise ProcessTimedOut from exc

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Callable, TypeAlias
@@ -112,3 +113,56 @@ class ContextActionProgressEvent:
 
 ContextActionProgressSink: TypeAlias = Callable[[ContextActionProgressEvent], None]
 """Call-local projection for detailed transient advisory progress."""
+
+
+class ProviderStreamEventKind(StrEnum):
+    """The normalized category of one in-progress provider stream chunk."""
+
+    STATUS = "status"
+    THOUGHT_DELTA = "thought_delta"
+    TEXT_DELTA = "text_delta"
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderStreamEvent:
+    """Exact transient event from an in-flight provider stream."""
+
+    kind: ProviderStreamEventKind
+    agent_id: str
+    text: str
+    operation_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.kind) is not ProviderStreamEventKind:
+            raise ValueError("stream event kind is invalid")
+        if type(self.agent_id) is not str or not self.agent_id:
+            raise ValueError("stream event agent_id must be nonempty text")
+        if type(self.text) is not str:
+            raise ValueError("stream event text must be a string")
+        if self.operation_id is not None and (
+            type(self.operation_id) is not str or not self.operation_id
+        ):
+            raise ValueError("stream event operation_id must be nonempty text or None")
+
+
+ProviderStreamSink: TypeAlias = Callable[[ProviderStreamEvent], None]
+"""Call-local projection for in-progress provider streaming tokens and status."""
+
+_ACTIVE_STREAM_SINK: ContextVar[ProviderStreamSink | None] = ContextVar(
+    "story_provider_stream_sink", default=None
+)
+
+
+def bind_provider_stream_sink(
+    sink: ProviderStreamSink,
+) -> Token[ProviderStreamSink | None]:
+    return _ACTIVE_STREAM_SINK.set(sink)
+
+
+def reset_provider_stream_sink(token: Token[ProviderStreamSink | None]) -> None:
+    _ACTIVE_STREAM_SINK.reset(token)
+
+
+def active_provider_stream_sink() -> ProviderStreamSink | None:
+    return _ACTIVE_STREAM_SINK.get()
+

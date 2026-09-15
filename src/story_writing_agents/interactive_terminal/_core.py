@@ -63,7 +63,12 @@ from ._advisory_progress import (
     format_elapsed,
     reset_advisory_progress,
 )
-from ..agent_context.progress import ContextActionProgressEvent
+from ..agent_context.progress import (
+    ContextActionProgressEvent,
+    ProviderStreamEvent,
+    bind_provider_stream_sink,
+    reset_provider_stream_sink,
+)
 from ._driver import (
     AdvisoryProgressError as AdvisoryProgressError,
     RawTerminalDriver,
@@ -1883,6 +1888,11 @@ class InteractiveAdvisoryProgress:
 
         self._state.observe(event)
 
+    def observe_stream(self, event: ProviderStreamEvent) -> None:
+        """Apply one provider streaming event."""
+
+        self._state.observe_stream(event)
+
     def finish(self) -> str:
         """Discard transient state and return the final elapsed duration."""
 
@@ -1892,9 +1902,11 @@ class InteractiveAdvisoryProgress:
         """Join one advisory operation with the terminal-owned indicator."""
 
         token = bind_advisory_progress(self._state)
+        sink_token = bind_provider_stream_sink(self._state.observe_stream)
         try:
             return await self._run(operation)
         finally:
+            reset_provider_stream_sink(sink_token)
             reset_advisory_progress(token)
 
 
