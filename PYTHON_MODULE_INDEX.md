@@ -804,15 +804,15 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.agent_context.progress`
 
 - **Source:** `src/story_writing_agents/agent_context/progress.py`
-- **Responsibility:** Define exact package-internal ephemeral SEARCH/READ progress facts.
-- **Supported surface:** No facade or project-root export. Internal immutable query,
-  source, event, kind, and synchronous-sink contracts carry literal validated queries,
-  safe relative locators, exact boundaries, counts, and truncation without excerpts,
-  bodies, provider answers, digests, credentials, or exception text.
+- **Responsibility:** Define exact package-internal ephemeral SEARCH/READ progress facts and provider stream events.
+- **Supported surface:** Re-exports via `agent_context` facade. Internal immutable query,
+  source, event, kind, stream event, and synchronous/context-bound sink contracts carry literal validated queries,
+  safe relative locators, exact boundaries, counts, and transient stream status/deltas without excerpts,
+  bodies, credentials, or hidden reasoning.
 - **Direct internal dependencies:** `agent_context.actions` and `agent_context.manifest`.
-- **State, resources, and side effects:** Values are immutable and importing performs no I/O.
+- **State, resources, and side effects:** Values are immutable and importing performs no I/O; stream sink is managed via ContextVar.
 - **Primary verification/documentation:** `tests/test_agent_context_execution.py`,
-  `tests/test_interactive_controller.py`, and `docs/guides/agent-context-progress.md`.
+  `tests/test_interactive_controller.py`, `tests/test_adapter_streaming.py`, and `docs/guides/agent-context-progress.md`.
 
 ### `story_writing_agents.agent_context.service`
 
@@ -1898,13 +1898,14 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** `run_process` launches one child with
   piped stdin/stdout/stderr, drains both streams concurrently through
-  `communicate`, and enforces the supplied timeout. On timeout, cancellation,
+  `communicate` (or chunked line streaming when `on_stdout_line` is supplied), and enforces the supplied timeout. On timeout, cancellation,
   or any other post-launch communication failure, it stops a still-running
   child by requesting termination, waiting up to two seconds, then killing and
   joining when necessary; completed children are not signaled. Optional cwd
   and environment are explicit request values. The module owns no persistent
   or import-time state and emits no provider-specific diagnostic.
 - **Primary verification/documentation:**
+  `tests/test_provider_process_streaming.py`,
   `tests/test_provider_auth_recovery_live.py` with
   `tests/provider_auth_recovery_live_harness.py` (opt-in native execution),
   `tests/test_codex_backend.py`,
@@ -5736,15 +5737,15 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.interactive_terminal._advisory_progress`
 
 - **Source:** `src/story_writing_agents/interactive_terminal/_advisory_progress.py`
-- **Responsibility:** Project one operation's detailed transient advisory cards and elapsed time.
+- **Responsibility:** Project one operation's detailed transient advisory cards, elapsed time, and streamed output previews.
 - **Supported surface:** Package-internal request/state and pure duration/frame helpers only.
-  Frames retain assignment order and show exact SEARCH queries/scopes or READ locators/ranges.
+  Frames retain assignment order and show exact SEARCH queries/scopes, READ locators/ranges, sanitized live provider status, and bounded trailing output previews.
 - **Direct internal dependencies:** `agent_context.actions` and `agent_context.progress`.
 - **State, resources, and side effects:** One adapter-owned process-local state uses a
   monotonic clock and call-local context binding; it performs no persistence, provider, or
-  terminal I/O and discards query/source metadata at completion.
+  terminal I/O and discards query/source and stream preview metadata at completion.
 - **Primary verification/documentation:** `tests/test_interactive_terminal_foundation.py`,
-  `tests/test_interactive_controller.py`, and `docs/design/interactive-cli-design-system.md`.
+  `tests/test_interactive_controller.py`, `tests/test_advisory_progress_streaming.py`, and `docs/design/interactive-cli-design-system.md`.
 
 ### `story_writing_agents.interactive_terminal._controls`
 

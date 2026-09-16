@@ -6,10 +6,14 @@ import asyncio
 import unittest
 from unittest import mock
 
-from story_writing_agents.agent_context.progress import (
+from story_writing_agents.agent_context import (
     ProviderStreamEvent,
     ProviderStreamEventKind,
     active_provider_stream_sink,
+)
+from story_writing_agents.agent_context.progress import (
+    ContextActionProgressEvent,
+    ContextActionProgressKind,
 )
 from story_writing_agents.interactive_terminal._advisory_progress import (
     AdvisoryProgressRequest,
@@ -290,6 +294,61 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         self.assertEqual(result, "ok")
         self.assertEqual(observed_sink_in_operation, progress._state.observe_stream)
         self.assertIsNone(active_provider_stream_sink())
+
+    def test_observe_stream_status_capped_and_single_line(self) -> None:
+        state = AdvisoryProgressState()
+        state.begin((AdvisoryProgressRequest("agent_a", "op_1", "Drafting scene"),))
+
+        long_multiline_status = "Line 1: Working on scene\nLine 2: " + ("x" * 200)
+        state.observe_stream(
+            ProviderStreamEvent(
+                kind=ProviderStreamEventKind.STATUS,
+                agent_id="agent_a",
+                text=long_multiline_status,
+                operation_id="op_1",
+            )
+        )
+        stored_status = state.stream_status.get(("agent_a", "op_1"))
+        self.assertEqual(stored_status, "Line 1: Working on scene")
+        self.assertLessEqual(len(stored_status), 120)
+
+        very_long_single_line = "y" * 200
+        state.observe_stream(
+            ProviderStreamEvent(
+                kind=ProviderStreamEventKind.STATUS,
+                agent_id="agent_a",
+                text=very_long_single_line,
+                operation_id="op_1",
+            )
+        )
+        stored_status2 = state.stream_status.get(("agent_a", "op_1"))
+        self.assertEqual(len(stored_status2), 120)
+        self.assertEqual(stored_status2, "y" * 120)
+
+    def test_observe_stream_infers_op_id_from_context_action_events(self) -> None:
+        state = AdvisoryProgressState()
+        state.begin()  # no initial requests
+
+        context_event = ContextActionProgressEvent(
+            kind=ContextActionProgressKind.READ_COMPLETED,
+            agent_id="lead_orchestrator",
+            operation_id="lead_turn_42",
+            action_index=1,
+        )
+        state.observe(context_event)
+
+        state.observe_stream(
+            ProviderStreamEvent(
+                kind=ProviderStreamEventKind.STATUS,
+                agent_id="lead_orchestrator",
+                text="Searching artifacts...",
+                operation_id=None,
+            )
+        )
+        self.assertEqual(
+            state.stream_status.get(("lead_orchestrator", "lead_turn_42")),
+            "Searching artifacts...",
+        )
 
 
 if __name__ == "__main__":

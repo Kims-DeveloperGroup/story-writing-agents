@@ -26,12 +26,10 @@ from .agent_context import (
     ContextComponentKind,
     ProviderCallState,
     ProviderJsonEncodingError,
-    ProviderUsage,
-    canonical_provider_json,
-)
-from .agent_context.progress import (
     ProviderStreamEvent,
     ProviderStreamEventKind,
+    ProviderUsage,
+    canonical_provider_json,
 )
 from .models import AgentDefinition
 from .errors import ProviderAuthenticationRequiredError
@@ -1267,6 +1265,8 @@ class AntigravityAdapter:
             terminal = cls._parse_result(stdout)
         except ProviderInvocationError:
             return None
+        if terminal.get("type") == "result" and isinstance(terminal.get("result"), dict):
+            terminal = terminal["result"]
         error = terminal.get("error")
         if terminal.get("status") != "ERROR":
             return None

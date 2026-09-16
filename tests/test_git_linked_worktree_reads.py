@@ -110,7 +110,7 @@ class GitLinkedWorktreeReadContractTests(unittest.TestCase):
         self.assertEqual(dependencies, {"contracts", "process"})
         index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text()
         self.assertIn("Importable production units indexed: 143.", index)
-        self.assertIn("Direct internal dependency edges indexed: 574.", index)
+        self.assertIn("Direct internal dependency edges indexed: 575.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
 
     def test_status_and_log_guard_external_identity_before_body_and_after_success(

@@ -10,12 +10,16 @@ from pathlib import Path
 from unittest import mock
 
 from story_writing_agents import AgentBackend, PLOT_ARCHITECT
-from story_writing_agents.agent_context.progress import (
+from story_writing_agents.agent_context import (
     ProviderStreamEvent,
     ProviderStreamEventKind,
 )
+from story_writing_agents.errors import ProviderAuthenticationRequiredError
 from story_writing_agents.prompts import PromptAssembler
-from story_writing_agents.provider_adapter import ProviderInvocation
+from story_writing_agents.provider_adapter import (
+    ProviderInvocation,
+    ProviderInvocationError,
+)
 from story_writing_agents.provider_process import ProcessRequest, ProcessResult
 from tests.helpers import initialized_workspace
 
@@ -481,6 +485,48 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].kind, ProviderStreamEventKind.STATUS)
         self.assertEqual(events[0].text, "Model working...")
+
+    async def test_antigravity_adapter_recognizes_wrapped_authentication_error(self) -> None:
+        agy_backend = AgentBackend(
+            self.workspace,
+            backend_overrides={PLOT_ARCHITECT: "antigravity"},
+        )
+        self.addCleanup(agy_backend.close)
+        adapter = agy_backend._antigravity_adapter
+        agy_definition = PromptAssembler(
+            self.workspace,
+            backend_overrides={PLOT_ARCHITECT: "antigravity"},
+        ).build_definition(
+            session_id="session_wrapped_auth_def",
+            agent_id=PLOT_ARCHITECT,
+        )
+        binding = adapter.bind(agy_definition)
+        invocation = ProviderInvocation(
+            session_id="session_agy_wrapped_auth",
+            schema={"type": "object"},
+            payload={},
+            thread_id="thread_wrapped_auth_1",
+        )
+
+        wrapped_auth_lines = [
+            b'{"type":"result","result":{"status":"ERROR","error":{"code":401,"message":"401 Unauthorized"}}}\n',
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            return ProcessResult(
+                stdout=b"".join(wrapped_auth_lines),
+                stderr=b"",
+                returncode=1,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            with self.assertRaises(ProviderInvocationError) as exc_info:
+                await adapter.invoke(binding, invocation)
+            self.assertIsNotNone(exc_info.exception.authentication_failure)
+            self.assertIsInstance(
+                exc_info.exception.authentication_failure,
+                ProviderAuthenticationRequiredError,
+            )
 
 
 if __name__ == "__main__":

@@ -904,7 +904,7 @@ assert len(writing_artifacts.__all__) == len(set(writing_artifacts.__all__)) == 
                     if resolved is not None and resolved != module:
                         edges.add((module, resolved))
         self.assertEqual(len(modules), 143)
-        self.assertEqual(len(edges), 574)
+        self.assertEqual(len(edges), 575)
         application_name = (
             "story_writing_agents.writing_artifacts.application_contracts"
         )
@@ -939,7 +939,7 @@ assert len(writing_artifacts.__all__) == len(set(writing_artifacts.__all__)) == 
             visit(module)
         index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8")
         self.assertIn("Importable production units indexed: 143.", index)
-        self.assertIn("Direct internal dependency edges indexed: 574.", index)
+        self.assertIn("Direct internal dependency edges indexed: 575.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         self.assertIn(
             "### `story_writing_agents.writing_artifacts.application_contracts`",

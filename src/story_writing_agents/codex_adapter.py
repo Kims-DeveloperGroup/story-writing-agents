@@ -17,12 +17,10 @@ from .agent_context import (
     ContextComponentKind,
     ProviderCallState,
     ProviderJsonEncodingError,
-    ProviderUsage,
-    canonical_provider_json,
-)
-from .agent_context.progress import (
     ProviderStreamEvent,
     ProviderStreamEventKind,
+    ProviderUsage,
+    canonical_provider_json,
 )
 from .agents import ROSTER
 from .config import ConfigurationSnapshot

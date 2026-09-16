@@ -84,9 +84,16 @@ class AdvisoryProgressState:
                 if req.agent_id == event.agent_id:
                     op_id = req.operation_id
                     break
+            if op_id is None:
+                for (event_agent_id, event_op_id, _) in self.events:
+                    if event_agent_id == event.agent_id:
+                        op_id = event_op_id
+                        break
         key = (event.agent_id, op_id or "")
         if event.kind is ProviderStreamEventKind.STATUS:
-            self.stream_status[key] = _sanitize_preview_text(event.text)
+            sanitized = _sanitize_preview_text(event.text).strip()
+            first_line = sanitized.splitlines()[0] if sanitized else ""
+            self.stream_status[key] = first_line[:120]
         elif event.kind is ProviderStreamEventKind.THOUGHT_DELTA:
             self.stream_status[key] = "Thinking..."
         elif event.kind is ProviderStreamEventKind.TEXT_DELTA:
