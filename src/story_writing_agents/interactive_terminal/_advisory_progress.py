@@ -209,7 +209,7 @@ class AdvisoryProgressState:
                     if preview_lines:
                         for idx, pline in enumerate(preview_lines[-2:]):
                             label = "Preview: " if idx == 0 else "         "
-                            lines.append(f"  {label}{pline[:120]}")
+                            lines.append(f"  {label}{pline[-120:]}")
         return "\n".join(lines)
 
 

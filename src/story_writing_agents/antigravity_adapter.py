@@ -1379,17 +1379,6 @@ class AntigravityAdapter:
                         taint_existing_thread=True,
                     )
                 if len(captured_result_bytes) != 1:
-                    if result.returncode != 0:
-                        detail = self._extract_failure_detail(b"", result.stderr)
-                        if detail:
-                            raise ProviderInvocationError(
-                                f"Antigravity CLI failed (status {result.returncode}): {detail}",
-                                taint_existing_thread=True,
-                            )
-                        raise ProviderInvocationError(
-                            f"Antigravity CLI exited with status {result.returncode}",
-                            taint_existing_thread=True,
-                        )
                     raise ProviderInvocationError(
                         f"Antigravity streaming response contained {len(captured_result_bytes)} terminal result events; expected exactly 1",
                         taint_existing_thread=True,
@@ -1410,12 +1399,6 @@ class AntigravityAdapter:
                         authentication_failure=authentication,
                     )
                 if result.returncode != 0:
-                    detail = self._extract_failure_detail(effective_stdout, result.stderr)
-                    if detail:
-                        raise ProviderInvocationError(
-                            f"Antigravity CLI failed (status {result.returncode}): {detail}",
-                            taint_existing_thread=True,
-                        )
                     raise ProviderInvocationError(
                         f"Antigravity CLI exited with status {result.returncode}",
                         taint_existing_thread=True,
@@ -1432,12 +1415,6 @@ class AntigravityAdapter:
                         authentication_failure=authentication,
                     )
                 if result.returncode != 0:
-                    detail = self._extract_failure_detail(effective_stdout, result.stderr)
-                    if detail:
-                        raise ProviderInvocationError(
-                            f"Antigravity CLI failed (status {result.returncode}): {detail}",
-                            taint_existing_thread=True,
-                        )
                     raise ProviderInvocationError(
                         f"Antigravity CLI exited with status {result.returncode}",
                         taint_existing_thread=True,
@@ -1498,40 +1475,6 @@ class AntigravityAdapter:
         if types_to_check and types_to_check[0] == "result" and isinstance(terminal.get("result"), dict):
             return terminal["result"]
         return terminal
-
-    @classmethod
-    def _extract_failure_detail(
-        cls,
-        stdout_bytes: bytes,
-        stderr_bytes: bytes,
-    ) -> str | None:
-        """Extract user-visible error diagnostic from terminal JSON or stderr."""
-        if stdout_bytes:
-            try:
-                terminal = cls._parse_result(stdout_bytes)
-                unwrapped = cls._unwrap_result_envelope(terminal)
-                error = unwrapped.get("error")
-                if error:
-                    if isinstance(error, dict):
-                        msg = error.get("message") or error.get("detail")
-                        if msg and isinstance(msg, str):
-                            return msg.strip()
-                    elif isinstance(error, str) and error.strip():
-                        return error.strip()
-            except Exception:
-                pass
-        if stderr_bytes:
-            stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
-            if stderr_text:
-                for line in stderr_text.splitlines():
-                    cleaned = line.strip()
-                    if cleaned.lower().startswith("warning:"):
-                        continue
-                    if cleaned.lower().startswith("error:"):
-                        return cleaned[6:].strip()
-                    if cleaned:
-                        return cleaned
-        return None
 
     @classmethod
     def _authentication_failure(
@@ -1784,18 +1727,6 @@ class AntigravityAdapter:
             and _MALFORMED_FUNCTION_CALL.fullmatch(native_error) is not None
         )
         if terminal.get("status") != "SUCCESS" and not recoverable_error:
-            error_msg = None
-            if isinstance(native_error, dict):
-                msg = native_error.get("message") or native_error.get("detail")
-                if msg and isinstance(msg, str) and msg.strip():
-                    error_msg = msg.strip()
-            elif isinstance(native_error, str) and native_error.strip():
-                error_msg = native_error.strip()
-            if error_msg:
-                raise ProviderInvocationError(
-                    f"Antigravity CLI did not complete successfully: {error_msg}",
-                    taint_existing_thread=True,
-                )
             raise ProviderInvocationError(
                 "Antigravity CLI did not complete successfully",
                 taint_existing_thread=True,

@@ -1676,7 +1676,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ProviderInvocationError) as cm:
                 await adapter.invoke(binding, invocation)
 
-        self.assertIn("No capacity available for model gpt-oss-120b-medium on the server", str(cm.exception))
+        self.assertEqual(str(cm.exception), "Antigravity CLI exited with status 1")
         # Verify status event was emitted to stream sink
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].kind, ProviderStreamEventKind.STATUS)
@@ -1718,7 +1718,9 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ProviderInvocationError) as cm:
                 await adapter.invoke(binding, invocation)
 
-        self.assertIn("invalid model selection (--model foo): unknown model", str(cm.exception))
+        self.assertEqual(str(cm.exception), "Antigravity CLI exited with status 1")
+        self.assertIsNotNone(cm.exception.response_diagnostic)
+        self.assertIn(b"invalid model selection (--model foo): unknown model", cm.exception.response_diagnostic.stderr)
 
     async def test_antigravity_adapter_replays_stdout_when_no_streaming_callbacks_delivered(self) -> None:
         agy_backend = AgentBackend(
