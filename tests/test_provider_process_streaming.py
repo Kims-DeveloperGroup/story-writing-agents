@@ -223,5 +223,53 @@ class TestProviderProcessStreaming(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(received[100], b"item_99\n")
 
 
+    async def test_streaming_selects_streaming_when_stdout_has_read_without_readline(self) -> None:
+        """Verify injected process streams with read but no readline attribute invoke callback."""
+        received: list[bytes] = []
+
+        class MockStdout:
+            def __init__(self, data: bytes) -> None:
+                self._data = data
+                self._pos = 0
+
+            async def read(self, n: int) -> bytes:
+                if self._pos >= len(self._data):
+                    return b""
+                chunk = self._data[self._pos : self._pos + n]
+                self._pos += len(chunk)
+                return chunk
+
+        class MockProcess:
+            def __init__(self) -> None:
+                self.stdin = None
+                self.stdout = MockStdout(b"custom_line_1\ncustom_line_2\n")
+                self.stderr = None
+                self.returncode = 0
+
+            async def communicate(self, _input: bytes | None = None) -> tuple[bytes, bytes]:
+                raise AssertionError("communicate() should not be called when streaming is active")
+
+            async def wait(self) -> int:
+                return self.returncode
+
+        # Explicitly verify MockStdout does NOT have readline
+        self.assertFalse(hasattr(MockStdout, "readline"))
+
+        async def fake_create_process(*_args: object, **_kwargs: object) -> MockProcess:
+            return MockProcess()
+
+        request = ProcessRequest(
+            command=["fake_binary"],
+            stdin=b"",
+            timeout_seconds=5.0,
+            on_stdout_line=lambda line: received.append(line),
+        )
+        result = await run_process(request, create_process=fake_create_process)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(received, [b"custom_line_1\n", b"custom_line_2\n"])
+        self.assertEqual(result.stdout, b"custom_line_1\ncustom_line_2\n")
+
+
 if __name__ == "__main__":
     unittest.main()
+

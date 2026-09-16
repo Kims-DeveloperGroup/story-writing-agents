@@ -103,6 +103,28 @@ class _DuplicateField(ValueError):
     """Mark an ambiguous provider JSON object without retaining its values."""
 
 
+def _reject_duplicate_fields(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise _DuplicateField
+        value[key] = item
+    return value
+
+
+def _reject_constant(_value: str) -> None:
+    raise ValueError
+
+
+def _finite_float(value: str) -> float:
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError
+    return number
+
+
 class _NativeEvidenceUnavailable(ValueError):
     """Reject unsafe or incomplete recovery evidence without native content."""
 
@@ -1040,12 +1062,17 @@ class AntigravityAdapter:
             if not stripped:
                 return
             try:
-                event = json.loads(stripped.decode("utf-8", errors="strict"))
-            except (ValueError, UnicodeError):
+                event = json.loads(
+                    stripped.decode("utf-8", errors="strict"),
+                    object_pairs_hook=_reject_duplicate_fields,
+                    parse_constant=_reject_constant,
+                    parse_float=_finite_float,
+                )
+            except (ValueError, RecursionError, UnicodeError):
                 if invalid_stream_line is None:
                     invalid_stream_line = "malformed JSON line"
                 return
-            if not isinstance(event, dict):
+            if type(event) is not dict:
                 if invalid_stream_line is None:
                     invalid_stream_line = "non-object JSON line"
                 return
@@ -1227,8 +1254,13 @@ class AntigravityAdapter:
         )
         try:
             if streaming:
+                candidate_stdout = (
+                    captured_result_bytes[0]
+                    if len(captured_result_bytes) == 1
+                    else result.stdout
+                )
                 authentication = self._authentication_failure(
-                    result.stdout, result.returncode,
+                    candidate_stdout, result.returncode,
                 )
                 if authentication is not None:
                     raise ProviderInvocationError(
@@ -1241,14 +1273,14 @@ class AntigravityAdapter:
                         f"Antigravity CLI exited with status {result.returncode}",
                         taint_existing_thread=True,
                     )
-                if len(captured_result_bytes) != 1:
-                    raise ProviderInvocationError(
-                        f"Antigravity streaming response contained {len(captured_result_bytes)} terminal result events; expected exactly 1",
-                        taint_existing_thread=True,
-                    )
                 if invalid_stream_line is not None:
                     raise ProviderInvocationError(
                         f"Antigravity streaming response contained invalid stream line: {invalid_stream_line}",
+                        taint_existing_thread=True,
+                    )
+                if len(captured_result_bytes) != 1:
+                    raise ProviderInvocationError(
+                        f"Antigravity streaming response contained {len(captured_result_bytes)} terminal result events; expected exactly 1",
                         taint_existing_thread=True,
                     )
                 if has_trailing_data_after_terminal:
@@ -1259,20 +1291,20 @@ class AntigravityAdapter:
                 effective_stdout = captured_result_bytes[0]
             else:
                 effective_stdout = result.stdout
-            authentication = self._authentication_failure(
-                effective_stdout, result.returncode,
-            )
-            if authentication is not None:
-                raise ProviderInvocationError(
-                    str(authentication),
-                    taint_existing_thread=not authentication.replay_safe,
-                    authentication_failure=authentication,
+                authentication = self._authentication_failure(
+                    effective_stdout, result.returncode,
                 )
-            if result.returncode != 0:
-                raise ProviderInvocationError(
-                    f"Antigravity CLI exited with status {result.returncode}",
-                    taint_existing_thread=True,
-                )
+                if authentication is not None:
+                    raise ProviderInvocationError(
+                        str(authentication),
+                        taint_existing_thread=not authentication.replay_safe,
+                        authentication_failure=authentication,
+                    )
+                if result.returncode != 0:
+                    raise ProviderInvocationError(
+                        f"Antigravity CLI exited with status {result.returncode}",
+                        taint_existing_thread=True,
+                    )
             provider_result = self._provider_result(
                 effective_stdout,
                 expected_thread_id=invocation.thread_id,
@@ -2040,32 +2072,13 @@ class AntigravityAdapter:
                 taint_existing_thread=True,
             ) from None
 
-        def reject_duplicate_fields(
-            pairs: list[tuple[str, Any]],
-        ) -> dict[str, Any]:
-            value: dict[str, Any] = {}
-            for key, item in pairs:
-                if key in value:
-                    raise _DuplicateField
-                value[key] = item
-            return value
-
-        def reject_constant(_value: str) -> None:
-            raise ValueError
-
-        def finite_float(value: str) -> float:
-            number = float(value)
-            if not math.isfinite(number):
-                raise ValueError
-            return number
-
         malformed = False
         try:
             value = json.loads(
                 text,
-                object_pairs_hook=reject_duplicate_fields,
-                parse_constant=reject_constant,
-                parse_float=finite_float,
+                object_pairs_hook=_reject_duplicate_fields,
+                parse_constant=_reject_constant,
+                parse_float=_finite_float,
             )
         except (ValueError, RecursionError, UnicodeError):
             malformed = True

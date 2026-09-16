@@ -371,7 +371,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
                 await adapter.invoke(binding, invocation)
-            self.assertEqual(str(cm.exception), "Antigravity CLI returned malformed JSON")
+            self.assertIn("malformed JSON", str(cm.exception))
 
     async def test_codex_adapter_handles_structured_reasoning_and_cumulative_deltas(self) -> None:
         adapter = self.codex_adapter
@@ -769,6 +769,195 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ProviderInvocationError) as cm:
                 await adapter.invoke(binding, invocation)
             self.assertIn("trailing data after terminal result", str(cm.exception))
+
+    async def test_antigravity_adapter_recognizes_authentication_failure_with_streaming_preamble(self) -> None:
+        """Verify authentication failure is recognized when preceded by streaming preamble."""
+        from story_writing_agents.provider_adapter import ProviderInvocationError
+
+        adapter, binding = self._make_agy_binding("session_auth_preamble")
+        schema = {
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"],
+            "additionalProperties": False,
+        }
+        invocation = ProviderInvocation(
+            session_id="session_auth_preamble",
+            schema=schema,
+            payload={},
+            thread_id=None,
+            stream_sink=lambda _event: None,
+        )
+        auth_terminal = {
+            "conversation_id": "",
+            "status": "ERROR",
+            "response": "",
+            "error": "authentication failed or timed out",
+            "duration_seconds": 0,
+            "num_turns": 0,
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "thinking_tokens": 0,
+                "cache_read_tokens": 0,
+                "total_tokens": 0,
+            },
+        }
+        stream_lines = [
+            b'{"type":"turn_start"}\n',
+            b'{"type":"status","text":"Connecting..."}\n',
+            json.dumps(auth_terminal).encode("utf-8") + b"\n",
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=1,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            with self.assertRaises(ProviderInvocationError) as cm:
+                await adapter.invoke(binding, invocation)
+            self.assertIsNotNone(cm.exception.authentication_failure)
+            self.assertTrue(cm.exception.authentication_failure.replay_safe)
+            self.assertFalse(cm.exception.taint_existing_thread)
+
+    async def test_antigravity_adapter_rejects_duplicate_field_in_stream_line(self) -> None:
+        """Verify duplicate fields in stream JSON lines are rejected."""
+        from story_writing_agents.provider_adapter import ProviderInvocationError
+
+        adapter, binding = self._make_agy_binding("session_dup_field")
+        schema = {
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"],
+            "additionalProperties": False,
+        }
+        invocation = ProviderInvocation(
+            session_id="session_dup_field",
+            schema=schema,
+            payload={},
+            thread_id=None,
+            stream_sink=lambda _event: None,
+        )
+        res = {
+            "conversation_id": "c1",
+            "status": "SUCCESS",
+            "structured_output": {"status": "ok"},
+            "json_schema": schema,
+        }
+        stream_lines = [
+            b'{"type":"status","text":"first","text":"duplicate"}\n',
+            json.dumps(res).encode("utf-8") + b"\n",
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            with self.assertRaises(ProviderInvocationError) as cm:
+                await adapter.invoke(binding, invocation)
+            self.assertIn("invalid stream line: malformed JSON line", str(cm.exception))
+
+    async def test_antigravity_adapter_rejects_nan_or_infinity_in_stream_line(self) -> None:
+        """Verify non-standard NaN / Infinity in stream JSON lines are rejected."""
+        from story_writing_agents.provider_adapter import ProviderInvocationError
+
+        adapter, binding = self._make_agy_binding("session_nan_field")
+        schema = {
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"],
+            "additionalProperties": False,
+        }
+        invocation = ProviderInvocation(
+            session_id="session_nan_field",
+            schema=schema,
+            payload={},
+            thread_id=None,
+            stream_sink=lambda _event: None,
+        )
+        res = {
+            "conversation_id": "c1",
+            "status": "SUCCESS",
+            "structured_output": {"status": "ok"},
+            "json_schema": schema,
+        }
+        stream_lines = [
+            b'{"type":"status","val":NaN}\n',
+            json.dumps(res).encode("utf-8") + b"\n",
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            with self.assertRaises(ProviderInvocationError) as cm:
+                await adapter.invoke(binding, invocation)
+            self.assertIn("invalid stream line: malformed JSON line", str(cm.exception))
+
+    async def test_antigravity_adapter_rejects_recursion_error_in_stream_line(self) -> None:
+        """Verify deeply nested stream JSON lines that trigger RecursionError are rejected fail-closed."""
+        from story_writing_agents.provider_adapter import ProviderInvocationError
+
+        adapter, binding = self._make_agy_binding("session_deep_recursion")
+        schema = {
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"],
+            "additionalProperties": False,
+        }
+        invocation = ProviderInvocation(
+            session_id="session_deep_recursion",
+            schema=schema,
+            payload={},
+            thread_id=None,
+            stream_sink=lambda _event: None,
+        )
+        res = {
+            "conversation_id": "c1",
+            "status": "SUCCESS",
+            "structured_output": {"status": "ok"},
+            "json_schema": schema,
+        }
+        deep_nesting = b'{"a":' * 10000 + b'1' + b'}' * 10000
+        stream_lines = [
+            deep_nesting + b"\n",
+            json.dumps(res).encode("utf-8") + b"\n",
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            with self.assertRaises(ProviderInvocationError) as cm:
+                await adapter.invoke(binding, invocation)
+            self.assertIn("invalid stream line: malformed JSON line", str(cm.exception))
 
 
 if __name__ == "__main__":

@@ -166,7 +166,7 @@ async def run_process(
         if (
             request.on_stdout_line is None
             or getattr(process, "stdout", None) is None
-            or not hasattr(process.stdout, "readline")
+            or not hasattr(process.stdout, "read")
         ):
             communicated = await wait_for(
                 process.communicate(request.stdin),
