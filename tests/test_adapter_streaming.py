@@ -1099,6 +1099,87 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("invalid stream line: unknown event type 'bogus_event'", str(cm.exception))
             self.assertIsNone(cm.exception.authentication_failure)
 
+    async def test_antigravity_adapter_rejects_explicit_null_type_discriminator(self) -> None:
+        """Verify explicit null type discriminator is rejected fail-closed and not inferred as legacy."""
+        from story_writing_agents.provider_adapter import ProviderInvocationError
+
+        adapter, binding = self._make_agy_binding("session_null_type")
+        schema = {
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"],
+            "additionalProperties": False,
+        }
+        invocation = ProviderInvocation(
+            session_id="session_null_type",
+            schema=schema,
+            payload={},
+            thread_id=None,
+            stream_sink=lambda _event: None,
+        )
+        stream_lines = [
+            b'{"type":null,"structured_output":{"status":"ok"},"conversation_id":"c1"}\n',
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            with self.assertRaises(ProviderInvocationError) as cm:
+                await adapter.invoke(binding, invocation)
+            self.assertIn("invalid stream line: invalid event discriminator", str(cm.exception))
+
+    async def test_antigravity_adapter_rejects_explicit_null_event_discriminator_with_running_status(self) -> None:
+        """Verify explicit null event discriminator with status 'running' is rejected fail-closed."""
+        from story_writing_agents.provider_adapter import ProviderInvocationError
+
+        adapter, binding = self._make_agy_binding("session_null_event_running")
+        schema = {
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"],
+            "additionalProperties": False,
+        }
+        invocation = ProviderInvocation(
+            session_id="session_null_event_running",
+            schema=schema,
+            payload={},
+            thread_id=None,
+            stream_sink=lambda _event: None,
+        )
+        res = {
+            "conversation_id": "c1",
+            "status": "SUCCESS",
+            "structured_output": {"status": "ok"},
+            "json_schema": schema,
+        }
+        stream_lines = [
+            b'{"event":null,"status":"running"}\n',
+            json.dumps(res).encode("utf-8") + b"\n",
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            with self.assertRaises(ProviderInvocationError) as cm:
+                await adapter.invoke(binding, invocation)
+            self.assertIn("invalid stream line: invalid event discriminator", str(cm.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

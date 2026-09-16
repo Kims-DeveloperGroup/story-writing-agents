@@ -1077,11 +1077,24 @@ class AntigravityAdapter:
                     invalid_stream_line = "non-object JSON line"
                 return
 
-            raw_event_type = event.get("type") if "type" in event else event.get("event")
-            event_type = str(raw_event_type).lower() if raw_event_type is not None else ""
+            has_discriminator = "type" in event or "event" in event
+            if has_discriminator:
+                raw_event_type = event.get("type") if "type" in event else event.get("event")
+                if raw_event_type is None or not isinstance(raw_event_type, str):
+                    if invalid_stream_line is None:
+                        invalid_stream_line = "invalid event discriminator"
+                    return
+                event_type = raw_event_type.strip().lower()
+                if not event_type:
+                    if invalid_stream_line is None:
+                        invalid_stream_line = "unknown event type ''"
+                    return
+            else:
+                raw_event_type = None
+                event_type = ""
 
             is_terminal = False
-            if raw_event_type is None:
+            if not has_discriminator:
                 is_terminal = (
                     "structured_output" in event
                     or (
@@ -1105,7 +1118,7 @@ class AntigravityAdapter:
                 "turn.started",
                 "turn_started",
                 "status",
-            } or (raw_event_type is None and str(event.get("status", "")).lower() == "running"):
+            } or (not has_discriminator and str(event.get("status", "")).lower() == "running"):
                 msg = str(
                     event.get("text")
                     or event.get("message")
