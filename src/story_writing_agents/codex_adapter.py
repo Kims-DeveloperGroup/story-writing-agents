@@ -70,6 +70,37 @@ def _extract_stream_text(value: object) -> str:
     return ""
 
 
+def _resolve_aliased_field(
+    mapping: dict[str, object],
+    primary_key: str,
+    alias_key: str,
+    *,
+    normalize_case: bool = False,
+) -> tuple[str | None, bool]:
+    """Resolve aliased fields from mapping.
+
+    Returns:
+        (resolved_value, has_conflict)
+    """
+    val1 = mapping.get(primary_key)
+    val2 = mapping.get(alias_key)
+    if val1 is not None and val2 is not None:
+        s1 = str(val1).strip()
+        s2 = str(val2).strip()
+        c1 = s1.lower() if normalize_case else s1
+        c2 = s2.lower() if normalize_case else s2
+        if c1 != c2:
+            return None, True
+        return c1, False
+    if val1 is not None:
+        s1 = str(val1).strip()
+        return (s1.lower() if normalize_case else s1), False
+    if val2 is not None:
+        s2 = str(val2).strip()
+        return (s2.lower() if normalize_case else s2), False
+    return None, False
+
+
 class CodexAdapter:
     """Own all Codex CLI resources and vendor-specific protocol handling."""
 
@@ -384,22 +415,27 @@ class CodexAdapter:
                         item = event.get("item")
                         if type(item) is dict:
                             top_id = event.get("item_id")
-                            nested_id = item.get("id") or item.get("item_id")
-                            if top_id is not None and nested_id is not None and str(top_id) != str(nested_id):
+                            nested_id, id_conflict = _resolve_aliased_field(item, "id", "item_id")
+                            if id_conflict:
                                 return
-                            raw_id = nested_id if nested_id is not None else top_id
+                            if top_id is not None and nested_id is not None and str(top_id).strip() != nested_id:
+                                return
+                            raw_id = nested_id if nested_id is not None else (str(top_id).strip() if top_id is not None else None)
                             item_id = str(raw_id) if raw_id is not None and str(raw_id) else None
 
                             top_type = event.get("item_type")
-                            nested_type = item.get("type") or item.get("item_type")
+                            nested_type, type_conflict = _resolve_aliased_field(
+                                item, "type", "item_type", normalize_case=True
+                            )
+                            if type_conflict:
+                                return
                             if top_type is not None and nested_type is not None:
                                 norm_top = str(top_type).strip().lower()
-                                norm_nested = str(nested_type).strip().lower()
-                                if norm_top != norm_nested:
+                                if norm_top != nested_type:
                                     return
                                 resolved_type = norm_top
                             elif nested_type is not None:
-                                resolved_type = str(nested_type).strip().lower()
+                                resolved_type = nested_type
                             elif top_type is not None:
                                 resolved_type = str(top_type).strip().lower()
                             else:
@@ -452,31 +488,43 @@ class CodexAdapter:
                                     )
                                 )
                     elif event_type in {"item.delta", "response.output_item.delta"}:
-                        raw_id = event.get("item_id")
+                        top_id = event.get("item_id")
                         raw_delta = event.get("delta")
                         item_obj = event.get("item")
                         top_type = event.get("item_type")
+
+                        nested_id = None
                         nested_type = None
                         if type(item_obj) is dict:
-                            nested_id = item_obj.get("id") or item_obj.get("item_id")
-                            if raw_id is not None and nested_id is not None and str(raw_id) != str(nested_id):
+                            nested_id, id_conflict = _resolve_aliased_field(item_obj, "id", "item_id")
+                            if id_conflict:
                                 return
-                            if raw_id is None:
-                                raw_id = nested_id
+                            nested_type, type_conflict = _resolve_aliased_field(
+                                item_obj, "type", "item_type", normalize_case=True
+                            )
+                            if type_conflict:
+                                return
+                            nested_delta, delta_conflict = _resolve_aliased_field(item_obj, "delta", "text")
+                            if delta_conflict:
+                                return
                             if raw_delta is None:
-                                raw_delta = item_obj.get("delta") or item_obj.get("text")
-                            nested_type = item_obj.get("type") or item_obj.get("item_type")
+                                raw_delta = nested_delta
+                            elif nested_delta is not None and str(raw_delta) != nested_delta:
+                                return
+
+                        if top_id is not None and nested_id is not None and str(top_id).strip() != nested_id:
+                            return
+                        raw_id = nested_id if nested_id is not None else (str(top_id).strip() if top_id is not None else None)
 
                         if top_type is not None and nested_type is not None:
                             norm_top = str(top_type).strip().lower()
-                            norm_nested = str(nested_type).strip().lower()
-                            if norm_top != norm_nested:
+                            if norm_top != nested_type:
                                 return
                             resolved_type = norm_top
                         elif top_type is not None:
                             resolved_type = str(top_type).strip().lower()
                         elif nested_type is not None:
-                            resolved_type = str(nested_type).strip().lower()
+                            resolved_type = nested_type
                         else:
                             resolved_type = None
 

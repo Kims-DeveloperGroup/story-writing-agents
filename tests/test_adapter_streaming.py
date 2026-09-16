@@ -1514,6 +1514,16 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             b'{"type":"item.updated","item_id":"i5","item_type":"agent_message","item":{"id":"i5","type":"reasoning","text":"secret update"}}\n',
             # Conflicting top-level item_id and nested id on item.updated: reject fail-closed
             b'{"type":"item.updated","item_id":"i6","item":{"id":"i7","type":"agent_message","text":"id mismatch update"}}\n',
+            # Conflicting nested type and item_type aliases on delta: reject fail-closed
+            b'{"type":"item.delta","item":{"id":"i9","type":"agent_message","item_type":"reasoning"},"delta":"alias type conflict"}\n',
+            # Conflicting nested id and item_id aliases on delta: reject fail-closed
+            b'{"type":"item.delta","item":{"id":"i10","item_id":"i11","type":"agent_message"},"delta":"alias id conflict"}\n',
+            # Conflicting nested delta and text aliases on delta: reject fail-closed
+            b'{"type":"item.delta","item_id":"i12","item_type":"agent_message","item":{"delta":"part a","text":"part b"}}\n',
+            # Conflicting nested type and item_type aliases on item.updated: reject fail-closed
+            b'{"type":"item.updated","item":{"id":"i13","type":"agent_message","item_type":"reasoning","text":"alias update type conflict"}}\n',
+            # Conflicting nested id and item_id aliases on item.updated: reject fail-closed
+            b'{"type":"item.updated","item":{"id":"i14","item_id":"i15","type":"agent_message","text":"alias update id conflict"}}\n',
             # Valid item delta with matching top-level and nested types: must emit TEXT_DELTA
             b'{"type":"item.delta","item_id":"i8","item_type":"agent_message","item":{"id":"i8","type":"agent_message"},"delta":"clean valid text"}\n',
         ]
