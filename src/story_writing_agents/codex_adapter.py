@@ -358,7 +358,7 @@ class CodexAdapter:
             agent_id = binding.definition.agent_id
             stream_sink = invocation.stream_sink
 
-            emitted_text_by_item: dict[str, str] = {}
+            emitted_fragments_by_item: dict[str, list[str]] = {}
             item_kinds_by_id: dict[str, ProviderStreamEventKind] = {}
 
             def handle_stream_line(raw_line: bytes) -> None:
@@ -385,52 +385,42 @@ class CodexAdapter:
                         if type(item) is dict:
                             item_type = item.get("type")
                             raw_id = item.get("id")
-                            if raw_id is not None and str(raw_id):
-                                item_id = str(raw_id)
+                            item_id = str(raw_id) if raw_id is not None and str(raw_id) else None
+                            if item_id is not None:
                                 if item_type == "reasoning":
                                     item_kinds_by_id[item_id] = ProviderStreamEventKind.THOUGHT_DELTA
                                 elif item_type == "agent_message":
                                     item_kinds_by_id[item_id] = ProviderStreamEventKind.TEXT_DELTA
-                            if item_type == "reasoning":
-                                text = _extract_stream_text(
-                                    item.get("text") or item.get("summary") or ""
+
+                            if item_type in {"reasoning", "agent_message"}:
+                                kind = (
+                                    ProviderStreamEventKind.THOUGHT_DELTA
+                                    if item_type == "reasoning"
+                                    else ProviderStreamEventKind.TEXT_DELTA
                                 )
-                                if raw_id is not None and str(raw_id):
-                                    item_id = str(raw_id)
-                                    prev_text = emitted_text_by_item.get(item_id, "")
+                                text_key = "summary" if item_type == "reasoning" else "content"
+                                text = _extract_stream_text(
+                                    item.get("text") or item.get(text_key) or ""
+                                )
+                                if item_id is not None:
+                                    if event_type == "item.completed":
+                                        prev_text = "".join(emitted_fragments_by_item.pop(item_id, []))
+                                        item_kinds_by_id.pop(item_id, None)
+                                    else:
+                                        prev_text = "".join(emitted_fragments_by_item.get(item_id, []))
                                     if text.startswith(prev_text):
                                         delta = text[len(prev_text) :]
                                     else:
                                         delta = text
-                                    emitted_text_by_item[item_id] = text
+                                    if event_type != "item.completed":
+                                        emitted_fragments_by_item[item_id] = [text]
                                 else:
                                     delta = text
+
                                 if delta:
                                     stream_sink(
                                         ProviderStreamEvent(
-                                            ProviderStreamEventKind.THOUGHT_DELTA,
-                                            agent_id,
-                                            delta,
-                                        )
-                                    )
-                            elif item_type == "agent_message":
-                                text = _extract_stream_text(
-                                    item.get("text") or item.get("content") or ""
-                                )
-                                if raw_id is not None and str(raw_id):
-                                    item_id = str(raw_id)
-                                    prev_text = emitted_text_by_item.get(item_id, "")
-                                    if text.startswith(prev_text):
-                                        delta = text[len(prev_text) :]
-                                    else:
-                                        delta = text
-                                    emitted_text_by_item[item_id] = text
-                                else:
-                                    delta = text
-                                if delta:
-                                    stream_sink(
-                                        ProviderStreamEvent(
-                                            ProviderStreamEventKind.TEXT_DELTA,
+                                            kind,
                                             agent_id,
                                             delta,
                                         )
@@ -439,30 +429,36 @@ class CodexAdapter:
                         raw_id = event.get("item_id")
                         raw_delta = event.get("delta")
                         item_obj = event.get("item")
+                        raw_type = event.get("item_type")
                         if type(item_obj) is dict:
                             if raw_id is None:
                                 raw_id = item_obj.get("id") or item_obj.get("item_id")
                             if raw_delta is None:
                                 raw_delta = item_obj.get("delta") or item_obj.get("text")
+                            if raw_type is None:
+                                raw_type = item_obj.get("type") or item_obj.get("item_type")
+
+                        item_id = str(raw_id) if raw_id is not None and str(raw_id) else None
+                        kind: ProviderStreamEventKind | None = None
+                        if item_id is not None and item_id in item_kinds_by_id:
+                            kind = item_kinds_by_id[item_id]
+                        elif raw_type is not None:
+                            norm_type = str(raw_type).strip().lower()
+                            if norm_type == "reasoning":
+                                kind = ProviderStreamEventKind.THOUGHT_DELTA
+                            elif norm_type == "agent_message":
+                                kind = ProviderStreamEventKind.TEXT_DELTA
+                            else:
+                                return
+                            if item_id is not None:
+                                item_kinds_by_id[item_id] = kind
+                        else:
+                            return
+
                         delta_text = _extract_stream_text(raw_delta)
                         if delta_text:
-                            if raw_id is not None and str(raw_id):
-                                item_id = str(raw_id)
-                                emitted_text_by_item[item_id] = (
-                                    emitted_text_by_item.get(item_id, "") + delta_text
-                                )
-                                kind = item_kinds_by_id.get(item_id)
-                                if kind is None:
-                                    if event.get("item_type") == "reasoning":
-                                        kind = ProviderStreamEventKind.THOUGHT_DELTA
-                                    else:
-                                        kind = ProviderStreamEventKind.TEXT_DELTA
-                                    item_kinds_by_id[item_id] = kind
-                            else:
-                                if event.get("item_type") == "reasoning":
-                                    kind = ProviderStreamEventKind.THOUGHT_DELTA
-                                else:
-                                    kind = ProviderStreamEventKind.TEXT_DELTA
+                            if item_id is not None:
+                                emitted_fragments_by_item.setdefault(item_id, []).append(delta_text)
                             stream_sink(
                                 ProviderStreamEvent(
                                     kind,

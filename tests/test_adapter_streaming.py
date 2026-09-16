@@ -1361,6 +1361,68 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[4].kind, ProviderStreamEventKind.TEXT_DELTA)
         self.assertEqual(events[4].text, "the valley.")
 
+    async def test_codex_adapter_item_delta_derives_nested_type_and_fails_closed_on_unknown(self) -> None:
+        """Verify item.delta derives kind from nested item.type and fails closed on unknown/untyped items."""
+        adapter = self.codex_adapter
+        binding = adapter.bind(self.definition)
+        events: list[ProviderStreamEvent] = []
+
+        schema = {
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+            "additionalProperties": False,
+        }
+        invocation = ProviderInvocation(
+            session_id="session_codex_nested_delta",
+            schema=schema,
+            payload={"task": "draft"},
+            thread_id=None,
+            stream_sink=events.append,
+        )
+
+        stream_lines = [
+            b'{"type":"thread.started","thread_id":"thread_nested_1"}\n',
+            # Nested reasoning delta without prior item.started: must be THOUGHT_DELTA, not TEXT_DELTA
+            b'{"type":"item.delta","item":{"id":"r_nested","type":"reasoning","delta":"Internal plan"}}\n',
+            # Unknown item type: must fail closed and NOT emit any event
+            b'{"type":"item.delta","item":{"id":"tool_1","type":"custom_tool","delta":"do_something()"}}\n',
+            # Untyped delta without prior classification: must fail closed and NOT emit
+            b'{"type":"item.delta","item_id":"untyped_1","delta":"untyped leak?"}\n',
+            # Nested agent_message delta: must be TEXT_DELTA
+            b'{"type":"item.delta","item":{"id":"msg_nested","type":"agent_message","delta":"Visible story"}}\n',
+            # Completion of msg_nested: should clean up and not replay
+            b'{"type":"item.completed","item":{"id":"msg_nested","type":"agent_message","text":"Visible story"}}\n',
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            output_flag_index = request.command.index("--output-last-message")
+            output_file_path = Path(request.command[output_flag_index + 1])
+            output_file_path.parent.mkdir(parents=True, exist_ok=True)
+            output_file_path.write_text('{"summary":"Done"}', encoding="utf-8")
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
+            result = await adapter.invoke(binding, invocation)
+
+        self.assertEqual(result.response_text, '{"summary":"Done"}')
+        # Exactly 2 events should have been emitted:
+        # 0: THOUGHT_DELTA ("Internal plan")
+        # 1: TEXT_DELTA ("Visible story")
+        # Unknown/untyped items were rejected fail-closed, and item.completed had zero replay
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0].kind, ProviderStreamEventKind.THOUGHT_DELTA)
+        self.assertEqual(events[0].text, "Internal plan")
+        self.assertEqual(events[1].kind, ProviderStreamEventKind.TEXT_DELTA)
+        self.assertEqual(events[1].text, "Visible story")
+
 
 if __name__ == "__main__":
     unittest.main()

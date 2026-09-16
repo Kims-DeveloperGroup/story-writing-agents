@@ -1100,9 +1100,7 @@ class AntigravityAdapter:
                         invalid_stream_line = "conflicting event discriminator"
                     return
                 event_type = types_to_check[0]
-                raw_event_type = event.get("type") if has_type else event.get("event")
             else:
-                raw_event_type = None
                 event_type = ""
 
             is_terminal = False
