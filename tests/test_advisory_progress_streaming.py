@@ -350,6 +350,74 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             "Searching artifacts...",
         )
 
+    def test_observe_migrates_provisional_stream_state_when_authoritative_action_arrives(self) -> None:
+        state = AdvisoryProgressState()
+        state.begin()  # no initial requests
+
+        # Stream event arrives first (no operation_id known yet)
+        state.observe_stream(
+            ProviderStreamEvent(
+                kind=ProviderStreamEventKind.STATUS,
+                agent_id="lead_orchestrator",
+                text="Drafting initial outline...",
+                operation_id=None,
+            )
+        )
+        state.observe_stream(
+            ProviderStreamEvent(
+                kind=ProviderStreamEventKind.TEXT_DELTA,
+                agent_id="lead_orchestrator",
+                text="Chapter 1 overview",
+                operation_id=None,
+            )
+        )
+        self.assertIn(("lead_orchestrator", ""), state.stream_status)
+        self.assertIn(("lead_orchestrator", ""), state.stream_preview)
+
+        # Later, authoritative context action arrives
+        context_event = ContextActionProgressEvent(
+            kind=ContextActionProgressKind.READ_COMPLETED,
+            agent_id="lead_orchestrator",
+            operation_id="lead_turn_99",
+            action_index=1,
+        )
+        state.observe(context_event)
+
+        # Provisional key should be migrated
+        self.assertNotIn(("lead_orchestrator", ""), state.stream_status)
+        self.assertNotIn(("lead_orchestrator", ""), state.stream_preview)
+        self.assertEqual(
+            state.stream_status.get(("lead_orchestrator", "lead_turn_99")),
+            "Drafting initial outline...",
+        )
+        self.assertEqual(
+            state.stream_preview.get(("lead_orchestrator", "lead_turn_99")),
+            "Chapter 1 overview",
+        )
+
+    def test_plain_terminal_does_not_bind_stream_sink(self) -> None:
+        mock_terminal = mock.create_autospec(InteractiveTerminal, instance=True)
+        from story_writing_agents.interactive_terminal._core import _plain_advisory_progress
+        mock_terminal._advisory_progress = _plain_advisory_progress
+        progress = InteractiveAdvisoryProgress(mock_terminal)
+
+        # bound_stream_sink on plain terminal should not bind
+        with progress.bound_stream_sink():
+            self.assertIsNone(active_provider_stream_sink())
+
+        # run on plain terminal should not bind
+        observed_sink = "sentinel"
+        async def fake_op():
+            nonlocal observed_sink
+            observed_sink = active_provider_stream_sink()
+            return 42
+
+        runner = asyncio.Runner()
+        self.addCleanup(runner.close)
+        result = runner.run(progress.run(fake_op()))
+        self.assertEqual(result, 42)
+        self.assertIsNone(observed_sink)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -379,17 +379,21 @@ class CodexAdapter:
                         item = event.get("item")
                         if type(item) is dict:
                             item_type = item.get("type")
+                            raw_id = item.get("id")
                             if item_type == "reasoning":
                                 text = _extract_stream_text(
                                     item.get("text") or item.get("summary") or ""
                                 )
-                                item_id = str(item.get("id") or "")
-                                prev_text = emitted_text_by_item.get(item_id, "")
-                                if text.startswith(prev_text):
-                                    delta = text[len(prev_text) :]
+                                if raw_id is not None and str(raw_id):
+                                    item_id = str(raw_id)
+                                    prev_text = emitted_text_by_item.get(item_id, "")
+                                    if text.startswith(prev_text):
+                                        delta = text[len(prev_text) :]
+                                    else:
+                                        delta = text
+                                    emitted_text_by_item[item_id] = text
                                 else:
                                     delta = text
-                                emitted_text_by_item[item_id] = text
                                 if delta:
                                     stream_sink(
                                         ProviderStreamEvent(
@@ -402,13 +406,16 @@ class CodexAdapter:
                                 text = _extract_stream_text(
                                     item.get("text") or item.get("content") or ""
                                 )
-                                item_id = str(item.get("id") or "")
-                                prev_text = emitted_text_by_item.get(item_id, "")
-                                if text.startswith(prev_text):
-                                    delta = text[len(prev_text) :]
+                                if raw_id is not None and str(raw_id):
+                                    item_id = str(raw_id)
+                                    prev_text = emitted_text_by_item.get(item_id, "")
+                                    if text.startswith(prev_text):
+                                        delta = text[len(prev_text) :]
+                                    else:
+                                        delta = text
+                                    emitted_text_by_item[item_id] = text
                                 else:
                                     delta = text
-                                emitted_text_by_item[item_id] = text
                                 if delta:
                                     stream_sink(
                                         ProviderStreamEvent(

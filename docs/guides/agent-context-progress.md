@@ -62,11 +62,11 @@ empty and `Results: truncated` when the bounded result set was truncated.
 
 A READ start displays every selected safe relative locator and its exact whole,
 line, or record boundary. Completion retains those locators and ranges and adds
-the exact UTF-8 byte count for each retrieved selection. The frame never
-includes source snippets or excerpts, absolute paths,
-credentials, or hidden reasoning. During provider generation, active terminals may
+the exact UTF-8 byte count for each retrieved selection. SEARCH and READ cards never
+include source snippets or excerpts, provider answers, absolute paths,
+credentials, or hidden reasoning. During provider generation, active capable terminals may
 display transient status notices and a bounded rolling preview of streamed output
-that is erased prior to persistent output.
+that is erased cleanly prior to persistent output.
 
 The raw driver redraws the whole multiline frame in ANSI-capable and plain
 `NO_COLOR` modes and clears it before persistent output. Ordinary line-input,
@@ -140,9 +140,9 @@ Optional conversation RAG is also a separate discovery layer.
 
 Detailed progress is transient presentation, not secure erasure. Terminal
 capture, a multiplexer, a remote terminal, accessibility tooling, or emulator
-scrollback may retain exact search queries and safe relative locators/ranges.
+scrollback may retain exact search queries, safe relative locators/ranges, and rolling streamed output previews.
 Treat such captured output as story metadata even though source bodies and
-provider answers are excluded.
+persisted records are excluded from progress frames.
 
 See [Agent-context design](../design/agent-context.md) and
 [privacy](../operations/privacy-and-provider.md#agent-context-progress-privacy).

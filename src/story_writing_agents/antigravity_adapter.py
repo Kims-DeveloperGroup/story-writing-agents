@@ -1256,6 +1256,14 @@ class AntigravityAdapter:
             raise
 
     @classmethod
+    def _unwrap_result_envelope(cls, terminal: dict[str, Any]) -> dict[str, Any]:
+        """Extract inner result payload if terminal is a result/event envelope."""
+        event_type = str(terminal.get("type") or terminal.get("event") or "").lower()
+        if event_type == "result" and isinstance(terminal.get("result"), dict):
+            return terminal["result"]
+        return terminal
+
+    @classmethod
     def _authentication_failure(
         cls, stdout: bytes, returncode: int,
     ) -> ProviderAuthenticationRequiredError | None:
@@ -1265,8 +1273,7 @@ class AntigravityAdapter:
             terminal = cls._parse_result(stdout)
         except ProviderInvocationError:
             return None
-        if terminal.get("type") == "result" and isinstance(terminal.get("result"), dict):
-            terminal = terminal["result"]
+        terminal = cls._unwrap_result_envelope(terminal)
         error = terminal.get("error")
         if terminal.get("status") != "ERROR":
             return None
@@ -1499,8 +1506,7 @@ class AntigravityAdapter:
         """Decode one Antigravity JSON result with fixed diagnostics."""
 
         terminal = cls._parse_result(stdout)
-        if terminal.get("type") == "result" and isinstance(terminal.get("result"), dict):
-            terminal = terminal["result"]
+        terminal = cls._unwrap_result_envelope(terminal)
         native_error = terminal.get("error")
         recoverable_error = (
             terminal.get("status") == "ERROR"

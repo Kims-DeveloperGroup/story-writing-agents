@@ -94,7 +94,7 @@ While a Lead or confirmed specialist request is active, capable terminals show
 a transient shared `HH:MM:SS` working bar and per-agent context cards. SEARCH
 cards may display exact query text, requested resource kinds and scope, and safe
 workspace-relative locators/ranges; READ cards show selected locators and exact
-boundaries. They never display source excerpts, absolute
+boundaries. SEARCH and READ cards never display source excerpts, provider answers, absolute
 paths, or hidden reasoning. During provider generation, active terminals may
 display transient status indicators and a bounded rolling preview of streamed output
 that is erased cleanly before final output. Final specialist request/answer/status panels

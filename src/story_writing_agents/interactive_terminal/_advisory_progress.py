@@ -74,6 +74,18 @@ class AdvisoryProgressState:
         if type(event) is not ContextActionProgressEvent:
             raise TypeError("progress event is invalid")
         self.events[(event.agent_id, event.operation_id, event.action_index)] = event
+        provisional_key = (event.agent_id, "")
+        target_key = (event.agent_id, event.operation_id)
+        if provisional_key in self.stream_status:
+            if target_key not in self.stream_status:
+                self.stream_status[target_key] = self.stream_status.pop(provisional_key)
+            else:
+                del self.stream_status[provisional_key]
+        if provisional_key in self.stream_preview:
+            prev = self.stream_preview.pop(provisional_key)
+            existing = self.stream_preview.get(target_key, "")
+            combined = (prev + existing)[-500:]
+            self.stream_preview[target_key] = combined
 
     def observe_stream(self, event: ProviderStreamEvent) -> None:
         if type(event) is not ProviderStreamEvent:

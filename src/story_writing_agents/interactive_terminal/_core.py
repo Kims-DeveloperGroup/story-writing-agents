@@ -1901,8 +1901,11 @@ class InteractiveAdvisoryProgress:
 
     @contextlib.contextmanager
     def bound_stream_sink(self) -> Iterator[None]:
-        """Temporarily bind the active stream sink to the calling context."""
+        """Temporarily bind the active stream sink to the calling context on capable terminals."""
 
+        if self._run is _plain_advisory_progress:
+            yield
+            return
         sink_token = bind_provider_stream_sink(self._state.observe_stream)
         try:
             yield
@@ -1913,11 +1916,14 @@ class InteractiveAdvisoryProgress:
         """Join one advisory operation with the terminal-owned indicator."""
 
         token = bind_advisory_progress(self._state)
-        sink_token = bind_provider_stream_sink(self._state.observe_stream)
+        sink_token = None
+        if self._run is not _plain_advisory_progress:
+            sink_token = bind_provider_stream_sink(self._state.observe_stream)
         try:
             return await self._run(operation)
         finally:
-            reset_provider_stream_sink(sink_token)
+            if sink_token is not None:
+                reset_provider_stream_sink(sink_token)
             reset_advisory_progress(token)
 
 

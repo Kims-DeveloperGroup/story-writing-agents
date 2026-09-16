@@ -368,10 +368,10 @@ For each turn, the runtime launches `agy` directly without shell evaluation. It:
   retained ID with `--conversation <id>`; it never registers the canonical
   story workspace root as an Antigravity project;
 - passes the exact confidential story request JSON as one `--print` argument,
-  selects `--input-format text --output-format json`, and sends empty stdin;
+  selects `--input-format text --output-format json` (or `--output-format stream-json` when an active stream sink is bound for capable advisory progress), and sends empty stdin;
 - enables the CLI sandbox, selects plan mode, and disables slash commands;
 - does not pass an approval-bypass or unrestricted-execution option; and
-- drains stdout and stderr, validates one JSON envelope with a safe conversation
+- drains stdout and stderr, validates one JSON envelope (extracting the terminal result from stream-json events when streaming) with a safe conversation
   ID, root-object structured output, and an exact rendered-schema echo, then
   applies the shared runtime correlation and semantic checks. Native `SUCCESS`
   is the normal path; only the [bounded recovery](#recover-a-completed-native-error)

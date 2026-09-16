@@ -528,6 +528,108 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
                 ProviderAuthenticationRequiredError,
             )
 
+    async def test_antigravity_adapter_unwraps_event_alias_result_envelope(self) -> None:
+        agy_backend = AgentBackend(
+            self.workspace,
+            backend_overrides={PLOT_ARCHITECT: "antigravity"},
+        )
+        self.addCleanup(agy_backend.close)
+        adapter = agy_backend._antigravity_adapter
+        agy_definition = PromptAssembler(
+            self.workspace,
+            backend_overrides={PLOT_ARCHITECT: "antigravity"},
+        ).build_definition(
+            session_id="session_event_alias_def",
+            agent_id=PLOT_ARCHITECT,
+        )
+        binding = adapter.bind(agy_definition)
+        invocation = ProviderInvocation(
+            session_id="session_agy_event_alias",
+            schema={"type": "object", "properties": {"msg": {"type": "string"}}, "required": ["msg"], "additionalProperties": False},
+            payload={},
+            thread_id="thread_alias_1",
+            stream_sink=lambda _ev: None,
+        )
+
+        stream_lines = [
+            (
+                b'{"event":"result","result":{"status":"SUCCESS","conversation_id":"thread_alias_1",'
+                b'"structured_output":{"msg":"Hello world"},'
+                b'"json_schema":{"type":"object","properties":{"msg":{"type":"string"}},"required":["msg"],"additionalProperties":false}}}\n'
+            ),
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            if request.on_stdout_line:
+                for line in stream_lines:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            result = await adapter.invoke(binding, invocation)
+        self.assertEqual(result.response_text, '{"msg":"Hello world"}')
+
+    async def test_codex_adapter_handles_id_less_items_independently(self) -> None:
+        adapter = self.codex_adapter
+        binding = adapter.bind(self.definition)
+        events: list[ProviderStreamEvent] = []
+
+        invocation = ProviderInvocation(
+            session_id="session_id_less",
+            schema={"type": "object", "properties": {"done": {"type": "boolean"}}, "required": ["done"]},
+            payload={},
+            thread_id="thread_id_less",
+            stream_sink=events.append,
+        )
+
+        stream_lines = [
+            b'{"type":"turn.started"}\n',
+            b'{"type":"item.updated","item":{"type":"reasoning","text":"Step 1"}}\n',
+            b'{"type":"item.updated","item":{"type":"agent_message","text":"Step 1 result"}}\n',
+            b'{"type":"turn.completed","result":{"structured_output":{"done":true}}}\n',
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            output_flag_index = request.command.index("--output-last-message")
+            output_file_path = Path(request.command[output_flag_index + 1])
+            output_file_path.parent.mkdir(parents=True, exist_ok=True)
+            output_file_path.write_text('{"done":true}', encoding="utf-8")
+
+            if request.on_stdout_line:
+                for line in stream_lines:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
+            result = await adapter.invoke(binding, invocation)
+
+        self.assertEqual(result.response_text, '{"done":true}')
+        text_events = [e for e in events if e.kind is ProviderStreamEventKind.TEXT_DELTA]
+        self.assertEqual(len(text_events), 1)
+        self.assertEqual(text_events[0].text, "Step 1 result")
+
+    def test_provider_invocation_rejects_async_stream_sink(self) -> None:
+        async def async_sink(_event: object) -> None:
+            pass
+
+        with self.assertRaises(TypeError) as exc:
+            ProviderInvocation(
+                session_id="session_async_sink",
+                schema={"type": "object"},
+                payload={},
+                thread_id="thread_async_1",
+                stream_sink=async_sink,
+            )
+        self.assertIn("synchronous callable", str(exc.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
