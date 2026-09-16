@@ -1077,17 +1077,19 @@ class AntigravityAdapter:
                     invalid_stream_line = "non-object JSON line"
                 return
 
-            is_terminal = (
-                "structured_output" in event
-                or (
-                    "conversation_id" in event
-                    and str(event.get("status", "")).upper() in {"SUCCESS", "ERROR"}
+            raw_event_type = event.get("type") if "type" in event else event.get("event")
+            event_type = str(raw_event_type).lower() if raw_event_type is not None else ""
+
+            is_terminal = False
+            if raw_event_type is None:
+                is_terminal = (
+                    "structured_output" in event
+                    or (
+                        "conversation_id" in event
+                        and str(event.get("status", "")).upper() in {"SUCCESS", "ERROR"}
+                    )
                 )
-            )
-            event_type = str(
-                event.get("type") or event.get("event") or ""
-            ).lower()
-            if event_type == "result" and isinstance(event.get("result"), dict):
+            elif event_type == "result" and isinstance(event.get("result"), dict):
                 is_terminal = True
 
             if is_terminal:
@@ -1103,7 +1105,7 @@ class AntigravityAdapter:
                 "turn.started",
                 "turn_started",
                 "status",
-            } or str(event.get("status", "")).lower() == "running":
+            } or (raw_event_type is None and str(event.get("status", "")).lower() == "running"):
                 msg = str(
                     event.get("text")
                     or event.get("message")
@@ -1254,13 +1256,29 @@ class AntigravityAdapter:
         )
         try:
             if streaming:
-                candidate_stdout = (
-                    captured_result_bytes[0]
-                    if len(captured_result_bytes) == 1
-                    else result.stdout
-                )
+                if invalid_stream_line is not None:
+                    raise ProviderInvocationError(
+                        f"Antigravity streaming response contained invalid stream line: {invalid_stream_line}",
+                        taint_existing_thread=True,
+                    )
+                if len(captured_result_bytes) != 1:
+                    if result.returncode != 0:
+                        raise ProviderInvocationError(
+                            f"Antigravity CLI exited with status {result.returncode}",
+                            taint_existing_thread=True,
+                        )
+                    raise ProviderInvocationError(
+                        f"Antigravity streaming response contained {len(captured_result_bytes)} terminal result events; expected exactly 1",
+                        taint_existing_thread=True,
+                    )
+                if has_trailing_data_after_terminal:
+                    raise ProviderInvocationError(
+                        "Antigravity streaming response contained trailing data after terminal result",
+                        taint_existing_thread=True,
+                    )
+                effective_stdout = captured_result_bytes[0]
                 authentication = self._authentication_failure(
-                    candidate_stdout, result.returncode,
+                    effective_stdout, result.returncode,
                 )
                 if authentication is not None:
                     raise ProviderInvocationError(
@@ -1273,22 +1291,6 @@ class AntigravityAdapter:
                         f"Antigravity CLI exited with status {result.returncode}",
                         taint_existing_thread=True,
                     )
-                if invalid_stream_line is not None:
-                    raise ProviderInvocationError(
-                        f"Antigravity streaming response contained invalid stream line: {invalid_stream_line}",
-                        taint_existing_thread=True,
-                    )
-                if len(captured_result_bytes) != 1:
-                    raise ProviderInvocationError(
-                        f"Antigravity streaming response contained {len(captured_result_bytes)} terminal result events; expected exactly 1",
-                        taint_existing_thread=True,
-                    )
-                if has_trailing_data_after_terminal:
-                    raise ProviderInvocationError(
-                        "Antigravity streaming response contained trailing data after terminal result",
-                        taint_existing_thread=True,
-                    )
-                effective_stdout = captured_result_bytes[0]
             else:
                 effective_stdout = result.stdout
                 authentication = self._authentication_failure(

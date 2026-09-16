@@ -959,6 +959,142 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
                 await adapter.invoke(binding, invocation)
             self.assertIn("invalid stream line: malformed JSON line", str(cm.exception))
 
+    async def test_antigravity_adapter_rejects_unknown_event_type_carrying_structured_output(self) -> None:
+        """Verify non-empty unknown type/event field is rejected even when carrying structured_output."""
+        from story_writing_agents.provider_adapter import ProviderInvocationError
+
+        adapter, binding = self._make_agy_binding("session_unknown_type_structured")
+        schema = {
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"],
+            "additionalProperties": False,
+        }
+        invocation = ProviderInvocation(
+            session_id="session_unknown_type_structured",
+            schema=schema,
+            payload={},
+            thread_id=None,
+            stream_sink=lambda _event: None,
+        )
+        stream_lines = [
+            b'{"type":"custom_unknown","structured_output":{"status":"ok"},"conversation_id":"c1"}\n',
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            with self.assertRaises(ProviderInvocationError) as cm:
+                await adapter.invoke(binding, invocation)
+            self.assertIn("invalid stream line: unknown event type 'custom_unknown'", str(cm.exception))
+
+    async def test_antigravity_adapter_rejects_unknown_event_type_carrying_status_running(self) -> None:
+        """Verify unknown event type is rejected even when status is 'running'."""
+        from story_writing_agents.provider_adapter import ProviderInvocationError
+
+        adapter, binding = self._make_agy_binding("session_unknown_type_running")
+        schema = {
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"],
+            "additionalProperties": False,
+        }
+        invocation = ProviderInvocation(
+            session_id="session_unknown_type_running",
+            schema=schema,
+            payload={},
+            thread_id=None,
+            stream_sink=lambda _event: None,
+        )
+        res = {
+            "conversation_id": "c1",
+            "status": "SUCCESS",
+            "structured_output": {"status": "ok"},
+            "json_schema": schema,
+        }
+        stream_lines = [
+            b'{"type":"unexpected_type","status":"running","text":"Working..."}\n',
+            json.dumps(res).encode("utf-8") + b"\n",
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            with self.assertRaises(ProviderInvocationError) as cm:
+                await adapter.invoke(binding, invocation)
+            self.assertIn("invalid stream line: unknown event type 'unexpected_type'", str(cm.exception))
+
+    async def test_antigravity_adapter_fails_closed_when_stream_contains_invalid_line_before_auth_terminal(self) -> None:
+        """Verify malformed/unknown stream line fails closed before auth recovery is considered."""
+        from story_writing_agents.provider_adapter import ProviderInvocationError
+
+        adapter, binding = self._make_agy_binding("session_invalid_before_auth")
+        schema = {
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"],
+            "additionalProperties": False,
+        }
+        invocation = ProviderInvocation(
+            session_id="session_invalid_before_auth",
+            schema=schema,
+            payload={},
+            thread_id=None,
+            stream_sink=lambda _event: None,
+        )
+        auth_terminal = {
+            "conversation_id": "",
+            "status": "ERROR",
+            "response": "",
+            "error": "authentication failed or timed out",
+            "duration_seconds": 0,
+            "num_turns": 0,
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "thinking_tokens": 0,
+                "cache_read_tokens": 0,
+                "total_tokens": 0,
+            },
+        }
+        stream_lines = [
+            b'{"type":"bogus_event"}\n',
+            json.dumps(auth_terminal).encode("utf-8") + b"\n",
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=1,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            with self.assertRaises(ProviderInvocationError) as cm:
+                await adapter.invoke(binding, invocation)
+            # Should fail closed on invalid stream line, NOT enter auth recovery
+            self.assertIn("invalid stream line: unknown event type 'bogus_event'", str(cm.exception))
+            self.assertIsNone(cm.exception.authentication_failure)
+
 
 if __name__ == "__main__":
     unittest.main()
