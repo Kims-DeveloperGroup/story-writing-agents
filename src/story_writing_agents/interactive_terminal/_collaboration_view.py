@@ -39,6 +39,7 @@ from ..conversations import (
     CollaborationStepState,
     CollaborationStepStatePayload,
     CollaborationTerminalOutcomePayload,
+    CollaborationNextAction,
     LeadTurnResult,
     StoryCommitDecisionPayload,
     StoryCommitDecisionResult,
@@ -148,9 +149,14 @@ def project_lead_turn_result(result: LeadTurnResult) -> Panel:
 
     if type(result) is not LeadTurnResult:
         raise TypeError("result must be a LeadTurnResult")
+    role = (
+        SemanticRole.ERROR
+        if result.next_action is CollaborationNextAction.RETRY_LEAD_TURN
+        else SemanticRole.AGENT
+    )
     items: list[Section | Field | Notice | Message | Record | ListView] = [
         Field("Outcome", result.kind.value),
-        _message("Lead", result.message, role=SemanticRole.AGENT),
+        _message("Lead", result.message, role=role),
         *_reply_trace_items(result.trace),
     ]
     if result.proposal is not None:
@@ -943,6 +949,8 @@ def _event_state(payload: object) -> ViewState:
         return ViewState.ERROR
     state = getattr(payload, "state", None)
     if state in {CollaborationStepState.FAILED, CollaborationStepState.OUTCOME_UNKNOWN, CollaborationStepState.RECOVERY_REQUIRED}:
+        return ViewState.ERROR
+    if getattr(payload, "next_action", None) is CollaborationNextAction.RETRY_LEAD_TURN:
         return ViewState.ERROR
     if state is CollaborationStepState.INTERRUPTED or isinstance(payload, CollaborationInterruptionPayload):
         return ViewState.CANCELLED

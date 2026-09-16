@@ -13501,6 +13501,41 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                     self.assertEqual(calls, [(_UNIQUE_C, label)])
                     self.assertEqual(len(output.components), 2)
 
+    def test_retry_lead_turn_surfaces_last_error_and_renders_error_role(self) -> None:
+        session = RuntimeSession.__new__(RuntimeSession)
+        runner = asyncio.Runner()
+        self.addCleanup(runner.close)
+        turn = LeadTurnResult(
+            "session",
+            _UNIQUE_C,
+            "turn-err",
+            "step-err",
+            LeadOutcomeKind.RECOMMENDATION,
+            "The Lead provider attempt failed without a usable result.",
+            None,
+            None,
+            None,
+            CollaborationNextAction.RETRY_LEAD_TURN,
+        )
+
+        async def lead_turn(*_args: object, **_kwargs: object) -> LeadTurnResult:
+            return turn
+
+        progress = self._Progress()
+        progress.last_error_message = "Antigravity CLI exited with status 1: No capacity available"
+        output = self._Output()
+        with mock.patch.object(RuntimeSession, "lead_turn", lead_turn):
+            adapter = lead_policy_module.InteractiveLeadAdapter(
+                session, runner, progress, self._Picker(), self._Prompt(), output,
+            )
+            self.assertFalse(adapter.submit(_UNIQUE_C, "test prompt"))
+            panel = output.components[0]
+            self.assertIsInstance(panel, terminal_module.Panel)
+            self.assertIs(panel.state, terminal_module.ViewState.ERROR)
+            message_item = next(item for item in panel.items if isinstance(item, terminal_module.Message))
+            self.assertIs(message_item.role, terminal_module.SemanticRole.ERROR)
+            self.assertIn("No capacity available", message_item.content)
+
     def test_pending_commit_redisclosure_reuses_exact_picker_without_apply(self):
         digest = "sha256:" + "a" * 64
         request = SimpleNamespace(confirmation_request_id="pending-commit", application_result_event_id="applied-event", candidate=SimpleNamespace(candidate_id="b" * 64), request_digest=digest)

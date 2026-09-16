@@ -2387,6 +2387,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                     backend.enqueue(RuntimeError("failed before submission"))
                     result = await runtime.lead_turn(self.session_id, conversation, "Retain the original request.")
                     self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
+                    self.assertIn("failed before submission", result.message)
                 prefix = self.history(conversation)
                 closure = [event.payload for event in prefix if type(event.payload) is CollaborationLeadOutcomeFailurePayload]
                 self.assertEqual(len(closure), 1)

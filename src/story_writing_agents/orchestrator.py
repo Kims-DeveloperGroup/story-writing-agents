@@ -8414,6 +8414,7 @@ class StoryRuntime:
             invocation_id=calls[-1].invocation_id if calls else None,
             call_id=calls[-1].call_id if calls else None,
             failure_code=code,
+            failure=failure,
         )
 
     def _lead_outcome_failure_result(
@@ -8426,6 +8427,7 @@ class StoryRuntime:
         invocation_id: str | None,
         call_id: str | None,
         failure_code: CollaborationLeadOutcomeFailureCode,
+        failure: BaseException | None = None,
     ) -> LeadTurnResult:
         """Durably close a failed read-only Lead attempt without replaying it."""
 
@@ -8433,25 +8435,44 @@ class StoryRuntime:
             failure_code
             is CollaborationLeadOutcomeFailureCode.ARTIFACT_INTENT_REJECTED
         )
-        message = (
-            "The Lead provider returned a result that the runtime rejected. Retry "
-            "the lead turn; the rejected provider call will not be replayed."
-            if failure_code
-            is CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED
-            else "The lead result failed runtime evidence validation. Retry the "
-            "lead turn; the rejected provider call will not be replayed."
-        )
+        failure_detail = str(failure).strip() if failure is not None else ""
+        if failure_code is CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED:
+            message = (
+                f"The Lead provider returned a result that the runtime rejected ({failure_detail}). Retry "
+                "the lead turn; the rejected provider call will not be replayed."
+                if failure_detail
+                else (
+                    "The Lead provider returned a result that the runtime rejected. Retry "
+                    "the lead turn; the rejected provider call will not be replayed."
+                )
+            )
+        else:
+            message = (
+                f"The lead result failed runtime evidence validation ({failure_detail}). Retry the "
+                "lead turn; the rejected provider call will not be replayed."
+                if failure_detail
+                else (
+                    "The lead result failed runtime evidence validation. Retry the "
+                    "lead turn; the rejected provider call will not be replayed."
+                )
+            )
         attempt_messages = {
             CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED:
                 "The Lead request stopped before a provider call was recorded.",
             CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED:
-                "The Lead provider attempt failed without a usable result.",
+                f"The Lead provider attempt failed ({failure_detail})."
+                if failure_detail
+                else "The Lead provider attempt failed without a usable result.",
             CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT:
-                "The Lead provider attempt exceeded its response timeout.",
+                f"The Lead provider attempt exceeded its response timeout ({failure_detail})."
+                if failure_detail
+                else "The Lead provider attempt exceeded its response timeout.",
             CollaborationLeadOutcomeFailureCode.CANCELLED:
                 "The Lead provider attempt was cancelled.",
             CollaborationLeadOutcomeFailureCode.INTERRUPTED:
-                "The prior Lead provider attempt ended without a recorded result.",
+                f"The prior Lead provider attempt ended without a recorded result ({failure_detail})."
+                if failure_detail
+                else "The prior Lead provider attempt ended without a recorded result.",
         }
         if failure_code in attempt_messages:
             message = (

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import inspect
 import uuid
 from collections.abc import Awaitable, Callable
@@ -13,6 +14,7 @@ from ..conversations import (
     ArtifactApplicationDecisionResult,
     CollaborationConfirmationDecision,
     CollaborationEvent,
+    CollaborationNextAction,
     CollaborationStepState,
     LeadDecisionResult,
     LeadRecommendationDecision,
@@ -259,6 +261,13 @@ class InteractiveLeadAdapter:
             for panel in self._pending_specialist_panels:
                 self._semantic_output.write_component(panel)
             self._pending_specialist_panels = ()
+            if turn.next_action is CollaborationNextAction.RETRY_LEAD_TURN:
+                last_error = getattr(self._progress, "last_error_message", None)
+                if last_error and last_error not in turn.message:
+                    turn = dataclasses.replace(
+                        turn,
+                        message=f"{turn.message}\n\nError details: {last_error}",
+                    )
             self._semantic_output.write_component(project_lead_turn_result(turn))
             self._write_elapsed()
             if turn.state in {
