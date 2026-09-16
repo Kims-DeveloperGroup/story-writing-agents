@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -92,17 +93,17 @@ async def _communicate_streaming(
                 del buffer[: newline_index + 1]
                 try:
                     callback_result = on_stdout_line(line)
-                    if asyncio.iscoroutine(callback_result):
+                    if inspect.isawaitable(callback_result):
                         await callback_result
-                except BaseException:
+                except Exception:
                     pass
         if buffer:
             trailing_line = bytes(buffer)
             try:
                 callback_result = on_stdout_line(trailing_line)
-                if asyncio.iscoroutine(callback_result):
+                if inspect.isawaitable(callback_result):
                     await callback_result
-            except BaseException:
+            except Exception:
                 pass
 
     async def read_stderr() -> None:

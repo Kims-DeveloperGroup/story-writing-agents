@@ -17,10 +17,12 @@ from .agent_context import (
     ContextComponentKind,
     ProviderCallState,
     ProviderJsonEncodingError,
-    ProviderStreamEvent,
-    ProviderStreamEventKind,
     ProviderUsage,
     canonical_provider_json,
+)
+from .agent_context.progress import (
+    ProviderStreamEvent,
+    ProviderStreamEventKind,
 )
 from .agents import ROSTER
 from .config import ConfigurationSnapshot
@@ -47,6 +49,23 @@ from .provider_process import (
 
 
 _SAFE_THREAD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+
+
+def _extract_stream_text(value: object) -> str:
+    """Extract string text from a string, list of entries, or dictionary."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts: list[str] = []
+        for entry in value:
+            if isinstance(entry, str):
+                parts.append(entry)
+            elif isinstance(entry, dict) and "text" in entry:
+                parts.append(str(entry["text"]))
+        return "".join(parts)
+    if isinstance(value, dict) and "text" in value:
+        return str(value["text"])
+    return ""
 
 
 class CodexAdapter:
@@ -337,6 +356,8 @@ class CodexAdapter:
             agent_id = binding.definition.agent_id
             stream_sink = invocation.stream_sink
 
+            emitted_text_by_item: dict[str, str] = {}
+
             def handle_stream_line(raw_line: bytes) -> None:
                 if stream_sink is None:
                     return
@@ -361,23 +382,41 @@ class CodexAdapter:
                         if type(item) is dict:
                             item_type = item.get("type")
                             if item_type == "reasoning":
-                                text = item.get("text") or item.get("summary") or ""
-                                if text:
+                                text = _extract_stream_text(
+                                    item.get("text") or item.get("summary") or ""
+                                )
+                                item_id = str(item.get("id") or "")
+                                prev_text = emitted_text_by_item.get(item_id, "")
+                                if text.startswith(prev_text):
+                                    delta = text[len(prev_text) :]
+                                else:
+                                    delta = text
+                                emitted_text_by_item[item_id] = text
+                                if delta:
                                     stream_sink(
                                         ProviderStreamEvent(
                                             ProviderStreamEventKind.THOUGHT_DELTA,
                                             agent_id,
-                                            text,
+                                            delta,
                                         )
                                     )
                             elif item_type == "agent_message":
-                                text = item.get("text") or item.get("content") or ""
-                                if text:
+                                text = _extract_stream_text(
+                                    item.get("text") or item.get("content") or ""
+                                )
+                                item_id = str(item.get("id") or "")
+                                prev_text = emitted_text_by_item.get(item_id, "")
+                                if text.startswith(prev_text):
+                                    delta = text[len(prev_text) :]
+                                else:
+                                    delta = text
+                                emitted_text_by_item[item_id] = text
+                                if delta:
                                     stream_sink(
                                         ProviderStreamEvent(
                                             ProviderStreamEventKind.TEXT_DELTA,
                                             agent_id,
-                                            text,
+                                            delta,
                                         )
                                     )
                 except Exception:

@@ -63,8 +63,10 @@ empty and `Results: truncated` when the bounded result set was truncated.
 A READ start displays every selected safe relative locator and its exact whole,
 line, or record boundary. Completion retains those locators and ranges and adds
 the exact UTF-8 byte count for each retrieved selection. The frame never
-includes source snippets or excerpts, provider answers, absolute paths,
-credentials, or hidden reasoning.
+includes source snippets or excerpts, absolute paths,
+credentials, or hidden reasoning. During provider generation, active terminals may
+display transient status notices and a bounded rolling preview of streamed output
+that is erased prior to persistent output.
 
 The raw driver redraws the whole multiline frame in ANSI-capable and plain
 `NO_COLOR` modes and clears it before persistent output. Ordinary line-input,

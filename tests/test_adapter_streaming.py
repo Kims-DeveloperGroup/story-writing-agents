@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 from story_writing_agents import AgentBackend, PLOT_ARCHITECT
-from story_writing_agents.agent_context import (
+from story_writing_agents.agent_context.progress import (
     ProviderStreamEvent,
     ProviderStreamEventKind,
 )
@@ -367,6 +367,120 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ProviderInvocationError) as cm:
                 await adapter.invoke(binding, invocation)
             self.assertEqual(str(cm.exception), "Antigravity CLI returned malformed JSON")
+
+    async def test_codex_adapter_handles_structured_reasoning_and_cumulative_deltas(self) -> None:
+        adapter = self.codex_adapter
+        binding = adapter.bind(self.definition)
+        events: list[ProviderStreamEvent] = []
+
+        schema = {
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+            "additionalProperties": False,
+        }
+        invocation = ProviderInvocation(
+            session_id="session_codex_delta",
+            schema=schema,
+            payload={"task": "outline"},
+            thread_id=None,
+            stream_sink=events.append,
+        )
+
+        stream_lines = [
+            b'{"type":"thread.started","thread_id":"thread_codex_delta"}\n',
+            b'{"type":"turn.started"}\n',
+            b'{"type":"item.started","item":{"id":"r1","type":"reasoning","summary":[{"type":"text","text":"Step 1"}]}}\n',
+            b'{"type":"item.updated","item":{"id":"m1","type":"agent_message","text":"Chapter 1"}}\n',
+            b'{"type":"item.updated","item":{"id":"m1","type":"agent_message","text":"Chapter 1: The Beginning"}}\n',
+            b'{"type":"item.completed","item":{"id":"m1","type":"agent_message","text":"Chapter 1: The Beginning."}}\n',
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            output_flag_index = request.command.index("--output-last-message")
+            output_file_path = Path(request.command[output_flag_index + 1])
+            output_file_path.parent.mkdir(parents=True, exist_ok=True)
+            output_file_path.write_text('{"summary":"Final"}', encoding="utf-8")
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
+            result = await adapter.invoke(binding, invocation)
+
+        self.assertEqual(result.response_text, '{"summary":"Final"}')
+        self.assertEqual(len(events), 5)
+        self.assertEqual(events[1].kind, ProviderStreamEventKind.THOUGHT_DELTA)
+        self.assertEqual(events[1].text, "Step 1")
+        self.assertEqual(events[2].kind, ProviderStreamEventKind.TEXT_DELTA)
+        self.assertEqual(events[2].text, "Chapter 1")
+        self.assertEqual(events[3].kind, ProviderStreamEventKind.TEXT_DELTA)
+        self.assertEqual(events[3].text, ": The Beginning")
+        self.assertEqual(events[4].kind, ProviderStreamEventKind.TEXT_DELTA)
+        self.assertEqual(events[4].text, ".")
+
+    async def test_antigravity_adapter_running_status_notice_emits_status_and_is_not_captured_as_terminal(self) -> None:
+        agy_backend = AgentBackend(
+            self.workspace,
+            backend_overrides={PLOT_ARCHITECT: "antigravity"},
+        )
+        self.addCleanup(agy_backend.close)
+        adapter = agy_backend._antigravity_adapter
+        agy_definition = PromptAssembler(
+            self.workspace,
+            backend_overrides={PLOT_ARCHITECT: "antigravity"},
+        ).build_definition(
+            session_id="definition_session_agy_status",
+            agent_id=PLOT_ARCHITECT,
+        )
+        binding = adapter.bind(agy_definition)
+        events: list[ProviderStreamEvent] = []
+
+        schema = {
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+            "additionalProperties": False,
+        }
+        invocation = ProviderInvocation(
+            session_id="session_agy_running",
+            schema=schema,
+            payload={},
+            thread_id="thread_run_1",
+            stream_sink=events.append,
+        )
+
+        stream_lines = [
+            b'{"conversation_id":"thread_run_1","status":"running","message":"Model working..."}\n',
+            (
+                b'{"conversation_id":"thread_run_1","status":"SUCCESS",'
+                b'"structured_output":{"summary":"Completed"},'
+                b'"json_schema":{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}}\n'
+            ),
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            result = await adapter.invoke(binding, invocation)
+
+        self.assertEqual(result.response_text, '{"summary":"Completed"}')
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].kind, ProviderStreamEventKind.STATUS)
+        self.assertEqual(events[0].text, "Model working...")
 
 
 if __name__ == "__main__":

@@ -50,7 +50,7 @@ class AdvisoryProgressStreamingTests(unittest.TestCase):
         )
         self.assertEqual(
             state.stream_status.get(("agent_a", "op_1")),
-            "Thinking: Considering pacing and conflict",
+            "Thinking...",
         )
 
         state.observe_stream(
@@ -73,6 +73,25 @@ class AdvisoryProgressStreamingTests(unittest.TestCase):
             state.stream_preview.get(("agent_a", "op_1")),
             "The door opened with a shudder.",
         )
+
+    def test_observe_stream_bounds_preview_buffer_to_500_chars(self) -> None:
+        state = AdvisoryProgressState()
+        state.begin((AdvisoryProgressRequest("agent_a", "op_1", "Generating text"),))
+
+        for i in range(10):
+            state.observe_stream(
+                ProviderStreamEvent(
+                    kind=ProviderStreamEventKind.TEXT_DELTA,
+                    agent_id="agent_a",
+                    text=f"chunk_{i:02d}_" + ("x" * 90) + "\n",
+                    operation_id="op_1",
+                )
+            )
+
+        preview = state.stream_preview.get(("agent_a", "op_1"), "")
+        self.assertLessEqual(len(preview), 500)
+        self.assertIn("chunk_09_", preview)
+        self.assertNotIn("chunk_00_", preview)
 
     def test_observe_stream_infers_active_request_when_operation_id_is_none(self) -> None:
         state = AdvisoryProgressState()
@@ -115,7 +134,8 @@ class AdvisoryProgressStreamingTests(unittest.TestCase):
         rendered = state.render(frame=0)
         self.assertIn("author_agent", rendered)
         self.assertIn("Request: Writing chapter", rendered)
-        self.assertIn("Thinking: Structuring the dialogue\\x1b[31m ANSI stripped", rendered)
+        self.assertIn("Thinking...", rendered)
+        self.assertNotIn("Structuring the dialogue", rendered)
         # Verify preview contains the last 2 lines
         self.assertIn("Preview: Line 2: Rain lashed the panes.", rendered)
         self.assertIn("         Line 3: Shadows lengthened.", rendered)

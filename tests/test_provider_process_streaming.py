@@ -134,6 +134,44 @@ class TestProviderProcessStreaming(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ProcessTimedOut):
             await run_process(request)
 
+    async def test_future_callback_is_awaited(self) -> None:
+        """Verify an awaitable that is a Future (not coroutine) is awaited properly."""
+        code = "import sys; sys.stdout.write('future_line\\n'); sys.stdout.flush()"
+        loop = asyncio.get_running_loop()
+        future_received: list[bytes] = []
+
+        def future_on_line(line: bytes) -> asyncio.Future[None]:
+            fut: asyncio.Future[None] = loop.create_future()
+            future_received.append(line)
+            fut.set_result(None)
+            return fut
+
+        request = ProcessRequest(
+            command=[sys.executable, "-c", code],
+            stdin=b"",
+            timeout_seconds=5.0,
+            on_stdout_line=future_on_line,
+        )
+        result = await run_process(request)
+        self.assertEqual(future_received, [b"future_line\n"])
+        self.assertEqual(result.stdout, b"future_line\n")
+
+    async def test_cancelled_error_in_callback_propagates(self) -> None:
+        """Verify asyncio.CancelledError in callback is not swallowed by exception handler."""
+        code = "import sys; sys.stdout.write('line\\n'); sys.stdout.flush()"
+
+        def cancelling_callback(_line: bytes) -> None:
+            raise asyncio.CancelledError("intentional cancel")
+
+        request = ProcessRequest(
+            command=[sys.executable, "-c", code],
+            stdin=b"",
+            timeout_seconds=5.0,
+            on_stdout_line=cancelling_callback,
+        )
+        with self.assertRaises(asyncio.CancelledError):
+            await run_process(request)
+
 
 if __name__ == "__main__":
     unittest.main()

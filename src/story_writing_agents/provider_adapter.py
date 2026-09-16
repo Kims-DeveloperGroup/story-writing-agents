@@ -17,9 +17,11 @@ from .agent_context import (
     ProviderCallState,
     ProviderJsonEncodingError,
     ProviderPayloadAccounting,
-    ProviderStreamSink,
     ProviderUsage,
     account_provider_payload,
+)
+from .agent_context.progress import (
+    ProviderStreamSink,
     active_provider_stream_sink,
 )
 from .errors import ProviderAuthenticationRequiredError

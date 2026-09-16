@@ -26,10 +26,12 @@ from .agent_context import (
     ContextComponentKind,
     ProviderCallState,
     ProviderJsonEncodingError,
-    ProviderStreamEvent,
-    ProviderStreamEventKind,
     ProviderUsage,
     canonical_provider_json,
+)
+from .agent_context.progress import (
+    ProviderStreamEvent,
+    ProviderStreamEventKind,
 )
 from .models import AgentDefinition
 from .errors import ProviderAuthenticationRequiredError
@@ -1040,8 +1042,9 @@ class AntigravityAdapter:
                 event = json.loads(stripped.decode("utf-8", errors="replace"))
                 if not isinstance(event, dict):
                     return
-                if "conversation_id" in event and (
-                    "status" in event or "structured_output" in event
+                if "structured_output" in event or (
+                    "conversation_id" in event
+                    and str(event.get("status", "")).upper() in {"SUCCESS", "ERROR"}
                 ):
                     captured_result_bytes.append(stripped)
                     return
@@ -1057,7 +1060,7 @@ class AntigravityAdapter:
                     "turn.started",
                     "turn_started",
                     "status",
-                }:
+                } or str(event.get("status", "")).lower() == "running":
                     msg = str(
                         event.get("text")
                         or event.get("message")

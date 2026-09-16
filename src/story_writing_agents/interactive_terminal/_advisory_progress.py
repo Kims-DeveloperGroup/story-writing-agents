@@ -88,11 +88,14 @@ class AdvisoryProgressState:
         if event.kind is ProviderStreamEventKind.STATUS:
             self.stream_status[key] = _sanitize_preview_text(event.text)
         elif event.kind is ProviderStreamEventKind.THOUGHT_DELTA:
-            sanitized = _sanitize_preview_text(event.text)
-            self.stream_status[key] = f"Thinking: {sanitized}"
+            self.stream_status[key] = "Thinking..."
         elif event.kind is ProviderStreamEventKind.TEXT_DELTA:
+            sanitized = _sanitize_preview_text(event.text)
             existing = self.stream_preview.get(key, "")
-            self.stream_preview[key] = existing + _sanitize_preview_text(event.text)
+            combined = existing + sanitized
+            if len(combined) > 500:
+                combined = combined[-500:]
+            self.stream_preview[key] = combined
 
     def elapsed_seconds(self) -> int:
         return 0 if self.started_at is None else int(time.monotonic() - self.started_at)
