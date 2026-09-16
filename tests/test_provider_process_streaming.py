@@ -172,6 +172,32 @@ class TestProviderProcessStreaming(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await run_process(request)
 
+    async def test_callback_cancellation_cleans_up_sibling_tasks(self) -> None:
+        """Verify callback cancellation ensures all internal reader/writer tasks are completed."""
+        code = (
+            "import sys, time\n"
+            "sys.stdout.write('line1\\n')\n"
+            "sys.stdout.flush()\n"
+            "time.sleep(1.0)\n"
+        )
+        current_task = asyncio.current_task()
+
+        def cancelling_callback(_line: bytes) -> None:
+            raise asyncio.CancelledError("cancel streaming")
+
+        request = ProcessRequest(
+            command=[sys.executable, "-c", code],
+            stdin=b"",
+            timeout_seconds=5.0,
+            on_stdout_line=cancelling_callback,
+        )
+        with self.assertRaises(asyncio.CancelledError):
+            await run_process(request)
+
+        # Confirm no orphan tasks were left pending in the event loop
+        pending_tasks = [t for t in asyncio.all_tasks() if t is not current_task and not t.done()]
+        self.assertEqual(pending_tasks, [])
+
 
 if __name__ == "__main__":
     unittest.main()

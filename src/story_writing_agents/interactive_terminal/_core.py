@@ -1867,7 +1867,7 @@ class InteractiveExternalViewer:
 class InteractiveAdvisoryProgress:
     """Retain one terminal's package-internal advisory progress session."""
 
-    __slots__ = ("_run", "_state")
+    __slots__ = ("_run", "_state", "_capability_provider")
 
     def __init__(self, terminal: InteractiveTerminal) -> None:
         """Bind progress lifecycle without inspecting streams or capabilities."""
@@ -1878,6 +1878,17 @@ class InteractiveAdvisoryProgress:
             terminal._advisory_progress
         )
         self._state = AdvisoryProgressState()
+        self._capability_provider = terminal._capability_provider
+
+    def _is_capable(self) -> bool:
+        """Return True when this terminal is configured for capable raw-mode progress."""
+
+        if self._run is _plain_advisory_progress:
+            return False
+        try:
+            return bool(self._capability_provider().raw_mode)
+        except Exception:
+            return False
 
     def begin(self, requests: tuple[AdvisoryProgressRequest, ...] = ()) -> None:
         """Begin one timer and reset its transient ordered cards."""
@@ -1903,7 +1914,7 @@ class InteractiveAdvisoryProgress:
     def bound_stream_sink(self) -> Iterator[None]:
         """Temporarily bind the active stream sink to the calling context on capable terminals."""
 
-        if self._run is _plain_advisory_progress:
+        if not self._is_capable():
             yield
             return
         sink_token = bind_provider_stream_sink(self._state.observe_stream)
@@ -1917,7 +1928,7 @@ class InteractiveAdvisoryProgress:
 
         token = bind_advisory_progress(self._state)
         sink_token = None
-        if self._run is not _plain_advisory_progress:
+        if self._is_capable():
             sink_token = bind_provider_stream_sink(self._state.observe_stream)
         try:
             return await self._run(operation)

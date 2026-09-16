@@ -418,6 +418,34 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         self.assertEqual(result, 42)
         self.assertIsNone(observed_sink)
 
+    def test_non_raw_stream_terminal_does_not_bind_stream_sink(self) -> None:
+        mock_terminal = mock.create_autospec(InteractiveTerminal, instance=True)
+        # Custom progress runner (like build_stream_terminal installs)
+        async def custom_advisory_progress(op):
+            return await op
+        mock_terminal._advisory_progress = custom_advisory_progress
+        # But capabilities indicate non-raw mode (e.g. line mode or dumb terminal)
+        mock_caps = mock.MagicMock()
+        mock_caps.raw_mode = False
+        mock_terminal._capability_provider.return_value = mock_caps
+
+        progress = InteractiveAdvisoryProgress(mock_terminal)
+
+        with progress.bound_stream_sink():
+            self.assertIsNone(active_provider_stream_sink())
+
+        observed_sink = "sentinel"
+        async def fake_op():
+            nonlocal observed_sink
+            observed_sink = active_provider_stream_sink()
+            return 99
+
+        runner = asyncio.Runner()
+        self.addCleanup(runner.close)
+        result = runner.run(progress.run(fake_op()))
+        self.assertEqual(result, 99)
+        self.assertIsNone(observed_sink)
+
 
 if __name__ == "__main__":
     unittest.main()

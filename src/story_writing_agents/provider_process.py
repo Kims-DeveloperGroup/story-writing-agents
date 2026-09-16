@@ -115,12 +115,19 @@ async def _communicate_streaming(
                 break
             stderr_chunks.append(chunk)
 
-    await asyncio.gather(
-        write_stdin(),
-        read_stdout(),
-        read_stderr(),
-        process.wait(),
-    )
+    tasks = [
+        asyncio.create_task(write_stdin()),
+        asyncio.create_task(read_stdout()),
+        asyncio.create_task(read_stderr()),
+        asyncio.create_task(process.wait()),
+    ]
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
     return b"".join(stdout_chunks), b"".join(stderr_chunks)
 
 
