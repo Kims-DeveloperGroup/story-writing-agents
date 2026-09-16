@@ -198,6 +198,30 @@ class TestProviderProcessStreaming(unittest.IsolatedAsyncioTestCase):
         pending_tasks = [t for t in asyncio.all_tasks() if t is not current_task and not t.done()]
         self.assertEqual(pending_tasks, [])
 
+    async def test_streaming_handles_multichunk_large_line_and_many_lines_in_single_chunk(self) -> None:
+        """Verify multi-chunk large lines and dense multiple lines in single chunks are framed correctly."""
+        chunk_line = "x" * 200000 + "\n"
+        small_lines = "".join(f"item_{i}\n" for i in range(100))
+        code = (
+            f"import sys; sys.stdout.write({chunk_line!r} + {small_lines!r}); "
+            "sys.stdout.flush()"
+        )
+        received: list[bytes] = []
+
+        request = ProcessRequest(
+            command=[sys.executable, "-c", code],
+            stdin=b"",
+            timeout_seconds=5.0,
+            on_stdout_line=lambda line: received.append(line),
+        )
+        result = await run_process(request)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(len(received), 101)
+        self.assertEqual(len(received[0]), 200001)
+        self.assertEqual(received[0][-1:], b"\n")
+        self.assertEqual(received[1], b"item_0\n")
+        self.assertEqual(received[100], b"item_99\n")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -602,6 +602,16 @@ consumer. Python callers can nevertheless supply this callback and retain its
 events; the caller then owns access control, retention, and cleanup for that
 copy.
 
+Provider execution additionally supports an additive, process-local
+`provider_stream_sink` context variable emitting `ProviderStreamEvent`
+instances (`STATUS`, `THOUGHT_DELTA`, `TEXT_DELTA`). While SEARCH and READ cards
+never display provider responses or excerpts, active capable raw terminals may
+render transient status notices and a bounded rolling preview of streamed
+output that is erased cleanly prior to persistent output. Like
+`action_progress_sink`, stream events are not durable ledger records or public
+lifecycle events; callers binding or retaining a custom stream sink receive
+raw deltas and own access control, retention, and cleanup for that stream.
+
 Observer delivery adds no provider call, result field, story content,
 conversation event, debate record, or second context ledger. The component has
 no supported post-hoc observer inspection. A consumer may render public compact
@@ -609,8 +619,8 @@ facts into terminal output, where an emulator, multiplexer, or remote terminal
 may retain them in scrollback. The installed shell's detailed frame is actively
 redrawn and cleared, but that is presentation cleanup rather than secure
 erasure: terminal capture, scrollback, multiplexers, remote terminals, or
-accessibility tooling may retain its exact queries and relative locators/ranges.
-A Python caller may deliberately retain
+accessibility tooling may retain its exact queries, relative locators/ranges,
+and transient preview output. A Python caller may deliberately retain
 callback values, in which case that caller owns access control, retention, and
 cleanup for the new copy.
 

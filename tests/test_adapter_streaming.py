@@ -628,7 +628,57 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
                 thread_id="thread_async_1",
                 stream_sink=async_sink,
             )
-        self.assertIn("synchronous callable", str(exc.exception))
+    async def test_antigravity_adapter_rejects_multiple_terminal_results_in_stream(self) -> None:
+        """Verify stream with multiple terminal results fails closed."""
+        from story_writing_agents.provider_adapter import ProviderInvocationError
+
+        adapter, binding = self._make_agy_binding("session_multi_terminal")
+        schema = {
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"],
+            "additionalProperties": False,
+        }
+        invocation = ProviderInvocation(
+            session_id="session_multi_terminal",
+            schema=schema,
+            payload={},
+            thread_id=None,
+            stream_sink=lambda _event: None,
+        )
+
+        res1 = {
+            "conversation_id": "c1",
+            "status": "SUCCESS",
+            "structured_output": {"status": "ok1"},
+            "json_schema": schema,
+        }
+        res2 = {
+            "conversation_id": "c1",
+            "status": "SUCCESS",
+            "structured_output": {"status": "ok2"},
+            "json_schema": schema,
+        }
+        stream_lines = [
+            b'{"type":"turn_start"}\n',
+            json.dumps(res1).encode("utf-8") + b"\n",
+            json.dumps(res2).encode("utf-8") + b"\n",
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            with self.assertRaises(ProviderInvocationError) as cm:
+                await adapter.invoke(binding, invocation)
+            self.assertIn("2 terminal result events; expected exactly 1", str(cm.exception))
 
 
 if __name__ == "__main__":

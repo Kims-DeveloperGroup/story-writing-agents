@@ -79,24 +79,31 @@ async def _communicate_streaming(
         if process.stdout is None:
             return
         buffer = bytearray()
+        search_start = 0
         while True:
             chunk = await process.stdout.read(65536)
             if not chunk:
                 break
             stdout_chunks.append(chunk)
             buffer.extend(chunk)
+            start = 0
             while True:
-                newline_index = buffer.find(b"\n")
+                newline_index = buffer.find(b"\n", max(start, search_start))
                 if newline_index == -1:
+                    search_start = len(buffer)
                     break
-                line = bytes(buffer[: newline_index + 1])
-                del buffer[: newline_index + 1]
+                line = bytes(buffer[start : newline_index + 1])
+                start = newline_index + 1
+                search_start = start
                 try:
                     callback_result = on_stdout_line(line)
                     if inspect.isawaitable(callback_result):
                         await callback_result
                 except Exception:
                     pass
+            if start > 0:
+                del buffer[:start]
+                search_start -= start
         if buffer:
             trailing_line = bytes(buffer)
             try:

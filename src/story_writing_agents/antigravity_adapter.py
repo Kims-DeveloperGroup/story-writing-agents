@@ -1192,11 +1192,6 @@ class AntigravityAdapter:
             raise
 
         submitted = True
-        effective_stdout = (
-            captured_result_bytes[-1]
-            if captured_result_bytes
-            else result.stdout
-        )
         response_diagnostic = ProviderResponseDiagnostic(
             stdout=result.stdout,
             stderr=result.stderr,
@@ -1207,6 +1202,29 @@ class AntigravityAdapter:
             _NATIVE_TRUNCATED.search(result.stderr)
         )
         try:
+            if streaming:
+                if len(captured_result_bytes) != 1:
+                    authentication = self._authentication_failure(
+                        result.stdout, result.returncode,
+                    )
+                    if authentication is not None:
+                        raise ProviderInvocationError(
+                            str(authentication),
+                            taint_existing_thread=not authentication.replay_safe,
+                            authentication_failure=authentication,
+                        )
+                    if result.returncode != 0:
+                        raise ProviderInvocationError(
+                            f"Antigravity CLI exited with status {result.returncode}",
+                            taint_existing_thread=True,
+                        )
+                    raise ProviderInvocationError(
+                        f"Antigravity streaming response contained {len(captured_result_bytes)} terminal result events; expected exactly 1",
+                        taint_existing_thread=True,
+                    )
+                effective_stdout = captured_result_bytes[0]
+            else:
+                effective_stdout = result.stdout
             authentication = self._authentication_failure(
                 effective_stdout, result.returncode,
             )
