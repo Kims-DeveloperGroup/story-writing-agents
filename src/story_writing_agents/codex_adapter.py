@@ -358,7 +358,7 @@ class CodexAdapter:
             agent_id = binding.definition.agent_id
             stream_sink = invocation.stream_sink
 
-            emitted_fragments_by_item: dict[str, list[str]] = {}
+            emitted_len_by_item: dict[str, int] = {}
             item_kinds_by_id: dict[str, ProviderStreamEventKind] = {}
 
             def handle_stream_line(raw_line: bytes) -> None:
@@ -386,45 +386,54 @@ class CodexAdapter:
                             item_type = item.get("type")
                             raw_id = item.get("id")
                             item_id = str(raw_id) if raw_id is not None and str(raw_id) else None
-                            if item_id is not None:
-                                if item_type == "reasoning":
-                                    item_kinds_by_id[item_id] = ProviderStreamEventKind.THOUGHT_DELTA
-                                elif item_type == "agent_message":
-                                    item_kinds_by_id[item_id] = ProviderStreamEventKind.TEXT_DELTA
 
-                            if item_type in {"reasoning", "agent_message"}:
-                                kind = (
-                                    ProviderStreamEventKind.THOUGHT_DELTA
-                                    if item_type == "reasoning"
-                                    else ProviderStreamEventKind.TEXT_DELTA
-                                )
-                                text_key = "summary" if item_type == "reasoning" else "content"
-                                text = _extract_stream_text(
-                                    item.get("text") or item.get(text_key) or ""
-                                )
-                                if item_id is not None:
-                                    if event_type == "item.completed":
-                                        prev_text = "".join(emitted_fragments_by_item.pop(item_id, []))
-                                        item_kinds_by_id.pop(item_id, None)
-                                    else:
-                                        prev_text = "".join(emitted_fragments_by_item.get(item_id, []))
-                                    if text.startswith(prev_text):
-                                        delta = text[len(prev_text) :]
-                                    else:
-                                        delta = text
-                                    if event_type != "item.completed":
-                                        emitted_fragments_by_item[item_id] = [text]
+                            current_kind: ProviderStreamEventKind | None = None
+                            if item_type is not None:
+                                norm_item_type = str(item_type).strip().lower()
+                                if norm_item_type == "reasoning":
+                                    explicit_kind = ProviderStreamEventKind.THOUGHT_DELTA
+                                elif norm_item_type == "agent_message":
+                                    explicit_kind = ProviderStreamEventKind.TEXT_DELTA
                                 else:
-                                    delta = text
+                                    return
+                                if item_id is not None:
+                                    if item_id in item_kinds_by_id and item_kinds_by_id[item_id] != explicit_kind:
+                                        return
+                                    item_kinds_by_id[item_id] = explicit_kind
+                                current_kind = explicit_kind
+                            elif item_id is not None and item_id in item_kinds_by_id:
+                                current_kind = item_kinds_by_id[item_id]
+                            else:
+                                return
 
-                                if delta:
-                                    stream_sink(
-                                        ProviderStreamEvent(
-                                            kind,
-                                            agent_id,
-                                            delta,
-                                        )
+                            text_key = (
+                                "summary"
+                                if current_kind == ProviderStreamEventKind.THOUGHT_DELTA
+                                else "content"
+                            )
+                            text = _extract_stream_text(
+                                item.get("text") or item.get(text_key) or ""
+                            )
+                            if item_id is not None:
+                                if event_type == "item.completed":
+                                    prev_len = emitted_len_by_item.pop(item_id, 0)
+                                    item_kinds_by_id.pop(item_id, None)
+                                else:
+                                    prev_len = emitted_len_by_item.get(item_id, 0)
+                                delta = text[prev_len:] if len(text) > prev_len else ""
+                                if event_type != "item.completed":
+                                    emitted_len_by_item[item_id] = len(text)
+                            else:
+                                delta = text
+
+                            if delta:
+                                stream_sink(
+                                    ProviderStreamEvent(
+                                        current_kind,
+                                        agent_id,
+                                        delta,
                                     )
+                                )
                     elif event_type in {"item.delta", "response.output_item.delta"}:
                         raw_id = event.get("item_id")
                         raw_delta = event.get("delta")
@@ -440,25 +449,31 @@ class CodexAdapter:
 
                         item_id = str(raw_id) if raw_id is not None and str(raw_id) else None
                         kind: ProviderStreamEventKind | None = None
-                        if item_id is not None and item_id in item_kinds_by_id:
-                            kind = item_kinds_by_id[item_id]
-                        elif raw_type is not None:
+
+                        if raw_type is not None:
                             norm_type = str(raw_type).strip().lower()
                             if norm_type == "reasoning":
-                                kind = ProviderStreamEventKind.THOUGHT_DELTA
+                                explicit_kind = ProviderStreamEventKind.THOUGHT_DELTA
                             elif norm_type == "agent_message":
-                                kind = ProviderStreamEventKind.TEXT_DELTA
+                                explicit_kind = ProviderStreamEventKind.TEXT_DELTA
                             else:
                                 return
                             if item_id is not None:
-                                item_kinds_by_id[item_id] = kind
+                                if item_id in item_kinds_by_id and item_kinds_by_id[item_id] != explicit_kind:
+                                    return
+                                item_kinds_by_id[item_id] = explicit_kind
+                            kind = explicit_kind
+                        elif item_id is not None and item_id in item_kinds_by_id:
+                            kind = item_kinds_by_id[item_id]
                         else:
                             return
 
                         delta_text = _extract_stream_text(raw_delta)
                         if delta_text:
                             if item_id is not None:
-                                emitted_fragments_by_item.setdefault(item_id, []).append(delta_text)
+                                emitted_len_by_item[item_id] = (
+                                    emitted_len_by_item.get(item_id, 0) + len(delta_text)
+                                )
                             stream_sink(
                                 ProviderStreamEvent(
                                     kind,

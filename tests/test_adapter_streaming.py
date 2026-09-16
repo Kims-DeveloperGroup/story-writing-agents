@@ -1423,6 +1423,65 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[1].kind, ProviderStreamEventKind.TEXT_DELTA)
         self.assertEqual(events[1].text, "Visible story")
 
+    async def test_codex_adapter_rejects_conflicting_or_mismatched_item_type_on_delta(self) -> None:
+        """Verify delta with mismatched or unknown explicit type fails closed even if item_id was classified."""
+        adapter = self.codex_adapter
+        binding = adapter.bind(self.definition)
+        events: list[ProviderStreamEvent] = []
+
+        schema = {
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+            "additionalProperties": False,
+        }
+        invocation = ProviderInvocation(
+            session_id="session_codex_mismatch",
+            schema=schema,
+            payload={"task": "draft"},
+            thread_id=None,
+            stream_sink=events.append,
+        )
+
+        stream_lines = [
+            b'{"type":"thread.started","thread_id":"thread_mismatch_1"}\n',
+            # Item started as agent_message
+            b'{"type":"item.started","item":{"id":"m_typed","type":"agent_message"}}\n',
+            # Mismatched delta claiming reasoning on agent_message: must fail closed (do NOT emit)
+            b'{"type":"item.delta","item_id":"m_typed","item_type":"reasoning","delta":"leaked thought?"}\n',
+            # Unknown item_type on delta: must fail closed (do NOT emit)
+            b'{"type":"item.delta","item_id":"m_typed","item_type":"custom_tool","delta":"tool text"}\n',
+            # Matching delta with explicit agent_message type: must emit TEXT_DELTA
+            b'{"type":"item.delta","item_id":"m_typed","item_type":"agent_message","delta":"Valid text "}\n',
+            # Delta without explicit type falls back to remembered agent_message: must emit TEXT_DELTA
+            b'{"type":"item.delta","item_id":"m_typed","delta":"part two"}\n',
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            output_flag_index = request.command.index("--output-last-message")
+            output_file_path = Path(request.command[output_flag_index + 1])
+            output_file_path.parent.mkdir(parents=True, exist_ok=True)
+            output_file_path.write_text('{"summary":"Done"}', encoding="utf-8")
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
+            result = await adapter.invoke(binding, invocation)
+
+        self.assertEqual(result.response_text, '{"summary":"Done"}')
+        # Exactly 2 events should have been emitted (the matching and remembered agent_message deltas):
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0].kind, ProviderStreamEventKind.TEXT_DELTA)
+        self.assertEqual(events[0].text, "Valid text ")
+        self.assertEqual(events[1].kind, ProviderStreamEventKind.TEXT_DELTA)
+        self.assertEqual(events[1].text, "part two")
+
 
 if __name__ == "__main__":
     unittest.main()
