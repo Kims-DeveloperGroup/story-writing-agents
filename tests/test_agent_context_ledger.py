@@ -2329,7 +2329,7 @@ class LedgerBoundaryTests(LedgerTestCase):
         self,
     ) -> None:
         self.assertEqual(len(story_writing_agents.__all__), 106)
-        self.assertEqual(len(agent_context.__all__), 11)
+        self.assertEqual(len(agent_context.__all__), 17)
         self.assertEqual(len(writing_artifacts.__all__), 78)
         self.assertTrue(
             set(ledger_module.__all__).isdisjoint(story_writing_agents.__all__)

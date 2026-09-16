@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 from story_writing_agents import AgentBackend, PLOT_ARCHITECT
-from story_writing_agents.agent_context import (
+from story_writing_agents.agent_context.progress import (
     ProviderStreamEvent,
     ProviderStreamEventKind,
 )
@@ -269,10 +269,10 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         binding = adapter.bind(agy_definition)
         return adapter, binding
 
-    async def test_antigravity_adapter_preserves_full_stdout_in_response_diagnostic(
+    async def test_antigravity_adapter_sanitizes_stdout_in_streamed_response_diagnostic(
         self,
     ) -> None:
-        """Verify ProviderResponseDiagnostic retains full process stdout containing stream events."""
+        """Verify ProviderResponseDiagnostic excludes intermediate stream events for privacy."""
         from story_writing_agents.provider_adapter import ProviderInvocationError
 
         adapter, binding = self._make_agy_binding("session_diag_test")
@@ -318,10 +318,11 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             with mock.patch.object(adapter, "_has_current_finish", return_value=True):
                 result = await adapter.invoke(binding, invocation)
 
-        # Incomplete output attaches response_diagnostic with FULL process stdout
+        # Incomplete output attaches response_diagnostic with non-sensitive terminal output
         self.assertIsNotNone(result.response_diagnostic)
-        self.assertEqual(result.response_diagnostic.stdout, full_stdout)
-        self.assertIn(b'{"type":"turn_start"}', result.response_diagnostic.stdout)
+        self.assertEqual(result.response_diagnostic.stdout, stream_lines[2].strip())
+        self.assertNotIn(b'{"type":"turn_start"}', result.response_diagnostic.stdout)
+        self.assertNotIn(b"Thinking...", result.response_diagnostic.stdout)
 
     async def test_antigravity_adapter_strictly_rejects_duplicate_fields_in_streamed_result(
         self,
@@ -679,6 +680,95 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ProviderInvocationError) as cm:
                 await adapter.invoke(binding, invocation)
             self.assertIn("2 terminal result events; expected exactly 1", str(cm.exception))
+
+    async def test_antigravity_adapter_rejects_invalid_line_before_terminal_result(self) -> None:
+        """Verify malformed line before valid terminal result triggers fail-closed error."""
+        from story_writing_agents.provider_adapter import ProviderInvocationError
+
+        adapter, binding = self._make_agy_binding("session_invalid_line")
+        schema = {
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"],
+            "additionalProperties": False,
+        }
+        invocation = ProviderInvocation(
+            session_id="session_invalid_line",
+            schema=schema,
+            payload={},
+            thread_id=None,
+            stream_sink=lambda _event: None,
+        )
+        res = {
+            "conversation_id": "c1",
+            "status": "SUCCESS",
+            "structured_output": {"status": "ok"},
+            "json_schema": schema,
+        }
+        stream_lines = [
+            b"not-json-line\n",
+            json.dumps(res).encode("utf-8") + b"\n",
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            with self.assertRaises(ProviderInvocationError) as cm:
+                await adapter.invoke(binding, invocation)
+            self.assertIn("invalid stream line: malformed JSON line", str(cm.exception))
+
+    async def test_antigravity_adapter_rejects_trailing_data_after_terminal_result(self) -> None:
+        """Verify trailing stream events after terminal result trigger fail-closed error."""
+        from story_writing_agents.provider_adapter import ProviderInvocationError
+
+        adapter, binding = self._make_agy_binding("session_trailing_data")
+        schema = {
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"],
+            "additionalProperties": False,
+        }
+        invocation = ProviderInvocation(
+            session_id="session_trailing_data",
+            schema=schema,
+            payload={},
+            thread_id=None,
+            stream_sink=lambda _event: None,
+        )
+        res = {
+            "conversation_id": "c1",
+            "status": "SUCCESS",
+            "structured_output": {"status": "ok"},
+            "json_schema": schema,
+        }
+        stream_lines = [
+            b'{"type":"turn_start"}\n',
+            json.dumps(res).encode("utf-8") + b"\n",
+            b'{"type":"text_delta","text":"extra trailing delta"}\n',
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            with self.assertRaises(ProviderInvocationError) as cm:
+                await adapter.invoke(binding, invocation)
+            self.assertIn("trailing data after terminal result", str(cm.exception))
 
 
 if __name__ == "__main__":

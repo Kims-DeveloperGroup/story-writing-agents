@@ -1027,95 +1027,114 @@ class AntigravityAdapter:
             invocation.thread_id,
         )
         captured_result_bytes: list[bytes] = []
+        invalid_stream_line: str | None = None
+        has_trailing_data_after_terminal: bool = False
         agent_id = binding.definition.agent_id
         stream_sink = invocation.stream_sink
 
         def handle_stream_line(raw_line: bytes) -> None:
+            nonlocal invalid_stream_line, has_trailing_data_after_terminal
             if stream_sink is None:
                 return
             stripped = raw_line.strip()
             if not stripped:
                 return
             try:
-                event = json.loads(stripped.decode("utf-8", errors="replace"))
-                if not isinstance(event, dict):
-                    return
-                if "structured_output" in event or (
+                event = json.loads(stripped.decode("utf-8", errors="strict"))
+            except (ValueError, UnicodeError):
+                if invalid_stream_line is None:
+                    invalid_stream_line = "malformed JSON line"
+                return
+            if not isinstance(event, dict):
+                if invalid_stream_line is None:
+                    invalid_stream_line = "non-object JSON line"
+                return
+
+            is_terminal = (
+                "structured_output" in event
+                or (
                     "conversation_id" in event
                     and str(event.get("status", "")).upper() in {"SUCCESS", "ERROR"}
-                ):
-                    captured_result_bytes.append(stripped)
-                    return
-                event_type = str(
-                    event.get("type") or event.get("event") or ""
-                ).lower()
-                if event_type == "result" and isinstance(event.get("result"), dict):
-                    captured_result_bytes.append(stripped)
-                    return
+                )
+            )
+            event_type = str(
+                event.get("type") or event.get("event") or ""
+            ).lower()
+            if event_type == "result" and isinstance(event.get("result"), dict):
+                is_terminal = True
 
-                if event_type in {
-                    "turn_start",
-                    "turn.started",
-                    "turn_started",
-                    "status",
-                } or str(event.get("status", "")).lower() == "running":
-                    msg = str(
-                        event.get("text")
-                        or event.get("message")
-                        or event.get("status")
-                        or "Generating response..."
+            if is_terminal:
+                captured_result_bytes.append(stripped)
+                return
+
+            if captured_result_bytes:
+                has_trailing_data_after_terminal = True
+                return
+
+            if event_type in {
+                "turn_start",
+                "turn.started",
+                "turn_started",
+                "status",
+            } or str(event.get("status", "")).lower() == "running":
+                msg = str(
+                    event.get("text")
+                    or event.get("message")
+                    or event.get("status")
+                    or "Generating response..."
+                )
+                stream_sink(
+                    ProviderStreamEvent(
+                        ProviderStreamEventKind.STATUS,
+                        agent_id,
+                        msg,
                     )
+                )
+            elif event_type in {
+                "thought",
+                "reasoning",
+                "thought_delta",
+                "reasoning_delta",
+            }:
+                text = str(
+                    event.get("text")
+                    or event.get("delta")
+                    or event.get("thought")
+                    or event.get("reasoning")
+                    or ""
+                )
+                if text:
                     stream_sink(
                         ProviderStreamEvent(
-                            ProviderStreamEventKind.STATUS,
+                            ProviderStreamEventKind.THOUGHT_DELTA,
                             agent_id,
-                            msg,
+                            text,
                         )
                     )
-                elif event_type in {
-                    "thought",
-                    "reasoning",
-                    "thought_delta",
-                    "reasoning_delta",
-                }:
-                    text = str(
-                        event.get("text")
-                        or event.get("delta")
-                        or event.get("thought")
-                        or event.get("reasoning")
-                        or ""
-                    )
-                    if text:
-                        stream_sink(
-                            ProviderStreamEvent(
-                                ProviderStreamEventKind.THOUGHT_DELTA,
-                                agent_id,
-                                text,
-                            )
+            elif event_type in {
+                "text_delta",
+                "content_delta",
+                "token",
+                "agent_message",
+                "text",
+            }:
+                text = str(
+                    event.get("text")
+                    or event.get("delta")
+                    or event.get("content")
+                    or ""
+                )
+                if text:
+                    stream_sink(
+                        ProviderStreamEvent(
+                            ProviderStreamEventKind.TEXT_DELTA,
+                            agent_id,
+                            text,
                         )
-                elif event_type in {
-                    "text_delta",
-                    "content_delta",
-                    "token",
-                    "agent_message",
-                    "text",
-                }:
-                    text = str(
-                        event.get("text")
-                        or event.get("delta")
-                        or event.get("content")
-                        or ""
                     )
-                    if text:
-                        stream_sink(
-                            ProviderStreamEvent(
-                                ProviderStreamEventKind.TEXT_DELTA,
-                                agent_id,
-                                text,
-                            )
-                        )
-            except Exception:
-                pass
+            else:
+                if invalid_stream_line is None:
+                    invalid_stream_line = f"unknown event type {event_type!r}"
 
         async def tracked_create_process(
             *arguments: object,
@@ -1192,34 +1211,49 @@ class AntigravityAdapter:
             raise
 
         submitted = True
-        response_diagnostic = ProviderResponseDiagnostic(
-            stdout=result.stdout,
-            stderr=result.stderr,
-            exit_code=result.returncode,
-        )
         partial_timeout = bool(_NATIVE_PARTIAL_TIMEOUT.search(result.stderr))
         incomplete_output = partial_timeout or bool(
             _NATIVE_TRUNCATED.search(result.stderr)
         )
+        diagnostic_stdout = (
+            captured_result_bytes[0]
+            if streaming and len(captured_result_bytes) == 1
+            else b"" if streaming else result.stdout
+        )
+        response_diagnostic = ProviderResponseDiagnostic(
+            stdout=diagnostic_stdout,
+            stderr=result.stderr,
+            exit_code=result.returncode,
+        )
         try:
             if streaming:
-                if len(captured_result_bytes) != 1:
-                    authentication = self._authentication_failure(
-                        result.stdout, result.returncode,
+                authentication = self._authentication_failure(
+                    result.stdout, result.returncode,
+                )
+                if authentication is not None:
+                    raise ProviderInvocationError(
+                        str(authentication),
+                        taint_existing_thread=not authentication.replay_safe,
+                        authentication_failure=authentication,
                     )
-                    if authentication is not None:
-                        raise ProviderInvocationError(
-                            str(authentication),
-                            taint_existing_thread=not authentication.replay_safe,
-                            authentication_failure=authentication,
-                        )
-                    if result.returncode != 0:
-                        raise ProviderInvocationError(
-                            f"Antigravity CLI exited with status {result.returncode}",
-                            taint_existing_thread=True,
-                        )
+                if result.returncode != 0:
+                    raise ProviderInvocationError(
+                        f"Antigravity CLI exited with status {result.returncode}",
+                        taint_existing_thread=True,
+                    )
+                if len(captured_result_bytes) != 1:
                     raise ProviderInvocationError(
                         f"Antigravity streaming response contained {len(captured_result_bytes)} terminal result events; expected exactly 1",
+                        taint_existing_thread=True,
+                    )
+                if invalid_stream_line is not None:
+                    raise ProviderInvocationError(
+                        f"Antigravity streaming response contained invalid stream line: {invalid_stream_line}",
+                        taint_existing_thread=True,
+                    )
+                if has_trailing_data_after_terminal:
+                    raise ProviderInvocationError(
+                        "Antigravity streaming response contained trailing data after terminal result",
                         taint_existing_thread=True,
                     )
                 effective_stdout = captured_result_bytes[0]

@@ -7,14 +7,12 @@ import io
 import unittest
 from unittest import mock
 
-from story_writing_agents.agent_context import (
-    ProviderStreamEvent,
-    ProviderStreamEventKind,
-    active_provider_stream_sink,
-)
 from story_writing_agents.agent_context.progress import (
     ContextActionProgressEvent,
     ContextActionProgressKind,
+    ProviderStreamEvent,
+    ProviderStreamEventKind,
+    active_provider_stream_sink,
 )
 from story_writing_agents.interactive_terminal import (
     _core,

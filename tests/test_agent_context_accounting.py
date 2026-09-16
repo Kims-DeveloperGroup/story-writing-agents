@@ -444,9 +444,15 @@ class AgentContextBoundaryTests(unittest.TestCase):
                 "ProviderCallState",
                 "ProviderJsonEncodingError",
                 "ProviderPayloadAccounting",
+                "ProviderStreamEvent",
+                "ProviderStreamEventKind",
+                "ProviderStreamSink",
                 "ProviderUsage",
                 "account_provider_payload",
+                "active_provider_stream_sink",
+                "bind_provider_stream_sink",
                 "canonical_provider_json",
+                "reset_provider_stream_sink",
             ),
         )
         self.assertEqual(len(story_writing_agents.__all__), 106)
@@ -483,8 +489,11 @@ class AgentContextBoundaryTests(unittest.TestCase):
             for node in ast.walk(facade_tree)
             if isinstance(node, ast.ImportFrom) and node.level
         ]
-        self.assertEqual(len(relative_imports), 1)
-        self.assertEqual(relative_imports[0].module, "accounting")
+        self.assertEqual(len(relative_imports), 2)
+        self.assertEqual(
+            {node.module for node in relative_imports},
+            {"accounting", "progress"},
+        )
 
 
 if __name__ == "__main__":

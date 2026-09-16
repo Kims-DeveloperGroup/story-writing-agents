@@ -1123,13 +1123,14 @@ still apply, and the vendor may retain remote conversations.
 
 Antigravity also runs without shell evaluation. The backend passes the exact
 confidential story request JSON as one `--print` argument, uses
-`--input-format text --output-format json`, and sends empty stdin. The full
-request can therefore appear in local process listings and inspection tools,
-including any story text, drafts, references, and retrieval observations it
-contains. CLI 1.1.27 ignored raw text stdin in transport probes, so this adapter
-uses the prompt argument. OS argument-size limits may reject large requests
-before process creation with a typed start failure and no submitted transport
-count.
+`--input-format text --output-format json` (or `--output-format stream-json` when
+an active capable terminal or caller binds a stream sink), and sends empty stdin.
+The full request can therefore appear in local process listings and inspection
+tools, including any story text, drafts, references, and retrieval observations
+it contains. CLI 1.1.27 ignored raw text stdin in transport probes, so this
+adapter uses the prompt argument. OS argument-size limits may reject large
+requests before process creation with a typed start failure and no submitted
+transport count.
 
 It stages and selects a custom main agent beneath an isolated provider
 workspace, uses `--new-project` for fresh history or the exact retained

@@ -598,17 +598,22 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Provide the internal provider-neutral agent-context
   facade.
 - **Supported surface:** No project-root-supported API. The package facade
-  exposes exactly 11 package-internal accounting contracts:
-  `ContextComponentBytes`, `ContextComponentKind`, `JsonPath`,
+  exposes exactly 17 package-internal contracts: 11 accounting contracts
+  (`ContextComponentBytes`, `ContextComponentKind`, `JsonPath`,
   `ProviderCallAccounting`, `ProviderCallKind`, `ProviderCallState`,
   `ProviderJsonEncodingError`, `ProviderPayloadAccounting`, `ProviderUsage`,
-  `account_provider_payload`, and `canonical_provider_json`. This is the
+  `account_provider_payload`, and `canonical_provider_json`) alongside 6
+  process-local stream progress contracts (`ProviderStreamEvent`,
+  `ProviderStreamEventKind`, `ProviderStreamSink`,
+  `active_provider_stream_sink`, `bind_provider_stream_sink`, and
+  `reset_provider_stream_sink`). This is the
   facade's complete exposed surface. The package-internal `actions`, `ledger`,
   `continuation`, `manifest`, `planning`, `service`, and `sources` modules intentionally remain
   direct-module contracts and are not re-exported here.
-- **Direct internal dependencies:** `agent_context.accounting`.
-- **State, resources, and side effects:** Re-exports immutable values and pure
-  functions only. Importing performs no I/O and creates no mutable state or
+- **Direct internal dependencies:** `agent_context.accounting` and
+  `agent_context.progress`.
+- **State, resources, and side effects:** Re-exports immutable values, pure
+  functions, and ContextVar stream sink lifecycle managers only. Importing performs no I/O and creates no mutable state or
   external resource.
 - **Primary verification/documentation:**
   `tests/test_agent_context_accounting.py`, `tests/test_codex_backend.py`,
