@@ -82,23 +82,43 @@ def _resolve_aliased_field(
     Returns:
         (resolved_value, has_conflict)
     """
+    has_primary = primary_key in mapping
+    has_alias = alias_key in mapping
+    if not has_primary and not has_alias:
+        return None, False
+
     val1 = mapping.get(primary_key)
     val2 = mapping.get(alias_key)
-    if val1 is not None and val2 is not None:
-        s1 = str(val1).strip()
-        s2 = str(val2).strip()
+
+    if has_primary and (val1 is None or not isinstance(val1, str)):
+        return None, True
+    if has_alias and (val2 is None or not isinstance(val2, str)):
+        return None, True
+
+    if has_primary and has_alias:
+        assert isinstance(val1, str) and isinstance(val2, str)
+        s1 = val1.strip()
+        s2 = val2.strip()
+        if not s1 or not s2:
+            return None, True
         c1 = s1.lower() if normalize_case else s1
         c2 = s2.lower() if normalize_case else s2
         if c1 != c2:
             return None, True
         return c1, False
-    if val1 is not None:
-        s1 = str(val1).strip()
+
+    if has_primary:
+        assert isinstance(val1, str)
+        s1 = val1.strip()
+        if not s1:
+            return None, True
         return (s1.lower() if normalize_case else s1), False
-    if val2 is not None:
-        s2 = str(val2).strip()
-        return (s2.lower() if normalize_case else s2), False
-    return None, False
+
+    assert isinstance(val2, str)
+    s2 = val2.strip()
+    if not s2:
+        return None, True
+    return (s2.lower() if normalize_case else s2), False
 
 
 class CodexAdapter:
@@ -399,7 +419,7 @@ class CodexAdapter:
                 if not stripped:
                     return
                 try:
-                    event = json.loads(stripped.decode("utf-8", errors="replace"))
+                    event = json.loads(stripped.decode("utf-8"))
                     if type(event) is not dict:
                         return
                     event_type = event.get("type")
@@ -414,30 +434,43 @@ class CodexAdapter:
                     elif event_type in {"item.updated", "item.started", "item.completed"}:
                         item = event.get("item")
                         if type(item) is dict:
-                            top_id = event.get("item_id")
+                            if "item_id" in event:
+                                raw_top_id = event.get("item_id")
+                                if raw_top_id is None or not isinstance(raw_top_id, str) or not raw_top_id.strip():
+                                    return
+                                top_id = raw_top_id.strip()
+                            else:
+                                top_id = None
+
                             nested_id, id_conflict = _resolve_aliased_field(item, "id", "item_id")
                             if id_conflict:
                                 return
-                            if top_id is not None and nested_id is not None and str(top_id).strip() != nested_id:
+                            if top_id is not None and nested_id is not None and top_id != nested_id:
                                 return
-                            raw_id = nested_id if nested_id is not None else (str(top_id).strip() if top_id is not None else None)
-                            item_id = str(raw_id) if raw_id is not None and str(raw_id) else None
+                            raw_id = nested_id if nested_id is not None else top_id
+                            item_id = raw_id if raw_id else None
 
-                            top_type = event.get("item_type")
+                            if "item_type" in event:
+                                raw_top_type = event.get("item_type")
+                                if raw_top_type is None or not isinstance(raw_top_type, str) or not raw_top_type.strip():
+                                    return
+                                top_type = raw_top_type.strip().lower()
+                            else:
+                                top_type = None
+
                             nested_type, type_conflict = _resolve_aliased_field(
                                 item, "type", "item_type", normalize_case=True
                             )
                             if type_conflict:
                                 return
                             if top_type is not None and nested_type is not None:
-                                norm_top = str(top_type).strip().lower()
-                                if norm_top != nested_type:
+                                if top_type != nested_type:
                                     return
-                                resolved_type = norm_top
+                                resolved_type = top_type
                             elif nested_type is not None:
                                 resolved_type = nested_type
                             elif top_type is not None:
-                                resolved_type = str(top_type).strip().lower()
+                                resolved_type = top_type
                             else:
                                 resolved_type = None
 
@@ -488,10 +521,24 @@ class CodexAdapter:
                                     )
                                 )
                     elif event_type in {"item.delta", "response.output_item.delta"}:
-                        top_id = event.get("item_id")
+                        if "item_id" in event:
+                            raw_top_id = event.get("item_id")
+                            if raw_top_id is None or not isinstance(raw_top_id, str) or not raw_top_id.strip():
+                                return
+                            top_id = raw_top_id.strip()
+                        else:
+                            top_id = None
+
+                        if "item_type" in event:
+                            raw_top_type = event.get("item_type")
+                            if raw_top_type is None or not isinstance(raw_top_type, str) or not raw_top_type.strip():
+                                return
+                            top_type = raw_top_type.strip().lower()
+                        else:
+                            top_type = None
+
                         raw_delta = event.get("delta")
                         item_obj = event.get("item")
-                        top_type = event.get("item_type")
 
                         nested_id = None
                         nested_type = None
@@ -512,17 +559,16 @@ class CodexAdapter:
                             elif nested_delta is not None and str(raw_delta) != nested_delta:
                                 return
 
-                        if top_id is not None and nested_id is not None and str(top_id).strip() != nested_id:
+                        if top_id is not None and nested_id is not None and top_id != nested_id:
                             return
-                        raw_id = nested_id if nested_id is not None else (str(top_id).strip() if top_id is not None else None)
+                        raw_id = nested_id if nested_id is not None else top_id
 
                         if top_type is not None and nested_type is not None:
-                            norm_top = str(top_type).strip().lower()
-                            if norm_top != nested_type:
+                            if top_type != nested_type:
                                 return
-                            resolved_type = norm_top
+                            resolved_type = top_type
                         elif top_type is not None:
-                            resolved_type = str(top_type).strip().lower()
+                            resolved_type = top_type
                         elif nested_type is not None:
                             resolved_type = nested_type
                         else:

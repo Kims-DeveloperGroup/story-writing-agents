@@ -1720,7 +1720,160 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("invalid model selection (--model foo): unknown model", str(cm.exception))
 
+    async def test_antigravity_adapter_replays_stdout_when_no_streaming_callbacks_delivered(self) -> None:
+        agy_backend = AgentBackend(
+            self.workspace,
+            backend_overrides={PLOT_ARCHITECT: "antigravity"},
+        )
+        self.addCleanup(agy_backend.close)
+        adapter = agy_backend._antigravity_adapter
+        definition = PromptAssembler(
+            self.workspace,
+            backend_overrides={PLOT_ARCHITECT: "antigravity"},
+        ).build_definition(
+            session_id="session_agy_fallback",
+            agent_id=PLOT_ARCHITECT,
+        )
+        binding = adapter.bind(definition)
+
+        schema = {"type": "object", "properties": {"reply": {"type": "string"}}}
+        events: list[ProviderStreamEvent] = []
+        invocation = ProviderInvocation(
+            session_id="session_agy_fallback",
+            schema=schema,
+            payload={"task": "draft"},
+            thread_id=None,
+            stream_sink=events.append,
+        )
+
+        stream_stdout = (
+            b'{"event":"init","init":{"conversation_id":"conv_fallback_1"}}\n'
+            b'{"event":"step_update","step_update":{"conversation_id":"conv_fallback_1","step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"Fallback text."}}\n'
+            + json.dumps({
+                "event": "result",
+                "result": {
+                    "conversation_id": "conv_fallback_1",
+                    "status": "SUCCESS",
+                    "structured_output": {"reply": "Fallback text."},
+                    "json_schema": schema,
+                },
+            }).encode("utf-8") + b"\n"
+        )
+
+        async def fake_run_process(_request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            # Simulate fallback transport: on_stdout_line is present but communicate() was used
+            return ProcessResult(
+                stdout=stream_stdout,
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            result = await adapter.invoke(binding, invocation)
+
+        self.assertEqual(result.thread_id, "conv_fallback_1")
+        self.assertEqual(json.loads(result.response_text), {"reply": "Fallback text."})
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0].kind, ProviderStreamEventKind.STATUS)
+        self.assertEqual(events[1].kind, ProviderStreamEventKind.TEXT_DELTA)
+        self.assertEqual(events[1].text, "Fallback text.")
+
+    async def test_codex_adapter_rejects_invalid_utf8_in_stream_line(self) -> None:
+        definition = PromptAssembler(self.workspace).build_definition(
+            session_id="session_codex_utf8",
+            agent_id=PLOT_ARCHITECT,
+        )
+        binding = self.codex_adapter.bind(definition)
+        schema = {"type": "object", "properties": {"x": {"type": "string"}}}
+        events: list[ProviderStreamEvent] = []
+        invocation = ProviderInvocation(
+            session_id="session_codex_utf8",
+            schema=schema,
+            payload={"task": "draft"},
+            thread_id=None,
+            stream_sink=events.append,
+        )
+
+        stream_lines = [
+            b'{"type":"turn.started"}\n',
+            b'{"type":"item.delta","item_id":"i1","item_type":"agent_message","delta":"\xff\xfe"}\n',
+            b'{"type":"item.delta","item_id":"i1","item_type":"agent_message","delta":"Valid text"}\n',
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            self.assertIsNotNone(request.on_stdout_line)
+            for line in stream_lines:
+                request.on_stdout_line(line)
+            output_flag_index = request.command.index("--output-last-message")
+            output_file_path = Path(request.command[output_flag_index + 1])
+            output_file_path.parent.mkdir(parents=True, exist_ok=True)
+            output_file_path.write_text('{"summary":"Final plot outline"}', encoding="utf-8")
+            return ProcessResult(
+                stdout=b'{"type":"thread.started","thread_id":"t_utf8"}\n{"type":"turn.completed"}\n',
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
+            await self.codex_adapter.invoke(binding, invocation)
+
+        # Invalid UTF-8 line must be skipped and not emitted
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0].kind, ProviderStreamEventKind.STATUS)
+        self.assertEqual(events[1].kind, ProviderStreamEventKind.TEXT_DELTA)
+        self.assertEqual(events[1].text, "Valid text")
+
+    async def test_codex_adapter_rejects_explicit_null_or_non_string_item_type_on_delta(self) -> None:
+        definition = PromptAssembler(self.workspace).build_definition(
+            session_id="session_codex_null_desc",
+            agent_id=PLOT_ARCHITECT,
+        )
+        binding = self.codex_adapter.bind(definition)
+        schema = {"type": "object", "properties": {"x": {"type": "string"}}}
+        events: list[ProviderStreamEvent] = []
+        invocation = ProviderInvocation(
+            session_id="session_codex_null_desc",
+            schema=schema,
+            payload={"task": "draft"},
+            thread_id=None,
+            stream_sink=events.append,
+        )
+
+        stream_lines = [
+            # First classify item m1 as agent_message
+            b'{"type":"item.started","item_id":"m1","item_type":"agent_message","item":{"content":""}}\n',
+            # Then send item.delta with explicit null item_type
+            b'{"type":"item.delta","item_id":"m1","item_type":null,"delta":"secret"}\n',
+            # Send item.delta with non-string item_id
+            b'{"type":"item.delta","item_id":123,"item_type":"agent_message","delta":"ignored"}\n',
+            # Send valid item.delta with omitted item_type (allowed to use remembered kind)
+            b'{"type":"item.delta","item_id":"m1","delta":"visible"}\n',
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            self.assertIsNotNone(request.on_stdout_line)
+            for line in stream_lines:
+                request.on_stdout_line(line)
+            output_flag_index = request.command.index("--output-last-message")
+            output_file_path = Path(request.command[output_flag_index + 1])
+            output_file_path.parent.mkdir(parents=True, exist_ok=True)
+            output_file_path.write_text('{"summary":"Final plot outline"}', encoding="utf-8")
+            return ProcessResult(
+                stdout=b'{"type":"thread.started","thread_id":"t_null"}\n{"type":"turn.completed"}\n',
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
+            await self.codex_adapter.invoke(binding, invocation)
+
+        # "secret" and "ignored" must be rejected fail-closed; only "visible" is emitted
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].kind, ProviderStreamEventKind.TEXT_DELTA)
+        self.assertEqual(events[0].text, "visible")
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

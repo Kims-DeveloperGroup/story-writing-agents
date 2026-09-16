@@ -200,10 +200,10 @@ class TestProviderProcessStreaming(unittest.IsolatedAsyncioTestCase):
 
     async def test_streaming_handles_multichunk_large_line_and_many_lines_in_single_chunk(self) -> None:
         """Verify multi-chunk large lines and dense multiple lines in single chunks are framed correctly."""
-        chunk_line = "x" * 200000 + "\n"
-        small_lines = "".join(f"item_{i}\n" for i in range(100))
         code = (
-            f"import sys; sys.stdout.write({chunk_line!r} + {small_lines!r}); "
+            "import sys; "
+            "sys.stdout.write('x' * 200000 + '\\n'); "
+            "sys.stdout.write(''.join(f'item_{i}\\n' for i in range(100))); "
             "sys.stdout.flush()"
         )
         received: list[bytes] = []

@@ -1051,11 +1051,13 @@ class AntigravityAdapter:
         captured_result_bytes: list[bytes] = []
         invalid_stream_line: str | None = None
         has_trailing_data_after_terminal: bool = False
+        callback_lines_delivered: int = 0
         agent_id = binding.definition.agent_id
         stream_sink = invocation.stream_sink
 
         def handle_stream_line(raw_line: bytes) -> None:
-            nonlocal invalid_stream_line, has_trailing_data_after_terminal
+            nonlocal callback_lines_delivered, invalid_stream_line, has_trailing_data_after_terminal
+            callback_lines_delivered += 1
             if stream_sink is None:
                 return
             stripped = raw_line.strip()
@@ -1352,6 +1354,9 @@ class AntigravityAdapter:
             raise
 
         submitted = True
+        if streaming and callback_lines_delivered == 0 and result.stdout:
+            for raw_line in result.stdout.splitlines(keepends=True):
+                handle_stream_line(raw_line)
         partial_timeout = bool(_NATIVE_PARTIAL_TIMEOUT.search(result.stderr))
         incomplete_output = partial_timeout or bool(
             _NATIVE_TRUNCATED.search(result.stderr)
@@ -1779,9 +1784,16 @@ class AntigravityAdapter:
             and _MALFORMED_FUNCTION_CALL.fullmatch(native_error) is not None
         )
         if terminal.get("status") != "SUCCESS" and not recoverable_error:
-            if native_error and isinstance(native_error, str) and native_error.strip():
+            error_msg = None
+            if isinstance(native_error, dict):
+                msg = native_error.get("message") or native_error.get("detail")
+                if msg and isinstance(msg, str) and msg.strip():
+                    error_msg = msg.strip()
+            elif isinstance(native_error, str) and native_error.strip():
+                error_msg = native_error.strip()
+            if error_msg:
                 raise ProviderInvocationError(
-                    f"Antigravity CLI did not complete successfully: {native_error.strip()}",
+                    f"Antigravity CLI did not complete successfully: {error_msg}",
                     taint_existing_thread=True,
                 )
             raise ProviderInvocationError(
