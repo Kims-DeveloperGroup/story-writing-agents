@@ -1551,6 +1551,176 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[0].kind, ProviderStreamEventKind.TEXT_DELTA)
         self.assertEqual(events[0].text, "clean valid text")
 
+    async def test_antigravity_adapter_streams_native_step_update_and_init_events(self) -> None:
+        agy_backend = AgentBackend(
+            self.workspace,
+            backend_overrides={PLOT_ARCHITECT: "antigravity"},
+        )
+        self.addCleanup(agy_backend.close)
+        adapter = agy_backend._antigravity_adapter
+        definition = PromptAssembler(
+            self.workspace,
+            backend_overrides={PLOT_ARCHITECT: "antigravity"},
+        ).build_definition(
+            session_id="session_agy_native_stream",
+            agent_id=PLOT_ARCHITECT,
+        )
+        binding = adapter.bind(definition)
+
+        schema = {
+            "type": "object",
+            "properties": {"reply": {"type": "string"}},
+            "required": ["reply"],
+            "additionalProperties": False,
+        }
+        events: list[ProviderStreamEvent] = []
+        invocation = ProviderInvocation(
+            session_id="session_agy_native_stream",
+            schema=schema,
+            payload={"task": "draft"},
+            thread_id=None,
+            stream_sink=events.append,
+        )
+
+        stream_lines = [
+            b'{"event":"init","conversation_id":"conv_native_1","init":{"model":"gemini-3.8-flash-high"}}\n',
+            b'{"event":"step_update","step_update":{"conversation_id":"conv_native_1","step_index":0,"state":"DONE","step_type":"user_input"}}\n',
+            b'{"event":"step_update","step_update":{"conversation_id":"conv_native_1","step_index":1,"state":"ACTIVE","step_type":"thought","thought_delta":"Analyzing the premise..."}}\n',
+            b'{"event":"step_update","step_update":{"conversation_id":"conv_native_1","step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"First part "}}\n',
+            b'{"event":"step_update","step_update":{"conversation_id":"conv_native_1","step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"second part."}}\n',
+            b'{"event":"step_update","step_update":{"conversation_id":"conv_native_1","step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"\\n"}}\n',
+            json.dumps({
+                "event": "result",
+                "result": {
+                    "conversation_id": "conv_native_1",
+                    "status": "SUCCESS",
+                    "structured_output": {"reply": "First part second part.\n"},
+                    "json_schema": schema,
+                },
+            }).encode("utf-8") + b"\n",
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            self.assertIsNotNone(request.on_stdout_line)
+            for line in stream_lines:
+                request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            result = await adapter.invoke(binding, invocation)
+
+        self.assertEqual(result.thread_id, "conv_native_1")
+        self.assertEqual(json.loads(result.response_text), {"reply": "First part second part.\n"})
+        self.assertEqual(len(events), 5)
+        self.assertEqual(events[0].kind, ProviderStreamEventKind.STATUS)
+        self.assertEqual(events[0].text, "Generating response...")
+        self.assertEqual(events[1].kind, ProviderStreamEventKind.THOUGHT_DELTA)
+        self.assertEqual(events[1].text, "Analyzing the premise...")
+        self.assertEqual(events[2].kind, ProviderStreamEventKind.TEXT_DELTA)
+        self.assertEqual(events[2].text, "First part ")
+        self.assertEqual(events[3].kind, ProviderStreamEventKind.TEXT_DELTA)
+        self.assertEqual(events[3].text, "second part.")
+        self.assertEqual(events[4].kind, ProviderStreamEventKind.TEXT_DELTA)
+        self.assertEqual(events[4].text, "\n")
+
+    async def test_antigravity_adapter_surfaces_provider_error_on_non_zero_returncode(self) -> None:
+        agy_backend = AgentBackend(
+            self.workspace,
+            backend_overrides={PLOT_ARCHITECT: "antigravity"},
+        )
+        self.addCleanup(agy_backend.close)
+        adapter = agy_backend._antigravity_adapter
+        definition = PromptAssembler(
+            self.workspace,
+            backend_overrides={PLOT_ARCHITECT: "antigravity"},
+        ).build_definition(
+            session_id="session_agy_err_code",
+            agent_id=PLOT_ARCHITECT,
+        )
+        binding = adapter.bind(definition)
+
+        schema = {"type": "object", "properties": {"x": {"type": "string"}}}
+        events: list[ProviderStreamEvent] = []
+        invocation = ProviderInvocation(
+            session_id="session_agy_err_code",
+            schema=schema,
+            payload={"task": "draft"},
+            thread_id=None,
+            stream_sink=events.append,
+        )
+
+        error_result = json.dumps({
+            "event": "result",
+            "result": {
+                "conversation_id": "conv_err_1",
+                "status": "ERROR",
+                "response": "",
+                "error": "No capacity available for model gpt-oss-120b-medium on the server",
+            },
+        }).encode("utf-8") + b"\n"
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            if request.on_stdout_line:
+                request.on_stdout_line(error_result)
+            return ProcessResult(
+                stdout=error_result,
+                stderr=b"warning: --mode plan has no effect\nerror: No capacity available for model gpt-oss-120b-medium on the server\n",
+                returncode=1,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            with self.assertRaises(ProviderInvocationError) as cm:
+                await adapter.invoke(binding, invocation)
+
+        self.assertIn("No capacity available for model gpt-oss-120b-medium on the server", str(cm.exception))
+        # Verify status event was emitted to stream sink
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].kind, ProviderStreamEventKind.STATUS)
+        self.assertIn("No capacity available", events[0].text)
+
+    async def test_antigravity_adapter_surfaces_provider_stderr_on_non_zero_returncode(self) -> None:
+        agy_backend = AgentBackend(
+            self.workspace,
+            backend_overrides={PLOT_ARCHITECT: "antigravity"},
+        )
+        self.addCleanup(agy_backend.close)
+        adapter = agy_backend._antigravity_adapter
+        definition = PromptAssembler(
+            self.workspace,
+            backend_overrides={PLOT_ARCHITECT: "antigravity"},
+        ).build_definition(
+            session_id="session_agy_stderr_err",
+            agent_id=PLOT_ARCHITECT,
+        )
+        binding = adapter.bind(definition)
+
+        schema = {"type": "object", "properties": {"x": {"type": "string"}}}
+        invocation = ProviderInvocation(
+            session_id="session_agy_stderr_err",
+            schema=schema,
+            payload={"task": "draft"},
+            thread_id=None,
+            stream_sink=None,
+        )
+
+        async def fake_run_process(_request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            return ProcessResult(
+                stdout=b"",
+                stderr=b"error: invalid model selection (--model foo): unknown model\n",
+                returncode=1,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            with self.assertRaises(ProviderInvocationError) as cm:
+                await adapter.invoke(binding, invocation)
+
+        self.assertIn("invalid model selection (--model foo): unknown model", str(cm.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
+

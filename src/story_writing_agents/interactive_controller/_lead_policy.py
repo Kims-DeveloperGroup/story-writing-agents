@@ -43,7 +43,10 @@ from ..interactive_terminal._collaboration_view import (
     project_specialist_results,
     project_story_commit_decision_result,
 )
-from ..errors import ProviderAuthenticationRequiredError
+from ..errors import (
+    BackendProtocolError,
+    ProviderAuthenticationRequiredError,
+)
 from ..orchestrator import RuntimeSession
 from ..provider_auth_recovery import ProviderAuthRecovery
 
@@ -182,6 +185,18 @@ class InteractiveLeadAdapter:
                     "Authentication recovery could not safely continue this request. "
                     "Inspect /history and /exchanges before continuing.",
                     label="authentication required",
+                    role=SemanticRole.ERROR,
+                    state=ViewState.ERROR,
+                )
+            )
+            self._write_elapsed()
+            return False
+        except BackendProtocolError as exc:
+            self._semantic_output.write_component(
+                Notice(
+                    f"Provider request failed: {exc}. "
+                    "Inspect /history and /exchanges before continuing.",
+                    label="provider failure",
                     role=SemanticRole.ERROR,
                     state=ViewState.ERROR,
                 )

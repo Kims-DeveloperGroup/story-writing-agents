@@ -1117,6 +1117,18 @@ class AntigravityAdapter:
 
             if is_terminal:
                 captured_result_bytes.append(stripped)
+                if event_type == "result":
+                    res = event.get("result")
+                    if isinstance(res, dict) and str(res.get("status", "")).upper() == "ERROR":
+                        err_text = str(res.get("error") or "")
+                        if err_text:
+                            stream_sink(
+                                ProviderStreamEvent(
+                                    ProviderStreamEventKind.STATUS,
+                                    agent_id,
+                                    f"Error: {err_text[:120]}",
+                                )
+                            )
                 return
 
             if captured_result_bytes:
@@ -1184,6 +1196,83 @@ class AntigravityAdapter:
                             text,
                         )
                     )
+            elif event_type == "init":
+                init_data = event.get("init")
+                if init_data is not None and type(init_data) is not dict:
+                    if invalid_stream_line is None:
+                        invalid_stream_line = "init payload is not an object"
+                    return
+                stream_sink(
+                    ProviderStreamEvent(
+                        ProviderStreamEventKind.STATUS,
+                        agent_id,
+                        "Generating response...",
+                    )
+                )
+            elif event_type == "step_update":
+                step_update = event.get("step_update")
+                if type(step_update) is not dict:
+                    if invalid_stream_line is None:
+                        invalid_stream_line = "step_update payload is not an object"
+                    return
+                step_type_val = step_update.get("step_type")
+                if step_type_val is not None and not isinstance(step_type_val, str):
+                    if invalid_stream_line is None:
+                        invalid_stream_line = "invalid step_type discriminator"
+                    return
+                step_type = str(step_type_val or "").strip().lower()
+
+                raw_text_delta = step_update.get("text_delta")
+                if raw_text_delta is not None and not isinstance(raw_text_delta, str):
+                    if invalid_stream_line is None:
+                        invalid_stream_line = "invalid text_delta type"
+                    return
+                raw_thought_delta = (
+                    step_update.get("thought_delta")
+                    or step_update.get("reasoning_delta")
+                )
+                if raw_thought_delta is not None and not isinstance(raw_thought_delta, str):
+                    if invalid_stream_line is None:
+                        invalid_stream_line = "invalid thought_delta type"
+                    return
+
+                text_delta = raw_text_delta or ""
+                thought_delta = raw_thought_delta or ""
+                if step_type in {"thought", "reasoning"} and text_delta and not thought_delta:
+                    thought_delta = text_delta
+                    text_delta = ""
+
+                if thought_delta:
+                    stream_sink(
+                        ProviderStreamEvent(
+                            ProviderStreamEventKind.THOUGHT_DELTA,
+                            agent_id,
+                            thought_delta,
+                        )
+                    )
+                if text_delta:
+                    stream_sink(
+                        ProviderStreamEvent(
+                            ProviderStreamEventKind.TEXT_DELTA,
+                            agent_id,
+                            text_delta,
+                        )
+                    )
+                if step_type == "error_message":
+                    error_text = str(
+                        step_update.get("error")
+                        or step_update.get("message")
+                        or step_update.get("text")
+                        or ""
+                    )
+                    if error_text:
+                        stream_sink(
+                            ProviderStreamEvent(
+                                ProviderStreamEventKind.STATUS,
+                                agent_id,
+                                f"Error: {error_text[:120]}",
+                            )
+                        )
             else:
                 if invalid_stream_line is None:
                     invalid_stream_line = f"unknown event type {event_type!r}"
@@ -1286,6 +1375,12 @@ class AntigravityAdapter:
                     )
                 if len(captured_result_bytes) != 1:
                     if result.returncode != 0:
+                        detail = self._extract_failure_detail(b"", result.stderr)
+                        if detail:
+                            raise ProviderInvocationError(
+                                f"Antigravity CLI failed (status {result.returncode}): {detail}",
+                                taint_existing_thread=True,
+                            )
                         raise ProviderInvocationError(
                             f"Antigravity CLI exited with status {result.returncode}",
                             taint_existing_thread=True,
@@ -1310,6 +1405,12 @@ class AntigravityAdapter:
                         authentication_failure=authentication,
                     )
                 if result.returncode != 0:
+                    detail = self._extract_failure_detail(effective_stdout, result.stderr)
+                    if detail:
+                        raise ProviderInvocationError(
+                            f"Antigravity CLI failed (status {result.returncode}): {detail}",
+                            taint_existing_thread=True,
+                        )
                     raise ProviderInvocationError(
                         f"Antigravity CLI exited with status {result.returncode}",
                         taint_existing_thread=True,
@@ -1326,6 +1427,12 @@ class AntigravityAdapter:
                         authentication_failure=authentication,
                     )
                 if result.returncode != 0:
+                    detail = self._extract_failure_detail(effective_stdout, result.stderr)
+                    if detail:
+                        raise ProviderInvocationError(
+                            f"Antigravity CLI failed (status {result.returncode}): {detail}",
+                            taint_existing_thread=True,
+                        )
                     raise ProviderInvocationError(
                         f"Antigravity CLI exited with status {result.returncode}",
                         taint_existing_thread=True,
@@ -1386,6 +1493,40 @@ class AntigravityAdapter:
         if types_to_check and types_to_check[0] == "result" and isinstance(terminal.get("result"), dict):
             return terminal["result"]
         return terminal
+
+    @classmethod
+    def _extract_failure_detail(
+        cls,
+        stdout_bytes: bytes,
+        stderr_bytes: bytes,
+    ) -> str | None:
+        """Extract user-visible error diagnostic from terminal JSON or stderr."""
+        if stdout_bytes:
+            try:
+                terminal = cls._parse_result(stdout_bytes)
+                unwrapped = cls._unwrap_result_envelope(terminal)
+                error = unwrapped.get("error")
+                if error:
+                    if isinstance(error, dict):
+                        msg = error.get("message") or error.get("detail")
+                        if msg and isinstance(msg, str):
+                            return msg.strip()
+                    elif isinstance(error, str) and error.strip():
+                        return error.strip()
+            except Exception:
+                pass
+        if stderr_bytes:
+            stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
+            if stderr_text:
+                for line in stderr_text.splitlines():
+                    cleaned = line.strip()
+                    if cleaned.lower().startswith("warning:"):
+                        continue
+                    if cleaned.lower().startswith("error:"):
+                        return cleaned[6:].strip()
+                    if cleaned:
+                        return cleaned
+        return None
 
     @classmethod
     def _authentication_failure(
@@ -1638,6 +1779,11 @@ class AntigravityAdapter:
             and _MALFORMED_FUNCTION_CALL.fullmatch(native_error) is not None
         )
         if terminal.get("status") != "SUCCESS" and not recoverable_error:
+            if native_error and isinstance(native_error, str) and native_error.strip():
+                raise ProviderInvocationError(
+                    f"Antigravity CLI did not complete successfully: {native_error.strip()}",
+                    taint_existing_thread=True,
+                )
             raise ProviderInvocationError(
                 "Antigravity CLI did not complete successfully",
                 taint_existing_thread=True,

@@ -13257,6 +13257,30 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         self.assertIsInstance(output.components[-1], terminal_module.Notice)
         self.assertEqual(output.components[-1].text, "Elapsed: 00:00:00")
 
+    def test_provider_invocation_failure_writes_error_notice_without_crashing(self) -> None:
+        session = RuntimeSession.__new__(RuntimeSession)
+        runner = asyncio.Runner()
+        self.addCleanup(runner.close)
+        progress, output = self._Progress(), self._Output()
+
+        async def failing_turn(_session, _cid, _text, *, action_progress_sink=None):
+            raise BackendProtocolError("Antigravity CLI failed (status 1): 503 Overloaded")
+
+        with mock.patch.object(RuntimeSession, "lead_turn", failing_turn):
+            adapter = lead_policy_module.InteractiveLeadAdapter(
+                session, runner, progress,
+                self._Picker(), self._Prompt(), output,
+            )
+            result = adapter.submit(_UNIQUE_C, "test prompt")
+
+        self.assertFalse(result)
+        self.assertEqual(len(output.components), 2)
+        notice = output.components[0]
+        self.assertIsInstance(notice, terminal_module.Notice)
+        self.assertEqual(notice.label, "provider failure")
+        self.assertIn("Antigravity CLI failed (status 1): 503 Overloaded", notice.text)
+        self.assertEqual(output.components[1].text, "Elapsed: 00:00:00")
+
     def test_confirmed_execution_writes_specialists_then_lead_then_elapsed(self) -> None:
         runner = asyncio.Runner(); self.addCleanup(runner.close); output = self._Output()
         adapter = lead_policy_module.InteractiveLeadAdapter(RuntimeSession.__new__(RuntimeSession),
