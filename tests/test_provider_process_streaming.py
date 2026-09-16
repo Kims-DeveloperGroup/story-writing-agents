@@ -102,9 +102,9 @@ class TestProviderProcessStreaming(unittest.IsolatedAsyncioTestCase):
     async def test_streaming_handles_lines_larger_than_64k_buffer(self) -> None:
         """Verify lines exceeding the default 64 KiB buffer are drained without ValueError."""
         # Write a line of 128 KiB (131072 bytes) plus newline, then a smaller line.
-        large_payload = "a" * 131072
         code = (
-            f"import sys; sys.stdout.write('{large_payload}\\nshort\\n'); "
+            "import sys; "
+            "sys.stdout.write('a' * 131072 + '\\nshort\\n'); "
             "sys.stdout.flush()"
         )
         received: list[bytes] = []

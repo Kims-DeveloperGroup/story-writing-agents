@@ -383,16 +383,33 @@ class CodexAdapter:
                     elif event_type in {"item.updated", "item.started", "item.completed"}:
                         item = event.get("item")
                         if type(item) is dict:
-                            item_type = item.get("type")
-                            raw_id = item.get("id")
+                            top_id = event.get("item_id")
+                            nested_id = item.get("id") or item.get("item_id")
+                            if top_id is not None and nested_id is not None and str(top_id) != str(nested_id):
+                                return
+                            raw_id = nested_id if nested_id is not None else top_id
                             item_id = str(raw_id) if raw_id is not None and str(raw_id) else None
 
+                            top_type = event.get("item_type")
+                            nested_type = item.get("type") or item.get("item_type")
+                            if top_type is not None and nested_type is not None:
+                                norm_top = str(top_type).strip().lower()
+                                norm_nested = str(nested_type).strip().lower()
+                                if norm_top != norm_nested:
+                                    return
+                                resolved_type = norm_top
+                            elif nested_type is not None:
+                                resolved_type = str(nested_type).strip().lower()
+                            elif top_type is not None:
+                                resolved_type = str(top_type).strip().lower()
+                            else:
+                                resolved_type = None
+
                             current_kind: ProviderStreamEventKind | None = None
-                            if item_type is not None:
-                                norm_item_type = str(item_type).strip().lower()
-                                if norm_item_type == "reasoning":
+                            if resolved_type is not None:
+                                if resolved_type == "reasoning":
                                     explicit_kind = ProviderStreamEventKind.THOUGHT_DELTA
-                                elif norm_item_type == "agent_message":
+                                elif resolved_type == "agent_message":
                                     explicit_kind = ProviderStreamEventKind.TEXT_DELTA
                                 else:
                                     return
@@ -438,23 +455,38 @@ class CodexAdapter:
                         raw_id = event.get("item_id")
                         raw_delta = event.get("delta")
                         item_obj = event.get("item")
-                        raw_type = event.get("item_type")
+                        top_type = event.get("item_type")
+                        nested_type = None
                         if type(item_obj) is dict:
+                            nested_id = item_obj.get("id") or item_obj.get("item_id")
+                            if raw_id is not None and nested_id is not None and str(raw_id) != str(nested_id):
+                                return
                             if raw_id is None:
-                                raw_id = item_obj.get("id") or item_obj.get("item_id")
+                                raw_id = nested_id
                             if raw_delta is None:
                                 raw_delta = item_obj.get("delta") or item_obj.get("text")
-                            if raw_type is None:
-                                raw_type = item_obj.get("type") or item_obj.get("item_type")
+                            nested_type = item_obj.get("type") or item_obj.get("item_type")
+
+                        if top_type is not None and nested_type is not None:
+                            norm_top = str(top_type).strip().lower()
+                            norm_nested = str(nested_type).strip().lower()
+                            if norm_top != norm_nested:
+                                return
+                            resolved_type = norm_top
+                        elif top_type is not None:
+                            resolved_type = str(top_type).strip().lower()
+                        elif nested_type is not None:
+                            resolved_type = str(nested_type).strip().lower()
+                        else:
+                            resolved_type = None
 
                         item_id = str(raw_id) if raw_id is not None and str(raw_id) else None
                         kind: ProviderStreamEventKind | None = None
 
-                        if raw_type is not None:
-                            norm_type = str(raw_type).strip().lower()
-                            if norm_type == "reasoning":
+                        if resolved_type is not None:
+                            if resolved_type == "reasoning":
                                 explicit_kind = ProviderStreamEventKind.THOUGHT_DELTA
-                            elif norm_type == "agent_message":
+                            elif resolved_type == "agent_message":
                                 explicit_kind = ProviderStreamEventKind.TEXT_DELTA
                             else:
                                 return

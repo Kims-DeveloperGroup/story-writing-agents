@@ -1482,6 +1482,65 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[1].kind, ProviderStreamEventKind.TEXT_DELTA)
         self.assertEqual(events[1].text, "part two")
 
+    async def test_codex_adapter_rejects_conflicting_top_level_and_nested_descriptors(self) -> None:
+        """Verify delta or item events with conflicting top-level and nested type/id fail closed."""
+        adapter = self.codex_adapter
+        binding = adapter.bind(self.definition)
+        events: list[ProviderStreamEvent] = []
+
+        schema = {
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+            "additionalProperties": False,
+        }
+        invocation = ProviderInvocation(
+            session_id="session_codex_conflict",
+            schema=schema,
+            payload={"task": "draft"},
+            thread_id=None,
+            stream_sink=events.append,
+        )
+
+        stream_lines = [
+            b'{"type":"thread.started","thread_id":"thread_conflict_1"}\n',
+            # Conflicting top-level item_type (agent_message) and nested type (reasoning) on delta: reject fail-closed
+            b'{"type":"item.delta","item_id":"i1","item_type":"agent_message","item":{"id":"i1","type":"reasoning"},"delta":"secret thought"}\n',
+            # Conflicting top-level item_type (reasoning) and nested type (agent_message) on delta: reject fail-closed
+            b'{"type":"item.delta","item_id":"i2","item_type":"reasoning","item":{"id":"i2","type":"agent_message"},"delta":"secret text"}\n',
+            # Conflicting top-level item_id (i3) and nested id (i4) on delta: reject fail-closed
+            b'{"type":"item.delta","item_id":"i3","item":{"id":"i4","type":"agent_message"},"delta":"id mismatch"}\n',
+            # Conflicting top-level item_type and nested type on item.updated: reject fail-closed
+            b'{"type":"item.updated","item_id":"i5","item_type":"agent_message","item":{"id":"i5","type":"reasoning","text":"secret update"}}\n',
+            # Conflicting top-level item_id and nested id on item.updated: reject fail-closed
+            b'{"type":"item.updated","item_id":"i6","item":{"id":"i7","type":"agent_message","text":"id mismatch update"}}\n',
+            # Valid item delta with matching top-level and nested types: must emit TEXT_DELTA
+            b'{"type":"item.delta","item_id":"i8","item_type":"agent_message","item":{"id":"i8","type":"agent_message"},"delta":"clean valid text"}\n',
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            output_flag_index = request.command.index("--output-last-message")
+            output_file_path = Path(request.command[output_flag_index + 1])
+            output_file_path.parent.mkdir(parents=True, exist_ok=True)
+            output_file_path.write_text('{"summary":"Done"}', encoding="utf-8")
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
+            result = await adapter.invoke(binding, invocation)
+
+        self.assertEqual(result.response_text, '{"summary":"Done"}')
+        # Exactly 1 event should have been emitted (the matching valid delta):
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].kind, ProviderStreamEventKind.TEXT_DELTA)
+        self.assertEqual(events[0].text, "clean valid text")
+
 
 if __name__ == "__main__":
     unittest.main()
