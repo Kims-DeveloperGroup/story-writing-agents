@@ -507,6 +507,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             schema={"type": "object"},
             payload={},
             thread_id="thread_wrapped_auth_1",
+            stream_sink=lambda _event: None,
         )
 
         wrapped_auth_lines = [
@@ -514,6 +515,9 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         ]
 
         async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            if request.on_stdout_line:
+                for line in wrapped_auth_lines:
+                    request.on_stdout_line(line)
             return ProcessResult(
                 stdout=b"".join(wrapped_auth_lines),
                 stderr=b"",
