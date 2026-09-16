@@ -7,9 +7,13 @@ import io
 import unittest
 from unittest import mock
 
+from story_writing_agents.agent_context.actions import ContextSourceBoundaryKind
 from story_writing_agents.agent_context.progress import (
     ContextActionProgressEvent,
     ContextActionProgressKind,
+    ContextActionProgressSource,
+    ContextSourceBoundary,
+    ContextSourceKind,
     ProviderStreamEvent,
     ProviderStreamEventKind,
     active_provider_stream_sink,
@@ -183,6 +187,91 @@ class AdvisoryProgressStreamingTests(unittest.TestCase):
         state.begin((AdvisoryProgressRequest("agent_x", "op_2", "Task 2"),))
         self.assertEqual(state.stream_status, {})
         self.assertEqual(state.stream_preview, {})
+
+    def test_render_collapses_multiple_sources_into_summary_line(self) -> None:
+        state = AdvisoryProgressState()
+        state.begin((AdvisoryProgressRequest("agent_searcher", "op_1", "Searching files"),))
+        boundary = ContextSourceBoundary(ContextSourceBoundaryKind.ARTIFACT_LINES, start=1, end=50)
+        sources = tuple(
+            ContextActionProgressSource(
+                ContextSourceKind.WRITING_ARTIFACT,
+                f"chapters/chapter_{i:02d}.md",
+                boundary,
+            )
+            for i in range(10)
+        )
+        state.observe(
+            ContextActionProgressEvent(
+                ContextActionProgressKind.SEARCH_COMPLETED,
+                "agent_searcher",
+                "op_1",
+                1,
+                sources=sources,
+                truncated=False,
+            )
+        )
+        rendered = state.render(0)
+        self.assertIn("Found: 10 sources (latest: chapters/chapter_09.md · lines 1–50)", rendered)
+        self.assertNotIn("chapters/chapter_00.md", rendered)
+        lines = rendered.splitlines()
+        self.assertLessEqual(len(lines), 8)
+
+    def test_render_height_is_bounded_to_8_lines(self) -> None:
+        state = AdvisoryProgressState()
+        state.begin(
+            (
+                AdvisoryProgressRequest("agent_1", "op_1", "Task 1"),
+                AdvisoryProgressRequest("agent_2", "op_2", "Task 2"),
+                AdvisoryProgressRequest("agent_3", "op_3", "Task 3"),
+            )
+        )
+        for i in range(1, 4):
+            state.observe_stream(
+                ProviderStreamEvent(
+                    ProviderStreamEventKind.STATUS,
+                    f"agent_{i}",
+                    f"Status for agent {i}",
+                    operation_id=f"op_{i}",
+                )
+            )
+            state.observe_stream(
+                ProviderStreamEvent(
+                    ProviderStreamEventKind.TEXT_DELTA,
+                    f"agent_{i}",
+                    f"Preview for agent {i}\nLine 2 for agent {i}",
+                    operation_id=f"op_{i}",
+                )
+            )
+        rendered = state.render(0)
+        lines = rendered.splitlines()
+        self.assertLessEqual(len(lines), 8)
+
+    def test_last_error_message_captured_and_persisted_across_finish(self) -> None:
+        state = AdvisoryProgressState()
+        state.begin((AdvisoryProgressRequest("agent_err", "op_err", "Error task"),))
+        self.assertIsNone(state.last_error_message)
+
+        state.observe_stream(
+            ProviderStreamEvent(
+                ProviderStreamEventKind.STATUS,
+                "agent_err",
+                "Error: No capacity available for model gpt-oss-120b-medium on the server",
+                operation_id="op_err",
+            )
+        )
+        self.assertEqual(
+            state.last_error_message,
+            "Error: No capacity available for model gpt-oss-120b-medium on the server",
+        )
+
+        state.finish()
+        self.assertEqual(
+            state.last_error_message,
+            "Error: No capacity available for model gpt-oss-120b-medium on the server",
+        )
+
+        state.begin((AdvisoryProgressRequest("agent_err", "op_err_2", "New task"),))
+        self.assertIsNone(state.last_error_message)
 
 
 class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCase):

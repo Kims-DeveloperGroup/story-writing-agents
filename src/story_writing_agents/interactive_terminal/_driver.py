@@ -593,6 +593,7 @@ class RawTerminalDriver:
             ):
                 raise ValueError("progress frame must be safe text")
             available_width = max(0, capabilities.width - 1)
+            available_height = 8
             rows: list[str] = []
             for logical in rendered.split("\n"):
                 if not logical:
@@ -612,6 +613,8 @@ class RawTerminalDriver:
                     fitted_width += character_width
                 if fitted:
                     rows.append("".join(fitted))
+            if len(rows) > available_height:
+                rows = [rows[0]] + rows[-(available_height - 1) :]
             fitted_text = "\n".join(rows)
             if len(rows) == 1 and fitted_text and capabilities.decorative_sgr:
                 return f"{_PROGRESS_SGR_FRAMES[frame]}{fitted_text}{_SGR_RESET}"
@@ -1080,7 +1083,7 @@ class RawTerminalDriver:
         while True:
             await asyncio.sleep(_PROGRESS_INTERVAL_SECONDS)
             self._progress_frame = (self._progress_frame + 1) % _PROGRESS_FRAME_COUNT
-            if self._progress_rows > 1:
+            if self._progress_rows > 0:
                 self._clear_progress_frame()
             self._draw_progress_frame(frame_renderer)
 

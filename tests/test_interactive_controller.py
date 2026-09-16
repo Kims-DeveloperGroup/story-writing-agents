@@ -13274,12 +13274,46 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             result = adapter.submit(_UNIQUE_C, "test prompt")
 
         self.assertFalse(result)
-        self.assertEqual(len(output.components), 2)
-        notice = output.components[0]
+        self.assertEqual(len(output.components), 3)
+        panel = output.components[0]
+        self.assertIsInstance(panel, terminal_module.Panel)
+        self.assertEqual(panel.title, "Lead")
+        self.assertEqual(panel.state, terminal_module.ViewState.ERROR)
+        self.assertEqual(panel.items[0].label, "Outcome")
+        self.assertEqual(panel.items[0].value, "failed")
+        self.assertEqual(panel.items[1].sender, "Lead")
+        self.assertIn("Antigravity CLI failed (status 1): 503 Overloaded", panel.items[1].content)
+        notice = output.components[1]
         self.assertIsInstance(notice, terminal_module.Notice)
         self.assertEqual(notice.label, "provider failure")
         self.assertIn("Antigravity CLI failed (status 1): 503 Overloaded", notice.text)
-        self.assertEqual(output.components[1].text, "Elapsed: 00:00:00")
+        self.assertEqual(output.components[2].text, "Elapsed: 00:00:00")
+
+    def test_provider_invocation_failure_surfaces_transient_stream_error_in_final_output(self) -> None:
+        session = RuntimeSession.__new__(RuntimeSession)
+        runner = asyncio.Runner()
+        self.addCleanup(runner.close)
+        progress, output = self._Progress(), self._Output()
+        progress.last_error_message = "Error: No capacity available for model gpt-oss-120b-medium on the server"
+
+        async def failing_turn(_session, _cid, _text, *, action_progress_sink=None):
+            raise BackendProtocolError("Antigravity CLI exited with status 1")
+
+        with mock.patch.object(RuntimeSession, "lead_turn", failing_turn):
+            adapter = lead_policy_module.InteractiveLeadAdapter(
+                session, runner, progress,
+                self._Picker(), self._Prompt(), output,
+            )
+            result = adapter.submit(_UNIQUE_C, "test prompt")
+
+        self.assertFalse(result)
+        self.assertEqual(len(output.components), 3)
+        panel = output.components[0]
+        self.assertIsInstance(panel, terminal_module.Panel)
+        self.assertEqual(panel.state, terminal_module.ViewState.ERROR)
+        self.assertIn("No capacity available for model gpt-oss-120b-medium on the server", panel.items[1].content)
+        notice = output.components[1]
+        self.assertIn("No capacity available for model gpt-oss-120b-medium on the server", notice.text)
 
     def test_confirmed_execution_writes_specialists_then_lead_then_elapsed(self) -> None:
         runner = asyncio.Runner(); self.addCleanup(runner.close); output = self._Output()

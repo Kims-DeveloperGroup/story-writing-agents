@@ -39,6 +39,7 @@ from ..interactive_terminal import (
 )
 from ..interactive_terminal._collaboration_view import (
     project_artifact_application_decision_result,
+    project_lead_error_result,
     project_lead_turn_result,
     project_specialist_results,
     project_story_commit_decision_result,
@@ -180,10 +181,16 @@ class InteractiveLeadAdapter:
             )
             return self._present_and_decide(turn)
         except ProviderAuthenticationRequiredError:
+            error_message = (
+                "Authentication recovery could not safely continue this request."
+            )
+            advice = "Inspect /history and /exchanges before continuing, or run /auth."
+            self._semantic_output.write_component(
+                project_lead_error_result(error_message, advice=advice)
+            )
             self._semantic_output.write_component(
                 Notice(
-                    "Authentication recovery could not safely continue this request. "
-                    "Inspect /history and /exchanges before continuing.",
+                    f"{error_message} {advice}",
                     label="authentication required",
                     role=SemanticRole.ERROR,
                     state=ViewState.ERROR,
@@ -192,9 +199,18 @@ class InteractiveLeadAdapter:
             self._write_elapsed()
             return False
         except BackendProtocolError as exc:
+            last_error = getattr(self._progress, "last_error_message", None)
+            exc_text = str(exc).strip()
+            if last_error and last_error not in exc_text:
+                error_message = f"{exc_text}\n{last_error}"
+            else:
+                error_message = exc_text or "Provider request failed."
+            self._semantic_output.write_component(
+                project_lead_error_result(error_message)
+            )
             self._semantic_output.write_component(
                 Notice(
-                    f"Provider request failed: {exc}. "
+                    f"Provider request failed: {error_message}. "
                     "Inspect /history and /exchanges before continuing.",
                     label="provider failure",
                     role=SemanticRole.ERROR,
@@ -210,6 +226,27 @@ class InteractiveLeadAdapter:
                     "and /exchanges before continuing.",
                     label="interrupted", role=SemanticRole.WARNING,
                     state=ViewState.CANCELLED,
+                )
+            )
+            self._write_elapsed()
+            return False
+        except Exception as exc:
+            last_error = getattr(self._progress, "last_error_message", None)
+            exc_text = str(exc).strip()
+            if last_error and last_error not in exc_text:
+                error_message = f"{exc_text}\n{last_error}"
+            else:
+                error_message = exc_text or "Unexpected failure during Lead turn."
+            self._semantic_output.write_component(
+                project_lead_error_result(error_message)
+            )
+            self._semantic_output.write_component(
+                Notice(
+                    f"Lead turn failed: {error_message}. "
+                    "Inspect /history and /exchanges before continuing.",
+                    label="turn failure",
+                    role=SemanticRole.ERROR,
+                    state=ViewState.ERROR,
                 )
             )
             self._write_elapsed()
@@ -529,7 +566,11 @@ class InteractiveLeadAdapter:
     def _run_operation(self, operation: Awaitable[object]) -> object:
         """Keep the operation pending while progress yields terminal ownership."""
 
+        bound_sink = getattr(self._progress, "bound_stream_sink", None)
         if self._recover_authentication is None:
+            if bound_sink is not None:
+                with bound_sink():
+                    return self._runner.run(self._progress.run(operation))
             return self._runner.run(self._progress.run(operation))
         recovery = ProviderAuthRecovery()
 

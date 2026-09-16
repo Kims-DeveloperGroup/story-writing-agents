@@ -192,6 +192,23 @@ def project_lead_turn_result(result: LeadTurnResult) -> Panel:
     return Panel("Lead", tuple(items), state=_event_state(result))
 
 
+def project_lead_error_result(
+    error_message: str,
+    *,
+    advice: str = "Inspect /history and /exchanges before continuing.",
+) -> Panel:
+    """Project one visible error result when a lead turn fails before validation."""
+
+    if type(error_message) is not str or not error_message.strip():
+        raise ValueError("error_message must be nonempty text")
+    items = (
+        Field("Outcome", "failed"),
+        _message("Lead", error_message.strip(), role=SemanticRole.ERROR),
+        Field("Next action", advice),
+    )
+    return Panel("Lead", items, state=ViewState.ERROR)
+
+
 def project_specialist_results(
     events: tuple[CollaborationEvent, ...],
     proposal: CollaborationProposal,
@@ -993,6 +1010,7 @@ __all__ = (
     "collaboration_view_context",
     "project_artifact_application_decision_result",
     "project_collaboration_event",
+    "project_lead_error_result",
     "project_lead_turn_result",
     "project_specialist_results",
     "project_story_commit_decision_result",

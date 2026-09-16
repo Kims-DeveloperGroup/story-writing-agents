@@ -61,6 +61,7 @@ class AdvisoryProgressState:
         self.events: dict[tuple[str, str, int], ContextActionProgressEvent] = {}
         self.stream_status: dict[tuple[str, str], str] = {}
         self.stream_preview: dict[tuple[str, str], str] = {}
+        self.last_error_message: str | None = None
 
     def begin(self, requests: tuple[AdvisoryProgressRequest, ...] = ()) -> None:
         if self.started_at is None:
@@ -69,6 +70,13 @@ class AdvisoryProgressState:
         self.events.clear()
         self.stream_status.clear()
         self.stream_preview.clear()
+        self.last_error_message = None
+
+    def record_error(self, message: str) -> None:
+        """Explicitly record a terminal diagnostic for outcome presentation."""
+        sanitized = _sanitize_preview_text(message).strip()
+        if sanitized:
+            self.last_error_message = sanitized
 
     def observe(self, event: ContextActionProgressEvent) -> None:
         if type(event) is not ContextActionProgressEvent:
@@ -106,6 +114,16 @@ class AdvisoryProgressState:
             sanitized = _sanitize_preview_text(event.text).strip()
             first_line = sanitized.splitlines()[0] if sanitized else ""
             self.stream_status[key] = first_line[:120]
+            lower = sanitized.lower()
+            if (
+                lower.startswith("error:")
+                or " error:" in lower
+                or "error" in lower
+                or "failed" in lower
+                or "overloaded" in lower
+                or "capacity" in lower
+            ):
+                self.last_error_message = sanitized
         elif event.kind is ProviderStreamEventKind.THOUGHT_DELTA:
             self.stream_status[key] = "Thinking..."
         elif event.kind is ProviderStreamEventKind.TEXT_DELTA:
@@ -155,7 +173,7 @@ class AdvisoryProgressState:
             lines.append("")
             lines.append(request.agent_id)
             if request.request:
-                lines.append(f"  Request: {request.request}")
+                lines.append(f"  Request: {request.request[:80]}")
             status = self.stream_status.get(key)
             preview = self.stream_preview.get(key)
             if not related:
@@ -174,28 +192,46 @@ class AdvisoryProgressState:
                     else "running"
                 )
                 lines.append(f"  {action} #{event.action_index} · {state}")
-                for query in event.queries:
+                if event.queries:
+                    query = event.queries[-1]
                     lines.append(f'  Searching for: "{query.text}"')
                     scope = ", ".join(item.value for item in query.source_kinds)
                     if query.artifact_path_prefix is not None:
                         scope += f" under {query.artifact_path_prefix}"
                     lines.append(f"  Scope: {scope}")
-                for source in event.sources:
-                    boundary = source.boundary
-                    suffix = ""
-                    if boundary.kind is not ContextSourceBoundaryKind.WHOLE:
-                        label = (
-                            "lines"
-                            if boundary.kind is ContextSourceBoundaryKind.ARTIFACT_LINES
-                            else "records"
+                if event.sources:
+                    if len(event.sources) <= 2:
+                        for source in event.sources:
+                            boundary = source.boundary
+                            suffix = ""
+                            if boundary.kind is not ContextSourceBoundaryKind.WHOLE:
+                                label = (
+                                    "lines"
+                                    if boundary.kind is ContextSourceBoundaryKind.ARTIFACT_LINES
+                                    else "records"
+                                )
+                                suffix = f" · {label} {boundary.start}–{boundary.end}"
+                            byte_suffix = (
+                                "" if source.utf8_bytes is None else f" · {source.utf8_bytes} bytes"
+                            )
+                            verb = "Found" if action == "SEARCH" else "Reading"
+                            lines.append(f"  {verb}: {source.locator}{suffix}{byte_suffix}")
+                    else:
+                        verb = "Found" if action == "SEARCH" else "Reading"
+                        latest = event.sources[-1]
+                        boundary = latest.boundary
+                        suffix = ""
+                        if boundary.kind is not ContextSourceBoundaryKind.WHOLE:
+                            label = (
+                                "lines"
+                                if boundary.kind is ContextSourceBoundaryKind.ARTIFACT_LINES
+                                else "records"
+                            )
+                            suffix = f" · {label} {boundary.start}–{boundary.end}"
+                        lines.append(
+                            f"  {verb}: {len(event.sources)} sources (latest: {latest.locator}{suffix})"
                         )
-                        suffix = f" · {label} {boundary.start}–{boundary.end}"
-                    byte_suffix = (
-                        "" if source.utf8_bytes is None else f" · {source.utf8_bytes} bytes"
-                    )
-                    verb = "Found" if action == "SEARCH" else "Reading"
-                    lines.append(f"  {verb}: {source.locator}{suffix}{byte_suffix}")
-                if action == "SEARCH" and state == "completed" and not event.sources:
+                elif action == "SEARCH" and state == "completed":
                     lines.append("  Found: no matches")
                 if event.truncated:
                     lines.append("  Results: truncated")
@@ -210,6 +246,8 @@ class AdvisoryProgressState:
                         for idx, pline in enumerate(preview_lines[-2:]):
                             label = "Preview: " if idx == 0 else "         "
                             lines.append(f"  {label}{pline[-120:]}")
+        if len(lines) > 8:
+            lines = [lines[0]] + lines[-7:]
         return "\n".join(lines)
 
 

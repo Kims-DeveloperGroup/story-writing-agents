@@ -1910,6 +1910,17 @@ class InteractiveAdvisoryProgress:
 
         return format_elapsed(self._state.finish())
 
+    @property
+    def last_error_message(self) -> str | None:
+        """Expose the most recently observed error status message, if any."""
+
+        return self._state.last_error_message
+
+    def record_error(self, message: str) -> None:
+        """Explicitly record a terminal diagnostic for outcome presentation."""
+
+        self._state.record_error(message)
+
     @contextlib.contextmanager
     def bound_stream_sink(self) -> Iterator[None]:
         """Temporarily bind the active stream sink to the calling context on capable terminals."""
