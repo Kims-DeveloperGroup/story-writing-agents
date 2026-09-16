@@ -58,11 +58,15 @@ def _extract_stream_text(value: object) -> str:
         for entry in value:
             if isinstance(entry, str):
                 parts.append(entry)
-            elif isinstance(entry, dict) and "text" in entry:
-                parts.append(str(entry["text"]))
+            elif isinstance(entry, dict):
+                text_val = entry.get("text") or entry.get("content") or entry.get("summary")
+                if text_val is not None:
+                    parts.append(str(text_val))
         return "".join(parts)
-    if isinstance(value, dict) and "text" in value:
-        return str(value["text"])
+    if isinstance(value, dict):
+        text_val = value.get("text") or value.get("content") or value.get("summary")
+        if text_val is not None:
+            return str(text_val)
     return ""
 
 
@@ -355,6 +359,7 @@ class CodexAdapter:
             stream_sink = invocation.stream_sink
 
             emitted_text_by_item: dict[str, str] = {}
+            item_kinds_by_id: dict[str, ProviderStreamEventKind] = {}
 
             def handle_stream_line(raw_line: bytes) -> None:
                 if stream_sink is None:
@@ -380,6 +385,12 @@ class CodexAdapter:
                         if type(item) is dict:
                             item_type = item.get("type")
                             raw_id = item.get("id")
+                            if raw_id is not None and str(raw_id):
+                                item_id = str(raw_id)
+                                if item_type == "reasoning":
+                                    item_kinds_by_id[item_id] = ProviderStreamEventKind.THOUGHT_DELTA
+                                elif item_type == "agent_message":
+                                    item_kinds_by_id[item_id] = ProviderStreamEventKind.TEXT_DELTA
                             if item_type == "reasoning":
                                 text = _extract_stream_text(
                                     item.get("text") or item.get("summary") or ""
@@ -424,6 +435,41 @@ class CodexAdapter:
                                             delta,
                                         )
                                     )
+                    elif event_type in {"item.delta", "response.output_item.delta"}:
+                        raw_id = event.get("item_id")
+                        raw_delta = event.get("delta")
+                        item_obj = event.get("item")
+                        if type(item_obj) is dict:
+                            if raw_id is None:
+                                raw_id = item_obj.get("id") or item_obj.get("item_id")
+                            if raw_delta is None:
+                                raw_delta = item_obj.get("delta") or item_obj.get("text")
+                        delta_text = _extract_stream_text(raw_delta)
+                        if delta_text:
+                            if raw_id is not None and str(raw_id):
+                                item_id = str(raw_id)
+                                emitted_text_by_item[item_id] = (
+                                    emitted_text_by_item.get(item_id, "") + delta_text
+                                )
+                                kind = item_kinds_by_id.get(item_id)
+                                if kind is None:
+                                    if event.get("item_type") == "reasoning":
+                                        kind = ProviderStreamEventKind.THOUGHT_DELTA
+                                    else:
+                                        kind = ProviderStreamEventKind.TEXT_DELTA
+                                    item_kinds_by_id[item_id] = kind
+                            else:
+                                if event.get("item_type") == "reasoning":
+                                    kind = ProviderStreamEventKind.THOUGHT_DELTA
+                                else:
+                                    kind = ProviderStreamEventKind.TEXT_DELTA
+                            stream_sink(
+                                ProviderStreamEvent(
+                                    kind,
+                                    agent_id,
+                                    delta_text,
+                                )
+                            )
                 except Exception:
                     pass
 

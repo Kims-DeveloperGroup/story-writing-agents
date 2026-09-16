@@ -1180,6 +1180,187 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
                 await adapter.invoke(binding, invocation)
             self.assertIn("invalid stream line: invalid event discriminator", str(cm.exception))
 
+    async def test_antigravity_adapter_unwraps_result_envelope_with_whitespace_discriminator(self) -> None:
+        """Verify _unwrap_result_envelope normalizes whitespace in discriminators."""
+        adapter, binding = self._make_agy_binding("session_whitespace_disc")
+        schema = {
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"],
+            "additionalProperties": False,
+        }
+        invocation = ProviderInvocation(
+            session_id="session_whitespace_disc",
+            schema=schema,
+            payload={},
+            thread_id="thread_ws_1",
+            stream_sink=lambda _event: None,
+        )
+        stream_lines = [
+            (
+                b'{"type":" result ","result":{"status":"SUCCESS","conversation_id":"thread_ws_1",'
+                b'"structured_output":{"status":"ok"},'
+                b'"json_schema":{"type":"object","properties":{"status":{"type":"string"}},"required":["status"],"additionalProperties":false}}}\n'
+            ),
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            result = await adapter.invoke(binding, invocation)
+        self.assertEqual(result.response_text, '{"status":"ok"}')
+
+    async def test_antigravity_adapter_rejects_conflicting_event_discriminators(self) -> None:
+        """Verify stream lines with conflicting type and event keys are rejected fail-closed."""
+        from story_writing_agents.provider_adapter import ProviderInvocationError
+
+        adapter, binding = self._make_agy_binding("session_conflict_disc")
+        schema = {
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"],
+            "additionalProperties": False,
+        }
+        invocation = ProviderInvocation(
+            session_id="session_conflict_disc",
+            schema=schema,
+            payload={},
+            thread_id=None,
+            stream_sink=lambda _event: None,
+        )
+        stream_lines = [
+            b'{"type":"result","event":"turn_start","result":{"status":"SUCCESS","conversation_id":"c1","structured_output":{"status":"ok"}}}\n',
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            with self.assertRaises(ProviderInvocationError) as cm:
+                await adapter.invoke(binding, invocation)
+            self.assertIn("invalid stream line: conflicting event discriminator", str(cm.exception))
+
+    async def test_antigravity_adapter_rejects_one_null_discriminator_when_other_present(self) -> None:
+        """Verify stream line with type='result' and event=null is rejected fail-closed."""
+        from story_writing_agents.provider_adapter import ProviderInvocationError
+
+        adapter, binding = self._make_agy_binding("session_one_null_disc")
+        schema = {
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"],
+            "additionalProperties": False,
+        }
+        invocation = ProviderInvocation(
+            session_id="session_one_null_disc",
+            schema=schema,
+            payload={},
+            thread_id=None,
+            stream_sink=lambda _event: None,
+        )
+        stream_lines = [
+            b'{"type":"result","event":null,"result":{"status":"SUCCESS","conversation_id":"c1","structured_output":{"status":"ok"}}}\n',
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            with self.assertRaises(ProviderInvocationError) as cm:
+                await adapter.invoke(binding, invocation)
+            self.assertIn("invalid stream line: invalid event discriminator", str(cm.exception))
+
+    async def test_codex_adapter_streams_item_delta_and_avoids_completed_replay(self) -> None:
+        """Verify CodexAdapter streams item.delta records, folds them, and avoids replay on item.completed."""
+        adapter = self.codex_adapter
+        binding = adapter.bind(self.definition)
+        events: list[ProviderStreamEvent] = []
+
+        schema = {
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+            "additionalProperties": False,
+        }
+        invocation = ProviderInvocation(
+            session_id="session_codex_item_delta",
+            schema=schema,
+            payload={"task": "draft"},
+            thread_id=None,
+            stream_sink=events.append,
+        )
+
+        stream_lines = [
+            b'{"type":"thread.started","thread_id":"thread_codex_delta_1"}\n',
+            b'{"type":"turn.started"}\n',
+            b'{"type":"item.started","item":{"id":"r1","type":"reasoning"}}\n',
+            b'{"type":"item.delta","item_id":"r1","delta":"Analyzing requirements..."}\n',
+            b'{"type":"item.completed","item":{"id":"r1","type":"reasoning","text":"Analyzing requirements..."}}\n',
+            b'{"type":"item.started","item":{"id":"m1","type":"agent_message"}}\n',
+            b'{"type":"item.delta","item_id":"m1","delta":"The dawn "}\n',
+            b'{"type":"item.delta","item_id":"m1","delta":"broke over "}\n',
+            b'{"type":"item.delta","item_id":"m1","delta":"the valley."}\n',
+            b'{"type":"item.completed","item":{"id":"m1","type":"agent_message","text":"The dawn broke over the valley."}}\n',
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            output_flag_index = request.command.index("--output-last-message")
+            output_file_path = Path(request.command[output_flag_index + 1])
+            output_file_path.parent.mkdir(parents=True, exist_ok=True)
+            output_file_path.write_text('{"summary":"Completed story"}', encoding="utf-8")
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
+            result = await adapter.invoke(binding, invocation)
+
+        self.assertEqual(result.response_text, '{"summary":"Completed story"}')
+        # Expect:
+        # 0: STATUS ("Generating response...")
+        # 1: THOUGHT_DELTA ("Analyzing requirements...")
+        # 2: TEXT_DELTA ("The dawn ")
+        # 3: TEXT_DELTA ("broke over ")
+        # 4: TEXT_DELTA ("the valley.")
+        # item.completed should NOT emit replay deltas because full text was already folded
+        self.assertEqual(len(events), 5)
+        self.assertEqual(events[0].kind, ProviderStreamEventKind.STATUS)
+        self.assertEqual(events[1].kind, ProviderStreamEventKind.THOUGHT_DELTA)
+        self.assertEqual(events[1].text, "Analyzing requirements...")
+        self.assertEqual(events[2].kind, ProviderStreamEventKind.TEXT_DELTA)
+        self.assertEqual(events[2].text, "The dawn ")
+        self.assertEqual(events[3].kind, ProviderStreamEventKind.TEXT_DELTA)
+        self.assertEqual(events[3].text, "broke over ")
+        self.assertEqual(events[4].kind, ProviderStreamEventKind.TEXT_DELTA)
+        self.assertEqual(events[4].text, "the valley.")
+
 
 if __name__ == "__main__":
     unittest.main()

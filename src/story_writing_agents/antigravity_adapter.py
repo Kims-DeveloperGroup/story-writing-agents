@@ -1077,18 +1077,30 @@ class AntigravityAdapter:
                     invalid_stream_line = "non-object JSON line"
                 return
 
-            has_discriminator = "type" in event or "event" in event
+            has_type = "type" in event
+            has_event = "event" in event
+            has_discriminator = has_type or has_event
             if has_discriminator:
-                raw_event_type = event.get("type") if "type" in event else event.get("event")
-                if raw_event_type is None or not isinstance(raw_event_type, str):
+                types_to_check: list[str] = []
+                for key in ("type", "event"):
+                    if key in event:
+                        val = event.get(key)
+                        if val is None or not isinstance(val, str):
+                            if invalid_stream_line is None:
+                                invalid_stream_line = "invalid event discriminator"
+                            return
+                        norm_val = val.strip().lower()
+                        if not norm_val:
+                            if invalid_stream_line is None:
+                                invalid_stream_line = "unknown event type ''"
+                            return
+                        types_to_check.append(norm_val)
+                if len(types_to_check) == 2 and types_to_check[0] != types_to_check[1]:
                     if invalid_stream_line is None:
-                        invalid_stream_line = "invalid event discriminator"
+                        invalid_stream_line = "conflicting event discriminator"
                     return
-                event_type = raw_event_type.strip().lower()
-                if not event_type:
-                    if invalid_stream_line is None:
-                        invalid_stream_line = "unknown event type ''"
-                    return
+                event_type = types_to_check[0]
+                raw_event_type = event.get("type") if has_type else event.get("event")
             else:
                 raw_event_type = None
                 event_type = ""
@@ -1357,8 +1369,23 @@ class AntigravityAdapter:
     @classmethod
     def _unwrap_result_envelope(cls, terminal: dict[str, Any]) -> dict[str, Any]:
         """Extract inner result payload if terminal is a result/event envelope."""
-        event_type = str(terminal.get("type") or terminal.get("event") or "").lower()
-        if event_type == "result" and isinstance(terminal.get("result"), dict):
+        has_type = "type" in terminal
+        has_event = "event" in terminal
+        if not (has_type or has_event):
+            return terminal
+        types_to_check: list[str] = []
+        for key in ("type", "event"):
+            if key in terminal:
+                val = terminal.get(key)
+                if not isinstance(val, str):
+                    return terminal
+                norm_val = val.strip().lower()
+                if not norm_val:
+                    return terminal
+                types_to_check.append(norm_val)
+        if len(types_to_check) == 2 and types_to_check[0] != types_to_check[1]:
+            return terminal
+        if types_to_check and types_to_check[0] == "result" and isinstance(terminal.get("result"), dict):
             return terminal["result"]
         return terminal
 
