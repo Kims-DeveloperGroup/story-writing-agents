@@ -807,8 +807,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Define exact package-internal ephemeral SEARCH/READ progress facts and provider stream events.
 - **Supported surface:** Re-exports via `agent_context` facade. Internal immutable query,
   source, event, kind, stream event, and synchronous/context-bound sink contracts carry literal validated queries,
-  safe relative locators, exact boundaries, counts, and transient stream status/deltas without excerpts,
-  bodies, credentials, or hidden reasoning.
+  safe relative locators, exact boundaries, and counts for content-free SEARCH/READ cards alongside transient stream status/deltas
+  without persisting excerpts, bodies, credentials, or hidden reasoning.
 - **Direct internal dependencies:** `agent_context.actions` and `agent_context.manifest`.
 - **State, resources, and side effects:** Values are immutable and importing performs no I/O; stream sink is managed via ContextVar.
 - **Primary verification/documentation:** `tests/test_agent_context_execution.py`,

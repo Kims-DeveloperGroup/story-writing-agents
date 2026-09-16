@@ -1869,9 +1869,11 @@ SEARCH/READ action. SEARCH starts expose exact literal queries, requested
 resource/source kinds, and an optional safe relative artifact scope prefix;
 completions expose safe relative locators, exact line/record ranges, byte
 counts, empty results, and truncation. READ starts expose safe relative locators
-and exact whole/line/record boundaries; completions add byte counts. No
-snippets, excerpts, provider answers, absolute paths, credentials, or hidden
-reasoning enter the frame.
+and exact whole/line/record boundaries; completions add byte counts. SEARCH and
+READ cards never include source snippets, excerpts, provider answers, absolute
+paths, credentials, or hidden reasoning. During provider generation, capable
+terminals may display transient status notices and a bounded rolling preview of
+streamed output that is cleanly erased before persistent output.
 
 The existing raw driver redraws and clears the complete multiline frame before
 semantic or provider-result output. ANSI-capable terminals use the fixed color

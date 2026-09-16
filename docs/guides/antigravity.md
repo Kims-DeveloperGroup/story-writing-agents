@@ -438,9 +438,10 @@ adapter-owned structure (the root and fingerprint are sanitized):
   sessions/novel/lead_orchestrator/<definition-sha256>/workspace
 ```
 
-The provider-state directory is its sibling `provider`. A fresh Lead call is
-equivalent to this shell-free argument vector; wrapping is only for
-readability:
+The provider-state directory is its sibling `provider`. A fresh non-streaming
+or fallback Lead call is equivalent to this shell-free argument vector (interactive
+turns on capable raw terminals select `--output-format stream-json`); wrapping is
+only for readability:
 
 ```text
 cwd=/workspace/agent_states/orchestrator_state/provider_sessions/.antigravity/sessions/novel/lead_orchestrator/<definition-sha256>/workspace
@@ -465,7 +466,8 @@ CLI 1.1.27: raw text stdin was ignored in probes with an empty `--print` argumen
 `-`, or a constant print value. The response schema still requires the descriptive
 typed result even though the input uses compact runtime field names.
 
-A successful native response is exactly one UTF-8 JSON object. This sanitized
+A successful native response is exactly one UTF-8 JSON object (or in streaming mode,
+line-delimited stream-json events ending in one terminal `result` object). This sanitized
 shape is deliberately non-executable: `json_schema` stands for the complete
 object supplied on argv, whose canonical bytes must match exactly.
 

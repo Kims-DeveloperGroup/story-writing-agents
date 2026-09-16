@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import unittest
 from unittest import mock
 
@@ -15,6 +16,10 @@ from story_writing_agents.agent_context.progress import (
     ContextActionProgressEvent,
     ContextActionProgressKind,
 )
+from story_writing_agents.interactive_terminal import (
+    _core,
+    _driver,
+)
 from story_writing_agents.interactive_terminal._advisory_progress import (
     AdvisoryProgressRequest,
     AdvisoryProgressState,
@@ -22,6 +27,11 @@ from story_writing_agents.interactive_terminal._advisory_progress import (
 from story_writing_agents.interactive_terminal._core import (
     InteractiveAdvisoryProgress,
     InteractiveTerminal,
+)
+from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
+from story_writing_agents.interactive_terminal._model import (
+    CapabilityProfile,
+    TerminalCapabilities,
 )
 from story_writing_agents.provider_adapter import ProviderInvocation
 
@@ -445,6 +455,85 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         result = runner.run(progress.run(fake_op()))
         self.assertEqual(result, 99)
         self.assertIsNone(observed_sink)
+
+    def test_capable_raw_terminal_renders_stream_preview_and_clears_cleanly(self) -> None:
+        """Verify stream status/preview updates render on a raw terminal and are cleared cleanly."""
+        output = io.StringIO()
+        real_sleep = asyncio.sleep
+
+        async def controlled_sleep(_delay: float) -> None:
+            await real_sleep(0)
+
+        with (
+            mock.patch.object(
+                RawTerminalDriver,
+                "capabilities",
+                autospec=True,
+                return_value=TerminalCapabilities(
+                    CapabilityProfile.ANSI,
+                    80,
+                    input_tty=True,
+                    output_tty=True,
+                    raw_mode=True,
+                    cursor_controls=True,
+                    decorative_sgr=True,
+                ),
+            ),
+            mock.patch.object(
+                _driver.asyncio,
+                "sleep",
+                side_effect=controlled_sleep,
+            ),
+        ):
+            terminal = _core.build_stream_terminal(
+                lambda _prompt: "",
+                io.StringIO(),
+                output,
+            )
+            progress = InteractiveAdvisoryProgress(terminal)
+            progress.begin(
+                (AdvisoryProgressRequest("lead_orchestrator", "lead_turn_1", "Consulting specialist..."),)
+            )
+
+            async def streaming_operation() -> str:
+                sink = active_provider_stream_sink()
+                self.assertIsNotNone(sink)
+                sink(
+                    ProviderStreamEvent(
+                        ProviderStreamEventKind.STATUS,
+                        "lead_orchestrator",
+                        "Synthesizing outline...",
+                        operation_id="lead_turn_1",
+                    )
+                )
+                sink(
+                    ProviderStreamEvent(
+                        ProviderStreamEventKind.TEXT_DELTA,
+                        "lead_orchestrator",
+                        "Chapter 1: The First Dawn",
+                        operation_id="lead_turn_1",
+                    )
+                )
+                await real_sleep(0.05)
+                return "ok"
+
+            runner = asyncio.Runner()
+            self.addCleanup(runner.close)
+            result = runner.run(progress.run(streaming_operation()))
+            # Final output is written after progress completes and clears
+            terminal.write_agent("lead_orchestrator", "Final novel outline committed.\n")
+
+        self.assertEqual(result, "ok")
+        rendered = output.getvalue()
+        # Preview and status were rendered into the terminal stream
+        self.assertIn("Synthesizing outline...", rendered)
+        self.assertIn("Chapter 1: The First Dawn", rendered)
+        # Clear sequence \r\x1b[K occurred and preceded the final output
+        clear_sequence = "\r\x1b[K"
+        self.assertIn(clear_sequence, rendered)
+        clear_pos = rendered.rindex(clear_sequence)
+        final_pos = rendered.index("Final novel outline committed.")
+        self.assertGreater(final_pos, clear_pos)
 
 
 if __name__ == "__main__":
