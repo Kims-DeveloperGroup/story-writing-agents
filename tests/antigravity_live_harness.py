@@ -495,8 +495,27 @@ def audit_exchanges(exchanges, calls, history=()):
                                 return base64.b64decode(item['data'], validate=True)
                             raise ValueError('Unknown diagnostic stream encoding')
 
+                        status = None
+                        error = None
+                        if stdout:
+                            try:
+                                parsed = json.loads(stdout.decode('utf-8', 'replace'))
+                                if isinstance(parsed, dict):
+                                    target = parsed.get('result') if isinstance(parsed.get('result'), dict) else parsed
+                                    if 'error' in target:
+                                        error = target['error']
+                                    elif 'error' in parsed:
+                                        error = parsed['error']
+                                    if 'status' in target:
+                                        status = target['status']
+                                    elif 'status' in parsed:
+                                        status = parsed['status']
+                            except Exception:
+                                pass
+
                         exact = (diagnostic['exit_code'] == call['delivered_returncode']
-                                 and decoded_stream(diagnostic['stdout']) == stdout
+                                 and diagnostic.get('status') == status
+                                 and diagnostic.get('error') == error
                                  and decoded_stream(diagnostic['stderr']) == stderr)
                     else:
                         native_value = (json.loads(stdout)['structured_output']
@@ -581,7 +600,26 @@ def audit_exchanges(exchanges, calls, history=()):
                 require(diagnostic is not None, 'Completed error bytes were not captured')
             if diagnostic is not None:
                 require(diagnostic['exit_code'] == call['delivered_returncode'], 'Diagnostic exit differs')
-                for name, expected in (('stdout', native), ('stderr', stderr)):
+                status = None
+                error = None
+                if native:
+                    try:
+                        parsed = json.loads(native.decode('utf-8', 'replace'))
+                        if isinstance(parsed, dict):
+                            target = parsed.get('result') if isinstance(parsed.get('result'), dict) else parsed
+                            if 'error' in target:
+                                error = target['error']
+                            elif 'error' in parsed:
+                                error = parsed['error']
+                            if 'status' in target:
+                                status = target['status']
+                            elif 'status' in parsed:
+                                status = parsed['status']
+                    except Exception:
+                        pass
+                require(diagnostic.get('status') == status, 'Diagnostic status differs')
+                require(diagnostic.get('error') == error, 'Diagnostic error differs')
+                for name, expected in (('stderr', stderr),):
                     item = diagnostic[name]
                     try:
                         expected.decode('utf-8', 'strict')

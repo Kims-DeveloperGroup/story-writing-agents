@@ -427,9 +427,9 @@ The request diagnostic is canonical JSON containing only `call_kind`,
 `actual_transport_utf8_bytes`, `response_text`, `thread_id`, and nullable
 validated `usage`. A recovered Antigravity native `ERROR`, or a timeout/truncation
 warning accepted with exact current-call completion proof, also carries
-`response_diagnostic`: integer `exit_code` and `stdout`/`stderr` streams, each encoded as
-`{"encoding":"utf-8","data":"…"}` or, for invalid UTF-8 bytes,
-`{"encoding":"base64","data":"…"}`.
+`response_diagnostic`: integer `exit_code`, nullable `error` and `status`,
+and a `stderr` stream encoded as `{"encoding":"utf-8","data":"…"}` or, for
+invalid UTF-8 bytes, `{"encoding":"base64","data":"…"}`.
 
 A typed completed Antigravity invocation failure can attempt a response with
 only `provider_failure: true` and that same `response_diagnostic` before its

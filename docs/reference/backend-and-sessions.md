@@ -331,9 +331,10 @@ The request shape has exactly `call_kind`, `payload`, `prior_thread_id`, and
 `input_tokens`, `output_tokens`, and `cached_input_tokens`. A narrowly recovered
 Antigravity result also has `response_diagnostic`. A provider failure response
 has `provider_failure: true` and an optional `response_diagnostic`. That
-diagnostic contains integer `exit_code` plus `stdout` and `stderr` objects whose
-exact completed bytes use `utf-8` or `base64` encoding. The outcome shape has
-exactly `code` and `outcome`. These JSON values are stored in the outer
+diagnostic contains nullable `error` and `status`, integer `exit_code`, and a
+`stderr` object whose exact completed bytes use `utf-8` or `base64` encoding.
+The outcome shape has exactly `code` and `outcome`. These JSON values are stored
+in the outer
 schema-v1 record's string `content`, subject to the 262,144-byte complete-code-
 point prefix. Full UTF-8 byte and Python Unicode-code-point counts plus SHA-256
 describe the complete capture input, so a truncated record is not the complete
@@ -390,8 +391,8 @@ The request append is attempted before invocation. A valid raw
 decode/domain validation, the separate rejected-response artifact, and thread
 persistence. A provider invocation failure or timeout instead attempts a
 failure response even when no native diagnostic is available, then its terminal
-outcome. Completed Codex and Antigravity failures can attach native stdout,
-stderr, and exit status;
+outcome. Completed Codex and Antigravity failures can attach native error,
+status, stderr, and exit status;
 native login bytes never enter this lifecycle. Exactly one terminal append is
 attempted when the relevant backend/context owner knows the outcome. Capture
 state advances before append; all capture failures are suppressed and never
