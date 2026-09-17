@@ -1417,6 +1417,10 @@ def transition_nested_scroll(
     if not state.views:
         return state
 
+    # 0. Toggle collapsed / expanded view
+    if event.kind is KeyKind.TEXT and event.text in {"t", "T"}:
+        return replace(state, collapsed=not state.collapsed)
+
     idx = state.focused_index % len(state.views)
     focused = state.views[idx]
 
@@ -1427,7 +1431,7 @@ def transition_nested_scroll(
             replace(v, is_focused=(i == new_idx))
             for i, v in enumerate(state.views)
         )
-        return MultiAgentScrollState(updated_views, new_idx)
+        return MultiAgentScrollState(updated_views, new_idx, collapsed=state.collapsed)
 
     if event.kind in {KeyKind.SHIFT_TAB, KeyKind.LEFT}:
         new_idx = (idx - 1) % len(state.views)
@@ -1435,7 +1439,7 @@ def transition_nested_scroll(
             replace(v, is_focused=(i == new_idx))
             for i, v in enumerate(state.views)
         )
-        return MultiAgentScrollState(updated_views, new_idx)
+        return MultiAgentScrollState(updated_views, new_idx, collapsed=state.collapsed)
 
     # 2. Viewport Scrolling for Focused Box
     max_start = max(1, focused.total_lines - focused.visible_height + 1)
@@ -1467,7 +1471,7 @@ def transition_nested_scroll(
         updated_focused = replace(focused, start_line=new_start, auto_scroll=auto_scroll)
         updated_views = list(state.views)
         updated_views[idx] = updated_focused
-        return MultiAgentScrollState(tuple(updated_views), idx)
+        return MultiAgentScrollState(tuple(updated_views), idx, collapsed=state.collapsed)
 
     return state
 

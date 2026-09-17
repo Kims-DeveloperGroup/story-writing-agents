@@ -67,6 +67,12 @@ class AdvisoryProgressState:
         self.scroll_offsets: dict[tuple[str, str], int] = {}
         self.focused_agent_index: int = 0
         self.auto_scroll_flags: dict[tuple[str, str], bool] = {}
+        self.collapsed: bool = False
+
+    def toggle_collapsed(self) -> bool:
+        """Toggle collapsed mode and return the new state."""
+        self.collapsed = not self.collapsed
+        return self.collapsed
 
     def begin(self, requests: tuple[AdvisoryProgressRequest, ...] = ()) -> None:
         if self.started_at is None:
@@ -180,6 +186,9 @@ class AdvisoryProgressState:
 
     def render(self, frame: int) -> str:
         elapsed = format_elapsed(self.elapsed_seconds())
+        if self.collapsed:
+            active_label = self.requests[0].agent_id if self.requests else "Working"
+            return f"[{_FRAMES[frame % len(_FRAMES)]}] {elapsed} · {active_label}"
         lines = [f"[{_FRAMES[frame % len(_FRAMES)]}] {elapsed} · Working"]
         ordered = list(self.requests)
         known = {(item.agent_id, item.operation_id) for item in ordered}

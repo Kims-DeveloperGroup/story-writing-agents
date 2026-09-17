@@ -575,6 +575,7 @@ class InteractiveTerminal:
         "_read_line",
         "_width",
         "_write_text",
+        "_progress_frame_collapsed",
     )
 
     def __init__(
@@ -650,6 +651,21 @@ class InteractiveTerminal:
         self._write_text = write_text
         self._width = width
         self._capability_provider = lambda: _plain_capabilities(width)
+        self._progress_frame_collapsed = False
+
+    @property
+    def progress_frame_collapsed(self) -> bool:
+        """Return whether advisory progress frames are in collapsed single-line mode."""
+        return self._progress_frame_collapsed
+
+    @progress_frame_collapsed.setter
+    def progress_frame_collapsed(self, value: bool) -> None:
+        self._progress_frame_collapsed = bool(value)
+
+    def toggle_progress_frame(self) -> bool:
+        """Toggle progress frame collapsed mode and return the new state."""
+        self._progress_frame_collapsed = not self._progress_frame_collapsed
+        return self._progress_frame_collapsed
 
     def read_main(
         self,
@@ -1872,18 +1888,37 @@ class InteractiveExternalViewer:
 class InteractiveAdvisoryProgress:
     """Retain one terminal's package-internal advisory progress session."""
 
-    __slots__ = ("_run", "_state", "_capability_provider")
+    __slots__ = ("_run", "_state", "_capability_provider", "_terminal")
 
     def __init__(self, terminal: InteractiveTerminal) -> None:
         """Bind progress lifecycle without inspecting streams or capabilities."""
 
         if not isinstance(terminal, InteractiveTerminal):
             raise TypeError("terminal must be an InteractiveTerminal")
+        self._terminal = terminal
         self._run: Callable[[Awaitable[object]], Awaitable[object]] = (
             terminal._advisory_progress
         )
         self._state = AdvisoryProgressState()
         self._capability_provider = terminal._capability_provider
+
+    @property
+    def collapsed(self) -> bool:
+        """Return whether advisory progress frames are rendered in collapsed mode."""
+        return self._state.collapsed
+
+    @collapsed.setter
+    def collapsed(self, value: bool) -> None:
+        self._state.collapsed = bool(value)
+        if hasattr(self._terminal, "progress_frame_collapsed"):
+            self._terminal.progress_frame_collapsed = bool(value)
+
+    def toggle_collapsed(self) -> bool:
+        """Toggle collapsed mode and return the new state."""
+        new_val = self._state.toggle_collapsed()
+        if hasattr(self._terminal, "progress_frame_collapsed"):
+            self._terminal.progress_frame_collapsed = new_val
+        return new_val
 
     def _is_capable(self) -> bool:
         """Return True when this terminal is configured for capable raw-mode progress."""
@@ -1943,6 +1978,7 @@ class InteractiveAdvisoryProgress:
         self,
         visible_height: int = 6,
         state: ViewState = ViewState.ERROR,
+        collapsed: bool | None = None,
     ) -> MultiAgentScrollState:
         """Project current buffered agent streams into a MultiAgentScrollState."""
 
@@ -1958,12 +1994,18 @@ class InteractiveAdvisoryProgress:
 
         for i, key in enumerate(ordered_keys):
             agent_id, op_id = key
-            buffer = self._state.agent_buffers.get(key)
+            buffer = list(self._state.agent_buffers.get(key, ()))
             if not buffer:
                 preview = self._state.stream_preview.get(key, "")
                 buffer = [p for p in preview.splitlines() if p] or [
                     self._state.stream_status.get(key, "Working...")
                 ]
+            if state == ViewState.ERROR and self._state.last_error_message:
+                err_lines = [
+                    line for line in self._state.last_error_message.splitlines() if line
+                ]
+                if err_lines and not any(err_lines[0] in line for line in buffer):
+                    buffer.extend(err_lines)
             total_lines = len(buffer)
             auto_scroll = self._state.auto_scroll_flags.get(key, True)
             max_start = max(1, total_lines - visible_height + 1)
@@ -1988,7 +2030,31 @@ class InteractiveAdvisoryProgress:
                     auto_scroll=auto_scroll,
                 )
             )
-        return MultiAgentScrollState(tuple(views), self._state.focused_agent_index)
+        if not views:
+            fallback_text = self._state.last_error_message or "Execution failed."
+            fallback_lines = [
+                line for line in fallback_text.splitlines() if line
+            ] or ["Execution failed."]
+            total_lines = len(fallback_lines)
+            views.append(
+                NestedScrollViewport(
+                    view_id="Lead:turn",
+                    title="Lead",
+                    total_lines=total_lines,
+                    start_line=1,
+                    visible_lines=tuple(fallback_lines[:visible_height]),
+                    visible_height=visible_height,
+                    is_focused=True,
+                    state=state,
+                    auto_scroll=False,
+                )
+            )
+        is_collapsed = self._state.collapsed if collapsed is None else bool(collapsed)
+        return MultiAgentScrollState(
+            tuple(views),
+            self._state.focused_agent_index,
+            collapsed=is_collapsed,
+        )
 
     async def run(
         self,
@@ -1997,6 +2063,9 @@ class InteractiveAdvisoryProgress:
         is_failure: Callable[[object], bool] | None = None,
     ) -> object:
         """Join one advisory operation with the terminal-owned indicator."""
+
+        if hasattr(self._terminal, "progress_frame_collapsed"):
+            self._state.collapsed = self._terminal.progress_frame_collapsed
 
         token = bind_advisory_progress(self._state)
         sink_token = None
@@ -2013,12 +2082,26 @@ class InteractiveAdvisoryProgress:
                 accepts_kwargs = True
 
             if accepts_kwargs:
-                return await self._run(
-                    operation,
-                    scroll_state_provider=lambda: self.to_scroll_state(
+                def _provide_scroll_state(
+                    failure: BaseException | object | None = None,
+                ) -> MultiAgentScrollState:
+                    if isinstance(failure, BaseException):
+                        if not self._state.last_error_message:
+                            self._state.record_error(str(failure))
+                    elif failure is not None:
+                        msg = getattr(failure, "message", None) or getattr(
+                            failure, "last_error_message", None
+                        )
+                        if msg and not self._state.last_error_message:
+                            self._state.record_error(str(msg))
+                    return self.to_scroll_state(
                         visible_height=6,
                         state=ViewState.ERROR,
-                    ),
+                    )
+
+                return await self._run(
+                    operation,
+                    scroll_state_provider=_provide_scroll_state,
                     is_failure=is_failure or _default_is_failure,
                 )
             return await self._run(operation)
@@ -2031,10 +2114,12 @@ class InteractiveAdvisoryProgress:
 def _default_is_failure(result: object) -> bool:
     """Return True if result indicates a failed turn or required recovery."""
 
-    next_action = getattr(result, "next_action", None)
+    turn = getattr(result, "turn", None)
+    target = turn if turn is not None else result
+    next_action = getattr(target, "next_action", None)
     if next_action is not None and str(next_action) == "retry_lead_turn":
         return True
-    step_state = getattr(result, "state", None)
+    step_state = getattr(target, "state", None)
     if step_state is not None and str(step_state) in {
         "outcome_unknown",
         "recovery_required",

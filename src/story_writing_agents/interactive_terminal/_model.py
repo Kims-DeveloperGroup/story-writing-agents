@@ -921,6 +921,7 @@ class MultiAgentScrollState:
 
     views: tuple[NestedScrollViewport, ...]
     focused_index: int = 0
+    collapsed: bool = False
 
     def __post_init__(self) -> None:
         """Validate multi-agent viewports collection."""
@@ -930,6 +931,8 @@ class MultiAgentScrollState:
             raise TypeError("views must be a tuple of NestedScrollViewport")
         if type(self.focused_index) is not int or self.focused_index < 0:
             raise ValueError("focused_index must be a non-negative integer")
+        if type(self.collapsed) is not bool:
+            raise TypeError("collapsed must be a boolean")
 
     @property
     def focused_view(self) -> NestedScrollViewport | None:

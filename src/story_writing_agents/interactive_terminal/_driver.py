@@ -722,7 +722,12 @@ class RawTerminalDriver:
             except BaseException as exc:
                 progress_failure = progress_failure or exc
 
-            failed = operation_failure is not None or (
+            failed = (
+                operation_failure is not None
+                and not isinstance(
+                    operation_failure, (asyncio.CancelledError, KeyboardInterrupt)
+                )
+            ) or (
                 is_failure is not None and operation_succeeded and is_failure(result)
             )
 
@@ -741,7 +746,15 @@ class RawTerminalDriver:
                     and nested_scroll_transition is not None
                 ):
                     try:
-                        scroll_state = scroll_state_provider()
+                        failure_arg = (
+                            operation_failure
+                            if operation_failure is not None
+                            else result
+                        )
+                        try:
+                            scroll_state = scroll_state_provider(failure_arg)
+                        except TypeError:
+                            scroll_state = scroll_state_provider()
                         if scroll_state.views:
                             self.run_nested_scroll_inspector(
                                 scroll_state,

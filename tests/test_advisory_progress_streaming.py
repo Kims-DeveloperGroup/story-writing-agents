@@ -882,6 +882,208 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             self.assertIn("[► Lead]", rendered_fail)
             self.assertIn("Error occurred line 1", rendered_fail)
 
+    def test_to_scroll_state_fallback_view_on_error_with_no_requests(self) -> None:
+        mock_terminal = mock.create_autospec(InteractiveTerminal, instance=True)
+        progress = InteractiveAdvisoryProgress(mock_terminal)
+        progress.begin()
+        progress.record_error("Provider connection timeout.")
+
+        scroll_state = progress.to_scroll_state(visible_height=4, state=ViewState.ERROR)
+        self.assertEqual(len(scroll_state.views), 1)
+        fallback = scroll_state.views[0]
+        self.assertEqual(fallback.title, "Lead")
+        self.assertEqual(fallback.state, ViewState.ERROR)
+        self.assertIn("Provider connection timeout.", fallback.visible_lines)
+
+    def test_to_scroll_state_incorporates_last_error_message(self) -> None:
+        mock_terminal = mock.create_autospec(InteractiveTerminal, instance=True)
+        progress = InteractiveAdvisoryProgress(mock_terminal)
+        progress.begin(
+            (AdvisoryProgressRequest("lead", "turn_1", "Leading..."),)
+        )
+        progress.observe_stream(
+            ProviderStreamEvent(
+                ProviderStreamEventKind.STATUS,
+                "lead",
+                "Working...",
+                operation_id="turn_1",
+            )
+        )
+        progress.record_error("Model capacity exceeded.")
+
+        scroll_state = progress.to_scroll_state(visible_height=6, state=ViewState.ERROR)
+        self.assertEqual(len(scroll_state.views), 1)
+        lead_view = scroll_state.views[0]
+        self.assertTrue(any("Model capacity exceeded." in line for line in lead_view.visible_lines))
+
+    def test_run_advisory_progress_retains_frame_on_exception(self) -> None:
+        capabilities = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+        real_sleep = asyncio.sleep
+
+        async def fast_sleep(_delay: float) -> None:
+            await real_sleep(0)
+
+        fail_output = io.StringIO()
+        with (
+            mock.patch.object(RawTerminalDriver, "capabilities", return_value=capabilities),
+            mock.patch.object(_driver.asyncio, "sleep", side_effect=fast_sleep),
+        ):
+            input_stream = io.StringIO("\r")
+            driver = RawTerminalDriver(
+                lambda _prompt: "",
+                input_stream,
+                fail_output,
+                lambda s, e: (s, None),
+                lambda s, e, h: (s, None),
+                lambda h, t: h,
+            )
+
+            async def crashing_op() -> None:
+                await real_sleep(0.01)
+                raise RuntimeError("Backend connection refused")
+
+            def provider(failure: BaseException | object | None = None) -> MultiAgentScrollState:
+                msg = str(failure) if failure is not None else "Unknown error"
+                v = NestedScrollViewport(
+                    view_id="lead:1",
+                    title="Lead",
+                    total_lines=1,
+                    start_line=1,
+                    visible_lines=(msg,),
+                    visible_height=2,
+                    is_focused=True,
+                    state=ViewState.ERROR,
+                )
+                return MultiAgentScrollState((v,), 0)
+
+            with self.assertRaises(RuntimeError) as ctx:
+                asyncio.run(
+                    driver.run_advisory_progress(
+                        crashing_op(),
+                        lambda _f: "Connecting...",
+                        scroll_state_provider=provider,
+                        nested_scroll_transition=transition_nested_scroll,
+                        nested_scroll_renderer=render_nested_scroll_view,
+                    )
+                )
+            self.assertIn("Backend connection refused", str(ctx.exception))
+            rendered = fail_output.getvalue()
+            self.assertIn("[► Lead]", rendered)
+            self.assertIn("Backend connection refused", rendered)
+
+    def test_transition_nested_scroll_toggles_collapsed_on_t_key(self) -> None:
+        v = NestedScrollViewport(
+            view_id="lead:1",
+            title="Lead",
+            total_lines=5,
+            start_line=1,
+            visible_lines=("line 1", "line 2"),
+            visible_height=2,
+            is_focused=True,
+            state=ViewState.ERROR,
+        )
+        state = MultiAgentScrollState((v,), 0, collapsed=False)
+        self.assertFalse(state.collapsed)
+
+        # Press 't' -> toggled to collapsed
+        t_event = KeyEvent(KeyKind.TEXT, text="t")
+        toggled = transition_nested_scroll(state, t_event)
+        self.assertTrue(toggled.collapsed)
+
+        # Press 'T' -> toggled back to expanded
+        cap_t_event = KeyEvent(KeyKind.TEXT, text="T")
+        expanded = transition_nested_scroll(toggled, cap_t_event)
+        self.assertFalse(expanded.collapsed)
+
+        # Navigation preserves collapsed state
+        down_event = KeyEvent(KeyKind.DOWN)
+        scrolled = transition_nested_scroll(toggled, down_event)
+        self.assertTrue(scrolled.collapsed)
+
+    def test_render_nested_scroll_view_collapsed_mode(self) -> None:
+        capabilities = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+        v = NestedScrollViewport(
+            view_id="lead:1",
+            title="Lead",
+            total_lines=10,
+            start_line=1,
+            visible_lines=("First error line", "Second line"),
+            visible_height=4,
+            is_focused=True,
+            state=ViewState.ERROR,
+        )
+
+        # Expanded state
+        expanded_state = MultiAgentScrollState((v,), 0, collapsed=False)
+        expanded_frame = render_nested_scroll_view(expanded_state, capabilities)
+        self.assertGreater(expanded_frame.line_count, 1)
+        self.assertIn("t: toggle view", expanded_frame.text)
+        self.assertIn("┌─ [► Lead]", expanded_frame.text)
+
+        # Collapsed state
+        collapsed_state = MultiAgentScrollState((v,), 0, collapsed=True)
+        collapsed_frame = render_nested_scroll_view(collapsed_state, capabilities)
+        self.assertEqual(collapsed_frame.line_count, 1)
+        self.assertEqual(len(collapsed_frame.text.splitlines()), 1)
+        self.assertIn("press 't' to expand", collapsed_frame.text)
+        self.assertIn("[! Lead]", collapsed_frame.text)
+        self.assertIn("First error line", collapsed_frame.text)
+
+    def test_advisory_progress_state_render_collapsed(self) -> None:
+        state = AdvisoryProgressState()
+        state.begin((AdvisoryProgressRequest("lead", "1", "Drafting"),))
+        state.record_error("Something went wrong")
+
+        # Default expanded
+        expanded_render = state.render(0)
+        self.assertIn("Working", expanded_render)
+        self.assertIn("lead", expanded_render)
+        self.assertGreater(len(expanded_render.splitlines()), 1)
+
+        # Toggled collapsed
+        state.toggle_collapsed()
+        self.assertTrue(state.collapsed)
+        collapsed_render = state.render(0)
+        self.assertEqual(len(collapsed_render.splitlines()), 1)
+        self.assertIn("lead", collapsed_render)
+
+    def test_interactive_terminal_and_progress_toggle(self) -> None:
+        terminal = InteractiveTerminal(lambda p: "", lambda t: "", width=80)
+        self.assertFalse(terminal.progress_frame_collapsed)
+
+        progress = InteractiveAdvisoryProgress(terminal)
+        self.assertFalse(progress.collapsed)
+
+        # Toggle via terminal
+        terminal.toggle_progress_frame()
+        self.assertTrue(terminal.progress_frame_collapsed)
+
+        # Progress syncs collapsed mode
+        progress.begin((AdvisoryProgressRequest("lead", "1", "Testing"),))
+        scroll_state = progress.to_scroll_state()
+        self.assertFalse(scroll_state.collapsed)
+
+        progress.collapsed = True
+        scroll_state_collapsed = progress.to_scroll_state()
+        self.assertTrue(scroll_state_collapsed.collapsed)
+
 
 if __name__ == "__main__":
     unittest.main()
+

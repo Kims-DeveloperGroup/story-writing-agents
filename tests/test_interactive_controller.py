@@ -2680,6 +2680,23 @@ class ControllerCommandTests(ControllerTestCase):
         self.assertIn("[error session_not_attached]", rendered)
         self.assertIn("Writing artifact references", rendered)
 
+    def test_progress_toggle_command_toggles_and_sets_mode(self) -> None:
+        workspace = self.make_workspace()
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            "/progress",
+            "/progress off",
+            "/progress on",
+            "/toggle",
+            "/quit",
+        )
+        self.assertFalse(controller._terminal.progress_frame_collapsed)
+        self.assertEqual(controller.run_session_lobby(), 0)
+        rendered = "".join(callbacks.records)
+        self.assertIn("Progress frame collapsed", rendered)
+        self.assertIn("Progress frame expanded", rendered)
+        self.assertTrue(controller._terminal.progress_frame_collapsed)
+
     def test_session_list_preserves_order_and_hides_access_owner_facts(self) -> None:
         workspace = self.make_workspace()
         backend = self.make_backend(workspace)

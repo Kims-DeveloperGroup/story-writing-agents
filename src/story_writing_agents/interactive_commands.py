@@ -45,6 +45,7 @@ class ActionKind(StrEnum):
     CONVERSATION_ARCHIVE = "conversation_archive"
     HELP = "help"
     QUIT = "quit"
+    PROGRESS = "progress"
     PARSE_ERROR = "parse_error"
 
 
@@ -298,6 +299,7 @@ _ACTION_FIELD_RULES: dict[ActionKind, tuple[frozenset[str], frozenset[str]]] = {
     ActionKind.CONVERSATION_ARCHIVE: (frozenset({"argument"}), _NO_FIELDS),
     ActionKind.HELP: (frozenset({"argument"}), _NO_FIELDS),
     ActionKind.QUIT: (_NO_FIELDS, _NO_FIELDS),
+    ActionKind.PROGRESS: (frozenset({"argument"}), _NO_FIELDS),
     ActionKind.PARSE_ERROR: (
         frozenset({"error", "suggestion"}),
         frozenset({"error"}),
@@ -419,6 +421,14 @@ COMMANDS: tuple[CommandSpec, ...] = (
         False,
         "/help status",
     ),
+    CommandSpec(
+        "Display",
+        "/progress [on|off|toggle]",
+        ("/toggle",),
+        False,
+        False,
+        "/progress toggle",
+    ),
     CommandSpec("Exit", "/quit", (), False, False, "/quit"),
 )
 
@@ -455,6 +465,8 @@ _COMMAND_ALIASES: dict[str, str] = {
     "help": "/help",
     "?": "/help",
     "quit": "/quit",
+    "progress": "/progress",
+    "toggle": "/progress",
 }
 
 _REMOVED_EXECUTION_COMMANDS = frozenset(
@@ -545,6 +557,13 @@ def project_command_completion(
             start,
             end,
             tuple(_CONVERSATION_COMMANDS),
+        )
+    if preceding in {("/progress",), ("/toggle",)}:
+        return _completion_context(
+            "progress.argument",
+            start,
+            end,
+            ("on", "off", "toggle"),
         )
     if preceding == ("/override",):
         return _completion_context(
@@ -739,8 +758,29 @@ def _parse_slash_command(line: str) -> InteractiveAction:
         return _parse_help(tail, command)
     if command == "quit":
         return _no_argument_action(tail, ActionKind.QUIT, "/quit")
+    if command in {"progress", "toggle"}:
+        return _parse_progress(tail, command=f"/{command}")
 
     return _parse_error(f"unsupported command: {head}")
+
+
+def _parse_progress(tail: str | None, *, command: str) -> InteractiveAction:
+    """Parse the /progress or /toggle command without external state."""
+
+    remainder = _remainder_after_ascii_delimiters(tail)
+    if remainder is None:
+        return InteractiveAction(ActionKind.PROGRESS, argument="toggle")
+    token = remainder.strip().lower()
+    if token in {"on", "expanded", "show"}:
+        return InteractiveAction(ActionKind.PROGRESS, argument="on")
+    if token in {"off", "collapsed", "hide"}:
+        return InteractiveAction(ActionKind.PROGRESS, argument="off")
+    if token in {"toggle", ""}:
+        return InteractiveAction(ActionKind.PROGRESS, argument="toggle")
+    return _parse_error(
+        f"invalid {command} option: {token}",
+        f"try {command} on, {command} off, or {command} toggle",
+    )
 
 
 def _parse_override(tail: str | None) -> InteractiveAction:

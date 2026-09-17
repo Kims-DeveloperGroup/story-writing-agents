@@ -598,22 +598,27 @@ class InteractiveLeadAdapter:
         else:
             task = self._runner.get_loop().create_task(scoped_operation())
 
-        async def wait_for_operation_or_auth() -> None:
+        async def wait_for_operation_or_auth() -> object:
             ready = asyncio.create_task(recovery.wait_ready())
             try:
                 await asyncio.wait((task, ready), return_when=asyncio.FIRST_COMPLETED)
             finally:
                 ready.cancel()
                 await asyncio.gather(ready, return_exceptions=True)
+            if task.done():
+                return task.result()
+            return None
 
         async def join_operation() -> None:
             await asyncio.gather(task, return_exceptions=True)
 
         try:
             while True:
-                self._runner.run(self._progress.run(wait_for_operation_or_auth()))
+                outcome = self._runner.run(
+                    self._progress.run(wait_for_operation_or_auth())
+                )
                 if task.done():
-                    return task.result()
+                    return outcome
                 key = recovery.next_request()
                 # Runner and progress have both returned before native TTY use.
                 authenticated = self._recover_authentication(key[0])

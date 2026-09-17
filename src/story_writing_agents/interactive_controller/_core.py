@@ -2099,6 +2099,9 @@ class InteractiveController:
         if action.kind is ActionKind.STATUS:
             self._write_runtime_status()
             return False
+        if action.kind is ActionKind.PROGRESS:
+            self._run_progress_toggle(action.argument)
+            return False
         if action.kind in {
             ActionKind.SET_LANGUAGE,
             ActionKind.SET_PERSONA,
@@ -5056,6 +5059,30 @@ class InteractiveController:
                 state=ViewState.COMPLETED,
             )
         )
+
+    def _run_progress_toggle(self, argument: str | None) -> None:
+        """Toggle or set the progress frame display mode."""
+
+        if argument == "off" or (
+            argument in {None, "toggle"}
+            and not self._terminal.progress_frame_collapsed
+        ):
+            self._terminal.progress_frame_collapsed = True
+            notice = Notice(
+                "Progress frame collapsed to single-line indicator. "
+                "Use /progress on or press 't' during inspection to expand.",
+                label="progress",
+                role=SemanticRole.MUTED,
+            )
+        else:
+            self._terminal.progress_frame_collapsed = False
+            notice = Notice(
+                "Progress frame expanded. "
+                "Use /progress off or press 't' during inspection to collapse.",
+                label="progress",
+                role=SemanticRole.MUTED,
+            )
+        self._semantic_output.write_component(notice)
 
     def _apply_attached_runtime_directive(
         self,

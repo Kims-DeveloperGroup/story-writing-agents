@@ -7,6 +7,7 @@ from ._model import (
     RenderedFrame,
     RenderedInputFrame,
     TerminalCapabilities,
+    ViewState,
     display_character_width,
     sanitize_terminal_text,
 )
@@ -303,6 +304,23 @@ def render_nested_scroll_view(
     if focused is None or not state.views:
         return RenderedFrame("", width, 0)
 
+    # If collapsed, render a minimal single-line status indicator
+    if state.collapsed:
+        prefix = "!" if focused.state == ViewState.ERROR else "►"
+        end_line = (
+            focused.start_line + len(focused.visible_lines) - 1
+            if focused.visible_lines
+            else focused.start_line
+        )
+        counter_str = f"({focused.start_line}–{end_line} of {focused.total_lines})"
+        first_line = focused.visible_lines[0] if focused.visible_lines else ""
+        content = f": {first_line}" if first_line else ""
+        compact_line = _clip_cells(
+            f"[{prefix} {focused.title}] {counter_str}{content} • press 't' to expand",
+            width,
+        )
+        return RenderedFrame(compact_line, width, 1)
+
     # 1. Header / Tab Row
     tab_parts: list[str] = []
     for i, v in enumerate(state.views):
@@ -347,7 +365,7 @@ def render_nested_scroll_view(
         body_lines.append(_clip_cells(f"│ {padded} {bar}│", width))
 
     # 3. Footer Line
-    hints = "↑/↓: scroll • Tab: switch agent • Enter/Esc: dismiss"
+    hints = "↑/↓: scroll • Tab: switch agent • t: toggle view • Enter/Esc: dismiss"
     footer_left = f"└─ {hints} "
     footer_fill = max(0, width - len(footer_left) - 1)
     footer_line = _clip_cells(f"{footer_left}{'─' * footer_fill}┘", width)
