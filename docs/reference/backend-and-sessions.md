@@ -391,8 +391,8 @@ The request append is attempted before invocation. A valid raw
 decode/domain validation, the separate rejected-response artifact, and thread
 persistence. A provider invocation failure or timeout instead attempts a
 failure response even when no native diagnostic is available, then its terminal
-outcome. Completed Codex and Antigravity failures can attach native stdout,
-stderr, and exit status;
+outcome. Completed Codex and Antigravity failures can attach native error,
+status, stderr, and exit status;
 native login bytes never enter this lifecycle. Exactly one terminal append is
 attempted when the relevant backend/context owner knows the outcome. Capture
 state advances before append; all capture failures are suppressed and never

@@ -502,8 +502,14 @@ def audit_exchanges(exchanges, calls, history=()):
                                 parsed = json.loads(stdout.decode('utf-8', 'replace'))
                                 if isinstance(parsed, dict):
                                     target = parsed.get('result') if isinstance(parsed.get('result'), dict) else parsed
-                                    error = target.get('error')
-                                    status = target.get('status')
+                                    if 'error' in target:
+                                        error = target['error']
+                                    elif 'error' in parsed:
+                                        error = parsed['error']
+                                    if 'status' in target:
+                                        status = target['status']
+                                    elif 'status' in parsed:
+                                        status = parsed['status']
                             except Exception:
                                 pass
 
@@ -601,8 +607,14 @@ def audit_exchanges(exchanges, calls, history=()):
                         parsed = json.loads(native.decode('utf-8', 'replace'))
                         if isinstance(parsed, dict):
                             target = parsed.get('result') if isinstance(parsed.get('result'), dict) else parsed
-                            error = target.get('error')
-                            status = target.get('status')
+                            if 'error' in target:
+                                error = target['error']
+                            elif 'error' in parsed:
+                                error = parsed['error']
+                            if 'status' in target:
+                                status = target['status']
+                            elif 'status' in parsed:
+                                status = parsed['status']
                     except Exception:
                         pass
                 require(diagnostic.get('status') == status, 'Diagnostic status differs')

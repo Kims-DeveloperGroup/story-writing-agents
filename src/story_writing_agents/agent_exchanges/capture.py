@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import threading
 from enum import StrEnum
 from uuid import uuid4
@@ -147,27 +148,56 @@ def _response_diagnostic(
                 "data": base64.b64encode(value).decode("ascii"),
             }
 
+    def parse_dict(text: str) -> dict[str, object] | None:
+        def reject_constant(_value: str) -> None:
+            raise ValueError("nonfinite JSON value")
+
+        def finite_float(value: str) -> float:
+            number = float(value)
+            if not math.isfinite(number):
+                raise ValueError("nonfinite JSON value")
+            return number
+
+        try:
+            value = json.loads(
+                text,
+                parse_constant=reject_constant,
+                parse_float=finite_float,
+            )
+            return value if isinstance(value, dict) else None
+        except Exception:
+            return None
+
     error: object = None
     status: object = None
     if diagnostic.stdout:
-        try:
-            parsed = json.loads(diagnostic.stdout.decode("utf-8", "replace"))
-            if isinstance(parsed, dict):
-                target = (
-                    parsed.get("result")
-                    if isinstance(parsed.get("result"), dict)
-                    else parsed
-                )
-                if "error" in target:
-                    error = target["error"]
-                elif "error" in parsed:
-                    error = parsed["error"]
-                if "status" in target:
-                    status = target["status"]
-                elif "status" in parsed:
-                    status = parsed["status"]
-        except Exception:
-            pass
+        decoded_text = diagnostic.stdout.decode("utf-8", "replace")
+        parsed = parse_dict(decoded_text)
+        if parsed is None:
+            # Check JSONL event streams (e.g. Codex) for terminal error events
+            for line in decoded_text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                event = parse_dict(line)
+                if event and event.get("type") in {"error", "turn.failed"}:
+                    parsed = event
+                    break
+
+        if isinstance(parsed, dict):
+            target = (
+                parsed.get("result")
+                if isinstance(parsed.get("result"), dict)
+                else parsed
+            )
+            if "error" in target:
+                error = target["error"]
+            elif "error" in parsed:
+                error = parsed["error"]
+            if "status" in target:
+                status = target["status"]
+            elif "status" in parsed:
+                status = parsed["status"]
 
     return {
         "error": error,

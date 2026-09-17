@@ -261,13 +261,13 @@ normally appears as adjacent request, response, and `rejected` outcome records.
 A provider invocation failure or timeout normally has a response containing
 `{"provider_failure":true}` followed by a `provider_failure` outcome. When a
 Codex or Antigravity process completed, that response can also carry a private
-`response_diagnostic` with exact stdout, stderr, and exit status. This response
+`response_diagnostic` with error, status, exit status, and stderr. This response
 is diagnostic and is never a valid `ProviderResult`. Cancellation uses its
 separate `cancelled` terminal and receives no provider-failure response marker.
 A cancellation or fail-open append failure can produce a shorter sequence.
 
-The exchange channel can capture completed provider stdout and stderr only
-through that typed response diagnostic. Those exact invocation streams receive
+The exchange channel can capture completed provider stderr and error details only
+through that typed response diagnostic. Those invocation streams receive
 no semantic redaction and can contain provider-emitted OAuth URLs or status,
 credentials, tokens, story content, or other secrets. Capture does not
 independently inspect the environment, browser, or credential store. It never

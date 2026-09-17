@@ -555,6 +555,37 @@ class ProviderDiagnosticCaptureTests(unittest.TestCase):
             "stderr": {"data": "error log", "encoding": "utf-8"},
         })
 
+    def test_failure_response_handles_nonfinite_json_and_codex_jsonl(self):
+        # Non-finite JSON values fall back to None without failing serialization
+        store = _RecordingStore()
+        lifecycle = _begin(store)
+        diagnostic = ProviderResponseDiagnostic(b'{"status": NaN, "error": Infinity}', b"err", 1)
+        lifecycle.provider_failure(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, response_diagnostic=diagnostic)
+        response = _decoded(store.records)[1]
+        self.assertEqual(response['response_diagnostic'], {
+            "error": None,
+            "exit_code": 1,
+            "status": None,
+            "stderr": {"data": "err", "encoding": "utf-8"},
+        })
+
+        # Codex JSONL multi-line event streams extract terminal error events
+        store = _RecordingStore()
+        lifecycle = _begin(store)
+        jsonl_stdout = (
+            b'{"type":"thread.started","thread_id":"t1"}\n'
+            b'{"type":"turn.failed","error":{"message":"Quota exceeded","code":429},"status":"failed"}\n'
+        )
+        diagnostic = ProviderResponseDiagnostic(jsonl_stdout, b"codex-err", 1)
+        lifecycle.provider_failure(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, response_diagnostic=diagnostic)
+        response = _decoded(store.records)[1]
+        self.assertEqual(response['response_diagnostic'], {
+            "error": {"code": 429, "message": "Quota exceeded"},
+            "exit_code": 1,
+            "status": "failed",
+            "stderr": {"data": "codex-err", "encoding": "utf-8"},
+        })
+
     def test_recovered_success_records_diagnostic_and_none_default_is_unchanged(self):
         for diagnostic in (None, self.diagnostic()):
             with self.subTest(diagnostic=diagnostic):

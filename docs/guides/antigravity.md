@@ -400,7 +400,7 @@ body as hostile plaintext and follow the inspection workflow in
 [Privacy](../operations/privacy-and-provider.md#rejected-provider-response-artifacts).
 
 Separately, `debug_logs/agent_exchanges/` can retain completed Antigravity or
-Codex failure stdout, stderr, and exit status before its fixed
+Codex failure error, status, stderr, and exit status before its fixed
 `provider_failure` outcome. A recovered Antigravity native `ERROR`, or a
 timeout/truncation warning accepted
 with exact current-call completion proof, retains the same private diagnostic
