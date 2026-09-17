@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ._model import (
+    MultiAgentScrollState,
     RenderedFrame,
     RenderedInputFrame,
     TerminalCapabilities,
@@ -287,4 +288,76 @@ def _decorate(text: str, role: str) -> str:
     return f"{sgr}{text}{_RESET}" if sgr and text else text
 
 
-__all__ = ["render_text_viewer", "render_text_viewer_fallback"]
+def render_nested_scroll_view(
+    state: MultiAgentScrollState,
+    capabilities: TerminalCapabilities,
+) -> RenderedFrame:
+    """Render the multi-agent nested scrollable view with active tab and scrollbar."""
+    if type(state) is not MultiAgentScrollState:
+        raise TypeError("state must be a MultiAgentScrollState")
+    if type(capabilities) is not TerminalCapabilities:
+        raise TypeError("capabilities must be TerminalCapabilities")
+
+    width = capabilities.width
+    focused = state.focused_view
+    if focused is None or not state.views:
+        return RenderedFrame("", width, 0)
+
+    # 1. Header / Tab Row
+    tab_parts: list[str] = []
+    for i, v in enumerate(state.views):
+        if i == state.focused_index % len(state.views):
+            tab_parts.append(f"[► {v.title}]")
+        else:
+            tab_parts.append(f"[{v.title}]")
+    tabs_str = " ".join(tab_parts)
+    end_line = (
+        focused.start_line + len(focused.visible_lines) - 1
+        if focused.visible_lines
+        else focused.start_line
+    )
+    counter_str = f"({focused.start_line}–{end_line} of {focused.total_lines})"
+    header_left = f"┌─ {tabs_str} "
+    header_right = f" {counter_str} ─┐"
+    fill_len = max(0, width - len(header_left) - len(header_right))
+    header_line = _clip_cells(f"{header_left}{'─' * fill_len}{header_right}", width)
+
+    # 2. Body Lines with Scrollbar
+    h = focused.visible_height
+    n = max(1, focused.total_lines)
+    thumb_size = max(1, int(h * h / n))
+    max_offset = max(1, n - h)
+    thumb_pos = min(
+        h - thumb_size,
+        int((h - thumb_size) * (focused.start_line - 1) / max_offset),
+    )
+
+    body_lines: list[str] = []
+    inner_width = max(0, width - 5)  # "│ " + content + " █│"
+    for y in range(h):
+        line_content = (
+            focused.visible_lines[y] if y < len(focused.visible_lines) else ""
+        )
+        safe_content = _clip_cells(line_content, inner_width)
+        pad_needed = max(
+            0, inner_width - sum(display_character_width(c) for c in safe_content)
+        )
+        padded = safe_content + (" " * pad_needed)
+        bar = "█" if thumb_pos <= y < thumb_pos + thumb_size else "│"
+        body_lines.append(_clip_cells(f"│ {padded} {bar}│", width))
+
+    # 3. Footer Line
+    hints = "↑/↓: scroll • Tab: switch agent • Enter/Esc: dismiss"
+    footer_left = f"└─ {hints} "
+    footer_fill = max(0, width - len(footer_left) - 1)
+    footer_line = _clip_cells(f"{footer_left}{'─' * footer_fill}┘", width)
+
+    all_rows = [header_line, *body_lines, footer_line]
+    return RenderedFrame("\n".join(all_rows), width, len(all_rows))
+
+
+__all__ = [
+    "render_text_viewer",
+    "render_text_viewer_fallback",
+    "render_nested_scroll_view",
+]

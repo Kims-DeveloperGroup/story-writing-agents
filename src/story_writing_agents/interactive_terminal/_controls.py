@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from dataclasses import replace
 
 from ._model import (
     ARTIFACT_REFERENCE_POSITION_PREFIX,
@@ -22,6 +22,8 @@ from ._model import (
     MainCommandPaletteState,
     MainInputControlState,
     MainInputHistoryState,
+    MultiAgentScrollState,
+    NestedScrollViewport,
     Notice,
     Picker,
     PickerControlState,
@@ -1401,6 +1403,73 @@ def transition_confirmation_answer(
     if normalized in {"yes", "no"}:
         return ControlOutcome(ControlOutcomeKind.COMMIT, text=normalized)
     return ControlOutcome(ControlOutcomeKind.REJECTED)
+
+
+def transition_nested_scroll(
+    state: MultiAgentScrollState,
+    event: KeyEvent,
+) -> MultiAgentScrollState:
+    """Handle scroll and focus cycling across nested viewports."""
+    if type(state) is not MultiAgentScrollState:
+        raise TypeError("state must be a MultiAgentScrollState")
+    if type(event) is not KeyEvent:
+        raise TypeError("event must be a KeyEvent")
+    if not state.views:
+        return state
+
+    idx = state.focused_index % len(state.views)
+    focused = state.views[idx]
+
+    # 1. Focus Cycling across agent boxes
+    if event.kind in {KeyKind.TAB, KeyKind.RIGHT}:
+        new_idx = (idx + 1) % len(state.views)
+        updated_views = tuple(
+            replace(v, is_focused=(i == new_idx))
+            for i, v in enumerate(state.views)
+        )
+        return MultiAgentScrollState(updated_views, new_idx)
+
+    if event.kind in {KeyKind.SHIFT_TAB, KeyKind.LEFT}:
+        new_idx = (idx - 1) % len(state.views)
+        updated_views = tuple(
+            replace(v, is_focused=(i == new_idx))
+            for i, v in enumerate(state.views)
+        )
+        return MultiAgentScrollState(updated_views, new_idx)
+
+    # 2. Viewport Scrolling for Focused Box
+    max_start = max(1, focused.total_lines - focused.visible_height + 1)
+    new_start = focused.start_line
+    auto_scroll = focused.auto_scroll
+
+    if event.kind is KeyKind.UP:
+        new_start = max(1, focused.start_line - 1)
+        auto_scroll = False
+    elif event.kind is KeyKind.DOWN:
+        new_start = min(max_start, focused.start_line + 1)
+        auto_scroll = (new_start >= max_start)
+    elif event.kind is KeyKind.SHIFT_UP:
+        new_start = max(1, focused.start_line - max(1, focused.visible_height - 1))
+        auto_scroll = False
+    elif event.kind is KeyKind.SHIFT_DOWN:
+        new_start = min(max_start, focused.start_line + max(1, focused.visible_height - 1))
+        auto_scroll = (new_start >= max_start)
+    elif event.kind is KeyKind.HOME:
+        new_start = 1
+        auto_scroll = False
+    elif event.kind is KeyKind.END:
+        new_start = max_start
+        auto_scroll = True
+    else:
+        return state
+
+    if new_start != focused.start_line or auto_scroll != focused.auto_scroll:
+        updated_focused = replace(focused, start_line=new_start, auto_scroll=auto_scroll)
+        updated_views = list(state.views)
+        updated_views[idx] = updated_focused
+        return MultiAgentScrollState(tuple(updated_views), idx)
+
+    return state
 
 
 __all__ = [

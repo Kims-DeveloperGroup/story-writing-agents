@@ -33,8 +33,15 @@ from story_writing_agents.interactive_terminal._core import (
 from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
 from story_writing_agents.interactive_terminal._model import (
     CapabilityProfile,
+    KeyEvent,
+    KeyKind,
+    MultiAgentScrollState,
+    NestedScrollViewport,
     TerminalCapabilities,
+    ViewState,
 )
+from story_writing_agents.interactive_terminal._controls import transition_nested_scroll
+from story_writing_agents.interactive_terminal._viewer_render import render_nested_scroll_view
 from story_writing_agents.provider_adapter import ProviderInvocation
 
 
@@ -654,6 +661,226 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         clear_pos = rendered.rindex(clear_sequence)
         final_pos = rendered.index("Final novel outline committed.")
         self.assertGreater(final_pos, clear_pos)
+
+    def test_nested_scroll_navigation_and_focus_switching(self) -> None:
+        view1 = NestedScrollViewport(
+            view_id="lead:op1",
+            title="Lead",
+            total_lines=50,
+            start_line=1,
+            visible_lines=tuple(f"Line {i}" for i in range(1, 7)),
+            visible_height=6,
+            is_focused=True,
+            state=ViewState.ERROR,
+            auto_scroll=False,
+        )
+        view2 = NestedScrollViewport(
+            view_id="spec:op2",
+            title="Specialist",
+            total_lines=30,
+            start_line=10,
+            visible_lines=tuple(f"Spec {i}" for i in range(10, 16)),
+            visible_height=6,
+            is_focused=False,
+            state=ViewState.ERROR,
+            auto_scroll=False,
+        )
+        state = MultiAgentScrollState((view1, view2), focused_index=0)
+        self.assertIsNotNone(state.focused_view)
+        self.assertEqual(state.focused_view.title, "Lead")
+
+        # Scroll down
+        down_state = transition_nested_scroll(state, KeyEvent(KeyKind.DOWN))
+        self.assertIsNotNone(down_state.focused_view)
+        self.assertEqual(down_state.focused_view.start_line, 2)
+
+        # Scroll up
+        up_state = transition_nested_scroll(down_state, KeyEvent(KeyKind.UP))
+        self.assertIsNotNone(up_state.focused_view)
+        self.assertEqual(up_state.focused_view.start_line, 1)
+
+        # Page down (Shift Down)
+        pgdn_state = transition_nested_scroll(up_state, KeyEvent(KeyKind.SHIFT_DOWN))
+        self.assertIsNotNone(pgdn_state.focused_view)
+        self.assertEqual(pgdn_state.focused_view.start_line, 6)
+
+        # End (scrolls to max_start = 50 - 6 + 1 = 45 and auto_scroll becomes True)
+        end_state = transition_nested_scroll(pgdn_state, KeyEvent(KeyKind.END))
+        self.assertIsNotNone(end_state.focused_view)
+        self.assertEqual(end_state.focused_view.start_line, 45)
+        self.assertTrue(end_state.focused_view.auto_scroll)
+
+        # Home (scrolls to 1 and auto_scroll becomes False)
+        home_state = transition_nested_scroll(end_state, KeyEvent(KeyKind.HOME))
+        self.assertIsNotNone(home_state.focused_view)
+        self.assertEqual(home_state.focused_view.start_line, 1)
+        self.assertFalse(home_state.focused_view.auto_scroll)
+
+        # Tab switches to Specialist (index 1)
+        tab_state = transition_nested_scroll(home_state, KeyEvent(KeyKind.TAB))
+        self.assertEqual(tab_state.focused_index, 1)
+        self.assertIsNotNone(tab_state.focused_view)
+        self.assertEqual(tab_state.focused_view.title, "Specialist")
+
+        # ShiftTab switches back to Lead (index 0)
+        backtab_state = transition_nested_scroll(tab_state, KeyEvent(KeyKind.SHIFT_TAB))
+        self.assertEqual(backtab_state.focused_index, 0)
+        self.assertIsNotNone(backtab_state.focused_view)
+        self.assertEqual(backtab_state.focused_view.title, "Lead")
+
+    def test_render_nested_scroll_view_scrollbar_geometry(self) -> None:
+        view = NestedScrollViewport(
+            view_id="lead:op1",
+            title="Lead",
+            total_lines=20,
+            start_line=5,
+            visible_lines=tuple(f"Content {i}" for i in range(5, 11)),
+            visible_height=6,
+            is_focused=True,
+            state=ViewState.ERROR,
+            auto_scroll=False,
+        )
+        state = MultiAgentScrollState((view,), focused_index=0)
+        capabilities = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+        rendered = render_nested_scroll_view(state, capabilities)
+        rows = rendered.text.split("\n")
+        # 1 header line + 6 body lines + 1 footer line = 8 rows (strictly <= 10)
+        self.assertEqual(len(rows), 8)
+        self.assertIn("[► Lead]", rows[0])
+        self.assertIn("(5–10 of 20)", rows[0])
+        # Scrollbar thumb █ in body lines
+        has_thumb = any("█" in r for r in rows[1:7])
+        self.assertTrue(has_thumb)
+        # Footer navigation hints
+        self.assertIn("↑/↓: scroll", rows[-1])
+        self.assertIn("Tab: switch agent", rows[-1])
+
+    def test_to_scroll_state_projection(self) -> None:
+        mock_terminal = mock.create_autospec(InteractiveTerminal, instance=True)
+        progress = InteractiveAdvisoryProgress(mock_terminal)
+        progress.begin(
+            (AdvisoryProgressRequest("lead", "turn_1", "Leading..."),)
+        )
+        progress.observe_stream(
+            ProviderStreamEvent(
+                ProviderStreamEventKind.STATUS,
+                "lead",
+                "Analyzing query...",
+                operation_id="turn_1",
+            )
+        )
+        progress.observe_stream(
+            ProviderStreamEvent(
+                ProviderStreamEventKind.TEXT_DELTA,
+                "lead",
+                "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7\n",
+                operation_id="turn_1",
+            )
+        )
+        scroll_state = progress.to_scroll_state(visible_height=4, state=ViewState.ERROR)
+        self.assertEqual(len(scroll_state.views), 1)
+        v = scroll_state.views[0]
+        self.assertEqual(v.title, "lead")
+        self.assertGreaterEqual(v.total_lines, 7)
+        self.assertEqual(v.visible_height, 4)
+        self.assertEqual(v.state, ViewState.ERROR)
+
+    def test_failure_turn_retains_scroll_box_and_success_clears_it(self) -> None:
+        capabilities = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+        real_sleep = asyncio.sleep
+
+        async def fast_sleep(_delay: float) -> None:
+            await real_sleep(0)
+
+        # 1. Success case: clears frame cleanly
+        success_output = io.StringIO()
+        with (
+            mock.patch.object(RawTerminalDriver, "capabilities", return_value=capabilities),
+            mock.patch.object(_driver.asyncio, "sleep", side_effect=fast_sleep),
+        ):
+            driver = RawTerminalDriver(
+                lambda _prompt: "",
+                io.StringIO(),
+                success_output,
+                lambda s, e: (s, None),
+                lambda s, e, h: (s, None),
+                lambda h, t: h,
+            )
+            async def successful_op() -> dict:
+                await real_sleep(0.01)
+                return {"status": "ok"}
+
+            res = asyncio.run(
+                driver.run_advisory_progress(
+                    successful_op(),
+                    lambda _f: "Running task...",
+                    is_failure=lambda r: r.get("status") != "ok",
+                )
+            )
+            self.assertEqual(res, {"status": "ok"})
+            self.assertIn("\r\x1b[K", success_output.getvalue())
+
+        # 2. Failure case: retains frame on screen, does not clear
+        fail_output = io.StringIO()
+        with (
+            mock.patch.object(RawTerminalDriver, "capabilities", return_value=capabilities),
+            mock.patch.object(_driver.asyncio, "sleep", side_effect=fast_sleep),
+        ):
+            input_stream = io.StringIO("\r")
+            driver = RawTerminalDriver(
+                lambda _prompt: "",
+                input_stream,
+                fail_output,
+                lambda s, e: (s, None),
+                lambda s, e, h: (s, None),
+                lambda h, t: h,
+            )
+            async def failing_op() -> dict:
+                await real_sleep(0.01)
+                return {"status": "error", "next_action": "retry_lead_turn"}
+
+            view = NestedScrollViewport(
+                view_id="lead:1",
+                title="Lead",
+                total_lines=10,
+                start_line=1,
+                visible_lines=("Error occurred line 1", "Error occurred line 2"),
+                visible_height=2,
+                is_focused=True,
+                state=ViewState.ERROR,
+            )
+            scroll_state = MultiAgentScrollState((view,), 0)
+
+            res = asyncio.run(
+                driver.run_advisory_progress(
+                    failing_op(),
+                    lambda _f: "Running task...",
+                    scroll_state_provider=lambda: scroll_state,
+                    is_failure=lambda r: r.get("next_action") == "retry_lead_turn",
+                    nested_scroll_transition=transition_nested_scroll,
+                    nested_scroll_renderer=render_nested_scroll_view,
+                )
+            )
+            self.assertEqual(res["next_action"], "retry_lead_turn")
+            rendered_fail = fail_output.getvalue()
+            self.assertIn("[► Lead]", rendered_fail)
+            self.assertIn("Error occurred line 1", rendered_fail)
 
 
 if __name__ == "__main__":

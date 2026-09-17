@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import inspect
 import json
 import re
 import textwrap
@@ -51,6 +52,7 @@ from ._controls import (
     transition_line_input,
     transition_prefilled_prompt_input,
     transition_prompt_input,
+    transition_nested_scroll,
 )
 from ._collaboration_view import (
     collaboration_view_context,
@@ -109,6 +111,8 @@ from ._model import (
     MainInputHistoryState as MainInputHistoryState,
     Message,
     MessagePresentation,
+    MultiAgentScrollState,
+    NestedScrollViewport,
     Notice,
     Panel,
     Picker,
@@ -158,6 +162,7 @@ from ._viewer_model import (
 from ._viewer_render import (
     render_text_viewer,
     render_text_viewer_fallback,
+    render_nested_scroll_view,
 )
 
 
@@ -1934,7 +1939,63 @@ class InteractiveAdvisoryProgress:
         finally:
             reset_provider_stream_sink(sink_token)
 
-    async def run(self, operation: Awaitable[object]) -> object:
+    def to_scroll_state(
+        self,
+        visible_height: int = 6,
+        state: ViewState = ViewState.ERROR,
+    ) -> MultiAgentScrollState:
+        """Project current buffered agent streams into a MultiAgentScrollState."""
+
+        views: list[NestedScrollViewport] = []
+        ordered_keys: list[tuple[str, str]] = []
+        for req in self._state.requests:
+            key = (req.agent_id, req.operation_id)
+            if key not in ordered_keys:
+                ordered_keys.append(key)
+        for key in list(self._state.stream_preview.keys()) + list(self._state.agent_buffers.keys()):
+            if key not in ordered_keys:
+                ordered_keys.append(key)
+
+        for i, key in enumerate(ordered_keys):
+            agent_id, op_id = key
+            buffer = self._state.agent_buffers.get(key)
+            if not buffer:
+                preview = self._state.stream_preview.get(key, "")
+                buffer = [p for p in preview.splitlines() if p] or [
+                    self._state.stream_status.get(key, "Working...")
+                ]
+            total_lines = len(buffer)
+            auto_scroll = self._state.auto_scroll_flags.get(key, True)
+            max_start = max(1, total_lines - visible_height + 1)
+            if auto_scroll:
+                start_line = max_start
+            else:
+                start_line = max(1, min(self._state.scroll_offsets.get(key, 1), max_start))
+            visible_lines = tuple(
+                buffer[start_line - 1 : start_line - 1 + visible_height]
+            )
+            is_focused = i == (self._state.focused_agent_index % max(1, len(ordered_keys)))
+            views.append(
+                NestedScrollViewport(
+                    view_id=f"{agent_id}:{op_id}",
+                    title=agent_id,
+                    total_lines=total_lines,
+                    start_line=start_line,
+                    visible_lines=visible_lines,
+                    visible_height=visible_height,
+                    is_focused=is_focused,
+                    state=state,
+                    auto_scroll=auto_scroll,
+                )
+            )
+        return MultiAgentScrollState(tuple(views), self._state.focused_agent_index)
+
+    async def run(
+        self,
+        operation: Awaitable[object],
+        *,
+        is_failure: Callable[[object], bool] | None = None,
+    ) -> object:
         """Join one advisory operation with the terminal-owned indicator."""
 
         token = bind_advisory_progress(self._state)
@@ -1942,11 +2003,44 @@ class InteractiveAdvisoryProgress:
         if self._is_capable():
             sink_token = bind_provider_stream_sink(self._state.observe_stream)
         try:
+            try:
+                sig = inspect.signature(self._run)
+                accepts_kwargs = any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD
+                    for p in sig.parameters.values()
+                ) or "scroll_state_provider" in sig.parameters
+            except (ValueError, TypeError):
+                accepts_kwargs = True
+
+            if accepts_kwargs:
+                return await self._run(
+                    operation,
+                    scroll_state_provider=lambda: self.to_scroll_state(
+                        visible_height=6,
+                        state=ViewState.ERROR,
+                    ),
+                    is_failure=is_failure or _default_is_failure,
+                )
             return await self._run(operation)
         finally:
             if sink_token is not None:
                 reset_provider_stream_sink(sink_token)
             reset_advisory_progress(token)
+
+
+def _default_is_failure(result: object) -> bool:
+    """Return True if result indicates a failed turn or required recovery."""
+
+    next_action = getattr(result, "next_action", None)
+    if next_action is not None and str(next_action) == "retry_lead_turn":
+        return True
+    step_state = getattr(result, "state", None)
+    if step_state is not None and str(step_state) in {
+        "outcome_unknown",
+        "recovery_required",
+    }:
+        return True
+    return False
 
 
 class InteractiveDebateProgress:
@@ -2097,13 +2191,25 @@ def _plain_prompt_reader(
     return read_prompt
 
 
-async def _plain_advisory_progress(operation: Awaitable[object]) -> object:
+async def _plain_advisory_progress(
+    operation: Awaitable[object],
+    *,
+    scroll_state_provider: Callable[[], MultiAgentScrollState] | None = None,
+    is_failure: Callable[[object], bool] | None = None,
+    **kwargs: object,
+) -> object:
     """Keep callback and non-TTY advisory execution visually silent."""
 
     return await operation
 
 
-async def _plain_debate_progress(operation: Awaitable[object]) -> object:
+async def _plain_debate_progress(
+    operation: Awaitable[object],
+    *,
+    scroll_state_provider: Callable[[], MultiAgentScrollState] | None = None,
+    is_failure: Callable[[object], bool] | None = None,
+    **kwargs: object,
+) -> object:
     """Keep callback and non-TTY consensus execution visually silent."""
 
     return await operation
@@ -2734,16 +2840,34 @@ def build_stream_terminal(
     )
     terminal._external_view_open = driver.open_external_view
 
-    async def run_advisory_progress(operation):
+    async def run_advisory_progress(
+        operation,
+        *,
+        scroll_state_provider=None,
+        is_failure=None,
+    ):
         return await driver.run_advisory_progress(
             operation,
             render_advisory_progress_frame,
+            scroll_state_provider=scroll_state_provider,
+            is_failure=is_failure,
+            nested_scroll_transition=transition_nested_scroll,
+            nested_scroll_renderer=render_nested_scroll_view,
         )
 
-    async def run_debate_progress(operation):
+    async def run_debate_progress(
+        operation,
+        *,
+        scroll_state_provider=None,
+        is_failure=None,
+    ):
         return await driver.run_advisory_progress(
             operation,
             render_advisory_progress_frame,
+            scroll_state_provider=scroll_state_provider,
+            is_failure=is_failure,
+            nested_scroll_transition=transition_nested_scroll,
+            nested_scroll_renderer=render_nested_scroll_view,
         )
 
     terminal._advisory_progress = run_advisory_progress

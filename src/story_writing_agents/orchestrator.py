@@ -8460,7 +8460,7 @@ class StoryRuntime:
             CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED:
                 "The Lead request stopped before a provider call was recorded.",
             CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED:
-                f"The Lead provider attempt failed ({failure_detail})."
+                f"The Lead provider attempt failed without a usable result ({failure_detail})."
                 if failure_detail
                 else "The Lead provider attempt failed without a usable result.",
             CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT:

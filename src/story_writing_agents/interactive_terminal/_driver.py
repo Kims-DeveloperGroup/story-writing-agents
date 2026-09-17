@@ -44,6 +44,8 @@ from ._model import (
     MainCommandControlState,
     MainInputControlState,
     MainInputHistoryState,
+    MultiAgentScrollState,
+    NestedScrollViewport,
     PickerControlState,
     PickerViewport,
     RenderedInputFrame,
@@ -117,6 +119,9 @@ _VIEWER_SCREEN_ENTER = "\x1b[?1049h\x1b[2J\x1b[H"
 _VIEWER_SCREEN_REDRAW = "\x1b[H\x1b[2J"
 _VIEWER_SCREEN_EXIT = "\x1b[?1049l"
 _T = TypeVar("_T")
+_NestedScrollRenderer: TypeAlias = Callable[
+    [MultiAgentScrollState, TerminalCapabilities], RenderedFrame
+]
 
 
 class AdvisoryProgressError(RuntimeError):
@@ -571,6 +576,14 @@ class RawTerminalDriver:
         self,
         operation: Awaitable[_T],
         frame_renderer: Callable[[int], str],
+        *,
+        scroll_state_provider: Callable[[], MultiAgentScrollState] | None = None,
+        is_failure: Callable[[_T], bool] | None = None,
+        nested_scroll_transition: Callable[
+            [MultiAgentScrollState, KeyEvent], MultiAgentScrollState
+        ]
+        | None = None,
+        nested_scroll_renderer: _NestedScrollRenderer | None = None,
     ) -> _T:
         """Join one advisory operation with a capable-terminal indicator."""
 
@@ -709,13 +722,48 @@ class RawTerminalDriver:
             except BaseException as exc:
                 progress_failure = progress_failure or exc
 
+            failed = operation_failure is not None or (
+                is_failure is not None and operation_succeeded and is_failure(result)
+            )
+
             clear_failure: BaseException | None = None
             self._progress_active = False
             self._progress_renderer = None
-            try:
-                self._clear_progress_frame()
-            except BaseException as exc:
-                clear_failure = exc
+            if not failed:
+                try:
+                    self._clear_progress_frame()
+                except BaseException as exc:
+                    clear_failure = exc
+            else:
+                if (
+                    scroll_state_provider is not None
+                    and nested_scroll_renderer is not None
+                    and nested_scroll_transition is not None
+                ):
+                    try:
+                        scroll_state = scroll_state_provider()
+                        if scroll_state.views:
+                            self.run_nested_scroll_inspector(
+                                scroll_state,
+                                nested_scroll_transition,
+                                nested_scroll_renderer,
+                            )
+                        else:
+                            self._write_raw_text("\r\n")
+                            self._progress_rows = 0
+                    except BaseException:
+                        try:
+                            self._write_raw_text("\r\n")
+                        except Exception:
+                            pass
+                        self._progress_rows = 0
+                else:
+                    try:
+                        self._write_raw_text("\r\n")
+                    except Exception:
+                        pass
+                    self._progress_rows = 0
+
             if (
                 operation_failure is None
                 and progress_failure is None
@@ -731,6 +779,137 @@ class RawTerminalDriver:
             ) from progress_failure
         assert operation_succeeded
         return result
+
+    def run_nested_scroll_inspector(
+        self,
+        initial_state: MultiAgentScrollState,
+        transition: Callable[[MultiAgentScrollState, KeyEvent], MultiAgentScrollState],
+        renderer: _NestedScrollRenderer,
+    ) -> MultiAgentScrollState:
+        """Run interactive scrolling on the retained nested agent view."""
+
+        if type(initial_state) is not MultiAgentScrollState:
+            raise TypeError("initial_state must be a MultiAgentScrollState")
+        if not callable(transition):
+            raise TypeError("transition must be callable")
+        if not callable(renderer):
+            raise TypeError("renderer must be callable")
+
+        with self._input_latch.input_operation():
+            observed_capabilities = self._observe_input_capabilities()
+            capabilities, configuration = self._prepare_input(observed_capabilities)
+            if configuration is None:
+                self._redraw_nested_scroll_frame(initial_state, capabilities, renderer)
+                self._write_raw_text("\r\n")
+                self._progress_rows = 0
+                return initial_state
+            return self._run_live_nested_scroll_inspector(
+                initial_state,
+                configuration,
+                capabilities,
+                transition,
+                renderer,
+            )
+
+    def _run_live_nested_scroll_inspector(
+        self,
+        initial_state: MultiAgentScrollState,
+        configuration: _TerminalConfiguration,
+        capabilities: TerminalCapabilities,
+        transition: Callable[[MultiAgentScrollState, KeyEvent], MultiAgentScrollState],
+        renderer: _NestedScrollRenderer,
+    ) -> MultiAgentScrollState:
+        """Run raw-mode interactive navigation for nested agent scroll view."""
+
+        state = initial_state
+        active_failure: BaseException | None = None
+        lifecycle_failure: BaseException | None = None
+        try:
+            try:
+                _activate_terminal(configuration)
+            except BaseException as failure:
+                lifecycle_failure = failure
+            else:
+                self._redraw_nested_scroll_frame(state, capabilities, renderer)
+                escape_sequence: _EscapeSequenceState = None
+                while True:
+                    try:
+                        character = self._read_character()
+                    except (KeyboardInterrupt, EOFError):
+                        break
+
+                    configured_event = _configured_control_event(
+                        character,
+                        configuration,
+                    )
+                    if configured_event is not None:
+                        if configured_event.kind in {KeyKind.INTERRUPT, KeyKind.EOF}:
+                            break
+
+                    if escape_sequence is not None:
+                        escape_state = _LiveEditorState(escape_sequence=escape_sequence)
+                        event, reprocess = _consume_escape_character(
+                            escape_state,
+                            character,
+                        )
+                        escape_sequence = escape_state.escape_sequence
+                        if event is not None:
+                            state = transition(state, event)
+                            self._redraw_nested_scroll_frame(state, capabilities, renderer)
+                        if not reprocess:
+                            continue
+
+                    if character == "\x1b":
+                        try:
+                            escape_input_is_ready = self._escape_continuation_is_ready(
+                                configuration
+                            )
+                        except KeyboardInterrupt:
+                            break
+                        if not escape_input_is_ready:
+                            break
+                        escape_sequence = character
+                        continue
+
+                    event = _key_event(character, configuration)
+                    if event.kind in {KeyKind.ENTER, KeyKind.INTERRUPT, KeyKind.EOF}:
+                        break
+                    if event.kind is KeyKind.TEXT and event.text in {"q", "Q"}:
+                        break
+                    state = transition(state, event)
+                    self._redraw_nested_scroll_frame(state, capabilities, renderer)
+        except BaseException as failure:
+            active_failure = failure
+        finally:
+            _restore_terminal_or_raise(
+                configuration, lifecycle_failure or active_failure
+            )
+            try:
+                self._write_raw_text("\r\n")
+            except Exception:
+                pass
+            self._progress_rows = 0
+
+        if lifecycle_failure is not None:
+            raise lifecycle_failure
+        if active_failure is not None:
+            raise active_failure
+        return state
+
+    def _redraw_nested_scroll_frame(
+        self,
+        state: MultiAgentScrollState,
+        capabilities: TerminalCapabilities,
+        renderer: _NestedScrollRenderer,
+    ) -> None:
+        """Replace the retained progress frame with an updated nested scroll view."""
+
+        if self._progress_rows > 0:
+            self._clear_progress_frame()
+        rendered = renderer(state, capabilities)
+        lines = rendered.text.split("\n")
+        self._write_raw_text("\r" + rendered.text)
+        self._progress_rows = len(lines)
 
     async def run_live_composer(
         self,

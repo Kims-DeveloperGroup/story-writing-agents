@@ -63,6 +63,10 @@ class AdvisoryProgressState:
         self.stream_status: dict[tuple[str, str], str] = {}
         self.stream_preview: dict[tuple[str, str], str] = {}
         self.last_error_message: str | None = None
+        self.agent_buffers: dict[tuple[str, str], list[str]] = {}
+        self.scroll_offsets: dict[tuple[str, str], int] = {}
+        self.focused_agent_index: int = 0
+        self.auto_scroll_flags: dict[tuple[str, str], bool] = {}
 
     def begin(self, requests: tuple[AdvisoryProgressRequest, ...] = ()) -> None:
         if self.started_at is None:
@@ -72,6 +76,10 @@ class AdvisoryProgressState:
         self.stream_status.clear()
         self.stream_preview.clear()
         self.last_error_message = None
+        self.agent_buffers.clear()
+        self.scroll_offsets.clear()
+        self.focused_agent_index = 0
+        self.auto_scroll_flags.clear()
 
     def record_error(self, message: str) -> None:
         """Explicitly record a terminal diagnostic for outcome presentation."""
@@ -95,6 +103,16 @@ class AdvisoryProgressState:
             existing = self.stream_preview.get(target_key, "")
             combined = (prev + existing)[-500:]
             self.stream_preview[target_key] = combined
+        if provisional_key in self.agent_buffers:
+            prev_buf = self.agent_buffers.pop(provisional_key)
+            if target_key not in self.agent_buffers:
+                self.agent_buffers[target_key] = prev_buf
+            else:
+                self.agent_buffers[target_key].extend(prev_buf)
+        if provisional_key in self.scroll_offsets:
+            self.scroll_offsets[target_key] = self.scroll_offsets.pop(provisional_key)
+        if provisional_key in self.auto_scroll_flags:
+            self.auto_scroll_flags[target_key] = self.auto_scroll_flags.pop(provisional_key)
 
     def observe_stream(self, event: ProviderStreamEvent) -> None:
         if type(event) is not ProviderStreamEvent:
@@ -115,6 +133,8 @@ class AdvisoryProgressState:
             sanitized = _sanitize_preview_text(event.text).strip()
             first_line = sanitized.splitlines()[0] if sanitized else ""
             self.stream_status[key] = first_line[:120]
+            if first_line:
+                self.agent_buffers.setdefault(key, []).append(f"Status: {first_line[:120]}")
             lower = sanitized.lower()
             if (
                 lower.startswith("error:")
@@ -127,6 +147,7 @@ class AdvisoryProgressState:
                 self.last_error_message = sanitized
         elif event.kind is ProviderStreamEventKind.THOUGHT_DELTA:
             self.stream_status[key] = "Thinking..."
+            self.agent_buffers.setdefault(key, []).append("Thinking...")
         elif event.kind is ProviderStreamEventKind.TEXT_DELTA:
             sanitized = _sanitize_preview_text(event.text)
             existing = self.stream_preview.get(key, "")
@@ -134,6 +155,16 @@ class AdvisoryProgressState:
             if len(combined) > 500:
                 combined = combined[-500:]
             self.stream_preview[key] = combined
+
+            buf = self.agent_buffers.setdefault(key, [])
+            delta_lines = sanitized.split("\n")
+            if not buf:
+                buf.extend(delta_lines)
+            else:
+                buf[-1] += delta_lines[0]
+                buf.extend(delta_lines[1:])
+            if len(buf) > 2000:
+                self.agent_buffers[key] = buf[-2000:]
 
     def elapsed_seconds(self) -> int:
         return 0 if self.started_at is None else int(time.monotonic() - self.started_at)
