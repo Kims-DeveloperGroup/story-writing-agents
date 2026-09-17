@@ -133,7 +133,7 @@ def _response_content(result: ProviderResult) -> str:
 def _response_diagnostic(
     diagnostic: ProviderResponseDiagnostic,
 ) -> dict[str, object]:
-    """Keep exact native bytes with an explicit reversible stream encoding."""
+    """Preserve only error, status, exit_code, and stderr from completed process diagnostics."""
 
     if type(diagnostic) is not ProviderResponseDiagnostic:
         raise TypeError("provider response diagnostic has an invalid type")
@@ -147,9 +147,32 @@ def _response_diagnostic(
                 "data": base64.b64encode(value).decode("ascii"),
             }
 
+    error: object = None
+    status: object = None
+    if diagnostic.stdout:
+        try:
+            parsed = json.loads(diagnostic.stdout.decode("utf-8", "replace"))
+            if isinstance(parsed, dict):
+                target = (
+                    parsed.get("result")
+                    if isinstance(parsed.get("result"), dict)
+                    else parsed
+                )
+                if "error" in target:
+                    error = target["error"]
+                elif "error" in parsed:
+                    error = parsed["error"]
+                if "status" in target:
+                    status = target["status"]
+                elif "status" in parsed:
+                    status = parsed["status"]
+        except Exception:
+            pass
+
     return {
+        "error": error,
         "exit_code": diagnostic.exit_code,
-        "stdout": stream(diagnostic.stdout),
+        "status": status,
         "stderr": stream(diagnostic.stderr),
     }
 

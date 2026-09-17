@@ -524,12 +524,36 @@ class ProviderDiagnosticCaptureTests(unittest.TestCase):
         self.assertTrue(response['provider_failure'])
         self.assertEqual(set(response), {'provider_failure', 'response_diagnostic'})
         raw = response['response_diagnostic']
-        self.assertEqual(base64.b64decode(raw['stdout']['data']), diagnostic.stdout)
-        self.assertEqual(raw['stdout']['encoding'], 'base64')
+        self.assertEqual(set(raw), {'error', 'exit_code', 'status', 'stderr'})
+        self.assertIsNone(raw['error'])
+        self.assertIsNone(raw['status'])
         self.assertEqual(raw['stderr'], {'encoding': 'utf-8', 'data': diagnostic.stderr.decode()})
         self.assertEqual(raw['exit_code'], 9)
         self.assertEqual(_decoded(store.records)[2], {'code': 'provider_invocation_failed', 'outcome': 'provider_failure'})
         self.assertEqual(len({r.exchange_id for r in store.records}), 1)
+
+    def test_failure_response_preserves_only_error_status_exit_code_and_stderr(self):
+        store = _RecordingStore()
+        lifecycle = _begin(store)
+        stdout = json.dumps({
+            "event": "result",
+            "result": {
+                "conversation_id": "thread-123",
+                "status": "ERROR",
+                "error": "Server overloaded",
+                "json_schema": {"huge": "schema" * 500},
+            },
+        }).encode("utf-8")
+        diagnostic = ProviderResponseDiagnostic(stdout, b"error log", 1)
+        lifecycle.provider_failure(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, response_diagnostic=diagnostic)
+        response = _decoded(store.records)[1]
+        raw = response['response_diagnostic']
+        self.assertEqual(raw, {
+            "error": "Server overloaded",
+            "exit_code": 1,
+            "status": "ERROR",
+            "stderr": {"data": "error log", "encoding": "utf-8"},
+        })
 
     def test_recovered_success_records_diagnostic_and_none_default_is_unchanged(self):
         for diagnostic in (None, self.diagnostic()):

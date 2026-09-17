@@ -143,7 +143,8 @@ class LiveHarnessAuditTests(unittest.TestCase):
                       "json_schema": schema, "structured_output": content}
             raw = harness.canonical_provider_json(native)
             failed = index >= 3
-            delivered = f"malformed-{index}".encode() if failed else raw
+            delivered = (json.dumps({"status": "ERROR", "error": f"malformed-{index}"}).encode()
+                         if failed else raw)
             argv = ["unused-agy", "--json-schema", harness.canonical_provider_json(schema).decode(),
                     "--print", json.dumps(payload)]
             (directory / "command.private.json").write_text(json.dumps({"argv": argv}))
@@ -162,7 +163,7 @@ class LiveHarnessAuditTests(unittest.TestCase):
                         "actual_transport_utf8_bytes": call["payload_bytes"]}
             if failed:
                 response = {"provider_failure": True, "response_diagnostic": {
-                    "exit_code": 0, "stdout": {"encoding": "utf-8", "data": delivered.decode()},
+                    "exit_code": 0, "status": "ERROR", "error": f"malformed-{index}",
                     "stderr": {"encoding": "utf-8", "data": ""}}}
             values = [{"payload": payload, "schema": schema, "prior_thread_id": None}, response,
                       {"outcome": "provider_failure" if failed else "accepted",
@@ -187,7 +188,7 @@ class LiveHarnessAuditTests(unittest.TestCase):
                 changed[0][1]["content"] = json.dumps(response)
             elif variant == "wrong_diagnostic":
                 response = json.loads(changed[3][1]["content"])
-                response["response_diagnostic"]["stdout"]["data"] = "wrong-bytes"
+                response["response_diagnostic"]["error"] = "wrong-error"
                 changed[3][1]["content"] = json.dumps(response)
             elif variant == "duplicate":
                 duplicate = copy.deepcopy(changed[0])
@@ -237,7 +238,7 @@ class LiveHarnessAuditTests(unittest.TestCase):
                 records[1]["content"] = self.exchanges[1]["content"]
             elif variant == "unverified_diagnostic":
                 records[1]["content"] = json.dumps({"provider_failure": True, "response_diagnostic": {
-                    "stdout": {"encoding": "utf-8", "data": "unverified"},
+                    "error": "unverified", "status": "ERROR",
                     "stderr": {"encoding": "utf-8", "data": ""}, "exit_code": 1}})
             elif variant == "nonboolean_marker":
                 records[1]["content"] = json.dumps({"provider_failure": 1})

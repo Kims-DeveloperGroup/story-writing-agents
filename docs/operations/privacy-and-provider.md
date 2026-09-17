@@ -844,8 +844,9 @@ warning accepted with exact current-call completion proof, adds
 A completed provider failure instead uses a response object containing
 `provider_failure: true` and, when available, `response_diagnostic`, followed by a fixed
 `provider_failure` outcome. Inside `response_diagnostic`, `exit_code` is the
-native integer status; `stdout` and `stderr` each contain `encoding` and `data`.
-Each stream uses strict `utf-8` when possible, otherwise reversible `base64`.
+native integer status; nullable `error` and `status` preserve the diagnostic
+failure details; and `stderr` contains `encoding` and `data`.
+The stream uses strict `utf-8` when possible, otherwise reversible `base64`.
 This is private diagnostic evidence, not a semantic result or a retry grant.
 
 Terminal content still contains only a closed `outcome` and fixed `code`, never

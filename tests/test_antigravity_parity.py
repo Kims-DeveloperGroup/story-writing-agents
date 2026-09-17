@@ -2501,9 +2501,10 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                         {
                             "provider_failure": True,
                             "response_diagnostic": {
-                                "stdout": {"encoding": "utf-8", "data": '{"event":'},
-                                "stderr": {"encoding": "utf-8", "data": ""},
+                                "error": None,
                                 "exit_code": 0,
+                                "status": None,
+                                "stderr": {"encoding": "utf-8", "data": ""},
                             },
                         },
                     )
