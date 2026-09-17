@@ -46,6 +46,8 @@ EXPECTED_SUGGESTIONS = (
     "/status",
     "/help",
     "/?",
+    "/progress",
+    "/toggle",
     "/quit",
 )
 
@@ -354,7 +356,7 @@ class SuggestionContractTests(unittest.TestCase):
             tuple(suggestion.token for suggestion in suggestions),
             EXPECTED_SUGGESTIONS,
         )
-        expected_identities = {"/?": "/help"}
+        expected_identities = {"/?": "/help", "/toggle": "/progress"}
         for suggestion in suggestions:
             with self.subTest(token=suggestion.token):
                 self.assertEqual(

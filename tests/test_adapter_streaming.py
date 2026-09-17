@@ -1959,6 +1959,52 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         emitted_texts = [ev.text for ev in events if ev.kind == ProviderStreamEventKind.TEXT_DELTA]
         self.assertEqual(emitted_texts, ["start"])
 
+    async def test_codex_adapter_retires_both_candidate_ids_on_conflicting_id_descriptor(self) -> None:
+        adapter = self.codex_adapter
+        binding = adapter.bind(self.definition)
+        events: list[ProviderStreamEvent] = []
+
+        invocation = ProviderInvocation(
+            session_id="session_codex_retire_both",
+            schema={"type": "object", "properties": {"summary": {"type": "string"}}, "required": ["summary"]},
+            payload={},
+            thread_id="thread_retire_both",
+            stream_sink=events.append,
+        )
+
+        stream_lines = [
+            b'{"type":"turn.started"}\n',
+            b'{"type":"item.started","item":{"id":"id_a","type":"agent_message","text":"text_a"}}\n',
+            b'{"type":"item.started","item":{"id":"id_b","type":"agent_message","text":"text_b"}}\n',
+            # Conflicting completed item: top-level id is id_a, but nested item.id is id_b
+            b'{"type":"item.completed","id":"id_a","item":{"id":"id_b","type":"agent_message","text":"both"}}\n',
+            # Later id-only deltas for both id_a and id_b should be ignored
+            b'{"type":"item.delta","item_id":"id_a","delta":"stale_delta_a"}\n',
+            b'{"type":"item.delta","item_id":"id_b","delta":"stale_delta_b"}\n',
+            b'{"type":"turn.completed"}\n',
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            self.assertIsNotNone(request.on_stdout_line)
+            for line in stream_lines:
+                request.on_stdout_line(line)
+            output_flag_index = request.command.index("--output-last-message")
+            output_file_path = Path(request.command[output_flag_index + 1])
+            output_file_path.parent.mkdir(parents=True, exist_ok=True)
+            output_file_path.write_text('{"summary":"Completed"}', encoding="utf-8")
+            return ProcessResult(
+                stdout=b'{"type":"thread.started","thread_id":"thread_retire_both"}\n{"type":"turn.completed"}\n',
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
+            await self.codex_adapter.invoke(binding, invocation)
+
+        # Only initial texts from item.started should be emitted; both IDs retired
+        emitted_texts = [ev.text for ev in events if ev.kind == ProviderStreamEventKind.TEXT_DELTA]
+        self.assertEqual(emitted_texts, ["text_a", "text_b"])
+
 
 if __name__ == "__main__":
     unittest.main()

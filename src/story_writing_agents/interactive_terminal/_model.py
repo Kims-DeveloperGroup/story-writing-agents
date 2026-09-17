@@ -888,6 +888,7 @@ class NestedScrollViewport:
     is_focused: bool
     state: ViewState = ViewState.IDLE
     auto_scroll: bool = True
+    buffer_lines: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate bounded scroll viewport geometry."""
@@ -913,6 +914,10 @@ class NestedScrollViewport:
             raise TypeError("is_focused must be a boolean")
         if type(self.auto_scroll) is not bool:
             raise TypeError("auto_scroll must be a boolean")
+        if type(self.buffer_lines) is not tuple or any(
+            type(line) is not str for line in self.buffer_lines
+        ):
+            raise TypeError("buffer_lines must be a tuple of strings")
 
 
 @dataclass(frozen=True, slots=True)

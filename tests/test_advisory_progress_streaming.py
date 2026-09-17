@@ -25,6 +25,8 @@ from story_writing_agents.interactive_terminal import (
 from story_writing_agents.interactive_terminal._advisory_progress import (
     AdvisoryProgressRequest,
     AdvisoryProgressState,
+    bind_advisory_progress,
+    reset_advisory_progress,
 )
 from story_writing_agents.interactive_terminal._core import (
     InteractiveAdvisoryProgress,
@@ -40,7 +42,12 @@ from story_writing_agents.interactive_terminal._model import (
     TerminalCapabilities,
     ViewState,
 )
-from story_writing_agents.interactive_terminal._controls import transition_nested_scroll
+from story_writing_agents.interactive_terminal._controls import (
+    append_main_input_history,
+    transition_line_input,
+    transition_main_input,
+    transition_nested_scroll,
+)
 from story_writing_agents.interactive_terminal._viewer_render import render_nested_scroll_view
 from story_writing_agents.provider_adapter import ProviderInvocation
 
@@ -1082,6 +1089,218 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         progress.collapsed = True
         scroll_state_collapsed = progress.to_scroll_state()
         self.assertTrue(scroll_state_collapsed.collapsed)
+
+    def test_failure_snapshot_retained_across_turns_until_dismissed(self) -> None:
+        state = AdvisoryProgressState()
+        key = ("lead", "op1")
+        req = AdvisoryProgressRequest("lead", "op1", "Working")
+        state.begin((req,))
+        state.agent_buffers[key] = ["Line 1", "Line 2", "Error: failed operation"]
+        state.record_error("Fatal connection timeout")
+
+        # Snapshot the failure
+        state.snapshot_failure()
+        self.assertIsNotNone(state.failure_snapshot)
+
+        # Start a new turn - regular buffers cleared, failure_snapshot retained
+        req2 = AdvisoryProgressRequest("lead", "op2", "Next turn")
+        state.begin((req2,))
+        self.assertNotIn(key, state.agent_buffers)
+        self.assertIsNotNone(state.failure_snapshot)
+
+        # InteractiveAdvisoryProgress falls back to failure_snapshot when agent_buffers is empty
+        terminal = InteractiveTerminal(lambda p: "", lambda t: "", width=80)
+        progress = InteractiveAdvisoryProgress(terminal)
+        progress._state = state
+        scroll_state = progress.to_scroll_state()
+        self.assertEqual(len(scroll_state.views), 1)
+        self.assertIn("Line 1", scroll_state.views[0].visible_lines)
+
+        # Explicitly dismiss the snapshot
+        progress.dismiss_failure_snapshot()
+        self.assertIsNone(state.failure_snapshot)
+
+    def test_thought_delta_coalesces_consecutive_thinking_rows_and_bounds_buffer(self) -> None:
+        state = AdvisoryProgressState()
+        req = AdvisoryProgressRequest("lead", "op1", "Thinking task")
+        state.begin((req,))
+
+        # Feed 10 consecutive thought deltas
+        for _ in range(10):
+            event = ProviderStreamEvent(
+                ProviderStreamEventKind.THOUGHT_DELTA,
+                text="reasoning...",
+                agent_id="lead",
+                operation_id="op1",
+            )
+            state.observe_stream(event)
+
+        key = ("lead", "op1")
+        # Should have coalesced into a single "Thinking..." row
+        self.assertEqual(state.agent_buffers[key], ["Thinking..."])
+
+        # Feed 2500 lines to verify 2,000 line bounding
+        for i in range(2500):
+            event = ProviderStreamEvent(
+                ProviderStreamEventKind.TEXT_DELTA,
+                text=f"Line {i}\n",
+                agent_id="lead",
+                operation_id="op1",
+            )
+            state.observe_stream(event)
+
+        # Buffer must be capped at 2,000 lines
+        self.assertLessEqual(len(state.agent_buffers[key]), 2000)
+
+    def test_transition_nested_scroll_aliases_and_dynamic_visible_lines(self) -> None:
+        all_lines = tuple(f"Line {i + 1}" for i in range(20))
+        v1 = NestedScrollViewport(
+            view_id="lead:1",
+            title="Lead",
+            total_lines=20,
+            start_line=1,
+            visible_lines=all_lines[:5],
+            visible_height=5,
+            is_focused=True,
+            state=ViewState.IDLE,
+            buffer_lines=all_lines,
+        )
+        v2 = NestedScrollViewport(
+            view_id="critic:2",
+            title="Critic",
+            total_lines=20,
+            start_line=1,
+            visible_lines=all_lines[:5],
+            visible_height=5,
+            is_focused=False,
+            state=ViewState.IDLE,
+            buffer_lines=all_lines,
+        )
+        state = MultiAgentScrollState((v1, v2), 0)
+
+        # Test tab navigation aliases: ']' advances tab, '[' recedes tab
+        state_tab_next = transition_nested_scroll(state, KeyEvent(KeyKind.TEXT, text="]"))
+        self.assertEqual(state_tab_next.focused_index, 1)
+        state_tab_prev = transition_nested_scroll(state_tab_next, KeyEvent(KeyKind.TEXT, text="["))
+        self.assertEqual(state_tab_prev.focused_index, 0)
+
+        # Test 'j' (down) scrolls and dynamically updates visible_lines
+        state_j = transition_nested_scroll(state, KeyEvent(KeyKind.TEXT, text="j"))
+        focused_j = state_j.views[state_j.focused_index]
+        self.assertEqual(focused_j.start_line, 2)
+        self.assertEqual(focused_j.visible_lines, all_lines[1:6])
+
+        # Test 'k' (up) scrolls back and dynamically updates visible_lines
+        state_k = transition_nested_scroll(state_j, KeyEvent(KeyKind.TEXT, text="k"))
+        focused_k = state_k.views[state_k.focused_index]
+        self.assertEqual(focused_k.start_line, 1)
+        self.assertEqual(focused_k.visible_lines, all_lines[:5])
+
+        # Test 'G' (bottom/end) scrolls to bottom and updates visible_lines
+        state_end = transition_nested_scroll(state, KeyEvent(KeyKind.TEXT, text="G"))
+        focused_end = state_end.views[state_end.focused_index]
+        self.assertEqual(focused_end.start_line, 16)
+        self.assertEqual(focused_end.visible_lines, all_lines[15:20])
+
+        # Test 'g' (top/home) scrolls back to line 1 and updates visible_lines
+        state_home = transition_nested_scroll(state_end, KeyEvent(KeyKind.TEXT, text="g"))
+        focused_home = state_home.views[state_home.focused_index]
+        self.assertEqual(focused_home.start_line, 1)
+        self.assertEqual(focused_home.visible_lines, all_lines[:5])
+
+        # Test PageDown (mapped to SHIFT_DOWN) and PageUp (mapped to SHIFT_UP)
+        state_pagedown = transition_nested_scroll(state, KeyEvent(KeyKind.SHIFT_DOWN))
+        focused_pagedown = state_pagedown.views[state_pagedown.focused_index]
+        self.assertEqual(focused_pagedown.start_line, 5)
+        self.assertEqual(focused_pagedown.visible_lines, all_lines[4:9])
+
+        state_pageup = transition_nested_scroll(state_pagedown, KeyEvent(KeyKind.SHIFT_UP))
+        focused_pageup = state_pageup.views[state_pageup.focused_index]
+        self.assertEqual(focused_pageup.start_line, 1)
+        self.assertEqual(focused_pageup.visible_lines, all_lines[:5])
+
+    def test_run_progress_frames_invokes_toggle_callback_on_t_key(self) -> None:
+        driver = RawTerminalDriver(
+            lambda _p: "",
+            io.StringIO(),
+            io.StringIO(),
+            transition_line_input,
+            transition_main_input,
+            append_main_input_history,
+        )
+        configuration = _driver._TerminalConfiguration(
+            0,
+            1,
+            [0, 0, 0, 0, 0, 0, []],
+            [0, 0, 0, 0, 0, 0, []],
+            80,
+            None,
+            None,
+            0,
+            object(),
+        )
+        toggled: list[bool] = []
+        def on_toggle() -> bool:
+            toggled.append(True)
+            return True
+
+        frames: list[int] = []
+        def renderer(frame: int) -> str:
+            frames.append(frame)
+            return f"frame {frame}"
+
+        read_chars = ["t", "x"]
+        def fake_read(*_args: object, **_kwargs: object) -> str:
+            return read_chars.pop(0)
+
+        def fake_select(*_args: object, **_kwargs: object) -> tuple[list[int], list[int], list[int]]:
+            if read_chars:
+                return ([0], [], [])
+            return ([], [], [])
+
+        async def run_test() -> None:
+            task = asyncio.create_task(
+                driver._run_progress_frames(
+                    renderer,
+                    configuration=configuration,
+                    toggle_callback=on_toggle,
+                )
+            )
+            await asyncio.sleep(0.12)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        with (
+            mock.patch.object(RawTerminalDriver, "_read_character", side_effect=fake_read),
+            mock.patch("story_writing_agents.interactive_terminal._driver._select.select", side_effect=fake_select),
+            mock.patch("story_writing_agents.interactive_terminal._driver._configured_control_event", return_value=None),
+        ):
+            asyncio.run(run_test())
+
+        self.assertTrue(len(toggled) >= 1)
+
+    def test_interactive_terminal_toggle_syncs_with_active_state(self) -> None:
+        terminal = InteractiveTerminal(lambda p: "", lambda t: "", width=80)
+        state = AdvisoryProgressState()
+        token = bind_advisory_progress(state)
+        try:
+            self.assertFalse(terminal.progress_frame_collapsed)
+            self.assertFalse(state.collapsed)
+
+            # Toggle on terminal -> state.collapsed becomes True
+            terminal.toggle_progress_frame()
+            self.assertTrue(terminal.progress_frame_collapsed)
+            self.assertTrue(state.collapsed)
+
+            # Set property on terminal -> state.collapsed updates
+            terminal.progress_frame_collapsed = False
+            self.assertFalse(terminal.progress_frame_collapsed)
+            self.assertFalse(state.collapsed)
+        finally:
+            reset_advisory_progress(token)
 
 
 if __name__ == "__main__":

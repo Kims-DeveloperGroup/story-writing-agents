@@ -62,6 +62,7 @@ from ._collaboration_view import (
 from ._advisory_progress import (
     AdvisoryProgressRequest,
     AdvisoryProgressState,
+    active_advisory_progress_state,
     bind_advisory_progress,
     format_elapsed,
     reset_advisory_progress,
@@ -661,10 +662,16 @@ class InteractiveTerminal:
     @progress_frame_collapsed.setter
     def progress_frame_collapsed(self, value: bool) -> None:
         self._progress_frame_collapsed = bool(value)
+        active_state = active_advisory_progress_state()
+        if active_state is not None:
+            active_state.collapsed = self._progress_frame_collapsed
 
     def toggle_progress_frame(self) -> bool:
         """Toggle progress frame collapsed mode and return the new state."""
         self._progress_frame_collapsed = not self._progress_frame_collapsed
+        active_state = active_advisory_progress_state()
+        if active_state is not None:
+            active_state.collapsed = self._progress_frame_collapsed
         return self._progress_frame_collapsed
 
     def read_main(
@@ -1974,6 +1981,10 @@ class InteractiveAdvisoryProgress:
         finally:
             reset_provider_stream_sink(sink_token)
 
+    def dismiss_failure_snapshot(self) -> None:
+        """Explicitly evict the retained failure snapshot."""
+        self._state.dismiss_failure_snapshot()
+
     def to_scroll_state(
         self,
         visible_height: int = 6,
@@ -1984,25 +1995,38 @@ class InteractiveAdvisoryProgress:
 
         views: list[NestedScrollViewport] = []
         ordered_keys: list[tuple[str, str]] = []
-        for req in self._state.requests:
-            key = (req.agent_id, req.operation_id)
-            if key not in ordered_keys:
-                ordered_keys.append(key)
-        for key in list(self._state.stream_preview.keys()) + list(self._state.agent_buffers.keys()):
+
+        source_buffers: dict[tuple[str, str], list[str] | tuple[str, ...]] = dict(
+            self._state.agent_buffers
+        )
+        source_error = self._state.last_error_message
+        using_snapshot = False
+        if not source_buffers and self._state.failure_snapshot is not None:
+            snap_buffers, snap_error = self._state.failure_snapshot
+            source_buffers = {k: list(v) for k, v in snap_buffers.items()}
+            source_error = snap_error or source_error
+            using_snapshot = True
+
+        if not using_snapshot:
+            for req in self._state.requests:
+                key = (req.agent_id, req.operation_id)
+                if key not in ordered_keys:
+                    ordered_keys.append(key)
+        for key in list(self._state.stream_preview.keys()) + list(source_buffers.keys()):
             if key not in ordered_keys:
                 ordered_keys.append(key)
 
         for i, key in enumerate(ordered_keys):
             agent_id, op_id = key
-            buffer = list(self._state.agent_buffers.get(key, ()))
+            buffer = list(source_buffers.get(key, ()))
             if not buffer:
                 preview = self._state.stream_preview.get(key, "")
                 buffer = [p for p in preview.splitlines() if p] or [
                     self._state.stream_status.get(key, "Working...")
                 ]
-            if state == ViewState.ERROR and self._state.last_error_message:
+            if state == ViewState.ERROR and source_error:
                 err_lines = [
-                    line for line in self._state.last_error_message.splitlines() if line
+                    line for line in source_error.splitlines() if line
                 ]
                 if err_lines and not any(err_lines[0] in line for line in buffer):
                     buffer.extend(err_lines)
@@ -2028,10 +2052,11 @@ class InteractiveAdvisoryProgress:
                     is_focused=is_focused,
                     state=state,
                     auto_scroll=auto_scroll,
+                    buffer_lines=tuple(buffer),
                 )
             )
         if not views:
-            fallback_text = self._state.last_error_message or "Execution failed."
+            fallback_text = source_error or "Execution failed."
             fallback_lines = [
                 line for line in fallback_text.splitlines() if line
             ] or ["Execution failed."]
@@ -2047,6 +2072,7 @@ class InteractiveAdvisoryProgress:
                     is_focused=True,
                     state=state,
                     auto_scroll=False,
+                    buffer_lines=tuple(fallback_lines),
                 )
             )
         is_collapsed = self._state.collapsed if collapsed is None else bool(collapsed)
@@ -2081,6 +2107,7 @@ class InteractiveAdvisoryProgress:
             except (ValueError, TypeError):
                 accepts_kwargs = True
 
+            failure_check = is_failure or _default_is_failure
             if accepts_kwargs:
                 def _provide_scroll_state(
                     failure: BaseException | object | None = None,
@@ -2099,12 +2126,21 @@ class InteractiveAdvisoryProgress:
                         state=ViewState.ERROR,
                     )
 
-                return await self._run(
+                result = await self._run(
                     operation,
                     scroll_state_provider=_provide_scroll_state,
-                    is_failure=is_failure or _default_is_failure,
+                    is_failure=failure_check,
                 )
-            return await self._run(operation)
+            else:
+                result = await self._run(operation)
+
+            if not failure_check(result):
+                self._state.dismiss_failure_snapshot()
+            return result
+        except BaseException as exc:
+            if not self._state.last_error_message:
+                self._state.record_error(str(exc))
+            raise
         finally:
             if sink_token is not None:
                 reset_provider_stream_sink(sink_token)
@@ -2938,6 +2974,7 @@ def build_stream_terminal(
             is_failure=is_failure,
             nested_scroll_transition=transition_nested_scroll,
             nested_scroll_renderer=render_nested_scroll_view,
+            toggle_callback=terminal.toggle_progress_frame,
         )
 
     async def run_debate_progress(
@@ -2953,6 +2990,7 @@ def build_stream_terminal(
             is_failure=is_failure,
             nested_scroll_transition=transition_nested_scroll,
             nested_scroll_renderer=render_nested_scroll_view,
+            toggle_callback=terminal.toggle_progress_frame,
         )
 
     terminal._advisory_progress = run_advisory_progress

@@ -434,18 +434,30 @@ class CodexAdapter:
                     elif event_type in {"item.updated", "item.started", "item.completed"}:
                         item = event.get("item")
                         if type(item) is dict:
-                            if "item_id" in event:
-                                raw_top_id = event.get("item_id")
-                                if raw_top_id is None or not isinstance(raw_top_id, str) or not raw_top_id.strip():
-                                    return
-                                top_id = raw_top_id.strip()
-                            else:
-                                top_id = None
+                            def _retire_id(target_id: object) -> None:
+                                if event_type == "item.completed" and isinstance(target_id, str):
+                                    stripped = target_id.strip()
+                                    if stripped:
+                                        emitted_len_by_item.pop(stripped, None)
+                                        item_kinds_by_id.pop(stripped, None)
+
+                            top_id, top_id_conflict = _resolve_aliased_field(event, "item_id", "id")
+                            if top_id_conflict:
+                                _retire_id(event.get("item_id"))
+                                _retire_id(event.get("id"))
+                                _retire_id(item.get("id"))
+                                _retire_id(item.get("item_id"))
+                                return
 
                             nested_id, id_conflict = _resolve_aliased_field(item, "id", "item_id")
                             if id_conflict:
+                                _retire_id(top_id)
+                                _retire_id(item.get("id"))
+                                _retire_id(item.get("item_id"))
                                 return
                             if top_id is not None and nested_id is not None and top_id != nested_id:
+                                _retire_id(top_id)
+                                _retire_id(nested_id)
                                 return
                             raw_id = nested_id if nested_id is not None else top_id
                             item_id = raw_id if raw_id else None
@@ -453,15 +465,14 @@ class CodexAdapter:
                             if "item_type" in event:
                                 raw_top_type = event.get("item_type")
                                 if raw_top_type is None or not isinstance(raw_top_type, str) or not raw_top_type.strip():
+                                    _retire_id(item_id)
                                     return
                                 top_type = raw_top_type.strip().lower()
                             else:
                                 top_type = None
 
                             def _cleanup_completed_item() -> None:
-                                if event_type == "item.completed" and item_id is not None:
-                                    emitted_len_by_item.pop(item_id, None)
-                                    item_kinds_by_id.pop(item_id, None)
+                                _retire_id(item_id)
 
                             nested_type, type_conflict = _resolve_aliased_field(
                                 item, "type", "item_type", normalize_case=True

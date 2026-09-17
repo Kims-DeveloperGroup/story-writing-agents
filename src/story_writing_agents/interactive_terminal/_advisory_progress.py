@@ -68,11 +68,21 @@ class AdvisoryProgressState:
         self.focused_agent_index: int = 0
         self.auto_scroll_flags: dict[tuple[str, str], bool] = {}
         self.collapsed: bool = False
+        self.failure_snapshot: tuple[dict[tuple[str, str], tuple[str, ...]], str | None] | None = None
 
     def toggle_collapsed(self) -> bool:
         """Toggle collapsed mode and return the new state."""
         self.collapsed = not self.collapsed
         return self.collapsed
+
+    def snapshot_failure(self) -> None:
+        """Preserve current agent buffers and last error as a failure snapshot."""
+        buffers = {k: tuple(v) for k, v in self.agent_buffers.items() if v}
+        self.failure_snapshot = (buffers, self.last_error_message)
+
+    def dismiss_failure_snapshot(self) -> None:
+        """Explicitly evict the retained failure snapshot."""
+        self.failure_snapshot = None
 
     def begin(self, requests: tuple[AdvisoryProgressRequest, ...] = ()) -> None:
         if self.started_at is None:
@@ -92,6 +102,7 @@ class AdvisoryProgressState:
         sanitized = _sanitize_preview_text(message).strip()
         if sanitized:
             self.last_error_message = sanitized
+            self.snapshot_failure()
 
     def observe(self, event: ContextActionProgressEvent) -> None:
         if type(event) is not ContextActionProgressEvent:
@@ -151,9 +162,14 @@ class AdvisoryProgressState:
                 or "capacity" in lower
             ):
                 self.last_error_message = sanitized
+                self.snapshot_failure()
         elif event.kind is ProviderStreamEventKind.THOUGHT_DELTA:
             self.stream_status[key] = "Thinking..."
-            self.agent_buffers.setdefault(key, []).append("Thinking...")
+            buf = self.agent_buffers.setdefault(key, [])
+            if not buf or buf[-1] != "Thinking...":
+                buf.append("Thinking...")
+                if len(buf) > 2000:
+                    self.agent_buffers[key] = buf[-2000:]
         elif event.kind is ProviderStreamEventKind.TEXT_DELTA:
             sanitized = _sanitize_preview_text(event.text)
             existing = self.stream_preview.get(key, "")
@@ -328,4 +344,8 @@ def render_detailed_advisory_progress(frame: int, fallback: str) -> str:
 def active_advisory_stream_sink() -> ProviderStreamSink | None:
     state = _ACTIVE_STATE.get()
     return state.observe_stream if state is not None and state.started_at is not None else None
+
+
+def active_advisory_progress_state() -> AdvisoryProgressState | None:
+    return _ACTIVE_STATE.get()
 

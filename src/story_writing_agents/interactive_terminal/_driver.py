@@ -7,6 +7,7 @@ import os
 import select as _select
 import time
 from collections.abc import Awaitable, Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import TextIO, TypeAlias, TypeVar
 
@@ -584,6 +585,7 @@ class RawTerminalDriver:
         ]
         | None = None,
         nested_scroll_renderer: _NestedScrollRenderer | None = None,
+        toggle_callback: Callable[[], bool] | None = None,
     ) -> _T:
         """Join one advisory operation with a capable-terminal indicator."""
 
@@ -633,46 +635,86 @@ class RawTerminalDriver:
                 return f"{_PROGRESS_SGR_FRAMES[frame]}{fitted_text}{_SGR_RESET}"
             return fitted_text
 
-        self._progress_active = True
-        self._progress_frame = 0
-        self._progress_renderer = fitted_frame_renderer
-        try:
-            self._draw_progress_frame(fitted_frame_renderer)
-        except BaseException as exc:
-            self._progress_active = False
-            self._progress_renderer = None
+        configuration: _TerminalConfiguration | None = None
+        if toggle_callback is not None:
             try:
-                self._clear_progress_frame()
-            except BaseException:
-                pass
-            close = getattr(operation, "close", None)
-            if callable(close):
-                close()
-            raise AdvisoryProgressError(
-                "advisory progress could not be displayed"
-            ) from exc
+                observed = self._observe_input_capabilities()
+                _caps, configuration = self._prepare_input(observed)
+            except Exception:
+                configuration = None
 
-        operation_task = asyncio.ensure_future(operation)
-        progress_task = asyncio.create_task(
-            self._run_progress_frames(fitted_frame_renderer)
+        input_context = (
+            self._input_latch.input_operation()
+            if configuration is not None
+            else nullcontext()
         )
-        operation_failure: BaseException | None = None
-        progress_failure: BaseException | None = None
-        result: _T | None = None
-        operation_succeeded = False
-        outer_failure = False
-        try:
-            while True:
-                done, _pending = await asyncio.wait(
-                    (operation_task, progress_task),
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                if operation_task in done:
+
+        with input_context:
+            if configuration is not None:
+                try:
+                    _activate_terminal(configuration)
+                except BaseException:
+                    configuration = None
+
+            self._progress_active = True
+            self._progress_frame = 0
+            self._progress_renderer = fitted_frame_renderer
+            try:
+                self._draw_progress_frame(fitted_frame_renderer)
+            except BaseException as exc:
+                self._progress_active = False
+                self._progress_renderer = None
+                try:
+                    self._clear_progress_frame()
+                except BaseException:
+                    pass
+                if configuration is not None:
                     try:
-                        result = operation_task.result()
-                        operation_succeeded = True
-                    except BaseException as exc:
-                        operation_failure = exc
+                        _restore_terminal_or_raise(
+                            configuration, None, discard_input=False
+                        )
+                    except BaseException:
+                        pass
+                close = getattr(operation, "close", None)
+                if callable(close):
+                    close()
+                raise AdvisoryProgressError(
+                    "advisory progress could not be displayed"
+                ) from exc
+
+            operation_task = asyncio.ensure_future(operation)
+            progress_task = asyncio.create_task(
+                self._run_progress_frames(
+                    fitted_frame_renderer,
+                    configuration=configuration,
+                    toggle_callback=toggle_callback,
+                )
+            )
+            operation_failure: BaseException | None = None
+            progress_failure: BaseException | None = None
+            result: _T | None = None
+            operation_succeeded = False
+            outer_failure = False
+            try:
+                while True:
+                    done, _pending = await asyncio.wait(
+                        (operation_task, progress_task),
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if operation_task in done:
+                        try:
+                            result = operation_task.result()
+                            operation_succeeded = True
+                        except BaseException as exc:
+                            operation_failure = exc
+                        if progress_task in done:
+                            try:
+                                progress_task.result()
+                            except asyncio.CancelledError:
+                                pass
+                            except BaseException as exc:
+                                progress_failure = exc
+                        break
                     if progress_task in done:
                         try:
                             progress_task.result()
@@ -680,47 +722,46 @@ class RawTerminalDriver:
                             pass
                         except BaseException as exc:
                             progress_failure = exc
-                    break
-                if progress_task in done:
-                    try:
-                        progress_task.result()
-                    except asyncio.CancelledError:
-                        pass
-                    except BaseException as exc:
-                        progress_failure = exc
-                    if progress_failure is None:
-                        progress_failure = RuntimeError(
-                            "advisory progress worker stopped unexpectedly"
-                        )
-                    break
-        except BaseException as exc:
-            operation_failure = exc
-            outer_failure = True
-        finally:
-            if (operation_failure is not None or progress_failure is not None) and (
-                not operation_task.done()
-            ):
-                operation_task.cancel()
-            if not operation_task.done():
-                try:
-                    await operation_task
-                except BaseException as exc:
-                    if not outer_failure and progress_failure is None:
-                        operation_failure = operation_failure or exc
-            elif operation_failure is None and progress_failure is None:
-                try:
-                    operation_task.result()
-                except BaseException as exc:
-                    operation_failure = exc
-
-            if not progress_task.done():
-                progress_task.cancel()
-            try:
-                await progress_task
-            except asyncio.CancelledError:
-                pass
+                        if progress_failure is None:
+                            progress_failure = RuntimeError(
+                                "advisory progress worker stopped unexpectedly"
+                            )
+                        break
             except BaseException as exc:
-                progress_failure = progress_failure or exc
+                operation_failure = exc
+                outer_failure = True
+            finally:
+                if (operation_failure is not None or progress_failure is not None) and (
+                    not operation_task.done()
+                ):
+                    operation_task.cancel()
+                if not operation_task.done():
+                    try:
+                        await operation_task
+                    except BaseException as exc:
+                        if not outer_failure and progress_failure is None:
+                            operation_failure = operation_failure or exc
+                elif operation_failure is None and progress_failure is None:
+                    try:
+                        operation_task.result()
+                    except BaseException as exc:
+                        operation_failure = exc
+
+                if not progress_task.done():
+                    progress_task.cancel()
+                try:
+                    await progress_task
+                except asyncio.CancelledError:
+                    pass
+                except BaseException as exc:
+                    progress_failure = progress_failure or exc
+
+                if configuration is not None:
+                    _restore_terminal_or_raise(
+                        configuration,
+                        operation_failure or progress_failure,
+                        discard_input=False,
+                    )
 
             failed = (
                 operation_failure is not None
@@ -1269,11 +1310,47 @@ class RawTerminalDriver:
     async def _run_progress_frames(
         self,
         frame_renderer: Callable[[int], str],
+        *,
+        configuration: _TerminalConfiguration | None = None,
+        toggle_callback: Callable[[], bool] | None = None,
     ) -> None:
         """Animate fixed frames until the joined operation finishes."""
 
         while True:
             await asyncio.sleep(_PROGRESS_INTERVAL_SECONDS)
+            if configuration is not None and toggle_callback is not None:
+                while True:
+                    try:
+                        readable, _, _ = _select.select(
+                            (configuration.input_descriptor,), (), (), 0
+                        )
+                    except (OSError, ValueError):
+                        break
+                    except KeyboardInterrupt:
+                        raise
+                    has_pending = False
+                    if self._input_latch.mode is TerminalInputMode.LIVE:
+                        try:
+                            has_pending = self._input_latch.live_reader.has_pending_codepoint
+                        except RuntimeError:
+                            has_pending = False
+                    if not readable and not has_pending:
+                        break
+                    try:
+                        character = self._read_character()
+                    except (EOFError, KeyboardInterrupt):
+                        raise
+                    configured_event = _configured_control_event(
+                        character,
+                        configuration,
+                    )
+                    if configured_event is not None and configured_event.kind in {
+                        KeyKind.INTERRUPT,
+                        KeyKind.EOF,
+                    }:
+                        raise KeyboardInterrupt
+                    if character in ("t", "T"):
+                        toggle_callback()
             self._progress_frame = (self._progress_frame + 1) % _PROGRESS_FRAME_COUNT
             if self._progress_rows > 0:
                 self._clear_progress_frame()
@@ -4473,6 +4550,8 @@ def _escape_event(sequence: str) -> KeyEvent | None:
         "\x1b[4~": KeyKind.END,
         "\x1b[8~": KeyKind.END,
         "\x1b[3~": KeyKind.DELETE,
+        "\x1b[5~": KeyKind.SHIFT_UP,
+        "\x1b[6~": KeyKind.SHIFT_DOWN,
         "\x1b[Z": KeyKind.SHIFT_TAB,
         "\x1b[1;2A": KeyKind.SHIFT_UP,
         "\x1b[1;2B": KeyKind.SHIFT_DOWN,
