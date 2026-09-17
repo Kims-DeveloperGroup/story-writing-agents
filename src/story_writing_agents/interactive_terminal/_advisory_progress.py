@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import textwrap
 import time
 import unicodedata
 from contextvars import ContextVar, Token
@@ -241,13 +242,20 @@ class AdvisoryProgressState:
             if preview:
                 preview_text = preview.strip()
                 if preview_text:
-                    preview_lines = [p for p in preview_text.splitlines() if p.strip()]
+                    raw_lines = [p for p in preview_text.splitlines() if p.strip()]
+                    preview_lines: list[str] = []
+                    for rline in raw_lines:
+                        if len(rline) > 100:
+                            wrapped = textwrap.wrap(rline, width=100)
+                            preview_lines.extend(wrapped or [rline])
+                        else:
+                            preview_lines.append(rline)
                     if preview_lines:
-                        for idx, pline in enumerate(preview_lines[-2:]):
+                        for idx, pline in enumerate(preview_lines[-5:]):
                             label = "Preview: " if idx == 0 else "         "
                             lines.append(f"  {label}{pline[-120:]}")
-        if len(lines) > 8:
-            lines = [lines[0]] + lines[-7:]
+        if len(lines) > 10:
+            lines = [lines[0]] + lines[-9:]
         return "\n".join(lines)
 
 

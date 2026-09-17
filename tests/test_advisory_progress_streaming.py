@@ -142,7 +142,14 @@ class AdvisoryProgressStreamingTests(unittest.TestCase):
             ProviderStreamEvent(
                 kind=ProviderStreamEventKind.TEXT_DELTA,
                 agent_id="author_agent",
-                text="Line 1: The cold wind howled.\nLine 2: Rain lashed the panes.\nLine 3: Shadows lengthened.",
+                text=(
+                    "Line 1: The cold wind howled.\n"
+                    "Line 2: Rain lashed the panes.\n"
+                    "Line 3: Shadows lengthened.\n"
+                    "Line 4: A floorboard creaked.\n"
+                    "Line 5: Dust danced in the air.\n"
+                    "Line 6: The key turned slowly."
+                ),
                 operation_id="op_99",
             )
         )
@@ -152,11 +159,37 @@ class AdvisoryProgressStreamingTests(unittest.TestCase):
         self.assertIn("Request: Writing chapter", rendered)
         self.assertIn("Thinking...", rendered)
         self.assertNotIn("Structuring the dialogue", rendered)
-        # Verify preview contains the last 2 lines
+        # Verify preview contains the last 5 lines
         self.assertIn("Preview: Line 2: Rain lashed the panes.", rendered)
         self.assertIn("         Line 3: Shadows lengthened.", rendered)
-        # Line 1 should not be in the 2-line preview
+        self.assertIn("         Line 4: A floorboard creaked.", rendered)
+        self.assertIn("         Line 5: Dust danced in the air.", rendered)
+        self.assertIn("         Line 6: The key turned slowly.", rendered)
+        # Line 1 should not be in the 5-line preview
         self.assertNotIn("Line 1: The cold wind howled.", rendered)
+
+    def test_long_single_line_preview_wraps_across_multiple_lines(self) -> None:
+        state = AdvisoryProgressState()
+        state.begin((AdvisoryProgressRequest("author_agent", "op_1", "Writing paragraph"),))
+        long_paragraph = (
+            "The rain fell softly upon the cobblestone streets of the old city, "
+            "washing away the dust of a long summer. In the distance, a clock tower "
+            "struck midnight, its deep chime echoing through the narrow alleys where "
+            "shadows danced in the flickering gaslight and footsteps faded into silence."
+        )
+        state.observe_stream(
+            ProviderStreamEvent(
+                kind=ProviderStreamEventKind.TEXT_DELTA,
+                agent_id="author_agent",
+                text=long_paragraph,
+                operation_id="op_1",
+            )
+        )
+        rendered = state.render(0)
+        lines = rendered.splitlines()
+        preview_lines = [line for line in lines if "Preview:" in line or line.startswith("           ")]
+        self.assertGreaterEqual(len(preview_lines), 2)
+        self.assertLessEqual(len(preview_lines), 5)
 
     def test_finish_and_begin_clear_all_transient_stream_state(self) -> None:
         state = AdvisoryProgressState()
@@ -216,7 +249,7 @@ class AdvisoryProgressStreamingTests(unittest.TestCase):
         lines = rendered.splitlines()
         self.assertLessEqual(len(lines), 8)
 
-    def test_render_height_is_bounded_to_8_lines(self) -> None:
+    def test_render_height_is_bounded_to_10_lines(self) -> None:
         state = AdvisoryProgressState()
         state.begin(
             (
@@ -244,7 +277,7 @@ class AdvisoryProgressStreamingTests(unittest.TestCase):
             )
         rendered = state.render(0)
         lines = rendered.splitlines()
-        self.assertLessEqual(len(lines), 8)
+        self.assertLessEqual(len(lines), 10)
 
     def test_last_error_message_captured_and_persisted_across_finish(self) -> None:
         state = AdvisoryProgressState()

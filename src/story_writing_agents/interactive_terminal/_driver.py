@@ -593,7 +593,7 @@ class RawTerminalDriver:
             ):
                 raise ValueError("progress frame must be safe text")
             available_width = max(0, capabilities.width - 1)
-            available_height = 8
+            available_height = 10
             rows: list[str] = []
             for logical in rendered.split("\n"):
                 if not logical:
