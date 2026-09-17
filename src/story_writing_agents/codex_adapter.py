@@ -458,13 +458,20 @@ class CodexAdapter:
                             else:
                                 top_type = None
 
+                            def _cleanup_completed_item() -> None:
+                                if event_type == "item.completed" and item_id is not None:
+                                    emitted_len_by_item.pop(item_id, None)
+                                    item_kinds_by_id.pop(item_id, None)
+
                             nested_type, type_conflict = _resolve_aliased_field(
                                 item, "type", "item_type", normalize_case=True
                             )
                             if type_conflict:
+                                _cleanup_completed_item()
                                 return
                             if top_type is not None and nested_type is not None:
                                 if top_type != nested_type:
+                                    _cleanup_completed_item()
                                     return
                                 resolved_type = top_type
                             elif nested_type is not None:
@@ -481,15 +488,18 @@ class CodexAdapter:
                                 elif resolved_type == "agent_message":
                                     explicit_kind = ProviderStreamEventKind.TEXT_DELTA
                                 else:
+                                    _cleanup_completed_item()
                                     return
                                 if item_id is not None:
                                     if item_id in item_kinds_by_id and item_kinds_by_id[item_id] != explicit_kind:
+                                        _cleanup_completed_item()
                                         return
                                     item_kinds_by_id[item_id] = explicit_kind
                                 current_kind = explicit_kind
                             elif item_id is not None and item_id in item_kinds_by_id:
                                 current_kind = item_kinds_by_id[item_id]
                             else:
+                                _cleanup_completed_item()
                                 return
 
                             text_key = (

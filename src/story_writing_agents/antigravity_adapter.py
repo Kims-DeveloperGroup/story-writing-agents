@@ -1240,8 +1240,11 @@ class AntigravityAdapter:
 
                 text_delta = raw_text_delta or ""
                 thought_delta = raw_thought_delta or ""
-                if step_type in {"thought", "reasoning"} and text_delta and not thought_delta:
-                    thought_delta = text_delta
+                if step_type in {"thought", "reasoning"}:
+                    if text_delta and not thought_delta:
+                        thought_delta = text_delta
+                    text_delta = ""
+                elif step_type != "agent_response":
                     text_delta = ""
 
                 if thought_delta:

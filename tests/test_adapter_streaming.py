@@ -1874,6 +1874,91 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[0].kind, ProviderStreamEventKind.TEXT_DELTA)
         self.assertEqual(events[0].text, "visible")
 
+    async def test_antigravity_adapter_thought_step_never_emits_text_delta_and_non_agent_response_steps_ignored(self) -> None:
+        adapter, binding = self._make_agy_binding("session_agy_step_privacy")
+        events: list[ProviderStreamEvent] = []
+
+        invocation = ProviderInvocation(
+            session_id="session_agy_step_privacy",
+            schema={"type": "object", "properties": {"msg": {"type": "string"}}, "required": ["msg"]},
+            payload={},
+            thread_id="thread_privacy_1",
+            stream_sink=events.append,
+        )
+
+        stream_lines = [
+            b'{"event":"step_update","step_update":{"step_type":"thought","thought_delta":"thinking","text_delta":"leaked_thought"}}\n',
+            b'{"event":"step_update","step_update":{"step_type":"user_input","text_delta":"echoed_user_prompt"}}\n',
+            b'{"event":"step_update","step_update":{"step_type":"agent_response","text_delta":"valid_response"}}\n',
+            (
+                b'{"event":"result","result":{"status":"SUCCESS","conversation_id":"thread_privacy_1",'
+                b'"structured_output":{"msg":"done"},'
+                b'"json_schema":{"type":"object","properties":{"msg":{"type":"string"}},"required":["msg"]}}}\n'
+            ),
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            self.assertIsNotNone(request.on_stdout_line)
+            for line in stream_lines:
+                request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            await adapter.invoke(binding, invocation)
+
+        text_deltas = [ev.text for ev in events if ev.kind == ProviderStreamEventKind.TEXT_DELTA]
+        thought_deltas = [ev.text for ev in events if ev.kind == ProviderStreamEventKind.THOUGHT_DELTA]
+        self.assertEqual(text_deltas, ["valid_response"])
+        self.assertEqual(thought_deltas, ["thinking"])
+
+    async def test_codex_adapter_item_completed_retires_state_on_conflicting_descriptor(self) -> None:
+        adapter = self.codex_adapter
+        binding = adapter.bind(self.definition)
+        events: list[ProviderStreamEvent] = []
+
+        invocation = ProviderInvocation(
+            session_id="session_codex_retire",
+            schema={"type": "object", "properties": {"summary": {"type": "string"}}, "required": ["summary"]},
+            payload={},
+            thread_id="thread_retire_1",
+            stream_sink=events.append,
+        )
+
+        stream_lines = [
+            b'{"type":"turn.started"}\n',
+            b'{"type":"item.started","item":{"id":"m1","type":"agent_message","text":"start"}}\n',
+            # Conflicting completed item: claims reasoning when started as agent_message
+            b'{"type":"item.completed","item":{"id":"m1","type":"reasoning","text":"conflict"}}\n',
+            # Later id-only delta should not reuse retired state
+            b'{"type":"item.delta","item_id":"m1","delta":"stale_delta"}\n',
+            b'{"type":"turn.completed"}\n',
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            self.assertIsNotNone(request.on_stdout_line)
+            for line in stream_lines:
+                request.on_stdout_line(line)
+            output_flag_index = request.command.index("--output-last-message")
+            output_file_path = Path(request.command[output_flag_index + 1])
+            output_file_path.parent.mkdir(parents=True, exist_ok=True)
+            output_file_path.write_text('{"summary":"Completed"}', encoding="utf-8")
+            return ProcessResult(
+                stdout=b'{"type":"thread.started","thread_id":"thread_retire_1"}\n{"type":"turn.completed"}\n',
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
+            await self.codex_adapter.invoke(binding, invocation)
+
+        # Only "start" from item.started should be emitted; conflict and stale delta must be ignored
+        emitted_texts = [ev.text for ev in events if ev.kind == ProviderStreamEventKind.TEXT_DELTA]
+        self.assertEqual(emitted_texts, ["start"])
+
 
 if __name__ == "__main__":
     unittest.main()
