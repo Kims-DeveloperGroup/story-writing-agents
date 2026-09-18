@@ -1433,7 +1433,303 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         self.assertTrue(_default_is_failure(FakeTurn("recovery_required")))
         self.assertFalse(_default_is_failure(FakeTurn("completed")))
 
+    def test_text_delta_chunks_long_line_and_bounds_rows(self) -> None:
+        """Verify long newline-free TEXT_DELTA is split into bounded <=2000 char chunks and <=2000 rows."""
+        state = AdvisoryProgressState()
+        key = ("agent1", "op1")
+        # Send a 5000-char single-line text delta
+        long_text = "x" * 5000
+        state.observe_stream(
+            ProviderStreamEvent(ProviderStreamEventKind.TEXT_DELTA, "agent1", long_text, operation_id="op1")
+        )
+        buf = state.agent_buffers[key]
+        # Should be split into chunks <= 2000 chars each: 2000, 2000, 1000
+        self.assertEqual(len(buf), 3)
+        for chunk in buf:
+            self.assertLessEqual(len(chunk), 2000)
 
-if __name__ == "__main__":
-    unittest.main()
+        # Now send 2500 lines to test buffer row bounding
+        state.observe_stream(
+            ProviderStreamEvent(ProviderStreamEventKind.TEXT_DELTA, "agent1", "\n".join(["line"] * 2500), operation_id="op1")
+        )
+        self.assertLessEqual(len(state.agent_buffers[key]), 2000)
+
+    def test_collapsed_rendering_resolves_active_agent_from_events_without_requests(self) -> None:
+        """Verify collapsed rendering displays active agent and status even without explicit requests."""
+        state = AdvisoryProgressState()
+        state.collapsed = True
+        state.begin(())  # No explicit requests
+        state.observe_stream(
+            ProviderStreamEvent(
+                ProviderStreamEventKind.STATUS,
+                "lead_agent",
+                "Analyzing outline...",
+                operation_id="lead_op",
+            )
+        )
+        rendered = state.render(0)
+        self.assertIn("lead_agent", rendered)
+        self.assertIn("Analyzing outline...", rendered)
+        self.assertIn("(press 't' to expand)", rendered)
+
+    def test_to_scroll_state_retains_errors_per_agent_and_unassociated_in_dedicated_tab(self) -> None:
+        """Verify multi-agent errors are retained by agent_id and unassociated errors get a dedicated tab."""
+        from story_writing_agents.interactive_terminal._core import InteractiveAdvisoryProgress, InteractiveTerminal
+        from story_writing_agents.interactive_terminal._model import ViewState
+
+        terminal = InteractiveTerminal(lambda p: "", lambda t: "", width=80)
+        progress = InteractiveAdvisoryProgress(terminal)
+        state = progress._state
+
+        # Two agents
+        key1 = ("agent_ok", "op1")
+        key2 = ("agent_err", "op2")
+        state.agent_buffers[key1] = ["Agent OK line 1", "Agent OK line 2"]
+        state.agent_buffers[key2] = ["Agent Err line 1"]
+
+        # Simulate agent_err failing
+        state.observe_stream(
+            ProviderStreamEvent(
+                ProviderStreamEventKind.STATUS,
+                "agent_err",
+                "error: token quota exceeded",
+                operation_id="op2",
+            )
+        )
+
+        scroll_state = progress.to_scroll_state(state=ViewState.ERROR)
+        self.assertEqual(len(scroll_state.views), 2)
+        # Agent OK buffer should NOT have the error
+        view_ok = next(v for v in scroll_state.views if v.title == "agent_ok")
+        self.assertNotIn("error: token quota exceeded", "\n".join(view_ok.buffer_lines))
+
+        # Agent Err buffer should have the error
+        view_err = next(v for v in scroll_state.views if v.title == "agent_err")
+        self.assertIn("error: token quota exceeded", "\n".join(view_err.buffer_lines))
+
+        # Now test unassociated error with multiple agents
+        state.agent_errors.clear()
+        state.last_error_message = "Unexpected runtime panic"
+        scroll_state_unassoc = progress.to_scroll_state(state=ViewState.ERROR)
+        # Should have agent_ok, agent_err, and dedicated Lead Error tab
+        self.assertEqual(len(scroll_state_unassoc.views), 3)
+        lead_err_view = scroll_state_unassoc.views[-1]
+        self.assertEqual(lead_err_view.title, "Lead Error")
+        self.assertIn("Unexpected runtime panic", "\n".join(lead_err_view.buffer_lines))
+
+    def test_run_nested_scroll_inspector_calls_toggle_callback_on_mode_change(self) -> None:
+        """Verify toggle_callback is called when 't' toggles collapsed mode in nested scroll inspector."""
+        from story_writing_agents.interactive_terminal._controls import transition_nested_scroll
+        from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
+        from story_writing_agents.interactive_terminal._model import (
+            MultiAgentScrollState,
+            NestedScrollViewport,
+            RenderedInputFrame,
+            KeyEvent,
+            KeyKind,
+        )
+
+        driver = RawTerminalDriver(
+            lambda _prompt: "",
+            io.StringIO(),
+            io.StringIO(),
+            lambda s, e: (s, None),
+            lambda s, e, h: (s, None),
+            lambda h, t: h,
+        )
+        viewport = NestedScrollViewport(
+            view_id="a:1",
+            title="Agent",
+            total_lines=5,
+            start_line=1,
+            visible_lines=("line 1",),
+            visible_height=1,
+            is_focused=True,
+            buffer_lines=("line 1",),
+        )
+        initial_state = MultiAgentScrollState((viewport,), 0, collapsed=False)
+
+        toggle_called = []
+        def on_toggle():
+            toggle_called.append(True)
+            return True
+
+        renderer = lambda state, caps: RenderedInputFrame("preview", 1)
+
+        # Mock _prepare_input to return a fake configuration
+        fake_config = mock.MagicMock()
+        fake_caps = mock.MagicMock()
+
+        # Simulate user pressing 't' then 'q'
+        with mock.patch.object(RawTerminalDriver, "_observe_input_capabilities", return_value=mock.MagicMock()), \
+             mock.patch.object(RawTerminalDriver, "_prepare_input", return_value=(fake_caps, fake_config)), \
+             mock.patch("story_writing_agents.interactive_terminal._driver._activate_terminal"), \
+             mock.patch("story_writing_agents.interactive_terminal._driver._restore_terminal_or_raise"), \
+             mock.patch.object(RawTerminalDriver, "_redraw_nested_scroll_frame"), \
+             mock.patch.object(RawTerminalDriver, "_read_character", side_effect=["t", "q"]):
+            driver.run_nested_scroll_inspector(
+                initial_state,
+                transition_nested_scroll,
+                renderer,
+                toggle_callback=on_toggle,
+            )
+
+        self.assertEqual(len(toggle_called), 1)
+
+    def test_is_failure_raising_resets_progress_state(self) -> None:
+        """Verify driver progress state is reset even if is_failure predicate raises."""
+        from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
+        from story_writing_agents.interactive_terminal._model import (
+            CapabilityProfile,
+            TerminalCapabilities,
+        )
+        driver = RawTerminalDriver(
+            lambda _prompt: "",
+            io.StringIO(),
+            io.StringIO(),
+            lambda s, e: (s, None),
+            lambda s, e, h: (s, None),
+            lambda h, t: h,
+        )
+
+        async def dummy_op():
+            return "done"
+
+        def broken_is_failure(_res):
+            raise ValueError("predicate crashed")
+
+        caps = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+        with mock.patch.object(RawTerminalDriver, "capabilities", return_value=caps):
+            with self.assertRaises(ValueError):
+                asyncio.run(
+                    driver.run_advisory_progress(
+                        dummy_op(),
+                        lambda _f: "frame",
+                        is_failure=broken_is_failure,
+                    )
+                )
+        self.assertFalse(driver._progress_active)
+        self.assertIsNone(driver._progress_renderer)
+
+    def test_setup_failure_closes_operation_coroutine(self) -> None:
+        """Verify operation coroutine is closed if activation and restoration fail during setup."""
+        from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
+        from story_writing_agents.interactive_terminal._model import (
+            CapabilityProfile,
+            TerminalCapabilities,
+        )
+        driver = RawTerminalDriver(
+            lambda _prompt: "",
+            io.StringIO(),
+            io.StringIO(),
+            lambda s, e: (s, None),
+            lambda s, e, h: (s, None),
+            lambda h, t: h,
+        )
+
+        closed = []
+        async def dummy_op():
+            try:
+                await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                pass
+            finally:
+                closed.append(True)
+
+        coro = dummy_op()
+        # Mock _prepare_input to return valid config and toggle_callback so it attempts activation
+        fake_config = mock.MagicMock()
+        fake_caps = mock.MagicMock()
+        caps = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+
+        with mock.patch.object(RawTerminalDriver, "capabilities", return_value=caps), \
+             mock.patch.object(RawTerminalDriver, "_observe_input_capabilities", return_value=mock.MagicMock()), \
+             mock.patch.object(RawTerminalDriver, "_prepare_input", return_value=(fake_caps, fake_config)), \
+             mock.patch("story_writing_agents.interactive_terminal._driver._activate_terminal", side_effect=RuntimeError("activation failed")), \
+             mock.patch("story_writing_agents.interactive_terminal._driver._restore_terminal_or_raise", side_effect=RuntimeError("restoration failed")):
+            with self.assertRaises(RuntimeError):
+                asyncio.run(
+                    driver.run_advisory_progress(
+                        coro,
+                        lambda _f: "frame",
+                        toggle_callback=lambda: False,
+                    )
+                )
+
+    def test_nested_inspector_failure_is_preserved_and_not_swallowed(self) -> None:
+        """Verify nested inspector failure is propagated and not swallowed into a newline."""
+        from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
+        from story_writing_agents.interactive_terminal._model import (
+            CapabilityProfile,
+            MultiAgentScrollState,
+            NestedScrollViewport,
+            TerminalCapabilities,
+        )
+
+        driver = RawTerminalDriver(
+            lambda _prompt: "",
+            io.StringIO(),
+            io.StringIO(),
+            lambda s, e: (s, None),
+            lambda s, e, h: (s, None),
+            lambda h, t: h,
+        )
+
+        async def failing_op():
+            raise RuntimeError("provider failed")
+
+        viewport = NestedScrollViewport(
+            view_id="a:1",
+            title="Agent",
+            total_lines=5,
+            start_line=1,
+            visible_lines=("line 1",),
+            visible_height=1,
+            is_focused=True,
+            buffer_lines=("line 1",),
+        )
+        scroll_state = MultiAgentScrollState((viewport,), 0)
+        caps = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+
+        with mock.patch.object(RawTerminalDriver, "capabilities", return_value=caps), \
+             mock.patch.object(
+                RawTerminalDriver,
+                "run_nested_scroll_inspector",
+                side_effect=RuntimeError("viewer terminal restoration failed"),
+            ):
+            with self.assertRaises(RuntimeError) as exc_info:
+                asyncio.run(
+                    driver.run_advisory_progress(
+                        failing_op(),
+                        lambda _f: "frame",
+                        scroll_state_provider=lambda _f: scroll_state,
+                        nested_scroll_transition=mock.MagicMock(),
+                        nested_scroll_renderer=mock.MagicMock(),
+                    )
+                )
+            self.assertEqual(str(exc_info.exception), "viewer terminal restoration failed")
 

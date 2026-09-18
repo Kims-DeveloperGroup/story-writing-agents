@@ -530,7 +530,9 @@ class RawTerminalDriver:
     def _clear_progress_frame(self) -> None:
         """Clear every physical row owned by the current indicator."""
 
-        rows = max(1, self._progress_rows)
+        if self._progress_rows <= 0:
+            return
+        rows = self._progress_rows
         commands: list[str] = []
         for ordinal in range(rows):
             commands.append("\r\x1b[K")
@@ -658,6 +660,11 @@ class RawTerminalDriver:
                         _restore_terminal_or_raise(
                             configuration, act_exc, discard_input=False
                         )
+                    except BaseException:
+                        close = getattr(operation, "close", None)
+                        if callable(close):
+                            close()
+                        raise
                     finally:
                         configuration = None
 
@@ -768,18 +775,22 @@ class RawTerminalDriver:
                         discard_input=False,
                     )
 
-        failed = (
-            operation_failure is not None
-            and not isinstance(
-                operation_failure, (asyncio.CancelledError, KeyboardInterrupt)
-            )
-        ) or (
-            is_failure is not None and operation_succeeded and is_failure(result)
-        )
-
         clear_failure: BaseException | None = None
-        self._progress_active = False
-        self._progress_renderer = None
+        failed = False
+        try:
+            failed = (
+                operation_failure is not None
+                and not isinstance(
+                    operation_failure, (asyncio.CancelledError, KeyboardInterrupt)
+                )
+            ) or (
+                is_failure is not None and operation_succeeded and is_failure(result)
+            )
+        finally:
+            self._progress_active = False
+            self._progress_renderer = None
+
+        inspector_failure: BaseException | None = None
         if not failed:
             try:
                 self._clear_progress_frame()
@@ -806,22 +817,24 @@ class RawTerminalDriver:
                             scroll_state,
                             nested_scroll_transition,
                             nested_scroll_renderer,
+                            toggle_callback=toggle_callback,
                         )
-                    else:
-                        self._write_raw_text("\r\n")
-                        self._progress_rows = 0
-                except BaseException:
+                except BaseException as exc:
+                    inspector_failure = exc
+                finally:
                     try:
-                        self._write_raw_text("\r\n")
-                    except Exception:
-                        pass
-                    self._progress_rows = 0
+                        self._clear_progress_frame()
+                    except BaseException as exc:
+                        if clear_failure is None:
+                            clear_failure = exc
             else:
                 try:
-                    self._write_raw_text("\r\n")
-                except Exception:
-                    pass
-                self._progress_rows = 0
+                    self._clear_progress_frame()
+                except BaseException as exc:
+                    clear_failure = exc
+
+        if inspector_failure is not None:
+            raise inspector_failure
 
         if (
             operation_failure is None
@@ -844,6 +857,8 @@ class RawTerminalDriver:
         initial_state: MultiAgentScrollState,
         transition: Callable[[MultiAgentScrollState, KeyEvent], MultiAgentScrollState],
         renderer: _NestedScrollRenderer,
+        *,
+        toggle_callback: Callable[[], bool] | None = None,
     ) -> MultiAgentScrollState:
         """Run interactive scrolling on the retained nested agent view."""
 
@@ -868,6 +883,7 @@ class RawTerminalDriver:
                 capabilities,
                 transition,
                 renderer,
+                toggle_callback=toggle_callback,
             )
 
     def _run_live_nested_scroll_inspector(
@@ -877,6 +893,8 @@ class RawTerminalDriver:
         capabilities: TerminalCapabilities,
         transition: Callable[[MultiAgentScrollState, KeyEvent], MultiAgentScrollState],
         renderer: _NestedScrollRenderer,
+        *,
+        toggle_callback: Callable[[], bool] | None = None,
     ) -> MultiAgentScrollState:
         """Run raw-mode interactive navigation for nested agent scroll view."""
 
@@ -913,7 +931,10 @@ class RawTerminalDriver:
                         )
                         escape_sequence = escape_state.escape_sequence
                         if event is not None:
+                            old_collapsed = state.collapsed
                             state = transition(state, event)
+                            if toggle_callback is not None and state.collapsed != old_collapsed:
+                                toggle_callback()
                             self._redraw_nested_scroll_frame(state, capabilities, renderer)
                         if not reprocess:
                             continue
@@ -935,7 +956,10 @@ class RawTerminalDriver:
                         break
                     if event.kind is KeyKind.TEXT and event.text in {"q", "Q"}:
                         break
+                    old_collapsed = state.collapsed
                     state = transition(state, event)
+                    if toggle_callback is not None and state.collapsed != old_collapsed:
+                        toggle_callback()
                     self._redraw_nested_scroll_frame(state, capabilities, renderer)
         except BaseException as failure:
             active_failure = failure
@@ -944,10 +968,9 @@ class RawTerminalDriver:
                 configuration, lifecycle_failure or active_failure
             )
             try:
-                self._write_raw_text("\r\n")
+                self._clear_progress_frame()
             except Exception:
-                pass
-            self._progress_rows = 0
+                self._progress_rows = 0
 
         if lifecycle_failure is not None:
             raise lifecycle_failure

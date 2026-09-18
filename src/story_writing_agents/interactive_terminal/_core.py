@@ -2000,11 +2000,13 @@ class InteractiveAdvisoryProgress:
             self._state.agent_buffers
         )
         source_error = self._state.last_error_message
+        source_agent_errors: dict[tuple[str, str], str] = dict(self._state.agent_errors)
         using_snapshot = False
         if not source_buffers and self._state.failure_snapshot is not None:
             snap_buffers, snap_error = self._state.failure_snapshot
             source_buffers = {k: list(v) for k, v in snap_buffers.items()}
             source_error = snap_error or source_error
+            source_agent_errors = dict(self._state.failure_agent_errors)
             using_snapshot = True
 
         if not using_snapshot:
@@ -2024,12 +2026,18 @@ class InteractiveAdvisoryProgress:
                 buffer = [p for p in preview.splitlines() if p] or [
                     self._state.stream_status.get(key, "Working...")
                 ]
-            if state == ViewState.ERROR and source_error:
-                err_lines = [
-                    line for line in source_error.splitlines() if line
-                ]
-                if err_lines and not any(err_lines[0] in line for line in buffer):
-                    buffer.extend(err_lines)
+            if state == ViewState.ERROR:
+                err_to_append: str | None = None
+                if key in source_agent_errors:
+                    err_to_append = source_agent_errors[key]
+                elif len(ordered_keys) == 1 and source_error:
+                    err_to_append = source_error
+                if err_to_append:
+                    err_lines = [
+                        line for line in err_to_append.splitlines() if line
+                    ]
+                    if err_lines and not any(err_lines[0] in line for line in buffer):
+                        buffer.extend(err_lines)
             total_lines = len(buffer)
             auto_scroll = self._state.auto_scroll_flags.get(key, True)
             max_start = max(1, total_lines - visible_height + 1)
@@ -2055,6 +2063,23 @@ class InteractiveAdvisoryProgress:
                     buffer_lines=tuple(buffer),
                 )
             )
+        if state == ViewState.ERROR and source_error and views and len(ordered_keys) > 1:
+            if not any(source_error in source_agent_errors.get(k, "") for k in ordered_keys):
+                err_lines = [line for line in source_error.splitlines() if line] or ["Execution failed."]
+                views.append(
+                    NestedScrollViewport(
+                        view_id="Lead:error",
+                        title="Lead Error",
+                        total_lines=len(err_lines),
+                        start_line=1,
+                        visible_lines=tuple(err_lines[:visible_height]),
+                        visible_height=visible_height,
+                        is_focused=False,
+                        state=state,
+                        auto_scroll=False,
+                        buffer_lines=tuple(err_lines),
+                    )
+                )
         if not views:
             fallback_text = source_error or "Execution failed."
             fallback_lines = [

@@ -232,19 +232,14 @@ class InteractiveLeadAdapter:
             )
             self._write_elapsed()
             return False
-        except Exception as exc:
-            last_error = getattr(self._progress, "last_error_message", None)
-            exc_text = str(exc).strip()
-            if last_error and last_error not in exc_text:
-                error_message = f"{exc_text}\n{last_error}"
-            else:
-                error_message = exc_text or "Unexpected failure during Lead turn."
+        except Exception:
+            error_message = "Unexpected failure during Lead turn."
             self._semantic_output.write_component(
                 project_lead_error_result(error_message)
             )
             self._semantic_output.write_component(
                 Notice(
-                    f"Lead turn failed: {error_message}. "
+                    f"Lead turn failed: {error_message} "
                     "Inspect /history and /exchanges before continuing.",
                     label="turn failure",
                     role=SemanticRole.ERROR,

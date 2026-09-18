@@ -69,9 +69,17 @@ async def _communicate_streaming(
         try:
             if stdin:
                 process.stdin.write(stdin)
-                await process.stdin.drain()
-            process.stdin.close()
-            await process.stdin.wait_closed()
+                drain = process.stdin.drain()
+                if inspect.isawaitable(drain):
+                    await drain
+            close = getattr(process.stdin, "close", None)
+            if callable(close):
+                close()
+            wait_closed = getattr(process.stdin, "wait_closed", None)
+            if callable(wait_closed):
+                res = wait_closed()
+                if inspect.isawaitable(res):
+                    await res
         except (BrokenPipeError, ConnectionResetError):
             pass
 
@@ -123,10 +131,10 @@ async def _communicate_streaming(
             stderr_chunks.append(chunk)
 
     tasks = [
-        asyncio.create_task(write_stdin()),
-        asyncio.create_task(read_stdout()),
-        asyncio.create_task(read_stderr()),
-        asyncio.create_task(process.wait()),
+        asyncio.ensure_future(write_stdin()),
+        asyncio.ensure_future(read_stdout()),
+        asyncio.ensure_future(read_stderr()),
+        asyncio.ensure_future(process.wait()),
     ]
     try:
         await asyncio.gather(*tasks)

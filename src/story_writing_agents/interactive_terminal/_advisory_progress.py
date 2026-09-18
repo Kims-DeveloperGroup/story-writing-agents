@@ -63,12 +63,14 @@ class AdvisoryProgressState:
         self.stream_status: dict[tuple[str, str], str] = {}
         self.stream_preview: dict[tuple[str, str], str] = {}
         self.last_error_message: str | None = None
+        self.agent_errors: dict[tuple[str, str], str] = {}
         self.agent_buffers: dict[tuple[str, str], list[str]] = {}
         self.scroll_offsets: dict[tuple[str, str], int] = {}
         self.focused_agent_index: int = 0
         self.auto_scroll_flags: dict[tuple[str, str], bool] = {}
         self.collapsed: bool = False
         self.failure_snapshot: tuple[dict[tuple[str, str], tuple[str, ...]], str | None] | None = None
+        self.failure_agent_errors: dict[tuple[str, str], str] = {}
         self.last_buffer_event_was_text: dict[tuple[str, str], bool] = {}
 
     def toggle_collapsed(self) -> bool:
@@ -80,10 +82,12 @@ class AdvisoryProgressState:
         """Preserve current agent buffers and last error as a failure snapshot."""
         buffers = {k: tuple(v) for k, v in self.agent_buffers.items() if v}
         self.failure_snapshot = (buffers, self.last_error_message)
+        self.failure_agent_errors = dict(self.agent_errors)
 
     def dismiss_failure_snapshot(self) -> None:
         """Explicitly evict the retained failure snapshot."""
         self.failure_snapshot = None
+        self.failure_agent_errors.clear()
 
     def begin(self, requests: tuple[AdvisoryProgressRequest, ...] = ()) -> None:
         if self.started_at is None:
@@ -171,6 +175,7 @@ class AdvisoryProgressState:
                 or "overloaded" in lower
                 or "capacity" in lower
             ):
+                self.agent_errors[key] = sanitized
                 self.last_error_message = sanitized
                 self.snapshot_failure()
         elif event.kind is ProviderStreamEventKind.THOUGHT_DELTA:
@@ -198,9 +203,11 @@ class AdvisoryProgressState:
                 buf[-1] += delta_lines[0]
                 buf.extend(delta_lines[1:])
             if buf and len(buf[-1]) > 2000:
-                long_line = buf[-1]
-                buf[-1] = long_line[:2000]
-                buf.append(long_line[2000:])
+                long_line = buf.pop()
+                while len(long_line) > 2000:
+                    buf.append(long_line[:2000])
+                    long_line = long_line[2000:]
+                buf.append(long_line)
             if len(buf) > 2000:
                 del buf[:-2000]
             self.last_buffer_event_was_text[key] = True
@@ -215,6 +222,7 @@ class AdvisoryProgressState:
         self.events.clear()
         self.stream_status.clear()
         self.stream_preview.clear()
+        self.agent_errors.clear()
         self.agent_buffers.clear()
         self.scroll_offsets.clear()
         self.focused_agent_index = 0
@@ -222,20 +230,7 @@ class AdvisoryProgressState:
         self.last_buffer_event_was_text.clear()
         return elapsed
 
-    def render(self, frame: int) -> str:
-        elapsed = format_elapsed(self.elapsed_seconds())
-        if self.collapsed:
-            active_label = self.requests[0].agent_id if self.requests else "Working"
-            status_summary = ""
-            if self.requests:
-                key = (self.requests[0].agent_id, self.requests[0].operation_id)
-                status_text = self.stream_status.get(key)
-                if status_text:
-                    status_summary = f" · {status_text[:40]}"
-                elif self.requests[0].request:
-                    status_summary = f" · {self.requests[0].request[:40]}"
-            return f"[{_FRAMES[frame % len(_FRAMES)]}] {elapsed} · {active_label}{status_summary} (press 't' to expand)"
-        lines = [f"[{_FRAMES[frame % len(_FRAMES)]}] {elapsed} · Working"]
+    def _ordered_requests(self) -> list[AdvisoryProgressRequest]:
         ordered = list(self.requests)
         known = {(item.agent_id, item.operation_id) for item in ordered}
         for event in self.events.values():
@@ -247,6 +242,23 @@ class AdvisoryProgressState:
             if key not in known:
                 ordered.append(AdvisoryProgressRequest(*key, ""))
                 known.add(key)
+        return ordered
+
+    def render(self, frame: int) -> str:
+        elapsed = format_elapsed(self.elapsed_seconds())
+        ordered = self._ordered_requests()
+        if self.collapsed:
+            active_label = ordered[0].agent_id if ordered else "Working"
+            status_summary = ""
+            if ordered:
+                key = (ordered[0].agent_id, ordered[0].operation_id)
+                status_text = self.stream_status.get(key)
+                if status_text:
+                    status_summary = f" · {status_text[:40]}"
+                elif ordered[0].request:
+                    status_summary = f" · {ordered[0].request[:40]}"
+            return f"[{_FRAMES[frame % len(_FRAMES)]}] {elapsed} · {active_label}{status_summary} (press 't' to expand)"
+        lines = [f"[{_FRAMES[frame % len(_FRAMES)]}] {elapsed} · Working"]
         for request in ordered:
             key = (request.agent_id, request.operation_id)
             related = sorted(

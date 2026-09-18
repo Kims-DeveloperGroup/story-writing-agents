@@ -992,13 +992,12 @@ class AntigravityAdapter:
             ) from None
         try:
             transport_schema = self.native_output_schema(invocation.schema)
-            streaming = invocation.stream_sink is not None
             command = self.command(
                 provider_state_directory=provider_state_directory,
                 schema=transport_schema,
                 thread_id=invocation.thread_id,
                 agent_id=binding.definition.agent_id,
-                output_format="stream-json" if streaming else "json",
+                output_format="stream-json",
             )
             prompt = invocation.payload_json.decode("utf-8", errors="strict")
             command.extend(["--print", prompt])
@@ -1055,11 +1054,13 @@ class AntigravityAdapter:
         agent_id = binding.definition.agent_id
         stream_sink = invocation.stream_sink
 
+        def emit_stream_event(event: ProviderStreamEvent) -> None:
+            if stream_sink is not None:
+                stream_sink(event)
+
         def handle_stream_line(raw_line: bytes) -> None:
             nonlocal callback_lines_delivered, invalid_stream_line, has_trailing_data_after_terminal
             callback_lines_delivered += 1
-            if stream_sink is None:
-                return
             stripped = raw_line.strip()
             if not stripped:
                 return
@@ -1129,7 +1130,7 @@ class AntigravityAdapter:
                 if target_dict is not None and str(target_dict.get("status", "")).upper() == "ERROR":
                     err_text = str(target_dict.get("error") or "")
                     if err_text:
-                        stream_sink(
+                        emit_stream_event(
                             ProviderStreamEvent(
                                 ProviderStreamEventKind.STATUS,
                                 agent_id,
@@ -1154,7 +1155,7 @@ class AntigravityAdapter:
                     or event.get("status")
                     or "Generating response..."
                 )
-                stream_sink(
+                emit_stream_event(
                     ProviderStreamEvent(
                         ProviderStreamEventKind.STATUS,
                         agent_id,
@@ -1175,7 +1176,7 @@ class AntigravityAdapter:
                     or ""
                 )
                 if text:
-                    stream_sink(
+                    emit_stream_event(
                         ProviderStreamEvent(
                             ProviderStreamEventKind.THOUGHT_DELTA,
                             agent_id,
@@ -1189,18 +1190,19 @@ class AntigravityAdapter:
                 "agent_message",
                 "text",
             }:
-                text = str(
+                raw_text = (
                     event.get("text")
-                    or event.get("delta")
-                    or event.get("content")
-                    or ""
+                    if "text" in event
+                    else event.get("delta")
+                    if "delta" in event
+                    else event.get("content")
                 )
-                if text:
-                    stream_sink(
+                if isinstance(raw_text, str) and raw_text:
+                    emit_stream_event(
                         ProviderStreamEvent(
                             ProviderStreamEventKind.TEXT_DELTA,
                             agent_id,
-                            text,
+                            raw_text,
                         )
                     )
             elif event_type == "init":
@@ -1209,7 +1211,7 @@ class AntigravityAdapter:
                     if invalid_stream_line is None:
                         invalid_stream_line = "init payload is not an object"
                     return
-                stream_sink(
+                emit_stream_event(
                     ProviderStreamEvent(
                         ProviderStreamEventKind.STATUS,
                         agent_id,
@@ -1253,7 +1255,7 @@ class AntigravityAdapter:
                     text_delta = ""
 
                 if thought_delta:
-                    stream_sink(
+                    emit_stream_event(
                         ProviderStreamEvent(
                             ProviderStreamEventKind.THOUGHT_DELTA,
                             agent_id,
@@ -1261,7 +1263,7 @@ class AntigravityAdapter:
                         )
                     )
                 if text_delta:
-                    stream_sink(
+                    emit_stream_event(
                         ProviderStreamEvent(
                             ProviderStreamEventKind.TEXT_DELTA,
                             agent_id,
@@ -1276,7 +1278,7 @@ class AntigravityAdapter:
                         or ""
                     )
                     if error_text:
-                        stream_sink(
+                        emit_stream_event(
                             ProviderStreamEvent(
                                 ProviderStreamEventKind.STATUS,
                                 agent_id,
@@ -1305,9 +1307,7 @@ class AntigravityAdapter:
                         self.timeout_seconds + PROVIDER_TIMEOUT_GRACE_SECONDS
                     ),
                     cwd=working_directory,
-                    on_stdout_line=(
-                        handle_stream_line if streaming else None
-                    ),
+                    on_stdout_line=handle_stream_line,
                 ),
                 create_process=tracked_create_process,
                 wait_for=self._wait_for(),
@@ -1362,7 +1362,7 @@ class AntigravityAdapter:
             raise
 
         submitted = True
-        if streaming and callback_lines_delivered == 0 and result.stdout:
+        if callback_lines_delivered == 0 and result.stdout:
             for raw_line in result.stdout.splitlines(keepends=True):
                 handle_stream_line(raw_line)
         partial_timeout = bool(_NATIVE_PARTIAL_TIMEOUT.search(result.stderr))
@@ -1370,9 +1370,11 @@ class AntigravityAdapter:
             _NATIVE_TRUNCATED.search(result.stderr)
         )
         diagnostic_stdout = (
-            captured_result_bytes[0]
-            if streaming and len(captured_result_bytes) == 1
-            else b"" if streaming else result.stdout
+            result.stdout
+            if len(result.stdout.splitlines()) <= 1
+            else captured_result_bytes[0]
+            if len(captured_result_bytes) == 1
+            else b""
         )
         response_diagnostic = ProviderResponseDiagnostic(
             stdout=diagnostic_stdout,
@@ -1380,53 +1382,40 @@ class AntigravityAdapter:
             exit_code=result.returncode,
         )
         try:
-            if streaming:
-                if invalid_stream_line is not None:
-                    raise ProviderInvocationError(
-                        f"Antigravity streaming response contained invalid stream line: {invalid_stream_line}",
-                        taint_existing_thread=True,
-                    )
-                if len(captured_result_bytes) != 1:
-                    raise ProviderInvocationError(
-                        f"Antigravity streaming response contained {len(captured_result_bytes)} terminal result events; expected exactly 1",
-                        taint_existing_thread=True,
-                    )
-                if has_trailing_data_after_terminal:
-                    raise ProviderInvocationError(
-                        "Antigravity streaming response contained trailing data after terminal result",
-                        taint_existing_thread=True,
-                    )
-                effective_stdout = captured_result_bytes[0]
-                authentication = self._authentication_failure(
-                    effective_stdout, result.returncode,
+            if invalid_stream_line is not None:
+                raise ProviderInvocationError(
+                    f"Antigravity streaming response contained invalid stream line: {invalid_stream_line}",
+                    taint_existing_thread=True,
                 )
-                if authentication is not None:
-                    raise ProviderInvocationError(
-                        str(authentication),
-                        taint_existing_thread=not authentication.replay_safe,
-                        authentication_failure=authentication,
-                    )
-                if result.returncode != 0:
-                    raise ProviderInvocationError(
-                        f"Antigravity CLI exited with status {result.returncode}",
-                        taint_existing_thread=True,
-                    )
-            else:
-                effective_stdout = result.stdout
-                authentication = self._authentication_failure(
-                    effective_stdout, result.returncode,
+            effective_stdout = (
+                captured_result_bytes[0]
+                if len(captured_result_bytes) == 1
+                else result.stdout
+            )
+            authentication = self._authentication_failure(
+                effective_stdout, result.returncode,
+            )
+            if authentication is not None:
+                raise ProviderInvocationError(
+                    str(authentication),
+                    taint_existing_thread=not authentication.replay_safe,
+                    authentication_failure=authentication,
                 )
-                if authentication is not None:
-                    raise ProviderInvocationError(
-                        str(authentication),
-                        taint_existing_thread=not authentication.replay_safe,
-                        authentication_failure=authentication,
-                    )
-                if result.returncode != 0:
-                    raise ProviderInvocationError(
-                        f"Antigravity CLI exited with status {result.returncode}",
-                        taint_existing_thread=True,
-                    )
+            if result.returncode != 0:
+                raise ProviderInvocationError(
+                    f"Antigravity CLI exited with status {result.returncode}",
+                    taint_existing_thread=True,
+                )
+            if len(captured_result_bytes) != 1:
+                raise ProviderInvocationError(
+                    f"Antigravity streaming response contained {len(captured_result_bytes)} terminal result events; expected exactly 1",
+                    taint_existing_thread=True,
+                )
+            if has_trailing_data_after_terminal:
+                raise ProviderInvocationError(
+                    "Antigravity streaming response contained trailing data after terminal result",
+                    taint_existing_thread=True,
+                )
             provider_result = self._provider_result(
                 effective_stdout,
                 expected_thread_id=invocation.thread_id,
@@ -1644,7 +1633,7 @@ class AntigravityAdapter:
         schema: Mapping[str, Any],
         thread_id: str | None,
         agent_id: str,
-        output_format: str = "json",
+        output_format: str = "stream-json",
     ) -> list[str]:
         """Build Antigravity options from the already rendered transport schema."""
 

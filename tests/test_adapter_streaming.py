@@ -2087,6 +2087,98 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         emitted_texts = [ev.text for ev in events if ev.kind == ProviderStreamEventKind.TEXT_DELTA]
         self.assertEqual(emitted_texts, ["hello"])
 
+    async def test_codex_adapter_rejects_resurrected_completed_item_id_with_explicit_type(self) -> None:
+        """Verify completed item IDs cannot be resurrected even with explicit item_type."""
+        binding = self.codex_adapter.bind(self.definition)
+        events: list[ProviderStreamEvent] = []
+        invocation = ProviderInvocation(
+            session_id="session_tombstone_resurrect",
+            schema={"type": "object"},
+            payload={},
+            thread_id="thread_tombstone_1",
+            stream_sink=events.append,
+        )
+
+        stream_lines = [
+            b'{"type":"turn.started"}\n',
+            b'{"type":"item.started","item":{"id":"item_done","type":"agent_message","text":"first part"}}\n',
+            b'{"type":"item.completed","item":{"id":"item_done","type":"agent_message","text":"first part"}}\n',
+            # Resurrection attempt with explicit type
+            b'{"type":"item.started","item":{"id":"item_done","type":"agent_message","text":"resurrected"}}\n',
+            b'{"type":"item.delta","item_id":"item_done","item_type":"agent_message","delta":" delta"}\n',
+            b'{"type":"turn.completed"}\n',
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            output_flag_index = request.command.index("--output-last-message")
+            output_file_path = Path(request.command[output_flag_index + 1])
+            output_file_path.parent.mkdir(parents=True, exist_ok=True)
+            output_file_path.write_text('{"summary":"Done"}', encoding="utf-8")
+            return ProcessResult(
+                stdout=b'{"type":"thread.started","thread_id":"thread_tombstone_1"}\n{"type":"turn.completed"}\n',
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
+            await self.codex_adapter.invoke(binding, invocation)
+
+        emitted_texts = [ev.text for ev in events if ev.kind == ProviderStreamEventKind.TEXT_DELTA]
+        self.assertEqual(emitted_texts, ["first part"])
+
+    def test_codex_adapter_extract_stream_text_ignores_non_string_values(self) -> None:
+        """Verify _extract_stream_text accepts only string text and ignores non-string metadata."""
+        from story_writing_agents.codex_adapter import _extract_stream_text
+
+        self.assertEqual(_extract_stream_text("valid"), "valid")
+        self.assertEqual(_extract_stream_text({"text": "hello"}), "hello")
+        self.assertEqual(_extract_stream_text({"text": 123}), "")
+        self.assertEqual(_extract_stream_text({"content": {"nested": "obj"}}), "")
+        self.assertEqual(_extract_stream_text([{"text": "a"}, {"text": 42}, "b"]), "ab")
+
+    async def test_antigravity_adapter_legacy_text_delta_fails_closed_on_non_string_payload(self) -> None:
+        """Verify legacy event extractor validates text payload as string before emitting TEXT_DELTA."""
+        adapter, binding = self._make_agy_binding("session_non_str_payload")
+        events: list[ProviderStreamEvent] = []
+
+        invocation = ProviderInvocation(
+            session_id="session_non_str_payload",
+            schema={"type": "object"},
+            payload={},
+            thread_id="thread_agy_non_str",
+            stream_sink=events.append,
+        )
+
+        terminal_result = {
+            "conversation_id": "thread_agy_non_str",
+            "status": "SUCCESS",
+            "structured_output": {},
+            "json_schema": {"type": "object"},
+        }
+        stream_lines = [
+            b'{"type":"agent_message","text":12345}\n',
+            json.dumps(terminal_result).encode("utf-8") + b"\n",
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            await adapter.invoke(binding, invocation)
+
+        text_deltas = [e for e in events if e.kind == ProviderStreamEventKind.TEXT_DELTA]
+        self.assertEqual(len(text_deltas), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
