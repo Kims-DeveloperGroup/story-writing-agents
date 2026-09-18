@@ -263,7 +263,7 @@ Capture and storage are fail-open and never retry. Likewise, a correlated
 request plus `provider_failure` outcome means no exact valid `ProviderResult`
 crossed Story's adapter boundary. When capture succeeds, the intervening
 response is `{"provider_failure":true}` and may also contain completed native
-stdout, stderr, and exit status. It still does not prove what external work
+error, status, stderr, and exit status. It still does not prove what external work
 occurred. A completed valid result rejected by Story normally has request,
 response, and `rejected` outcome under one `exchange_id`.
 
