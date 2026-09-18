@@ -653,8 +653,13 @@ class RawTerminalDriver:
             if configuration is not None:
                 try:
                     _activate_terminal(configuration)
-                except BaseException:
-                    configuration = None
+                except BaseException as act_exc:
+                    try:
+                        _restore_terminal_or_raise(
+                            configuration, act_exc, discard_input=False
+                        )
+                    finally:
+                        configuration = None
 
             self._progress_active = True
             self._progress_frame = 0
@@ -763,67 +768,67 @@ class RawTerminalDriver:
                         discard_input=False,
                     )
 
-            failed = (
-                operation_failure is not None
-                and not isinstance(
-                    operation_failure, (asyncio.CancelledError, KeyboardInterrupt)
-                )
-            ) or (
-                is_failure is not None and operation_succeeded and is_failure(result)
+        failed = (
+            operation_failure is not None
+            and not isinstance(
+                operation_failure, (asyncio.CancelledError, KeyboardInterrupt)
             )
+        ) or (
+            is_failure is not None and operation_succeeded and is_failure(result)
+        )
 
-            clear_failure: BaseException | None = None
-            self._progress_active = False
-            self._progress_renderer = None
-            if not failed:
+        clear_failure: BaseException | None = None
+        self._progress_active = False
+        self._progress_renderer = None
+        if not failed:
+            try:
+                self._clear_progress_frame()
+            except BaseException as exc:
+                clear_failure = exc
+        else:
+            if (
+                scroll_state_provider is not None
+                and nested_scroll_renderer is not None
+                and nested_scroll_transition is not None
+            ):
                 try:
-                    self._clear_progress_frame()
-                except BaseException as exc:
-                    clear_failure = exc
-            else:
-                if (
-                    scroll_state_provider is not None
-                    and nested_scroll_renderer is not None
-                    and nested_scroll_transition is not None
-                ):
+                    failure_arg = (
+                        operation_failure
+                        if operation_failure is not None
+                        else result
+                    )
                     try:
-                        failure_arg = (
-                            operation_failure
-                            if operation_failure is not None
-                            else result
+                        scroll_state = scroll_state_provider(failure_arg)
+                    except TypeError:
+                        scroll_state = scroll_state_provider()
+                    if scroll_state.views:
+                        self.run_nested_scroll_inspector(
+                            scroll_state,
+                            nested_scroll_transition,
+                            nested_scroll_renderer,
                         )
-                        try:
-                            scroll_state = scroll_state_provider(failure_arg)
-                        except TypeError:
-                            scroll_state = scroll_state_provider()
-                        if scroll_state.views:
-                            self.run_nested_scroll_inspector(
-                                scroll_state,
-                                nested_scroll_transition,
-                                nested_scroll_renderer,
-                            )
-                        else:
-                            self._write_raw_text("\r\n")
-                            self._progress_rows = 0
-                    except BaseException:
-                        try:
-                            self._write_raw_text("\r\n")
-                        except Exception:
-                            pass
+                    else:
+                        self._write_raw_text("\r\n")
                         self._progress_rows = 0
-                else:
+                except BaseException:
                     try:
                         self._write_raw_text("\r\n")
                     except Exception:
                         pass
                     self._progress_rows = 0
+            else:
+                try:
+                    self._write_raw_text("\r\n")
+                except Exception:
+                    pass
+                self._progress_rows = 0
 
-            if (
-                operation_failure is None
-                and progress_failure is None
-                and clear_failure is not None
-            ):
-                progress_failure = clear_failure
+        if (
+            operation_failure is None
+            and progress_failure is None
+            and clear_failure is not None
+        ):
+            progress_failure = clear_failure
 
         if operation_failure is not None:
             raise operation_failure

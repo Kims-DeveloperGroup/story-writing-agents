@@ -2159,6 +2159,7 @@ def _default_is_failure(result: object) -> bool:
     if step_state is not None and str(step_state) in {
         "outcome_unknown",
         "recovery_required",
+        "failed",
     }:
         return True
     return False

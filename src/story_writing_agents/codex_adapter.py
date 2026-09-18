@@ -433,7 +433,14 @@ class CodexAdapter:
                         )
                     elif event_type in {"item.updated", "item.started", "item.completed"}:
                         item = event.get("item")
-                        if type(item) is dict:
+                        if type(item) is not dict:
+                            if event_type == "item.completed":
+                                for cand in (event.get("item_id"), event.get("id")):
+                                    if isinstance(cand, str) and cand.strip():
+                                        emitted_len_by_item.pop(cand.strip(), None)
+                                        item_kinds_by_id.pop(cand.strip(), None)
+                            return
+                        if True:
                             def _retire_id(target_id: object) -> None:
                                 if event_type == "item.completed" and isinstance(target_id, str):
                                     stripped = target_id.strip()

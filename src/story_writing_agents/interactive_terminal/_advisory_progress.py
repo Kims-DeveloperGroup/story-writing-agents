@@ -69,6 +69,7 @@ class AdvisoryProgressState:
         self.auto_scroll_flags: dict[tuple[str, str], bool] = {}
         self.collapsed: bool = False
         self.failure_snapshot: tuple[dict[tuple[str, str], tuple[str, ...]], str | None] | None = None
+        self.last_buffer_event_was_text: dict[tuple[str, str], bool] = {}
 
     def toggle_collapsed(self) -> bool:
         """Toggle collapsed mode and return the new state."""
@@ -96,6 +97,7 @@ class AdvisoryProgressState:
         self.scroll_offsets.clear()
         self.focused_agent_index = 0
         self.auto_scroll_flags.clear()
+        self.last_buffer_event_was_text.clear()
 
     def record_error(self, message: str) -> None:
         """Explicitly record a terminal diagnostic for outcome presentation."""
@@ -123,13 +125,17 @@ class AdvisoryProgressState:
         if provisional_key in self.agent_buffers:
             prev_buf = self.agent_buffers.pop(provisional_key)
             if target_key not in self.agent_buffers:
-                self.agent_buffers[target_key] = prev_buf
+                self.agent_buffers[target_key] = prev_buf[-2000:]
             else:
                 self.agent_buffers[target_key].extend(prev_buf)
+                if len(self.agent_buffers[target_key]) > 2000:
+                    self.agent_buffers[target_key] = self.agent_buffers[target_key][-2000:]
         if provisional_key in self.scroll_offsets:
             self.scroll_offsets[target_key] = self.scroll_offsets.pop(provisional_key)
         if provisional_key in self.auto_scroll_flags:
             self.auto_scroll_flags[target_key] = self.auto_scroll_flags.pop(provisional_key)
+        if provisional_key in self.last_buffer_event_was_text:
+            self.last_buffer_event_was_text[target_key] = self.last_buffer_event_was_text.pop(provisional_key)
 
     def observe_stream(self, event: ProviderStreamEvent) -> None:
         if type(event) is not ProviderStreamEvent:
@@ -147,11 +153,15 @@ class AdvisoryProgressState:
                         break
         key = (event.agent_id, op_id or "")
         if event.kind is ProviderStreamEventKind.STATUS:
+            self.last_buffer_event_was_text[key] = False
             sanitized = _sanitize_preview_text(event.text).strip()
             first_line = sanitized.splitlines()[0] if sanitized else ""
             self.stream_status[key] = first_line[:120]
             if first_line:
-                self.agent_buffers.setdefault(key, []).append(f"Status: {first_line[:120]}")
+                buf = self.agent_buffers.setdefault(key, [])
+                buf.append(f"Status: {first_line[:120]}")
+                if len(buf) > 2000:
+                    del buf[:-2000]
             lower = sanitized.lower()
             if (
                 lower.startswith("error:")
@@ -164,12 +174,13 @@ class AdvisoryProgressState:
                 self.last_error_message = sanitized
                 self.snapshot_failure()
         elif event.kind is ProviderStreamEventKind.THOUGHT_DELTA:
+            self.last_buffer_event_was_text[key] = False
             self.stream_status[key] = "Thinking..."
             buf = self.agent_buffers.setdefault(key, [])
             if not buf or buf[-1] != "Thinking...":
                 buf.append("Thinking...")
                 if len(buf) > 2000:
-                    self.agent_buffers[key] = buf[-2000:]
+                    del buf[:-2000]
         elif event.kind is ProviderStreamEventKind.TEXT_DELTA:
             sanitized = _sanitize_preview_text(event.text)
             existing = self.stream_preview.get(key, "")
@@ -180,13 +191,19 @@ class AdvisoryProgressState:
 
             buf = self.agent_buffers.setdefault(key, [])
             delta_lines = sanitized.split("\n")
-            if not buf:
+            was_text = self.last_buffer_event_was_text.get(key, False)
+            if not buf or not was_text:
                 buf.extend(delta_lines)
             else:
                 buf[-1] += delta_lines[0]
                 buf.extend(delta_lines[1:])
+            if buf and len(buf[-1]) > 2000:
+                long_line = buf[-1]
+                buf[-1] = long_line[:2000]
+                buf.append(long_line[2000:])
             if len(buf) > 2000:
-                self.agent_buffers[key] = buf[-2000:]
+                del buf[:-2000]
+            self.last_buffer_event_was_text[key] = True
 
     def elapsed_seconds(self) -> int:
         return 0 if self.started_at is None else int(time.monotonic() - self.started_at)
@@ -198,13 +215,26 @@ class AdvisoryProgressState:
         self.events.clear()
         self.stream_status.clear()
         self.stream_preview.clear()
+        self.agent_buffers.clear()
+        self.scroll_offsets.clear()
+        self.focused_agent_index = 0
+        self.auto_scroll_flags.clear()
+        self.last_buffer_event_was_text.clear()
         return elapsed
 
     def render(self, frame: int) -> str:
         elapsed = format_elapsed(self.elapsed_seconds())
         if self.collapsed:
             active_label = self.requests[0].agent_id if self.requests else "Working"
-            return f"[{_FRAMES[frame % len(_FRAMES)]}] {elapsed} · {active_label}"
+            status_summary = ""
+            if self.requests:
+                key = (self.requests[0].agent_id, self.requests[0].operation_id)
+                status_text = self.stream_status.get(key)
+                if status_text:
+                    status_summary = f" · {status_text[:40]}"
+                elif self.requests[0].request:
+                    status_summary = f" · {self.requests[0].request[:40]}"
+            return f"[{_FRAMES[frame % len(_FRAMES)]}] {elapsed} · {active_label}{status_summary} (press 't' to expand)"
         lines = [f"[{_FRAMES[frame % len(_FRAMES)]}] {elapsed} · Working"]
         ordered = list(self.requests)
         known = {(item.agent_id, item.operation_id) for item in ordered}

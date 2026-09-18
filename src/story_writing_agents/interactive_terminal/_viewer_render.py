@@ -351,7 +351,7 @@ def render_nested_scroll_view(
     )
 
     body_lines: list[str] = []
-    inner_width = max(0, width - 5)  # "│ " + content + " █│"
+    inner_width = max(1, width - 5)  # "│ " + content + " █│"
     for y in range(h):
         line_content = (
             focused.visible_lines[y] if y < len(focused.visible_lines) else ""

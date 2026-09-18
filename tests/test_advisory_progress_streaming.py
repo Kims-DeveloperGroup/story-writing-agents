@@ -1302,6 +1302,137 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         finally:
             reset_advisory_progress(token)
 
+    def test_status_buffer_bounded_and_text_delta_does_not_mutate_status_row(self) -> None:
+        state = AdvisoryProgressState()
+        key = ("test_agent", "op1")
+        # 1. Emit 2005 status events -> buffer capped at 2000
+        for i in range(2005):
+            state.observe_stream(
+                ProviderStreamEvent(
+                    ProviderStreamEventKind.STATUS,
+                    "test_agent",
+                    f"Status {i}",
+                    operation_id="op1",
+                )
+            )
+        buf = state.agent_buffers[key]
+        self.assertEqual(len(buf), 2000)
+        self.assertEqual(buf[-1], "Status: Status 2004")
+
+        # 2. Emit text delta -> must be appended as a new row, NOT merged into "Status: Status 2004"
+        state.observe_stream(
+            ProviderStreamEvent(
+                ProviderStreamEventKind.TEXT_DELTA,
+                "test_agent",
+                "Hello world",
+                operation_id="op1",
+            )
+        )
+        self.assertEqual(len(buf), 2000)
+        self.assertEqual(buf[-2], "Status: Status 2004")
+        self.assertEqual(buf[-1], "Hello world")
+
+        # 3. Consecutive text deltas should merge with previous text row
+        state.observe_stream(
+            ProviderStreamEvent(
+                ProviderStreamEventKind.TEXT_DELTA,
+                "test_agent",
+                "!",
+                operation_id="op1",
+            )
+        )
+        self.assertEqual(buf[-1], "Hello world!")
+
+    def test_finish_clears_live_agent_buffers_while_preserving_snapshot(self) -> None:
+        state = AdvisoryProgressState()
+        key = ("test_agent", "op1")
+        state.observe_stream(
+            ProviderStreamEvent(
+                ProviderStreamEventKind.STATUS,
+                "test_agent",
+                "Error: something broke",
+                operation_id="op1",
+            )
+        )
+        self.assertTrue(key in state.agent_buffers)
+        self.assertIsNotNone(state.failure_snapshot)
+
+        # finish() must clear live buffers
+        state.finish()
+        self.assertEqual(len(state.agent_buffers), 0)
+        # But failure snapshot remains
+        self.assertIsNotNone(state.failure_snapshot)
+        snap_buffers, snap_err = state.failure_snapshot
+        self.assertIn(key, snap_buffers)
+        self.assertEqual(snap_err, "Error: something broke")
+
+    def test_collapsed_render_includes_status_and_expansion_hint(self) -> None:
+        state = AdvisoryProgressState()
+        state.collapsed = True
+        state.begin((AdvisoryProgressRequest("agent_writer", "op1", "Drafting scene"),))
+        state.observe_stream(
+            ProviderStreamEvent(
+                ProviderStreamEventKind.STATUS,
+                "agent_writer",
+                "Writing paragraph 2",
+                operation_id="op1",
+            )
+        )
+        rendered = state.render(0)
+        self.assertIn("agent_writer", rendered)
+        self.assertIn("Writing paragraph 2", rendered)
+        self.assertIn("(press 't' to expand)", rendered)
+
+    def test_nested_scroll_view_renders_on_narrow_terminals_without_error(self) -> None:
+        from story_writing_agents.interactive_terminal._model import (
+            CapabilityProfile,
+            MultiAgentScrollState,
+            NestedScrollViewport,
+            TerminalCapabilities,
+        )
+        from story_writing_agents.interactive_terminal._viewer_render import (
+            render_nested_scroll_view,
+        )
+
+        viewport = NestedScrollViewport(
+            view_id="a:1",
+            title="Agent",
+            total_lines=5,
+            start_line=1,
+            visible_lines=("line 1", "line 2"),
+            visible_height=2,
+            is_focused=True,
+            buffer_lines=("line 1", "line 2", "line 3", "line 4", "line 5"),
+        )
+        state = MultiAgentScrollState((viewport,), 0)
+
+        # Test valid terminal widths 1 through 5
+        for w in range(1, 6):
+            caps = TerminalCapabilities(
+                CapabilityProfile.ANSI,
+                w,
+                input_tty=True,
+                output_tty=True,
+                raw_mode=True,
+                cursor_controls=True,
+                decorative_sgr=True,
+            )
+            frame = render_nested_scroll_view(state, caps)
+            self.assertIsNotNone(frame.text)
+
+    def test_default_is_failure_recognizes_failed_state(self) -> None:
+        from dataclasses import dataclass
+        from story_writing_agents.interactive_terminal._core import _default_is_failure
+
+        @dataclass
+        class FakeTurn:
+            state: str
+
+        self.assertTrue(_default_is_failure(FakeTurn("failed")))
+        self.assertTrue(_default_is_failure(FakeTurn("outcome_unknown")))
+        self.assertTrue(_default_is_failure(FakeTurn("recovery_required")))
+        self.assertFalse(_default_is_failure(FakeTurn("completed")))
+
 
 if __name__ == "__main__":
     unittest.main()

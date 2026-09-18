@@ -1119,18 +1119,23 @@ class AntigravityAdapter:
 
             if is_terminal:
                 captured_result_bytes.append(stripped)
+                target_dict = None
                 if event_type == "result":
                     res = event.get("result")
-                    if isinstance(res, dict) and str(res.get("status", "")).upper() == "ERROR":
-                        err_text = str(res.get("error") or "")
-                        if err_text:
-                            stream_sink(
-                                ProviderStreamEvent(
-                                    ProviderStreamEventKind.STATUS,
-                                    agent_id,
-                                    f"Error: {err_text[:120]}",
-                                )
+                    if isinstance(res, dict):
+                        target_dict = res
+                elif not has_discriminator:
+                    target_dict = event
+                if target_dict is not None and str(target_dict.get("status", "")).upper() == "ERROR":
+                    err_text = str(target_dict.get("error") or "")
+                    if err_text:
+                        stream_sink(
+                            ProviderStreamEvent(
+                                ProviderStreamEventKind.STATUS,
+                                agent_id,
+                                f"Error: {err_text[:120]}",
                             )
+                        )
                 return
 
             if captured_result_bytes:

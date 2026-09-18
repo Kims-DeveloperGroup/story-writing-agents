@@ -2005,6 +2005,88 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         emitted_texts = [ev.text for ev in events if ev.kind == ProviderStreamEventKind.TEXT_DELTA]
         self.assertEqual(emitted_texts, ["text_a", "text_b"])
 
+    async def test_antigravity_adapter_extracts_status_and_error_from_legacy_terminal_shape(self) -> None:
+        """Verify legacy terminal error event without result envelope emits stream error status."""
+        adapter, binding = self._make_agy_binding("session_legacy_error")
+        events: list[ProviderStreamEvent] = []
+        schema = {
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"],
+            "additionalProperties": False,
+        }
+        invocation = ProviderInvocation(
+            session_id="session_legacy_error",
+            schema=schema,
+            payload={},
+            thread_id=None,
+            stream_sink=events.append,
+        )
+
+        stream_lines = [
+            b'{"type":"turn_start"}\n',
+            b'{"conversation_id":"c1","status":"ERROR","error":"Quota exceeded for tier"}\n',
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=1,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            with self.assertRaises(Exception):
+                await adapter.invoke(binding, invocation)
+
+        status_events = [ev for ev in events if ev.kind == ProviderStreamEventKind.STATUS]
+        self.assertTrue(any("Error: Quota exceeded for tier" in ev.text for ev in status_events))
+
+    async def test_codex_adapter_retires_top_level_id_on_item_completed_with_missing_nested_item(self) -> None:
+        """Verify item.completed without nested item dict retires top-level ID."""
+        binding = self.codex_adapter.bind(self.definition)
+        events: list[ProviderStreamEvent] = []
+        invocation = ProviderInvocation(
+            session_id="session_retire_nondict",
+            schema={"type": "object"},
+            payload={},
+            thread_id="thread_retire_nondict",
+            stream_sink=events.append,
+        )
+
+        stream_lines = [
+            b'{"type":"turn.started"}\n',
+            b'{"type":"item.started","item":{"id":"m1","type":"agent_message","text":"hello"}}\n',
+            # item.completed has top-level item_id but item is null / missing
+            b'{"type":"item.completed","item_id":"m1"}\n',
+            # Later delta for m1 must be ignored
+            b'{"type":"item.delta","item_id":"m1","delta":"stale"}\n',
+            b'{"type":"turn.completed"}\n',
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            output_flag_index = request.command.index("--output-last-message")
+            output_file_path = Path(request.command[output_flag_index + 1])
+            output_file_path.parent.mkdir(parents=True, exist_ok=True)
+            output_file_path.write_text('{"summary":"Done"}', encoding="utf-8")
+            return ProcessResult(
+                stdout=b'{"type":"thread.started","thread_id":"thread_retire_nondict"}\n{"type":"turn.completed"}\n',
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
+            await self.codex_adapter.invoke(binding, invocation)
+
+        emitted_texts = [ev.text for ev in events if ev.kind == ProviderStreamEventKind.TEXT_DELTA]
+        self.assertEqual(emitted_texts, ["hello"])
+
 
 if __name__ == "__main__":
     unittest.main()
