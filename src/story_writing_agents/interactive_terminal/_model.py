@@ -1014,11 +1014,12 @@ Component: TypeAlias = (
 
 @dataclass(frozen=True, slots=True)
 class RenderedFrame:
-    """Pure rendered text plus width and visible-line accounting."""
+    """Pure rendered text plus width and visible-line accounting, with optional horizontal offset for scrolling."""
 
     text: str
     width: int
     line_count: int
+    h_offset: int = 0
 
     def __post_init__(self) -> None:
         if type(self.text) is not str:
