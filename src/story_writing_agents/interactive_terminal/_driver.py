@@ -704,6 +704,7 @@ class RawTerminalDriver:
             )
             operation_failure: BaseException | None = None
             progress_failure: BaseException | None = None
+            restoration_failure: BaseException | None = None
             result: _T | None = None
             operation_succeeded = False
             outer_failure = False
@@ -743,37 +744,51 @@ class RawTerminalDriver:
                 operation_failure = exc
                 outer_failure = True
             finally:
-                if (operation_failure is not None or progress_failure is not None) and (
-                    not operation_task.done()
-                ):
-                    operation_task.cancel()
-                if not operation_task.done():
-                    try:
-                        await operation_task
-                    except BaseException as exc:
-                        if not outer_failure and progress_failure is None:
-                            operation_failure = operation_failure or exc
-                elif operation_failure is None and progress_failure is None:
-                    try:
-                        operation_task.result()
-                    except BaseException as exc:
-                        operation_failure = exc
-
-                if not progress_task.done():
-                    progress_task.cancel()
                 try:
-                    await progress_task
-                except asyncio.CancelledError:
-                    pass
-                except BaseException as exc:
-                    progress_failure = progress_failure or exc
+                    if (operation_failure is not None or progress_failure is not None) and (
+                        not operation_task.done()
+                    ):
+                        operation_task.cancel()
+                    if not operation_task.done():
+                        try:
+                            await operation_task
+                        except BaseException as exc:
+                            if not outer_failure and progress_failure is None:
+                                operation_failure = operation_failure or exc
+                    elif operation_failure is None and progress_failure is None:
+                        try:
+                            operation_task.result()
+                        except BaseException as exc:
+                            operation_failure = exc
 
-                if configuration is not None:
-                    _restore_terminal_or_raise(
-                        configuration,
-                        operation_failure or progress_failure,
-                        discard_input=False,
-                    )
+                    if not progress_task.done():
+                        progress_task.cancel()
+                    try:
+                        await progress_task
+                    except asyncio.CancelledError:
+                        pass
+                    except BaseException as exc:
+                        progress_failure = progress_failure or exc
+
+                    if configuration is not None:
+                        try:
+                            _restore_terminal_or_raise(
+                                configuration,
+                                operation_failure or progress_failure,
+                                discard_input=False,
+                            )
+                        except BaseException as exc:
+                            restoration_failure = exc
+                finally:
+                    self._progress_active = False
+                    self._progress_renderer = None
+
+        if restoration_failure is not None:
+            try:
+                self._clear_progress_frame()
+            except BaseException:
+                pass
+            raise restoration_failure
 
         clear_failure: BaseException | None = None
         failed = False
@@ -786,9 +801,12 @@ class RawTerminalDriver:
             ) or (
                 is_failure is not None and operation_succeeded and is_failure(result)
             )
-        finally:
-            self._progress_active = False
-            self._progress_renderer = None
+        except BaseException:
+            try:
+                self._clear_progress_frame()
+            except BaseException:
+                pass
+            raise
 
         inspector_failure: BaseException | None = None
         if not failed:

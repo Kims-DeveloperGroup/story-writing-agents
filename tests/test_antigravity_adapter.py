@@ -2251,7 +2251,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             "--input-format",
             "text",
             "--output-format",
-            "stream-json",
+            "json",
             "--json-schema",
             canonical_provider_json(schema).decode("utf-8"),
             "--agent",

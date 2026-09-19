@@ -515,8 +515,17 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                 operation_id=None,
             )
         )
+        state.observe_stream(
+            ProviderStreamEvent(
+                kind=ProviderStreamEventKind.STATUS,
+                agent_id="lead_orchestrator",
+                text="Error: initial failure",
+                operation_id=None,
+            )
+        )
         self.assertIn(("lead_orchestrator", ""), state.stream_status)
         self.assertIn(("lead_orchestrator", ""), state.stream_preview)
+        self.assertIn(("lead_orchestrator", ""), state.agent_errors)
 
         # Later, authoritative context action arrives
         context_event = ContextActionProgressEvent(
@@ -530,13 +539,18 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         # Provisional key should be migrated
         self.assertNotIn(("lead_orchestrator", ""), state.stream_status)
         self.assertNotIn(("lead_orchestrator", ""), state.stream_preview)
+        self.assertNotIn(("lead_orchestrator", ""), state.agent_errors)
         self.assertEqual(
             state.stream_status.get(("lead_orchestrator", "lead_turn_99")),
-            "Drafting initial outline...",
+            "Error: initial failure",
         )
         self.assertEqual(
             state.stream_preview.get(("lead_orchestrator", "lead_turn_99")),
             "Chapter 1 overview",
+        )
+        self.assertEqual(
+            state.agent_errors.get(("lead_orchestrator", "lead_turn_99")),
+            "Error: initial failure",
         )
 
     def test_plain_terminal_does_not_bind_stream_sink(self) -> None:
@@ -1732,4 +1746,109 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                     )
                 )
             self.assertEqual(str(exc_info.exception), "viewer terminal restoration failed")
+
+    def test_render_nested_scroll_view_empty_state_returns_valid_frame(self) -> None:
+        """Verify empty view state produces a RenderedFrame with line_count=1 without ValueError."""
+        caps = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+        scroll_state = MultiAgentScrollState((), 0)
+        frame = render_nested_scroll_view(scroll_state, caps)
+        self.assertEqual(frame.line_count, 1)
+        self.assertEqual(frame.text, "")
+
+    def test_text_delta_multiline_rechunks_all_long_lines(self) -> None:
+        """Verify multiline TEXT_DELTA chunks all lines exceeding 2000 chars, not just the last one."""
+        state = AdvisoryProgressState()
+        key = ("agent1", "op1")
+        # Send multiline text delta where first line is 3000 chars, second is 4000 chars, third is 100 chars
+        multiline_text = ("a" * 3000) + "\n" + ("b" * 4000) + "\n" + ("c" * 100)
+        state.observe_stream(
+            ProviderStreamEvent(ProviderStreamEventKind.TEXT_DELTA, "agent1", multiline_text, operation_id="op1")
+        )
+        buf = state.agent_buffers[key]
+        for line in buf:
+            self.assertLessEqual(len(line), 2000)
+
+    def test_terminal_restoration_raising_resets_progress_state_and_clears_frame(self) -> None:
+        """Verify driver progress state is reset and frame cleared even if terminal restoration raises."""
+        driver = RawTerminalDriver(
+            lambda _prompt: "",
+            io.StringIO(),
+            io.StringIO(),
+            lambda s, e: (s, None),
+            lambda s, e, h: (s, None),
+            lambda h, t: h,
+        )
+
+        async def dummy_op():
+            return "done"
+
+        caps = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+        with mock.patch.object(RawTerminalDriver, "capabilities", return_value=caps), \
+             mock.patch.object(RawTerminalDriver, "_prepare_input", return_value=(caps, mock.MagicMock())), \
+             mock.patch("story_writing_agents.interactive_terminal._driver._activate_terminal"), \
+             mock.patch(
+                 "story_writing_agents.interactive_terminal._driver._restore_terminal_or_raise",
+                 side_effect=RuntimeError("interactive terminal restoration failed"),
+             ):
+            with self.assertRaises(RuntimeError) as exc_info:
+                asyncio.run(
+                    driver.run_advisory_progress(
+                        dummy_op(),
+                        lambda _f: "frame",
+                        toggle_callback=lambda: None,
+                    )
+                )
+            self.assertIn("restoration failed", str(exc_info.exception))
+        self.assertFalse(driver._progress_active)
+        self.assertIsNone(driver._progress_renderer)
+        self.assertEqual(driver._progress_rows, 0)
+
+    async def test_interactive_progress_does_not_dismiss_failure_snapshot_on_none_result(self) -> None:
+        mock_terminal = mock.create_autospec(InteractiveTerminal, instance=True)
+        mock_terminal.raw_mode = True
+
+        async def fake_run(op, scroll_state_provider=None, is_failure=None):
+            return await op
+
+        mock_terminal._advisory_progress = fake_run
+
+        progress = InteractiveAdvisoryProgress(mock_terminal)
+        progress._state.record_error("Simulated initial auth required error")
+        progress._state.snapshot_failure()
+        self.assertIsNotNone(progress._state.failure_snapshot)
+
+        async def none_op():
+            return None
+
+        result = await progress.run(none_op())
+        self.assertIsNone(result)
+        # Failure snapshot should NOT have been dismissed when result is None
+        self.assertIsNotNone(progress._state.failure_snapshot)
+        self.assertEqual(progress._state.last_error_message, "Simulated initial auth required error")
+
+        async def success_op():
+            class SuccessTurn:
+                status = "completed"
+            return SuccessTurn()
+
+        result2 = await progress.run(success_op())
+        self.assertEqual(result2.status, "completed")
+        # Now snapshot is dismissed on actual success
+        self.assertIsNone(progress._state.failure_snapshot)
 

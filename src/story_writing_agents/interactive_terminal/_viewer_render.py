@@ -302,7 +302,7 @@ def render_nested_scroll_view(
     width = capabilities.width
     focused = state.focused_view
     if focused is None or not state.views:
-        return RenderedFrame("", width, 0)
+        return RenderedFrame("", width, 1)
 
     # If collapsed, render a minimal single-line status indicator
     if state.collapsed:

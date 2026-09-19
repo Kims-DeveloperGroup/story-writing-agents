@@ -2159,7 +2159,7 @@ class InteractiveAdvisoryProgress:
             else:
                 result = await self._run(operation)
 
-            if not failure_check(result):
+            if result is not None and not failure_check(result):
                 self._state.dismiss_failure_snapshot()
             return result
         except BaseException as exc:

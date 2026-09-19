@@ -134,6 +134,11 @@ class AdvisoryProgressState:
                 self.agent_buffers[target_key].extend(prev_buf)
                 if len(self.agent_buffers[target_key]) > 2000:
                     self.agent_buffers[target_key] = self.agent_buffers[target_key][-2000:]
+        if provisional_key in self.agent_errors:
+            if target_key not in self.agent_errors:
+                self.agent_errors[target_key] = self.agent_errors.pop(provisional_key)
+            else:
+                del self.agent_errors[provisional_key]
         if provisional_key in self.scroll_offsets:
             self.scroll_offsets[target_key] = self.scroll_offsets.pop(provisional_key)
         if provisional_key in self.auto_scroll_flags:
@@ -198,16 +203,33 @@ class AdvisoryProgressState:
             delta_lines = sanitized.split("\n")
             was_text = self.last_buffer_event_was_text.get(key, False)
             if not buf or not was_text:
-                buf.extend(delta_lines)
+                to_process = delta_lines
+                start_idx = len(buf)
             else:
                 buf[-1] += delta_lines[0]
-                buf.extend(delta_lines[1:])
-            if buf and len(buf[-1]) > 2000:
-                long_line = buf.pop()
-                while len(long_line) > 2000:
-                    buf.append(long_line[:2000])
-                    long_line = long_line[2000:]
-                buf.append(long_line)
+                to_process = delta_lines[1:]
+                start_idx = len(buf) - 1
+
+            new_chunks: list[str] = []
+            for line in buf[start_idx:]:
+                if len(line) > 2000:
+                    rem = line
+                    while len(rem) > 2000:
+                        new_chunks.append(rem[:2000])
+                        rem = rem[2000:]
+                    new_chunks.append(rem)
+                else:
+                    new_chunks.append(line)
+            for line in to_process:
+                if len(line) > 2000:
+                    rem = line
+                    while len(rem) > 2000:
+                        new_chunks.append(rem[:2000])
+                        rem = rem[2000:]
+                    new_chunks.append(rem)
+                else:
+                    new_chunks.append(line)
+            buf[start_idx:] = new_chunks
             if len(buf) > 2000:
                 del buf[:-2000]
             self.last_buffer_event_was_text[key] = True
