@@ -18,6 +18,7 @@ from story_writing_agents.agent_context.progress import (
     ProviderStreamEventKind,
     active_provider_stream_sink,
 )
+from story_writing_agents.errors import BackendProtocolError
 from story_writing_agents.interactive_terminal import (
     _core,
     _driver,
@@ -1851,4 +1852,193 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         self.assertEqual(result2.status, "completed")
         # Now snapshot is dismissed on actual success
         self.assertIsNone(progress._state.failure_snapshot)
+
+    async def test_interactive_progress_sanitizes_unexpected_exceptions(self) -> None:
+        mock_terminal = mock.create_autospec(InteractiveTerminal, instance=True)
+        mock_terminal.raw_mode = True
+        mock_terminal.progress_frame_collapsed = False
+
+        captured_provider = None
+
+        async def fake_run(op, scroll_state_provider=None, is_failure=None):
+            nonlocal captured_provider
+            captured_provider = scroll_state_provider
+            return await op
+
+        mock_terminal._advisory_progress = fake_run
+
+        progress = InteractiveAdvisoryProgress(mock_terminal)
+
+        # 1. Unexpected exception raised by operation: message is sanitized
+        async def failing_op():
+            raise RuntimeError("sensitive database path: /var/db/secret.sqlite")
+
+        with self.assertRaises(RuntimeError):
+            await progress.run(failing_op())
+
+        self.assertEqual(
+            progress._state.last_error_message,
+            "Unexpected failure during operation.",
+        )
+
+        # 2. Allowlisted BackendProtocolError raised by operation: message is preserved
+        progress._state.last_error_message = None
+
+        async def protocol_op():
+            raise BackendProtocolError("Codex CLI exited with status 1")
+
+        with self.assertRaises(BackendProtocolError):
+            await progress.run(protocol_op())
+
+        self.assertEqual(
+            progress._state.last_error_message,
+            "Codex CLI exited with status 1",
+        )
+
+        # 3. scroll_state_provider with unexpected exception: sanitized
+        progress._state.last_error_message = None
+
+        async def dummy_op():
+            return None
+
+        await progress.run(dummy_op())
+        self.assertIsNotNone(captured_provider)
+
+        captured_provider(RuntimeError("leak /private/tmp/keys.txt"))
+        self.assertEqual(
+            progress._state.last_error_message,
+            "Unexpected failure during operation.",
+        )
+
+        # 4. scroll_state_provider with BackendProtocolError: preserved
+        progress._state.last_error_message = None
+        captured_provider(BackendProtocolError("Transport closed prematurely"))
+        self.assertEqual(
+            progress._state.last_error_message,
+            "Transport closed prematurely",
+        )
+
+    def test_run_progress_frames_preserves_typeahead_characters(self) -> None:
+        driver = RawTerminalDriver(
+            lambda _p: "",
+            io.StringIO(),
+            io.StringIO(),
+            transition_line_input,
+            transition_main_input,
+            append_main_input_history,
+        )
+        configuration = _driver._TerminalConfiguration(
+            0,
+            1,
+            [0, 0, 0, 0, 0, 0, []],
+            [0, 0, 0, 0, 0, 0, []],
+            80,
+            None,
+            None,
+            0,
+            object(),
+        )
+        toggled: list[bool] = []
+
+        def on_toggle() -> bool:
+            toggled.append(True)
+            return True
+
+        frames: list[int] = []
+
+        def renderer(frame: int) -> str:
+            frames.append(frame)
+            return f"frame {frame}"
+
+        read_chars = ["a", "t", "b", "c"]
+
+        def fake_read(*_args: object, **kwargs: object) -> str:
+            # Fake live reader returns next queued char
+            return read_chars.pop(0)
+
+        def fake_select(*_args: object, **_kwargs: object) -> tuple[list[int], list[int], list[int]]:
+            if read_chars:
+                return ([0], [], [])
+            return ([], [], [])
+
+        async def run_test() -> None:
+            task = asyncio.create_task(
+                driver._run_progress_frames(
+                    renderer,
+                    configuration=configuration,
+                    toggle_callback=on_toggle,
+                )
+            )
+            await asyncio.sleep(0.15)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        with (
+            mock.patch.object(RawTerminalDriver, "_read_character", side_effect=fake_read),
+            mock.patch("story_writing_agents.interactive_terminal._driver._select.select", side_effect=fake_select),
+            mock.patch("story_writing_agents.interactive_terminal._driver._configured_control_event", return_value=None),
+        ):
+            asyncio.run(run_test())
+
+        # Toggle callback was invoked for 't'
+        self.assertEqual(len(toggled), 1)
+        # Non-toggle characters 'a', 'b', 'c' are preserved in typeahead buffer
+        self.assertEqual(list(driver._typeahead_buffer), ["a", "b", "c"])
+
+    def test_run_advisory_progress_propagates_activation_failure_and_closes_operation(self) -> None:
+        driver = RawTerminalDriver(
+            lambda _p: "",
+            io.StringIO(),
+            io.StringIO(),
+            transition_line_input,
+            transition_main_input,
+            append_main_input_history,
+        )
+        fake_caps = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+        configuration = _driver._TerminalConfiguration(
+            0,
+            1,
+            [0, 0, 0, 0, 0, 0, []],
+            [0, 0, 0, 0, 0, 0, []],
+            80,
+            None,
+            None,
+            0,
+            mock.MagicMock(),
+        )
+
+        async def sample_op():
+            await asyncio.sleep(1)
+
+        coro = sample_op()
+
+        with (
+            mock.patch.object(RawTerminalDriver, "capabilities", return_value=fake_caps),
+            mock.patch.object(RawTerminalDriver, "_observe_input_capabilities", return_value=fake_caps),
+            mock.patch.object(RawTerminalDriver, "_prepare_input", return_value=(fake_caps, configuration)),
+            mock.patch("story_writing_agents.interactive_terminal._driver._activate_terminal", side_effect=OSError("tcsetattr failed")),
+            mock.patch("story_writing_agents.interactive_terminal._driver._restore_terminal_or_raise") as mock_restore,
+        ):
+            with self.assertRaisesRegex(OSError, "tcsetattr failed"):
+                asyncio.run(
+                    driver.run_advisory_progress(
+                        coro,
+                        lambda _f: "progress",
+                        toggle_callback=lambda: True,
+                    )
+                )
+
+            mock_restore.assert_called_once()
+
 

@@ -6,6 +6,7 @@ import asyncio
 import os
 import select as _select
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -419,6 +420,7 @@ class RawTerminalDriver:
         "_progress_renderer",
         "_progress_rows",
         "_termios_provider",
+        "_typeahead_buffer",
     )
 
     def __init__(
@@ -467,6 +469,7 @@ class RawTerminalDriver:
         self._progress_frame = 0
         self._progress_renderer: Callable[[int], str] | None = None
         self._progress_rows = 0
+        self._typeahead_buffer: deque[str] = deque()
         self._termios_provider = (
             (lambda: _termios) if termios_provider is None else termios_provider
         )
@@ -656,17 +659,16 @@ class RawTerminalDriver:
                 try:
                     _activate_terminal(configuration)
                 except BaseException as act_exc:
-                    try:
-                        _restore_terminal_or_raise(
-                            configuration, act_exc, discard_input=False
-                        )
-                    except BaseException:
-                        close = getattr(operation, "close", None)
-                        if callable(close):
+                    close = getattr(operation, "close", None)
+                    if callable(close):
+                        try:
                             close()
-                        raise
-                    finally:
-                        configuration = None
+                        except Exception:
+                            pass
+                    _restore_terminal_or_raise(
+                        configuration, act_exc, discard_input=False
+                    )
+                    raise
 
             self._progress_active = True
             self._progress_frame = 0
@@ -1241,7 +1243,11 @@ class RawTerminalDriver:
                 readable, _writable, _exceptional = _select.select(
                     (configuration.input_descriptor,), (), (), 0
                 )
-                if readable or self._input_latch.live_reader.has_pending_codepoint:
+                if (
+                    readable
+                    or self._input_latch.live_reader.has_pending_codepoint
+                    or bool(self._typeahead_buffer)
+                ):
                     character = self._read_character()
                     event = self._live_composer_key_event(
                         character, configuration, display
@@ -1383,7 +1389,7 @@ class RawTerminalDriver:
                     if not readable and not has_pending:
                         break
                     try:
-                        character = self._read_character()
+                        character = self._read_character(consume_typeahead=False)
                     except (EOFError, KeyboardInterrupt):
                         raise
                     configured_event = _configured_control_event(
@@ -1394,9 +1400,12 @@ class RawTerminalDriver:
                         KeyKind.INTERRUPT,
                         KeyKind.EOF,
                     }:
+                        self._typeahead_buffer.clear()
                         raise KeyboardInterrupt
                     if character in ("t", "T"):
                         toggle_callback()
+                    else:
+                        self._typeahead_buffer.append(character)
             self._progress_frame = (self._progress_frame + 1) % _PROGRESS_FRAME_COUNT
             if self._progress_rows > 0:
                 self._clear_progress_frame()
@@ -2831,7 +2840,10 @@ class RawTerminalDriver:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return "key\tescape" if not received else "key\tunknown_escape"
-            if not self._input_latch.live_reader.has_pending_codepoint:
+            if not (
+                self._input_latch.live_reader.has_pending_codepoint
+                or bool(self._typeahead_buffer)
+            ):
                 try:
                     ready, _, _ = _select.select(
                         (configuration.input_descriptor,), (), (), remaining
@@ -3844,16 +3856,24 @@ class RawTerminalDriver:
     ) -> bool:
         """Prefer decoded suffixes before the bounded descriptor wait."""
 
+        if self._typeahead_buffer:
+            return True
         reader = self._input_latch.live_reader
         if reader.has_pending_codepoint:
             return True
         try:
             return _escape_input_is_ready(configuration.input_descriptor)
         except KeyboardInterrupt:
+            self._typeahead_buffer.clear()
             self._input_latch.reset_after_interrupt()
             raise
 
-    def _read_character(self, *, before_read: Callable[[], None] | None = None) -> str:
+    def _read_character(
+        self,
+        *,
+        before_read: Callable[[], None] | None = None,
+        consume_typeahead: bool = True,
+    ) -> str:
         """Read one decoded code point from the borrowed active input stream.
 
         Physical EOF raises ``EOFError``. Invalid stream return shapes raise
@@ -3861,11 +3881,14 @@ class RawTerminalDriver:
         state and propagate the collaborator failure.
         """
 
+        if consume_typeahead and self._typeahead_buffer:
+            return self._typeahead_buffer.popleft()
         try:
             character = self._input_latch.live_reader.read_character(
                 before_read=before_read,
             )
         except KeyboardInterrupt:
+            self._typeahead_buffer.clear()
             self._input_latch.reset_after_interrupt()
             raise
         if character == "":

@@ -105,6 +105,69 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[3].kind, ProviderStreamEventKind.TEXT_DELTA)
         self.assertEqual(events[3].text, " King Alden had vanished.")
 
+    async def test_codex_adapter_rejects_duplicate_keys_and_nonfinite_values_in_stream(self) -> None:
+        adapter = self.codex_adapter
+        binding = adapter.bind(self.definition)
+
+        events: list[ProviderStreamEvent] = []
+        sink = events.append
+
+        schema = {
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+            "additionalProperties": False,
+        }
+        payload = {"task": "outline"}
+
+        invocation = ProviderInvocation(
+            session_id="session_codex_stream_strict",
+            schema=schema,
+            payload=payload,
+            thread_id=None,
+            stream_sink=sink,
+        )
+
+        malformed_stream_lines = [
+            b'{"type":"reasoning","type":"agent_message","item":{"type":"agent_message","text":"Leaked"}}\n',
+            b'{"type":"item.updated","item":{"type":"reasoning","type":"agent_message","text":"Secret"}}\n',
+            b'{"type":"item.updated","item":{"type":"agent_message","text":"Val","score":NaN}}\n',
+            b'{"type":"turn.started"}\n',
+            b'{"type":"item.updated","item":{"type":"agent_message","text":"Valid text"}}\n',
+        ]
+
+        async def fake_run_process(
+            request: ProcessRequest,
+            **_kwargs: object,
+        ) -> ProcessResult:
+            output_flag_index = request.command.index("--output-last-message")
+            output_file_path = Path(request.command[output_flag_index + 1])
+            output_file_path.parent.mkdir(parents=True, exist_ok=True)
+            output_file_path.write_text('{"summary":"Valid"}', encoding="utf-8")
+
+            assert request.on_stdout_line is not None
+            for line in malformed_stream_lines:
+                request.on_stdout_line(line)
+
+            return ProcessResult(
+                stdout=b"".join(malformed_stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
+            try:
+                await adapter.invoke(binding, invocation)
+            except Exception:
+                pass
+
+        emitted_texts = [e.text for e in events]
+        self.assertNotIn("Leaked", emitted_texts)
+        self.assertNotIn("Secret", emitted_texts)
+        self.assertNotIn("Val", emitted_texts)
+        self.assertIn("Generating response...", emitted_texts)
+        self.assertIn("Valid text", emitted_texts)
+
     async def test_antigravity_adapter_streams_events_and_parses_stream_json(self) -> None:
         agy_backend = AgentBackend(
             self.workspace,

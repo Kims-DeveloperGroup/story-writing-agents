@@ -2139,7 +2139,11 @@ class InteractiveAdvisoryProgress:
                 ) -> MultiAgentScrollState:
                     if isinstance(failure, BaseException):
                         if not self._state.last_error_message:
-                            self._state.record_error(str(failure))
+                            if _is_content_safe_failure(failure):
+                                err_msg = str(failure).strip() or "Backend protocol error."
+                            else:
+                                err_msg = "Unexpected failure during operation."
+                            self._state.record_error(err_msg)
                     elif failure is not None:
                         msg = getattr(failure, "message", None) or getattr(
                             failure, "last_error_message", None
@@ -2164,12 +2168,24 @@ class InteractiveAdvisoryProgress:
             return result
         except BaseException as exc:
             if not self._state.last_error_message:
-                self._state.record_error(str(exc))
+                if _is_content_safe_failure(exc):
+                    err_msg = str(exc).strip() or "Backend protocol error."
+                else:
+                    err_msg = "Unexpected failure during operation."
+                self._state.record_error(err_msg)
             raise
         finally:
             if sink_token is not None:
                 reset_provider_stream_sink(sink_token)
             reset_advisory_progress(token)
+
+
+def _is_content_safe_failure(failure: BaseException) -> bool:
+    """Return True only if failure is an allowlisted content-safe protocol error."""
+    return any(
+        cls.__name__ == "BackendProtocolError"
+        for cls in type(failure).__mro__
+    )
 
 
 def _default_is_failure(result: object) -> bool:

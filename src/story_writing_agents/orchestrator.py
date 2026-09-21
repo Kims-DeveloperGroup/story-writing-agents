@@ -8435,7 +8435,11 @@ class StoryRuntime:
             failure_code
             is CollaborationLeadOutcomeFailureCode.ARTIFACT_INTENT_REJECTED
         )
-        failure_detail = str(failure).strip() if failure is not None else ""
+        failure_detail = (
+            str(failure).strip()
+            if failure is not None and isinstance(failure, BackendProtocolError)
+            else ""
+        )
         if failure_code is CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED:
             message = (
                 f"The Lead provider returned a result that the runtime rejected ({failure_detail}). Retry "

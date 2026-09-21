@@ -49,6 +49,26 @@ from .provider_process import (
 _SAFE_THREAD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 
 
+def _reject_duplicate_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON field")
+        value[key] = item
+    return value
+
+
+def _reject_constant(_value: str) -> None:
+    raise ValueError("nonfinite JSON value")
+
+
+def _finite_float(value: str) -> float:
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("nonfinite JSON value")
+    return number
+
+
 def _extract_stream_text(value: object) -> str:
     """Extract string text from a string, list of entries, or dictionary."""
     if isinstance(value, str):
@@ -428,7 +448,12 @@ class CodexAdapter:
                 if not stripped:
                     return
                 try:
-                    event = json.loads(stripped.decode("utf-8"))
+                    event = json.loads(
+                        stripped.decode("utf-8", errors="strict"),
+                        object_pairs_hook=_reject_duplicate_fields,
+                        parse_constant=_reject_constant,
+                        parse_float=_finite_float,
+                    )
                     if type(event) is not dict:
                         return
                     event_type = event.get("type")
@@ -946,23 +971,6 @@ class CodexAdapter:
                 "Codex CLI event stream is not valid UTF-8",
                 taint_existing_thread=True,
             ) from exc
-        def strict_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-            value: dict[str, Any] = {}
-            for key, item in pairs:
-                if key in value:
-                    raise ValueError("duplicate JSON field")
-                value[key] = item
-            return value
-
-        def reject_constant(value: str) -> None:
-            raise ValueError("nonfinite JSON value")
-
-        def finite_float(value: str) -> float:
-            number = float(value)
-            if not math.isfinite(number):
-                raise ValueError("nonfinite JSON value")
-            return number
-
         events: list[dict[str, Any]] = []
         for line_number, line in enumerate(text.splitlines(), 1):
             if not line:
@@ -970,10 +978,13 @@ class CodexAdapter:
             try:
                 value = (
                     json.loads(
-                        line, object_pairs_hook=strict_fields,
-                        parse_constant=reject_constant, parse_float=finite_float,
+                        line,
+                        object_pairs_hook=_reject_duplicate_fields,
+                        parse_constant=_reject_constant,
+                        parse_float=_finite_float,
                     )
-                    if strict else json.loads(line)
+                    if strict
+                    else json.loads(line)
                 )
             except (ValueError, RecursionError) as exc:
                 raise ProviderInvocationError(
