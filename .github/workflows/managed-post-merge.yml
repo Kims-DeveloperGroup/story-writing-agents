@@ -32,9 +32,6 @@ jobs:
             const failures = [];
             const warnings = [];
 
-            // Give native closing-keyword and delete-branch automation a short
-            // window to settle; this workflow never deletes or closes records.
-            await new Promise(resolve => setTimeout(resolve, 10000));
             const response = await github.graphql(`
               query($owner: String!, $repo: String!, $number: Int!) {
                 repository(owner: $owner, name: $repo) {
@@ -43,7 +40,17 @@ jobs:
                     headRefName
                     headRepository { nameWithOwner }
                     closingIssuesReferences(first: 50) {
-                      nodes { id number state url }
+                      nodes {
+                        id
+                        number
+                        state
+                        url
+                        linkedBranches(first: 50) {
+                          nodes {
+                            ref { name repository { nameWithOwner } }
+                          }
+                        }
+                      }
                     }
                   }
                 }
@@ -53,18 +60,32 @@ jobs:
             const pr = repository.pullRequest;
             const issues = pr.closingIssuesReferences.nodes;
 
+            // Capture Development links before native branch deletion can remove
+            // them, then allow Issue/Project and remote-branch automation to settle.
+            const linkedIssues = new Set(issues
+              .filter(issue => issue.linkedBranches.nodes.some(link =>
+                link.ref?.name === pr.headRefName &&
+                link.ref?.repository?.nameWithOwner === `${owner}/${repo}`))
+              .map(issue => issue.id));
+            await new Promise(resolve => setTimeout(resolve, 10000));
+
             for (const issue of issues) {
-              if (issue.state !== "CLOSED") {
-                failures.push(`#${issue.number} is ${issue.state}, not CLOSED`);
-              }
               try {
                 const projectResponse = await github.graphql(`
                   query($id: ID!) {
                     node(id: $id) {
                       ... on Issue {
+                        state
                         projectItems(first: 20) {
-                          nodes {
-                            project { title number }
+                        nodes {
+                          project {
+                            title
+                            number
+                            owner {
+                              ... on Organization { login }
+                              ... on User { login }
+                            }
+                          }
                             fieldValues(first: 50) {
                               nodes {
                                 ... on ProjectV2ItemFieldSingleSelectValue {
@@ -81,14 +102,24 @@ jobs:
                     }
                   }
                 `, {id: issue.id});
-                const items = projectResponse.node.projectItems.nodes;
+                if (projectResponse.node.state !== "CLOSED") {
+                  failures.push(
+                    `#${issue.number} is ${projectResponse.node.state}, not CLOSED`);
+                }
+                if (!linkedIssues.has(issue.id)) {
+                  failures.push(
+                    `#${issue.number} has no Development-linked branch ${pr.headRefName}`);
+                }
+
+                const items = projectResponse.node.projectItems.nodes.filter(item =>
+                  item.project.number === 1 && item.project.owner?.login === owner);
                 if (!items.length) {
-                  warnings.push(`#${issue.number} has no readable Project item`);
+                  failures.push(`#${issue.number} has no readable ${owner} Project #1 item`);
                 }
                 for (const item of items) {
                   const status = item.fieldValues.nodes.find(value => value.field?.name === "Status");
                   if (!status) {
-                    warnings.push(`#${issue.number} has no readable Project Status`);
+                    failures.push(`#${issue.number} has no readable Project Status`);
                   } else if (status.name !== "Done") {
                     failures.push(`#${issue.number} Project Status is ${status.name}, not Done`);
                   }

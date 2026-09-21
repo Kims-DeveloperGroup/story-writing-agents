@@ -2,7 +2,7 @@ name: AI review gate
 
 on:
   pull_request_target:
-    types: [synchronize, reopened]
+    types: [synchronize, reopened, labeled, unlabeled]
   pull_request_review:
     types: [submitted, edited, dismissed]
   pull_request_review_comment:
@@ -83,8 +83,25 @@ jobs:
             const {data: pr} = await github.rest.pulls.get({
               owner, repo, pull_number: pullNumber,
             });
-            if (pr.state !== "open" || pr.draft ||
-                !pr.labels.some(label => label.name === "workflow:managed")) {
+
+            const disableAutoMerge = async reason => {
+              if (!pr.auto_merge) return;
+              try {
+                await github.graphql(`
+                  mutation($pullRequestId: ID!) {
+                    disablePullRequestAutoMerge(input: {
+                      pullRequestId: $pullRequestId
+                    }) { pullRequest { number } }
+                  }
+                `, {pullRequestId: pr.node_id});
+                core.notice(`Auto-merge disabled: ${reason}`);
+              } catch (error) {
+                core.warning(`Auto-merge could not be disabled: ${error.message}`);
+              }
+            };
+            const managed = pr.labels.some(label => label.name === "workflow:managed");
+            if (pr.state !== "open" || pr.draft || !managed) {
+              await disableAutoMerge("PR is closed, draft, or outside workflow:managed scope");
               core.notice("PR is closed, draft, or not workflow:managed; no status published.");
               return;
             }
@@ -100,6 +117,7 @@ jobs:
               .sort((left, right) =>
                 new Date(right.created_at) - new Date(left.created_at))[0];
             if (!marker) {
+              await disableAutoMerge("current head has no review milestone");
               core.notice("No AI review milestone exists for the current head.");
               return;
             }
@@ -163,8 +181,12 @@ jobs:
               const ids = new Set(selected.map(review => review.id));
               const comments = reviewComments.filter(comment =>
                 ids.has(comment.pull_request_review_id));
+              const latest = [...selected].sort((left, right) =>
+                new Date(right.submitted_at) - new Date(left.submitted_at))[0];
+              const latestHasInline = latest && comments.some(comment =>
+                comment.pull_request_review_id === latest.id);
               return [
-                ...selected.map(review => review.body || ""),
+                ...(latest && !latestHasInline ? [latest.body || ""] : []),
                 ...comments
                   .filter(comment => !resolvedByComment.get(comment.id))
                   .map(comment => comment.body || ""),
@@ -208,7 +230,19 @@ jobs:
               description: description.slice(0, 140),
               target_url: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
             });
-            if (state === "success" && !pr.auto_merge) {
+            const {data: latestPr} = await github.rest.pulls.get({
+              owner, repo, pull_number: pullNumber,
+            });
+            const stillManaged = latestPr.labels.some(
+              label => label.name === "workflow:managed");
+            const canArmAutoMerge = state === "success" &&
+              stillManaged && latestPr.head.sha === pr.head.sha &&
+              latestPr.mergeable_state === "clean";
+
+            if (!canArmAutoMerge) {
+              await disableAutoMerge(
+                "AI, human-review, or required-check gates are not all current and clean");
+            } else if (!latestPr.auto_merge) {
               try {
                 await github.graphql(`
                   mutation($pullRequestId: ID!) {
@@ -219,7 +253,7 @@ jobs:
                       pullRequest { number }
                     }
                   }
-                `, {pullRequestId: pr.node_id});
+                `, {pullRequestId: latestPr.node_id});
               } catch (error) {
                 core.warning(`Auto-merge was not enabled: ${error.message}`);
               }
@@ -231,6 +265,7 @@ jobs:
                 [{data: "Copilot current-head review", header: true}, copilot.length ? "present" : "pending"],
                 [{data: "Codex current-head review", header: true}, codex.length ? "present" : "pending"],
                 [{data: "PR validation", header: true}, validation ? `${validation.status}/${validation.conclusion || "pending"}` : "pending"],
+                [{data: "Merge gates", header: true}, canArmAutoMerge ? "clean" : latestPr.mergeable_state],
                 [{data: "Gate", header: true}, `${state}: ${description}`],
               ])
               .addRaw("\nBranch rulesets continue to enforce required human reviews, conversations, and checks independently.\n")

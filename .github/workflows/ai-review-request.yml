@@ -84,11 +84,21 @@ jobs:
         with:
           script: |
             const {owner, repo} = context.repo;
+            const pullNumber = Number(process.env.PR_NUMBER);
+            const {data: pr} = await github.rest.pulls.get({
+              owner, repo, pull_number: pullNumber,
+            });
+            if (pr.head.sha !== process.env.HEAD_SHA) {
+              core.setFailed(
+                `PR head moved from ${process.env.HEAD_SHA} to ${pr.head.sha}; ` +
+                "restart the milestone on the current head.");
+              return;
+            }
             const short = process.env.HEAD_SHA.slice(0, 12);
             await github.rest.issues.createComment({
               owner,
               repo,
-              issue_number: Number(process.env.PR_NUMBER),
+              issue_number: pullNumber,
               body: `AI review milestone **${process.env.MILESTONE}** opened for \`${short}\`.\n\n<!-- ai-review-milestone:${process.env.MILESTONE}:${process.env.HEAD_SHA} -->`,
             });
 

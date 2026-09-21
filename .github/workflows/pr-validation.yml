@@ -65,7 +65,8 @@ jobs:
               }
             }
 
-            const paths = files.map(file => file.filename);
+            const paths = files.flatMap(file =>
+              [file.filename, file.previous_filename].filter(Boolean));
             const isRuntime = path =>
               path.startsWith("src/") ||
               path.startsWith("config/") ||
@@ -85,7 +86,8 @@ jobs:
               if (/interactive|\/cli\.py|\/cli_context\.py/.test(path)) add("interactive-terminal");
             }
 
-            const full = runtime && (truncated || labels.includes("test:full"));
+            const full = runtime && (
+              truncated || labels.includes("test:full") || groups.size === 0);
             const matrix = {include: [...groups].sort().map(group => ({group}))};
             core.setOutput("runtime", String(runtime));
             core.setOutput("policy_only", String(!runtime));
@@ -131,6 +133,97 @@ jobs:
                   json.loads(path.read_text(encoding="utf-8"))
           PY
           ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}"].each { |path| YAML.parse_file(path) }'
+      - name: Validate policy artifacts
+        run: |
+          python - <<'PY'
+          import pathlib
+          import re
+          from urllib.parse import unquote
+
+          root = pathlib.Path.cwd()
+          templates = {
+              ".github/ISSUE_TEMPLATE/work_item.md": [
+                  "## Objective", "## Use cases and expected results",
+                  "## Implementation summary", "## Acceptance criteria",
+                  "## Boundaries and dependencies",
+                  "## Related work and verification plan", "## Implementation plan",
+              ],
+              ".github/pull_request_template.md": [
+                  "## What changed", "## Before and after", "## Implementation",
+                  "## Verification", "## Limitations and follow-ups",
+                  "## Related Issue",
+              ],
+              ".github/templates/evidence.md": [
+                  "## What this demonstrates", "## Scenario results",
+                  "## Reproduction and environment", "## Failures and coverage gaps",
+                  "## Technical provenance and artifacts", "## Assessment",
+              ],
+              ".github/templates/working-status-comment.md": [
+                  "## Current status", "## What works now", "## What remains",
+                  "## Blocker or decision", "## Next step", "## Evidence links",
+              ],
+          }
+          for relative, expected in templates.items():
+              text = (root / relative).read_text(encoding="utf-8")
+              actual = list(dict.fromkeys(
+                  line for line in text.splitlines() if line.startswith("## ")))
+              if actual != expected:
+                  raise SystemExit(f"{relative}: template headings changed: {actual!r}")
+
+          issue_lines = (root / ".github/ISSUE_TEMPLATE/work_item.md").read_text(
+              encoding="utf-8").splitlines()
+          if not issue_lines or issue_lines[0] != "---" or "---" not in issue_lines[1:]:
+              raise SystemExit("work item template frontmatter is missing")
+          issue_end = issue_lines[1:].index("---") + 1
+          issue_frontmatter = "\n".join(issue_lines[1:issue_end])
+          for key in ("name", "about", "title", "labels", "assignees"):
+              if not re.search(rf"^{key}:\s*", issue_frontmatter, re.MULTILINE):
+                  raise SystemExit(f"work item template frontmatter is missing {key}")
+
+          for skill in sorted((root / ".agents/skills").glob("*/SKILL.md")):
+              lines = skill.read_text(encoding="utf-8").splitlines()
+              if not lines or lines[0] != "---" or "---" not in lines[1:]:
+                  raise SystemExit(f"{skill}: missing skill frontmatter")
+              end = lines[1:].index("---") + 1
+              frontmatter = "\n".join(lines[1:end])
+              if not re.search(r"^name:\s*\S+", frontmatter, re.MULTILINE):
+                  raise SystemExit(f"{skill}: missing skill name")
+              if not re.search(r"^description:\s*(?:\S|>)", frontmatter, re.MULTILINE):
+                  raise SystemExit(f"{skill}: missing skill description")
+
+          markdown = [root / "AGENTS.md", root / "GITHUB_WORKFLOW.md",
+                      root / "PYTHON_MODULE_INDEX.md"]
+          markdown += list((root / ".agents/skills").glob("**/*.md"))
+          markdown += list((root / ".github").glob("**/*.md"))
+          markdown += list((root / ".codex/agents").glob("**/*.md"))
+          for source in markdown:
+              text = source.read_text(encoding="utf-8")
+              for raw in re.findall(r"\[[^\]]+\]\(([^)]+)\)", text):
+                  target = raw.strip().strip("<>").split()[0]
+                  if not target or target.startswith(("http://", "https://", "mailto:", "#")):
+                      continue
+                  path = unquote(target.split("#", 1)[0])
+                  if path and not (source.parent / path).resolve().exists():
+                      raise SystemExit(f"{source}: missing local link target {target}")
+
+          agents = {path.name for path in (root / ".codex/agents").glob("*.toml")}
+          if agents != {"runtime_implementer.toml", "test_engineer.toml"}:
+              raise SystemExit(f"unexpected development agents: {sorted(agents)!r}")
+          required = [
+              root / ".agents/skills/project-workflow/SKILL.md",
+              root / ".codex/agents/runtime_implementer/PYTHON_MODULARITY_POLICY.md",
+          ]
+          if any(not path.is_file() for path in required):
+              raise SystemExit("required simplified workflow artifact is missing")
+          forbidden = [
+              root / ".agents/skills/adaptive-verification/SKILL.md",
+              root / "tests/test_repository_agent_policy.py",
+          ]
+          if any(path.exists() for path in forbidden):
+              raise SystemExit("retired policy artifact still exists")
+          if len((root / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8").splitlines()) > 300:
+              raise SystemExit("PYTHON_MODULE_INDEX.md exceeds 300 lines")
+          PY
 
   fast:
     name: Runtime fast tier
@@ -139,11 +232,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Install runtime test dependencies
+        run: >-
+          python -m pip install --no-deps --editable vendor/generic-rag
+          --editable vendor/jsonl-viewer --editable .
       - name: Run fast runtime tests
         run: PYTHONPATH=src python -m tests.runner run --tier fast --json "$RUNNER_TEMP/fast.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: runtime-fast
+          path: ${{ runner.temp }}/fast.json
+          if-no-files-found: warn
 
   affected:
     name: Affected runtime (${{ matrix.group }})
@@ -155,11 +260,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Install runtime test dependencies
+        run: >-
+          python -m pip install --no-deps --editable vendor/generic-rag
+          --editable vendor/jsonl-viewer --editable .
       - name: Run affected runtime group
         run: PYTHONPATH=src python -m tests.runner run --group "${{ matrix.group }}" --json "$RUNNER_TEMP/affected-${{ matrix.group }}.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: runtime-affected-${{ matrix.group }}
+          path: ${{ runner.temp }}/affected-${{ matrix.group }}.json
+          if-no-files-found: warn
 
   full:
     name: Full runtime shard ${{ matrix.shard }}/2
@@ -172,9 +289,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Install runtime test dependencies
+        run: >-
+          python -m pip install --no-deps --editable vendor/generic-rag
+          --editable vendor/jsonl-viewer --editable .
       - name: Run full runtime shard
         run: PYTHONPATH=src python -m tests.runner run --shard "${{ matrix.shard }}/2" --json "$RUNNER_TEMP/full-${{ matrix.shard }}.json"
       - uses: actions/upload-artifact@v4
@@ -201,3 +324,9 @@ jobs:
           full-reports/full-1/full-1.json
           full-reports/full-2/full-2.json
           --json "$RUNNER_TEMP/full-reconciled.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: runtime-full-reconciled
+          path: ${{ runner.temp }}/full-reconciled.json
+          if-no-files-found: warn
