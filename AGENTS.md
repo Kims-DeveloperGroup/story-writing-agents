@@ -2,103 +2,102 @@
 
 ## Project Role
 
-Read `README.md` first; it governs objective/language/contributions/structure. Maintain this
-novel-writing runtime; write fiction only for requested examples/fixtures/tests.
+Read `README.md` first; it governs the objective, language, contributions, and structure.
+Maintain this novel-writing runtime. Write fiction only for requested examples, fixtures,
+or tests.
 
 ## Working Method
 
-1. Inspect behavior; define requirements/inventory/constraints/scope/criteria/gates.
-2. Explanation/review/diagnosis/planning authorize no change; implement only approved
-   scope.
-3. Change minimally; preserve unrelated work; verify/diff-review.
+1. Inspect current behavior and define scope, constraints, acceptance criteria, and gates.
+2. Explanation, review, diagnosis, and planning are read-only unless implementation is
+   explicitly requested.
+3. Make the smallest coherent change, preserve unrelated work, and review the final diff.
 
-Ask when missing requirements materially change design/results. Skills supply procedures;
-never override this file/policies.
+Ask only when a missing requirement would materially change the result. Skills provide
+procedures and never override this file or repository policies.
 
 ## GitHub Planning Gate
 
-Before branches/worktrees/writers/edits record
-`github_planning_gate=not_required|pending|passed|blocked` plus reason. Pending/blocked
-permits read-only work only. For GitHub-tracked work load `$github-task-lifecycle`; obey
+Before creating branches/worktrees or editing, record
+`github_planning_gate=not_required|pending|passed|blocked` and the reason. Pending or blocked
+permits read-only work only. For tracked work load `$github-task-lifecycle` and follow
 [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md).
 
-Large means `L|XL`; two independent slices/parent criteria; three production modules; two
-domains; modularity/migration coordination; dependency sequencing; multiple
-owners/worktrees/phases; or parent integration. Tests/docs do not count; uncertainty is
-large. Before writing verify graph/Project metadata. One-implementation/delivery-unit
-plans stay on their Issue; direct-child-sets/subdivision require >=2 independently-complete
-necessary siblings, created/verified together; otherwise enlarge/update current scope. New
-scope stops writes; preserve diff and initialize it.
+Large (`L|XL`) work spans multiple independent delivery slices, three production modules,
+two domains, a migration or dependency sequence, multiple worktrees, or parent integration.
+Before writing, verify its Issue graph, Project metadata, and executable `Ready` leaf. Keep
+one delivery unit on one Issue; create children only as a complete set of at least two
+independently useful, necessary siblings. New scope pauses writes until its planning state is
+valid.
 
-## Subagent Delegation
+When the user explicitly invokes `$project-workflow`, the root must load and follow it for
+the complete GitHub lifecycle. Subagents must never invoke or operate that skill.
 
-Six `.codex/agents/` development roles never join four `config/agents/` story roles. Never
-add a reviewer role.
+## Development Roles
 
-|Role|Ownership|
-|---|---|
-|`requirements_analyst`|Read-only requirements/acceptance/modularity advice|
-|`regression_diagnostician`|Read-only reproduction/cause/boundary impact|
-|`modularity_maintainer`|Boundaries; exclusive index semantics|
-|`runtime_implementer`|Approved production/configuration|
-|`test_engineer`|Exclusive test design/edit/run/behavior/coverage|
-|`documentation_maintainer`|Exclusive docs/skills after stabilization|
+The two `.codex/agents/` development roles are separate from the four `config/agents/`
+story-runtime roles. Do not add a development reviewer role.
 
-### Delegation-Gain Gate
+| Role | Ownership |
+| --- | --- |
+| `runtime_implementer` | Production and configuration; modularity decisions, boundary review, and module-index updates. |
+| `test_engineer` | Runtime-test planning, editing, execution, and coverage; regression reproduction and diagnosis. Never edits production code. |
 
-Load `$subagent-routing` before evaluating/dispatching subagents.
+The root owns requirements, documentation, integration, GitHub orchestration, and small
+in-scope changes. Delegate only for a clear parallel gain or specialized runtime/test work.
+Load `$subagent-routing` before delegation and `$subagent-model-selection` only when choosing
+or overriding a child model or reasoning effort. Use concise packets, one owner per file,
+and reuse a valid agent thread.
 
-### Root-Capability Routing
+Record each delegated task's worktree disposition as
+`remove_after_integration|retain_with_reason|authorization_required`. The root validates
+returned scope, evidence, and diffs before integration.
 
-Load `$subagent-model-selection` before selecting, requesting, overriding, or inheriting a
-child model/reasoning effort.
+## Modularity
 
-### Role, Mode, and Control Gate
+The `runtime_implementer` owns modularity analysis and decisions when work changes importable
+structure, responsibility or lifecycle ownership, dependency direction, cycles, public
+facades/protocols/exports, shared abstractions, or multi-consumer migrations. Local refactors
+with unchanged boundaries, tests, docs, formatting, ordinary configuration/data, and
+dependency metadata do not trigger this gate.
 
-Load `$subagent-routing` before capability/identity preflight, handoff, join, retry,
-interruption, or conflict handling.
+Perform boundary analysis before structural writing when possible. Unexpected boundary
+impact pauses the writer for a root decision. The runtime owner updates and reconciles the
+language module index in the same slice; the root performs final integration review.
 
-### Worktree Disposition
+## Verification
 
-Nest one `remove_after_integration|retain_with_reason|authorization_required` under task
-`identity`. Load routing for identity and GitHub lifecycle for tracked cleanup.
+Runtime tests are required only when runtime code changes. The `test_engineer` owns their
+selection and execution. Use the canonical runner:
 
-### Modularity Gate
+```bash
+PYTHONPATH=src python -m tests.runner run
+```
 
-Require modularity for importable structure; responsibility/state/resource/lifecycle
-ownership; dependency direction/cycles/private access; shared abstractions/adapters/
-facades/protocols/exports/public imports; multi-consumer extraction/migration; or
-architectural coupling. Exclude unchanged-contract local refactors, tests/docs, formatting,
-typing, ordinary configuration/data, dependency metadata, and story runs.
+Preserve exact test IDs and machine-readable JSON evidence. Retain the runner's groups,
+timing weights, shards, and reconciliation rules. Start with affected groups in parallel;
+run broader coverage only when risk, failure, or the changed dependency surface requires it.
+Do not serially rerun unchanged successful evidence.
 
-Use pre-writer `analysis`, architecture-dominant `implementation`, or post-writer `review`.
-Unexpected triggers stop writers. Load routing for policy/index procedures.
+Policy, documentation, templates, skills, development-agent configuration, module-index-only,
+and test-only changes require static validation and diff review, not runtime tests. Validate
+links, paths, headings/frontmatter, references, formatting, and relevant policy invariants.
 
-### Orchestration Sequence
+## Code Review Rules
 
-1. Root resolves scope, gates, inventory, delegation, requirements/diagnosis, then any
-   boundary brief/index delta.
-2. Pass planning; use one production owner at a time; reconcile indices and boundary review.
-3. Run exclusive tests before exclusive docs; reconcile later index drift.
-4. Root validates packets, integrates, verifies, and summarizes.
+At the ready-for-review milestone, request Copilot and Codex review concurrently with affected
+CI. Use Copilot Lite by default; use Balanced only for high-risk changes. Batch blocking
+feedback into one change set. After material fixes, make one final milestone request; do not
+request review after every push.
 
-### Adaptive Verification
-
-Load `$adaptive-verification` before planning, running, reusing, escalating, or accepting
-evidence for nontrivial tracked changes. Root owns authorization and sufficiency. Tests use
-the canonical repository test runner `PYTHONPATH=src python -m tests.runner`; README runner
-guidance is human-facing and non-normative.
-
-### Handoff and Result Contracts
-
-Load `$subagent-routing` for exact packets. Thread reuse never authorizes history.
-
-### Prospective Orchestration Telemetry
-
-Load `$subagent-routing` before telemetry.
+Only unresolved Copilot **High**, Codex **P0/P1**, required human approvals, and required
+checks block merge. Record review and check evidence against the current head SHA. GitHub
+Actions are event-driven and nonblocking to agent work; concurrency should cancel stale runs.
+Mutating automation applies only to PRs labeled `workflow:managed`. Enable auto-merge or the
+merge queue only after all gates pass.
 
 ## Quality and Commits
 
-Follow [COMMIT_POLICY.md](COMMIT_POLICY.md). Before structural changes use the
-[modularity selector](.codex/agents/modularity_maintainer.toml) and packaged defaults.
-Follow/verify [DEPENDENCY_POLICY.md](DEPENDENCY_POLICY.md) for dependency/packaging work.
+Follow [COMMIT_POLICY.md](COMMIT_POLICY.md). Follow and verify
+[DEPENDENCY_POLICY.md](DEPENDENCY_POLICY.md) for dependency or packaging work. Preserve
+Issue/PR/comment template headings and semantics when authoring or changing workflow records.

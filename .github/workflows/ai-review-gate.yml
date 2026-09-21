@@ -1,0 +1,237 @@
+name: AI review gate
+
+on:
+  pull_request_target:
+    types: [synchronize, reopened]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+  issue_comment:
+    types: [created, edited, deleted]
+  workflow_run:
+    workflows: [PR validation]
+    types: [completed]
+  schedule:
+    - cron: '17,47 * * * *'
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to re-evaluate
+        required: true
+        type: number
+
+permissions:
+  actions: read
+  contents: write
+  issues: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  resolve:
+    name: Resolve managed pull requests
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.resolve.outputs.matrix }}
+    steps:
+      - id: resolve
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            let numbers = [];
+            if (context.eventName === "schedule") {
+              const pulls = await github.paginate(github.rest.pulls.list, {
+                owner, repo, state: "open", per_page: 100,
+              });
+              numbers = pulls
+                .filter(pr => pr.labels.some(label => label.name === "workflow:managed"))
+                .map(pr => pr.number);
+            } else if (context.eventName === "workflow_dispatch") {
+              numbers = [Number(context.payload.inputs.pr_number)];
+            } else if (context.eventName === "workflow_run") {
+              numbers = (context.payload.workflow_run.pull_requests || [])
+                .map(pr => pr.number);
+            } else if (context.payload.pull_request) {
+              numbers = [context.payload.pull_request.number];
+            } else if (context.payload.issue?.pull_request) {
+              numbers = [context.payload.issue.number];
+            }
+            core.setOutput("matrix", JSON.stringify({pr: numbers.length ? numbers : [0]}));
+
+  evaluate:
+    name: Current-head AI review (${{ matrix.pr }})
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+    concurrency:
+      group: ai-review-gate-${{ matrix.pr }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish current-head gate status
+        if: matrix.pr != 0
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ matrix.pr }}
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const pullNumber = Number(process.env.PR_NUMBER);
+            const {data: pr} = await github.rest.pulls.get({
+              owner, repo, pull_number: pullNumber,
+            });
+            if (pr.state !== "open" || pr.draft ||
+                !pr.labels.some(label => label.name === "workflow:managed")) {
+              core.notice("PR is closed, draft, or not workflow:managed; no status published.");
+              return;
+            }
+
+            const issueComments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: pullNumber, per_page: 100,
+            });
+            const marker = issueComments
+              .filter(comment =>
+                comment.user?.login === "github-actions[bot]" &&
+                comment.body?.includes(`:${pr.head.sha} -->`) &&
+                comment.body?.includes("<!-- ai-review-milestone:"))
+              .sort((left, right) =>
+                new Date(right.created_at) - new Date(left.created_at))[0];
+            if (!marker) {
+              core.notice("No AI review milestone exists for the current head.");
+              return;
+            }
+
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner, repo, pull_number: pullNumber, per_page: 100,
+            });
+            const current = reviews.filter(review =>
+              review.commit_id === pr.head.sha &&
+              review.state !== "DISMISSED" &&
+              new Date(review.submitted_at) >= new Date(marker.created_at));
+            const copilotLogin = "copilot-pull-request-reviewer[bot]";
+            const codexLogin = "chatgpt-codex-connector[bot]";
+            const copilot = current.filter(review => review.user?.login === copilotLogin);
+            const codex = current.filter(review => review.user?.login === codexLogin);
+
+            const reviewComments = await github.paginate(github.rest.pulls.listReviewComments, {
+              owner, repo, pull_number: pullNumber, per_page: 100,
+            });
+            const validationRuns = await github.paginate(
+              github.rest.actions.listWorkflowRuns,
+              {
+                owner,
+                repo,
+                workflow_id: "pr-validation.yml",
+                head_sha: pr.head.sha,
+                per_page: 100,
+              },
+            );
+            const validation = validationRuns
+              .sort((left, right) =>
+                new Date(right.created_at) - new Date(left.created_at))[0];
+            const resolvedByComment = new Map();
+            let cursor = null;
+            do {
+              const response = await github.graphql(`
+                query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+                  repository(owner: $owner, name: $repo) {
+                    pullRequest(number: $number) {
+                      reviewThreads(first: 100, after: $cursor) {
+                        pageInfo { hasNextPage endCursor }
+                        nodes {
+                          isResolved
+                          comments(first: 100) { nodes { databaseId } }
+                        }
+                      }
+                    }
+                  }
+                }
+              `, {owner, repo, number: pullNumber, cursor});
+              const threads = response.repository.pullRequest.reviewThreads;
+              for (const thread of threads.nodes) {
+                for (const comment of thread.comments.nodes) {
+                  resolvedByComment.set(comment.databaseId, thread.isResolved);
+                }
+              }
+              cursor = threads.pageInfo.hasNextPage ? threads.pageInfo.endCursor : null;
+            } while (cursor);
+
+            const textsFor = selected => {
+              const ids = new Set(selected.map(review => review.id));
+              const comments = reviewComments.filter(comment =>
+                ids.has(comment.pull_request_review_id));
+              return [
+                ...selected.map(review => review.body || ""),
+                ...comments
+                  .filter(comment => !resolvedByComment.get(comment.id))
+                  .map(comment => comment.body || ""),
+              ];
+            };
+            const copilotHigh = /\bseverity\s*[:=-]\s*(?:\*\*)?high\b|\[(?:severity\s*:\s*)?high\]|(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*\*)?high(?:\*\*)?\s*(?:severity)?\s*[:—-]/im;
+            const codexBlocking = /\[(?:P0|P1)\]/i;
+            const blockers = [];
+            if (textsFor(copilot).some(text => copilotHigh.test(text))) blockers.push("Copilot High");
+            if (textsFor(codex).some(text => codexBlocking.test(text))) blockers.push("Codex P0/P1");
+
+            let state;
+            let description;
+            if (!copilot.length || !codex.length) {
+              state = "pending";
+              const missing = [
+                !copilot.length && "Copilot",
+                !codex.length && "Codex",
+              ].filter(Boolean).join(" and ");
+              description = `Waiting for current-head ${missing} review`;
+            } else if (blockers.length) {
+              state = "failure";
+              description = `Unresolved ${blockers.join(" and ")} finding`;
+            } else if (!validation || validation.status !== "completed") {
+              state = "pending";
+              description = "Waiting for current-head PR validation";
+            } else if (validation.conclusion !== "success") {
+              state = "failure";
+              description = `Current-head PR validation is ${validation.conclusion}`;
+            } else {
+              state = "success";
+              description = "Current-head Copilot and Codex gates passed";
+            }
+
+            await github.rest.repos.createCommitStatus({
+              owner,
+              repo,
+              ref: pr.head.sha,
+              state,
+              context: "ai-review-gate",
+              description: description.slice(0, 140),
+              target_url: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+            });
+            if (state === "success" && !pr.auto_merge) {
+              try {
+                await github.graphql(`
+                  mutation($pullRequestId: ID!) {
+                    enablePullRequestAutoMerge(input: {
+                      pullRequestId: $pullRequestId,
+                      mergeMethod: SQUASH
+                    }) {
+                      pullRequest { number }
+                    }
+                  }
+                `, {pullRequestId: pr.node_id});
+              } catch (error) {
+                core.warning(`Auto-merge was not enabled: ${error.message}`);
+              }
+            }
+            core.summary
+              .addHeading("AI review gate")
+              .addTable([
+                [{data: "Head", header: true}, pr.head.sha],
+                [{data: "Copilot current-head review", header: true}, copilot.length ? "present" : "pending"],
+                [{data: "Codex current-head review", header: true}, codex.length ? "present" : "pending"],
+                [{data: "PR validation", header: true}, validation ? `${validation.status}/${validation.conclusion || "pending"}` : "pending"],
+                [{data: "Gate", header: true}, `${state}: ${description}`],
+              ])
+              .addRaw("\nBranch rulesets continue to enforce required human reviews, conversations, and checks independently.\n")
+              .write();

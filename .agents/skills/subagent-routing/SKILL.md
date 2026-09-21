@@ -1,86 +1,56 @@
 ---
 name: subagent-routing
 description: >-
-  Development-subagent routing: validates/evaluates/dispatches/controls/joins/retries packets;
-  excludes story/root-only work.
+  Route and validate the two development subagents for clear parallel gain or specialized
+  runtime/test work; excludes story-runtime agents and root-only GitHub workflow.
 ---
 
-`predicted_critical_path_savings_seconds=root_sequential_estimate-(parallel_critical_path+spawn_wait_handoff_synthesis_overhead)`
+Root handles requirements, documentation, GitHub orchestration, integration, and small
+changes. Delegate only when work can proceed independently with clear time/budget gain or
+needs the specialized owner below. Do not delegate deterministic commands, create a reviewer
+role, or split one file across owners.
 
-Require >=20s and >=20% of root estimate, or name
-`material_correctness_risk_reduction|mandatory_ownership_rule`; exceptions authorize, not
-savings. Mandatory owners: docs/tests/triggered-modularity/production outside fast path.
-Fast path permits clear one/two-file production/configuration within established
-responsibility/boundary;
-excludes mandatory owners/ambiguity/unknown failures. Never dispatch deterministic commands.
-Load `$subagent-model-selection` for model/effort.
+| Role | Use for | Never use for |
+| --- | --- | --- |
+| `runtime_implementer` | Production/configuration implementation; modularity decisions and review; module-index updates. | Tests or root-only GitHub operations. |
+| `test_engineer` | Runtime-test design/edit/run/coverage; regression reproduction and diagnosis. | Production edits or documentation ownership. |
 
-|Role|Dispatch|
-|---|---|
-|`requirements_analyst`|Substantial-ambiguity-only|
-|`regression_diagnostician`|Unknown-failure-only|
+Prefer one subagent for a cohesive slice. Parallelize runtime and test analysis only when they
+do not write the same inputs. Reuse the same role thread while its context and identity remain
+valid. Load `$subagent-model-selection` only when selecting or overriding the child model or
+effort.
 
-RO: requirements/diagnosis `analysis`; modularity `analysis|review`; tests/docs `analysis`.
-RW: modularity/runtime/tests/docs `implementation`.
+Before work, the child confirms role, mode, repository, worktree, branch, base/HEAD ancestry,
+exclusive targets, and disposition. One owner edits each file. Never reset, checkout, clean,
+revert, or overwrite another owner's changes. Pause on scope expansion, ownership conflict,
+unexpected boundary impact, or identity mismatch.
 
-RO means read-only without approval-enabled writes; RW means assigned-worktree writes. Child
-first reports filesystem/sandbox/write availability/approval path/identity; reject unsupported
-mode, missing evidence, or mismatch before other work. Route observed capability fail-closed;
-prompts/TOMLs/tests cannot enforce isolation.
+Use a concise packet:
 
-Writers match physical path/Git root/branch/HEAD/base ancestry/targets and exact porcelain
-bytes/SHA-256/decoded paths; pin all three. Never reset/checkout/clean/revert.
-Re-preflight after change/interruption/invalidation. Full-history requires recorded
-reason/bounded scope/stale-risk assessment/root approval.
+| `task_packet` | Required content |
+| --- | --- |
+| `mode` | `analysis`, `implementation`, or `review`. |
+| `objective` | Concrete outcome. |
+| `scope` | Included and excluded targets. |
+| `acceptance` | Observable criteria and compatibility constraints. |
+| `ownership` | Read-only or exclusive files/responsibilities. |
+| `gates` | Planning, modularity, and accepted decisions. |
+| `identity` | Repo, worktree, branch, base/HEAD, and `remove_after_integration|retain_with_reason|authorization_required`. |
+| `verification` | Authorized static/runtime checks, evidence shape, and budget. |
+| `upstream_decisions` | Stable facts the child may rely on. |
+| `stop_conditions` | Conflicts or decisions that return control to root. |
 
-Pre-record result IDs/role/mode; join after none runs/missing and all packets validate.
-Retry transient spawn/delivery/join once with fingerprint/no-write proof. Possible writes
-require inspection/diff preservation/same-thread resume; policy/capability/scope/schema never
-retry. After failed retry, root does only authorized static/fast-path work. Resolve
-`observed>inferred>proposed>unknown` within ownership; never vote; escalate owner/root/user.
+Require a concise result:
 
-|Disposition|Meaning|
-|---|---|
-|`remove_after_integration`|Cleanup-authority-granted|
-|`retain_with_reason`|Reason/next-owner|
-|`authorization_required`|Removal-authority-absent/unresolved|
+| `result_packet` | Required content |
+| --- | --- |
+| `outcome` | Completed, stopped, or blocked state. |
+| `findings` | Decisions, changed files, and boundary/index consistency. |
+| `changed_inputs` | Relevant source, tests, fixtures, config, policy, docs, or environment. |
+| `evidence` | Exact checks, IDs/outcomes when runtime tests ran, duration, identity, and cleanup/recoverability. |
+| `risks` | Residual ambiguity, blocker, or proposed expansion. |
+| `next_action` | Owner and concrete next step. |
 
-Nest under task `identity`; change only after recorded authority/state.
-
-Missing policy: report language/path; root asks about packaged creation, resumes thread,
-records declined general-judgment exceptions. Missing
-index needs no permission: derive inventory/path/content; same-thread index-only creation.
-Select/verify root `<LANGUAGE>_MODULE_INDEX.md`.
-Runtime boundary work needs index reconciliation/review before tests/docs; return deviations
-until resolved/accepted. Modularity implementation needs its report plus root review. Tests
-precede docs; reconcile drift. Specialists never coordinate/delegate; reuse unless stale/unsafe.
-
-|`task_packet` field|Content|
-|---|---|
-|`mode`|`analysis/implementation/review`|
-|`objective`|Concrete-outcome/relevant-evidence|
-|`scope`|Approved-in/out-targets|
-|`acceptance`|Criteria/compatibility|
-|`ownership`|Read-only/exclusive-targets|
-|`gates`|GitHub/modularity-decisions/rationale/evidence/accepted-boundary/index-status/delta|
-|`identity`|Repository/Issue/Project/Iteration/Development-linked-branch-or-PR/worktree/base/head/preflight/disposition|
-|`verification`|Authorized-adaptive-plan/compact-ledger/required-checks/budget/expected-output|
-|`upstream_decisions`|Distilled-findings/accepted-decisions|
-|`stop_conditions`|Policy-conflict/breaking-decision/scope-deviation/unexpected-structure/other-explicit-returns|
-
-|`result_packet` field|Content|
-|---|---|
-|`outcome`|Completed-work/precise-blocked-or-stopped-state|
-|`findings`|Distilled-findings/files/indices/implementation-index-consistency|
-|`changed_inputs`|Relevant-source/test/fixture/config/policy/docs/environment|
-|`evidence`|`mandatory_evidence,authorized_selection,exact_commands,completed_ids,failed_ids,accepted_skips,invalidated_evidence,unexecuted_ids,actual_duration,spent_and_remaining_budget,identities,digests,failure_fingerprints,checks,recommended_next_evidence`;cleanup/recoverability|
-|`risks`|Blockers/ambiguity/residual/proposed-expansions-requiring-root-authorization|
-|`next_action`|Recommended-owner/action|
-
-Exclude logs/full Issues/plans; reuse never authorizes history.
-
-Record `root_phase_wall_time_seconds,subagent_startup_seconds,subagent_wait_seconds,turn_count,tool_call_count,duplicate_read_count,verification_time_seconds,input_tokens,output_tokens`
-as `observed|estimated|unavailable`; explain unavailable; estimates aren't observations.
-Reduction targets:
-`median>=25%,P95>=15%,turns>=30%,duplicate-broad-suites>=50%,packet-tokens=25--35%`.
-Static tests don't prove performance.
+Root validates the packet and diff before integration. Retry only a transient delivery failure
+once; never retry a policy, capability, identity, schema, or scope conflict. Preserve possible
+writes and resume the same thread after a safe interruption.

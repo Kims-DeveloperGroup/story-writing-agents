@@ -1,0 +1,128 @@
+name: Managed post-merge verification
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+# Optional: PROJECT_STATUS_TOKEN may be a fine-grained token with read access
+# to the organization Project when the repository token cannot read ProjectV2.
+jobs:
+  verify:
+    name: Verify managed status and cleanup
+    if: >-
+      github.event.pull_request.merged == true &&
+      contains(github.event.pull_request.labels.*.name, 'workflow:managed')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECT_STATUS_TOKEN || github.token }}
+          script: |
+            const {owner, repo} = context.repo;
+            const pullNumber = context.payload.pull_request.number;
+            const failures = [];
+            const warnings = [];
+
+            // Give native closing-keyword and delete-branch automation a short
+            // window to settle; this workflow never deletes or closes records.
+            await new Promise(resolve => setTimeout(resolve, 10000));
+            const response = await github.graphql(`
+              query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  defaultBranchRef { name }
+                  pullRequest(number: $number) {
+                    headRefName
+                    headRepository { nameWithOwner }
+                    closingIssuesReferences(first: 50) {
+                      nodes { id number state url }
+                    }
+                  }
+                }
+              }
+            `, {owner, repo, number: pullNumber});
+            const repository = response.repository;
+            const pr = repository.pullRequest;
+            const issues = pr.closingIssuesReferences.nodes;
+
+            for (const issue of issues) {
+              if (issue.state !== "CLOSED") {
+                failures.push(`#${issue.number} is ${issue.state}, not CLOSED`);
+              }
+              try {
+                const projectResponse = await github.graphql(`
+                  query($id: ID!) {
+                    node(id: $id) {
+                      ... on Issue {
+                        projectItems(first: 20) {
+                          nodes {
+                            project { title number }
+                            fieldValues(first: 50) {
+                              nodes {
+                                ... on ProjectV2ItemFieldSingleSelectValue {
+                                  name
+                                  field {
+                                    ... on ProjectV2SingleSelectField { name }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                `, {id: issue.id});
+                const items = projectResponse.node.projectItems.nodes;
+                if (!items.length) {
+                  warnings.push(`#${issue.number} has no readable Project item`);
+                }
+                for (const item of items) {
+                  const status = item.fieldValues.nodes.find(value => value.field?.name === "Status");
+                  if (!status) {
+                    warnings.push(`#${issue.number} has no readable Project Status`);
+                  } else if (status.name !== "Done") {
+                    failures.push(`#${issue.number} Project Status is ${status.name}, not Done`);
+                  }
+                }
+              } catch (error) {
+                warnings.push(`#${issue.number} Project status unreadable: ${error.message}`);
+              }
+            }
+            if (!issues.length) {
+              warnings.push("PR has no closing Issue reference; manual Issue lifecycle may still be required");
+            }
+
+            const sameRepository = pr.headRepository?.nameWithOwner === `${owner}/${repo}`;
+            const protectedHead = pr.headRefName === repository.defaultBranchRef.name;
+            if (sameRepository && !protectedHead) {
+              try {
+                await github.rest.git.getRef({
+                  owner, repo, ref: `heads/${pr.headRefName}`,
+                });
+                failures.push(`remote branch ${pr.headRefName} still exists`);
+              } catch (error) {
+                if (error.status !== 404) throw error;
+              }
+            } else if (!sameRepository) {
+              warnings.push("fork head branch cleanup belongs to the fork owner");
+            }
+
+            core.summary.addHeading("Managed post-merge verification");
+            core.summary.addList([
+              `${issues.length} closing Issue(s) inspected`,
+              sameRepository ? `remote head checked: ${pr.headRefName}` : "fork head not mutated",
+            ]);
+            if (warnings.length) core.summary.addHeading("Warnings", 3).addList(warnings);
+            if (failures.length) core.summary.addHeading("Required follow-up", 3).addList(failures);
+            await core.summary.write();
+            for (const warning of warnings) core.warning(warning);
+            if (failures.length) core.setFailed(failures.join("; "));

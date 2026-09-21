@@ -345,8 +345,6 @@
     "tests.test_rag_module_and_packaging_boundary.RagPackagingBoundaryTests": 14889743,
     "tests.test_recommendation_actions.RecommendationActionContractTests": 31674070,
     "tests.test_reply_trace.ReplyTraceContractTests": 291,
-    "tests.test_repository_agent_policy.RepositoryAgentPolicyTests": 69571,
-    "tests.test_repository_agent_policy.RepositoryWorkTemplateTests": 7758,
     "tests.test_runtime_reference_integration.RuntimeExecutionRetirementTests": 61897,
     "tests.test_session_lifecycle.AgentBackendLifecycleTests": 686701,
     "tests.test_session_lifecycle.SessionLifecycleContractTests": 231559,
