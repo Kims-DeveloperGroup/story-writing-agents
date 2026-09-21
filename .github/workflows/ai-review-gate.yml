@@ -31,6 +31,15 @@ permissions:
 jobs:
   resolve:
     name: Resolve managed pull requests
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'workflow_run' ||
+      (github.event_name == 'pull_request_target' &&
+       (github.event.action == 'unlabeled' ||
+        contains(github.event.pull_request.labels.*.name, 'workflow:managed'))) ||
+      contains(github.event.pull_request.labels.*.name, 'workflow:managed') ||
+      contains(github.event.issue.labels.*.name, 'workflow:managed')
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.resolve.outputs.matrix }}
