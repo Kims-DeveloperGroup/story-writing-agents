@@ -33,41 +33,14 @@ valid.
 When the user explicitly invokes `$project-workflow`, the root must load and follow it for
 the complete GitHub lifecycle. Subagents must never invoke or operate that skill.
 
-## Development Roles
+## Development Delegation
 
-The two `.codex/agents/` development roles are separate from the four `config/agents/`
-story-runtime roles. Do not add a development reviewer role.
-
-| Role | Ownership |
-| --- | --- |
-| `runtime_implementer` | Production and configuration; modularity decisions, boundary review, and module-index updates. |
-| `test_engineer` | Runtime-test planning, editing, execution, and coverage; regression reproduction and diagnosis. Never edits production code. |
-
-The root owns requirements, documentation, integration, GitHub orchestration, and small
-in-scope changes. Delegate only for a clear parallel gain or specialized runtime/test work.
-Load `$subagent-routing` before delegation. Use concise packets, one owner per file, and reuse
-a valid agent thread.
-
-Record each delegated task's worktree disposition as
-`remove_after_integration|retain_with_reason|authorization_required`. The root validates
-returned scope, evidence, and diffs before integration.
-
-## Modularity
-
-The `runtime_implementer` owns modularity analysis and decisions when work changes importable
-structure, responsibility or lifecycle ownership, dependency direction, cycles, public
-facades/protocols/exports, shared abstractions, or multi-consumer migrations. Local refactors
-with unchanged boundaries, tests, docs, formatting, ordinary configuration/data, and
-dependency metadata do not trigger this gate.
-
-Perform boundary analysis before structural writing when possible. Unexpected boundary
-impact pauses the writer for a root decision. The runtime owner updates and reconciles the
-language module index in the same slice; the root performs final integration review.
+Development roles in `.codex/agents/` are separate from story-runtime roles in
+`config/agents/`. Load `$subagent-routing` before delegation.
 
 ## Verification
 
-Runtime tests are required only when runtime code changes. The `test_engineer` owns their
-selection and execution. Use the canonical runner:
+Runtime tests are required only when runtime code changes. Use the canonical runner:
 
 ```bash
 PYTHONPATH=src python -m tests.runner run
