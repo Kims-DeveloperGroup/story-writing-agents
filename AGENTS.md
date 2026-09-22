@@ -45,10 +45,8 @@ story-runtime roles. Do not add a development reviewer role.
 
 The root owns requirements, documentation, integration, GitHub orchestration, and small
 in-scope changes. Delegate only for a clear parallel gain or specialized runtime/test work.
-Load `$subagent-routing` before delegation. Subagents inherit the root agent's model and
-reasoning effort by default. A role may instead use one fixed pair by declaring both `model`
-and `model_reasoning_effort` in its `.codex/agents/<role>.toml`; never select or override the
-pair per task. Use concise packets, one owner per file, and reuse a valid agent thread.
+Load `$subagent-routing` before delegation. Use concise packets, one owner per file, and reuse
+a valid agent thread.
 
 Record each delegated task's worktree disposition as
 `remove_after_integration|retain_with_reason|authorization_required`. The root validates
