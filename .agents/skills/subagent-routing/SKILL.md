@@ -17,10 +17,7 @@ role, or split one file across owners.
 
 Prefer one subagent for a cohesive slice. Parallelize runtime and test analysis only when they
 do not write the same inputs. Reuse the same role thread while its context and identity remain
-valid. Do not spend delegation budget selecting models. Omitted `model` and
-`model_reasoning_effort` inherit the root pair. A fixed role pair is permitted only when both
-fields are declared together in that role's `.codex/agents/<role>.toml`; never override them
-per task.
+valid.
 
 Before work, the child confirms role, mode, repository, worktree, branch, base/HEAD ancestry,
 exclusive targets, and disposition. One owner edits each file. Never reset, checkout, clean,
