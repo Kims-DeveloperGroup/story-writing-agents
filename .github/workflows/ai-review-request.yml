@@ -61,7 +61,7 @@ jobs:
               const comments = await github.paginate(github.rest.issues.listComments, {
                 owner, repo, issue_number: number, per_page: 100,
               });
-              const marker = `<!-- ai-review-milestone:${milestone}:${pr.head.sha} -->`;
+              const marker = `<!-- ai-review-milestone-complete:${milestone}:${pr.head.sha} -->`;
               request = !comments.some(comment => comment.body?.includes(marker));
             }
 
@@ -99,7 +99,7 @@ jobs:
               owner,
               repo,
               issue_number: pullNumber,
-              body: `AI review milestone **${process.env.MILESTONE}** opened for \`${short}\`.\n\n<!-- ai-review-milestone:${process.env.MILESTONE}:${process.env.HEAD_SHA} -->`,
+              body: `AI review milestone **${process.env.MILESTONE}** opened for \`${short}\`.\n\n<!-- ai-review-milestone-open:${process.env.MILESTONE}:${process.env.HEAD_SHA} -->`,
             });
 
   request-copilot:
@@ -135,4 +135,28 @@ jobs:
               ...context.repo,
               issue_number: Number(process.env.PR_NUMBER),
               body: `@codex review\n\nMilestone: ${process.env.MILESTONE}.`,
+            });
+
+  complete:
+    name: Complete review request milestone
+    needs: [resolve, mark, request-copilot, request-codex]
+    if: >-
+      needs.resolve.outputs.request == 'true' &&
+      needs.mark.result == 'success' &&
+      needs.request-copilot.result == 'success' &&
+      needs.request-codex.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+          MILESTONE: ${{ needs.resolve.outputs.milestone }}
+        with:
+          script: |
+            const short = process.env.HEAD_SHA.slice(0, 12);
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              body: `AI review requests for milestone **${process.env.MILESTONE}** completed for \`${short}\`.\n\n<!-- ai-review-milestone-complete:${process.env.MILESTONE}:${process.env.HEAD_SHA} -->`,
             });

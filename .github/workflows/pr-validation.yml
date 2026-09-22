@@ -76,7 +76,8 @@ jobs:
             const add = group => groups.add(group);
 
             for (const path of paths.filter(isRuntime)) {
-              if (path.includes("/git/") || path.includes("session_")) add("git-storage");
+              if (path.includes("/git/")) add("git-storage");
+              if (path.includes("session_")) add("session-runtime");
               if (path.includes("workspace/") || path.includes("conversation_storage/") || path.includes("conversations/")) {
                 add("workspace-session");
                 add("workspace-core");
@@ -191,13 +192,11 @@ jobs:
               if not re.search(r"^description:\s*(?:\S|>)", frontmatter, re.MULTILINE):
                   raise SystemExit(f"{skill}: missing skill description")
 
-          markdown = [root / "AGENTS.md", root / "GITHUB_WORKFLOW.md",
-                      root / "PYTHON_MODULE_INDEX.md"]
-          markdown += list((root / ".agents/skills").glob("**/*.md"))
-          markdown += list((root / ".github").glob("**/*.md"))
-          markdown += list((root / ".codex/agents").glob("**/*.md"))
+          markdown = [path for path in root.rglob("*.md")
+                      if ".git" not in path.parts and "vendor" not in path.parts]
           for source in markdown:
               text = source.read_text(encoding="utf-8")
+              text = re.sub(r"```.*?```|~~~.*?~~~", "", text, flags=re.DOTALL)
               for raw in re.findall(r"\[[^\]]+\]\(([^)]+)\)", text):
                   target = raw.strip().strip("<>").split()[0]
                   if not target or target.startswith(("http://", "https://", "mailto:", "#")):

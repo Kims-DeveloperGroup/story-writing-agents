@@ -70,6 +70,21 @@ AFFECTED_GROUPS: Mapping[str, tuple[GroupSelector, ...]] = {
             "tests.test_git_session_resources",
         )
     ),
+    "session-runtime": tuple(
+        GroupSelector(module)
+        for module in (
+            "tests.test_git_session_checkpoint_classifier",
+            "tests.test_git_session_checkpoint_contracts",
+            "tests.test_git_session_checkpoint_process",
+            "tests.test_git_session_checkpoints",
+            "tests.test_git_session_contracts",
+            "tests.test_git_session_history_contracts",
+            "tests.test_session_lifecycle",
+            "tests.test_session_recovery_contracts",
+            "tests.test_session_recovery_reconciliation",
+            "tests.test_session_transition_assessment",
+        )
+    ),
     "workspace-session": tuple(
         GroupSelector(module)
         for module in (

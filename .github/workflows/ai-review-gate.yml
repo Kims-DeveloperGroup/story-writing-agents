@@ -122,7 +122,7 @@ jobs:
               .filter(comment =>
                 comment.user?.login === "github-actions[bot]" &&
                 comment.body?.includes(`:${pr.head.sha} -->`) &&
-                comment.body?.includes("<!-- ai-review-milestone:"))
+                comment.body?.includes("<!-- ai-review-milestone-open:"))
               .sort((left, right) =>
                 new Date(right.created_at) - new Date(left.created_at))[0];
             if (!marker) {
@@ -202,7 +202,7 @@ jobs:
               ];
             };
             const copilotHigh = /\bseverity\s*[:=-]\s*(?:\*\*)?high\b|\[(?:severity\s*:\s*)?high\]|(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*\*)?high(?:\*\*)?\s*(?:severity)?\s*[:—-]/im;
-            const codexBlocking = /\[(?:P0|P1)\]/i;
+            const codexBlocking = /\[(?:P0|P1)(?:\s+Badge)?\]/i;
             const blockers = [];
             if (textsFor(copilot).some(text => copilotHigh.test(text))) blockers.push("Copilot High");
             if (textsFor(codex).some(text => codexBlocking.test(text))) blockers.push("Codex P0/P1");

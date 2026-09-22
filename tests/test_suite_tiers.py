@@ -77,6 +77,7 @@ class LanePolicyTests(unittest.TestCase):
                 "interactive-terminal",
                 "provider-process",
                 "runner",
+                "session-runtime",
                 "workspace-core",
                 "workspace-session",
             },
@@ -88,6 +89,10 @@ class LanePolicyTests(unittest.TestCase):
         workspace_session_modules = {
             selector.module
             for selector in suite_policy.AFFECTED_GROUPS["workspace-session"]
+        }
+        session_runtime_modules = {
+            selector.module
+            for selector in suite_policy.AFFECTED_GROUPS["session-runtime"]
         }
         database_modules = {
             selector.module
@@ -106,8 +111,15 @@ class LanePolicyTests(unittest.TestCase):
         self.assertFalse(database_modules & artifact_modules)
         self.assertFalse(workspace_modules & artifact_modules)
         self.assertFalse(git_modules & workspace_session_modules)
+        self.assertFalse(git_modules & session_runtime_modules)
+        self.assertFalse(workspace_session_modules & session_runtime_modules)
         self.assertFalse(database_modules & workspace_session_modules)
         self.assertIn("tests.test_git_session_resources", git_modules)
+        self.assertIn(
+            "tests.test_git_session_checkpoints",
+            session_runtime_modules,
+        )
+        self.assertIn("tests.test_session_lifecycle", session_runtime_modules)
         self.assertEqual(
             workspace_session_modules,
             {
