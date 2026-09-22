@@ -2041,4 +2041,257 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
 
             mock_restore.assert_called_once()
 
+    def test_run_advisory_progress_propagates_draw_restoration_failure_and_closes_operation(self) -> None:
+        driver = RawTerminalDriver(
+            lambda _p: "",
+            io.StringIO(),
+            io.StringIO(),
+            transition_line_input,
+            transition_main_input,
+            append_main_input_history,
+        )
+        fake_caps = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+        configuration = _driver._TerminalConfiguration(
+            0,
+            1,
+            [0, 0, 0, 0, 0, 0, []],
+            [0, 0, 0, 0, 0, 0, []],
+            80,
+            None,
+            None,
+            0,
+            mock.MagicMock(),
+        )
+
+        async def sample_op():
+            await asyncio.sleep(1)
+
+        coro = sample_op()
+
+        with (
+            mock.patch.object(RawTerminalDriver, "capabilities", return_value=fake_caps),
+            mock.patch.object(RawTerminalDriver, "_observe_input_capabilities", return_value=fake_caps),
+            mock.patch.object(RawTerminalDriver, "_prepare_input", return_value=(fake_caps, configuration)),
+            mock.patch("story_writing_agents.interactive_terminal._driver._activate_terminal"),
+            mock.patch.object(RawTerminalDriver, "_draw_progress_frame", side_effect=ValueError("draw boom")),
+            mock.patch("story_writing_agents.interactive_terminal._driver._restore_terminal_or_raise", side_effect=RuntimeError("restoration failed")),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "restoration failed"):
+                asyncio.run(
+                    driver.run_advisory_progress(
+                        coro,
+                        lambda _f: "progress",
+                        toggle_callback=lambda: True,
+                    )
+                )
+
+    def test_redraw_nested_scroll_frame_validates_type_width_and_safety(self) -> None:
+        driver = RawTerminalDriver(
+            lambda _p: "",
+            io.StringIO(),
+            io.StringIO(),
+            transition_line_input,
+            transition_main_input,
+            append_main_input_history,
+        )
+        caps = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            40,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+        state = MultiAgentScrollState(views=())
+
+        # Non-callable renderer
+        with self.assertRaises(TypeError):
+            driver._redraw_nested_scroll_frame(state, caps, "not callable")  # type: ignore[arg-type]
+
+        # Renderer returns non-RenderedFrame
+        with self.assertRaises(TypeError):
+            driver._redraw_nested_scroll_frame(state, caps, lambda _s, _c: "string frame")  # type: ignore[return-value]
+
+        # Renderer returns width mismatch
+        from story_writing_agents.interactive_terminal._model import RenderedFrame
+        with self.assertRaises(ValueError):
+            driver._redraw_nested_scroll_frame(state, caps, lambda _s, _c: RenderedFrame("line", 80, 1))
+
+        # Renderer returns text with unauthorized escape sequence
+        with self.assertRaises(ValueError):
+            driver._redraw_nested_scroll_frame(state, caps, lambda _s, _c: RenderedFrame("line\x1b[31m", 40, 1))
+
+        # Valid frame succeeds and writes text
+        valid_frame = RenderedFrame("safe line", 40, 1)
+        driver._redraw_nested_scroll_frame(state, caps, lambda _s, _c: valid_frame)
+        self.assertEqual(driver._progress_rows, 1)
+
+    def test_draw_progress_frame_tracks_rows_before_write_for_error_cleanup(self) -> None:
+        out = io.StringIO()
+        driver = RawTerminalDriver(
+            lambda _p: "",
+            io.StringIO(),
+            out,
+            transition_line_input,
+            transition_main_input,
+            append_main_input_history,
+        )
+        driver._progress_frame = 0
+
+        # When _write_raw_text raises, _progress_rows is already set to row count
+        with mock.patch.object(RawTerminalDriver, "_write_raw_text", side_effect=OSError("write incomplete")):
+            with self.assertRaises(OSError):
+                driver._draw_progress_frame(lambda _f: "line1\nline2\nline3")
+
+        self.assertEqual(driver._progress_rows, 3)
+
+        # Calling _clear_progress_frame cleans up those 3 rows and resets _progress_rows to 0
+        driver._clear_progress_frame()
+        self.assertEqual(driver._progress_rows, 0)
+        self.assertIn("\r\x1b[K", out.getvalue())
+
+    def test_nested_scroll_inspector_preserves_buffered_typeahead(self) -> None:
+        driver = RawTerminalDriver(
+            lambda _p: "",
+            io.StringIO(),
+            io.StringIO(),
+            transition_line_input,
+            transition_main_input,
+            append_main_input_history,
+        )
+        caps = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+        configuration = _driver._TerminalConfiguration(
+            0, 1, [0]*7, [0]*7, 80, None, None, 0, mock.MagicMock(),
+        )
+        driver._typeahead_buffer.extend(["c", "m", "d"])
+
+        # Inspector receives 'q' from live reader
+        with (
+            mock.patch("story_writing_agents.interactive_terminal._driver._activate_terminal"),
+            mock.patch("story_writing_agents.interactive_terminal._driver._restore_terminal_or_raise"),
+            mock.patch.object(RawTerminalDriver, "_read_character", side_effect=lambda consume_typeahead=True: "q"),
+            mock.patch.object(RawTerminalDriver, "_redraw_nested_scroll_frame"),
+        ):
+            driver.run_nested_scroll_inspector(
+                MultiAgentScrollState(views=()),
+                lambda s, _e: s,
+                mock.MagicMock(),
+            )
+
+        # Typeahead buffer was NOT drained by inspector
+        self.assertEqual(list(driver._typeahead_buffer), ["c", "m", "d"])
+
+    def test_run_progress_frames_propagates_eof_and_interrupt_without_advisory_error_wrapping(self) -> None:
+        from story_writing_agents.interactive_terminal._driver import AdvisoryProgressError
+
+        driver = RawTerminalDriver(
+            lambda _p: "",
+            io.StringIO(),
+            io.StringIO(),
+            transition_line_input,
+            transition_main_input,
+            append_main_input_history,
+        )
+        fake_caps = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+        configuration = _driver._TerminalConfiguration(
+            0, 1, [0]*7, [0]*7, 80, None, None, 0, mock.MagicMock(),
+        )
+
+        async def infinite_op():
+            await asyncio.sleep(100)
+
+        # When progress frame worker encounters EOF, run_advisory_progress propagates EOFError directly
+        with (
+            mock.patch.object(RawTerminalDriver, "capabilities", return_value=fake_caps),
+            mock.patch.object(RawTerminalDriver, "_observe_input_capabilities", return_value=fake_caps),
+            mock.patch.object(RawTerminalDriver, "_prepare_input", return_value=(fake_caps, configuration)),
+            mock.patch("story_writing_agents.interactive_terminal._driver._activate_terminal"),
+            mock.patch("story_writing_agents.interactive_terminal._driver._restore_terminal_or_raise"),
+            mock.patch.object(RawTerminalDriver, "_draw_progress_frame"),
+            mock.patch.object(RawTerminalDriver, "_clear_progress_frame"),
+            mock.patch.object(RawTerminalDriver, "_run_progress_frames", side_effect=EOFError()),
+        ):
+            with self.assertRaises(EOFError):
+                asyncio.run(driver.run_advisory_progress(infinite_op(), lambda _f: "frame"))
+
+        # When progress frame worker encounters KeyboardInterrupt, run_advisory_progress propagates KeyboardInterrupt directly
+        with (
+            mock.patch.object(RawTerminalDriver, "capabilities", return_value=fake_caps),
+            mock.patch.object(RawTerminalDriver, "_observe_input_capabilities", return_value=fake_caps),
+            mock.patch.object(RawTerminalDriver, "_prepare_input", return_value=(fake_caps, configuration)),
+            mock.patch("story_writing_agents.interactive_terminal._driver._activate_terminal"),
+            mock.patch("story_writing_agents.interactive_terminal._driver._restore_terminal_or_raise"),
+            mock.patch.object(RawTerminalDriver, "_draw_progress_frame"),
+            mock.patch.object(RawTerminalDriver, "_clear_progress_frame"),
+            mock.patch.object(RawTerminalDriver, "_run_progress_frames", side_effect=KeyboardInterrupt()),
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                asyncio.run(driver.run_advisory_progress(infinite_op(), lambda _f: "frame"))
+
+    def test_is_content_safe_failure_rejects_unrelated_class_named_backend_protocol_error(self) -> None:
+        from story_writing_agents.interactive_terminal._core import _is_content_safe_failure
+        from story_writing_agents.errors import BackendProtocolError as RealBackendProtocolError
+
+        class FakeBackendProtocolError(Exception):
+            pass
+        FakeBackendProtocolError.__name__ = "BackendProtocolError"
+        FakeBackendProtocolError.__qualname__ = "BackendProtocolError"
+
+        self.assertFalse(_is_content_safe_failure(FakeBackendProtocolError("secret paths")))
+        self.assertTrue(_is_content_safe_failure(RealBackendProtocolError("safe message")))
+
+    def test_advisory_progress_finish_refreshes_snapshot_from_final_failed_state(self) -> None:
+        state = AdvisoryProgressState()
+        state.begin((AdvisoryProgressRequest("agent_1", "op_1", "Drafting"),))
+        state.record_error("Initial error")
+        self.assertIsNotNone(state.failure_snapshot)
+        self.assertEqual(state.failure_snapshot[1], "Initial error")
+
+        # More stream lines arrive after initial error
+        state.observe_stream(
+            ProviderStreamEvent(
+                kind=ProviderStreamEventKind.TEXT_DELTA,
+                agent_id="agent_1",
+                text="Additional streamed paragraph.\n",
+                operation_id="op_1",
+            )
+        )
+        self.assertIn("Additional streamed paragraph.", state.agent_buffers.get(("agent_1", "op_1"), []))
+
+        # finish() refreshes the snapshot before clearing live buffers
+        state.finish()
+        self.assertIsNotNone(state.failure_snapshot)
+        snapshot_buffers, last_err = state.failure_snapshot
+        self.assertEqual(last_err, "Initial error")
+        self.assertIn(("agent_1", "op_1"), snapshot_buffers)
+        self.assertIn("Additional streamed paragraph.", snapshot_buffers[("agent_1", "op_1")])
+        # Live buffer itself was cleared
+        self.assertEqual(len(state.agent_buffers), 0)
+
+
 

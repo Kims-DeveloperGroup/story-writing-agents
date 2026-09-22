@@ -240,6 +240,12 @@ class AdvisoryProgressState:
     def finish(self) -> int:
         elapsed = self.elapsed_seconds()
         self.started_at = None
+        if (
+            self.failure_snapshot is not None
+            or self.last_error_message is not None
+            or self.agent_errors
+        ):
+            self.snapshot_failure()
         self.requests = ()
         self.events.clear()
         self.stream_status.clear()

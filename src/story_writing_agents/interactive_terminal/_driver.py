@@ -541,8 +541,8 @@ class RawTerminalDriver:
             commands.append("\r\x1b[K")
             if ordinal + 1 < rows:
                 commands.append("\x1b[1A")
-        self._write_raw_text("".join(commands))
         self._progress_rows = 0
+        self._write_raw_text("".join(commands))
 
     def _draw_progress_frame(
         self,
@@ -575,8 +575,8 @@ class RawTerminalDriver:
         ):
             raise ValueError("progress frame must contain safe text rows")
         display_frame = frame if plain_frame != frame else "\n".join(lines)
-        self._write_raw_text("\r" + display_frame)
         self._progress_rows = len(lines)
+        self._write_raw_text("\r" + display_frame)
 
     async def run_advisory_progress(
         self,
@@ -682,16 +682,16 @@ class RawTerminalDriver:
                     self._clear_progress_frame()
                 except BaseException:
                     pass
-                if configuration is not None:
-                    try:
-                        _restore_terminal_or_raise(
-                            configuration, None, discard_input=False
-                        )
-                    except BaseException:
-                        pass
                 close = getattr(operation, "close", None)
                 if callable(close):
-                    close()
+                    try:
+                        close()
+                    except Exception:
+                        pass
+                if configuration is not None:
+                    _restore_terminal_or_raise(
+                        configuration, exc, discard_input=False
+                    )
                 raise AdvisoryProgressError(
                     "advisory progress could not be displayed"
                 ) from exc
@@ -866,6 +866,8 @@ class RawTerminalDriver:
         if operation_failure is not None:
             raise operation_failure
         if progress_failure is not None:
+            if isinstance(progress_failure, (KeyboardInterrupt, EOFError)):
+                raise progress_failure
             raise AdvisoryProgressError(
                 "advisory progress worker failed"
             ) from progress_failure
@@ -931,7 +933,7 @@ class RawTerminalDriver:
                 escape_sequence: _EscapeSequenceState = None
                 while True:
                     try:
-                        character = self._read_character()
+                        character = self._read_character(consume_typeahead=False)
                     except (KeyboardInterrupt, EOFError):
                         break
 
@@ -962,7 +964,8 @@ class RawTerminalDriver:
                     if character == "\x1b":
                         try:
                             escape_input_is_ready = self._escape_continuation_is_ready(
-                                configuration
+                                configuration,
+                                consume_typeahead=False,
                             )
                         except KeyboardInterrupt:
                             break
@@ -1006,12 +1009,28 @@ class RawTerminalDriver:
     ) -> None:
         """Replace the retained progress frame with an updated nested scroll view."""
 
+        if not callable(renderer):
+            raise TypeError("renderer must be callable")
+        rendered = renderer(state, capabilities)
+        if not isinstance(rendered, RenderedFrame):
+            raise TypeError("rendered frame must be a RenderedFrame")
+        if rendered.width != capabilities.width:
+            raise ValueError("rendered frame width must match terminal capabilities width")
+        lines = rendered.text.split("\n")
+        if (
+            not lines
+            or any(
+                sanitize_terminal_text(line) != line
+                or any(character in line for character in ("\r", "\x1b"))
+                or sum(display_character_width(c) for c in line) > capabilities.width
+                for line in lines
+            )
+        ):
+            raise ValueError("rendered frame must contain safe text rows within capability width")
         if self._progress_rows > 0:
             self._clear_progress_frame()
-        rendered = renderer(state, capabilities)
-        lines = rendered.text.split("\n")
-        self._write_raw_text("\r" + rendered.text)
         self._progress_rows = len(lines)
+        self._write_raw_text("\r" + rendered.text)
 
     async def run_live_composer(
         self,
@@ -1396,12 +1415,13 @@ class RawTerminalDriver:
                         character,
                         configuration,
                     )
-                    if configured_event is not None and configured_event.kind in {
-                        KeyKind.INTERRUPT,
-                        KeyKind.EOF,
-                    }:
-                        self._typeahead_buffer.clear()
-                        raise KeyboardInterrupt
+                    if configured_event is not None:
+                        if configured_event.kind is KeyKind.INTERRUPT:
+                            self._typeahead_buffer.clear()
+                            raise KeyboardInterrupt
+                        if configured_event.kind is KeyKind.EOF:
+                            self._typeahead_buffer.clear()
+                            raise EOFError
                     if character in ("t", "T"):
                         toggle_callback()
                     else:
@@ -3853,10 +3873,12 @@ class RawTerminalDriver:
     def _escape_continuation_is_ready(
         self,
         configuration: _TerminalConfiguration,
+        *,
+        consume_typeahead: bool = True,
     ) -> bool:
         """Prefer decoded suffixes before the bounded descriptor wait."""
 
-        if self._typeahead_buffer:
+        if consume_typeahead and self._typeahead_buffer:
             return True
         reader = self._input_latch.live_reader
         if reader.has_pending_codepoint:

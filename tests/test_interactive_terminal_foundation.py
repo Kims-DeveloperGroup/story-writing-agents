@@ -3476,6 +3476,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
                 "..agent_context.progress",
                 "..agents",
                 "..conversations",
+                "..errors",
                 "..interactive_commands",
                 "._collaboration_view",
                 "._advisory_progress",

@@ -257,11 +257,11 @@ class InteractiveLeadAdapter:
                 self._semantic_output.write_component(panel)
             self._pending_specialist_panels = ()
             if turn.next_action is CollaborationNextAction.RETRY_LEAD_TURN:
-                last_error = getattr(self._progress, "last_error_message", None)
-                if last_error and last_error not in turn.message:
+                diagnostic_hint = "Inspect /history and /exchanges before continuing."
+                if diagnostic_hint not in turn.message:
                     turn = dataclasses.replace(
                         turn,
-                        message=f"{turn.message}\n\nError details: {last_error}",
+                        message=f"{turn.message}\n\n{diagnostic_hint}",
                     )
             self._semantic_output.write_component(project_lead_turn_result(turn))
             self._write_elapsed()

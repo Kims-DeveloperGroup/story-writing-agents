@@ -7331,6 +7331,7 @@ class StoryRuntime:
                         failure_code=(
                             CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED
                         ),
+                        failure=failure,
                     )
                 raise
             if (
@@ -7350,6 +7351,7 @@ class StoryRuntime:
                     failure_code=(
                         CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED
                     ),
+                    failure=failure,
                 )
             recovered = self._close_failed_lead_attempt(
                 session_id, conversation_id, failure=failure,

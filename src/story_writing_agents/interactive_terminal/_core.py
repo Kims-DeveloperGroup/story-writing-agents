@@ -67,6 +67,7 @@ from ._advisory_progress import (
     format_elapsed,
     reset_advisory_progress,
 )
+from ..errors import BackendProtocolError
 from ..agent_context.progress import (
     ContextActionProgressEvent,
     ProviderStreamEvent,
@@ -2182,10 +2183,7 @@ class InteractiveAdvisoryProgress:
 
 def _is_content_safe_failure(failure: BaseException) -> bool:
     """Return True only if failure is an allowlisted content-safe protocol error."""
-    return any(
-        cls.__name__ == "BackendProtocolError"
-        for cls in type(failure).__mro__
-    )
+    return isinstance(failure, BackendProtocolError)
 
 
 def _default_is_failure(result: object) -> bool:
