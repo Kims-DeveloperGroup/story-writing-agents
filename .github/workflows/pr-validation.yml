@@ -216,6 +216,7 @@ jobs:
               raise SystemExit("required simplified workflow artifact is missing")
           forbidden = [
               root / ".agents/skills/adaptive-verification/SKILL.md",
+              root / ".agents/skills/subagent-model-selection/SKILL.md",
               root / "tests/test_repository_agent_policy.py",
           ]
           if any(path.exists() for path in forbidden):
