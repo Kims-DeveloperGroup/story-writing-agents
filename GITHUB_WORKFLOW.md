@@ -77,7 +77,9 @@ Lower-severity feedback is nonblocking and may become follow-up work. Review/che
 must match the current head SHA.
 
 Automation that mutates Issues, Projects, PRs, merge state, or cleanup state runs only for the
-`workflow:managed` label. `pr-validation` and `ai-review-gate` are event-driven; the latter may
+`workflow:managed` label. Removing that label authorizes only revocation of previously enabled
+auto-merge on that PR; it does not authorize new automation. `pr-validation` and
+`ai-review-gate` are event-driven; the latter may
 poll on a schedule without checking out code. Enable auto-merge or the merge queue only after
 all gates pass. Post-merge automation verifies Issue closure, Project `Done`, Development
 links, and remote-branch cleanup; failures remain visible for root repair.

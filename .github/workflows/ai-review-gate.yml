@@ -180,7 +180,7 @@ jobs:
                 linked => linked.number === pullNumber))
               .sort((left, right) =>
                 new Date(right.created_at) - new Date(left.created_at))[0];
-            const resolvedByComment = new Map();
+            const addressedByComment = new Map();
             let cursor = null;
             do {
               const response = await github.graphql(`
@@ -191,7 +191,10 @@ jobs:
                         pageInfo { hasNextPage endCursor }
                         nodes {
                           isResolved
-                          comments(first: 100) { nodes { databaseId } }
+                        comments(first: 100) {
+                          pageInfo { hasNextPage }
+                          nodes { databaseId body author { login } }
+                        }
                         }
                       }
                     }
@@ -200,8 +203,14 @@ jobs:
               `, {owner, repo, number: pullNumber, cursor});
               const threads = response.repository.pullRequest.reviewThreads;
               for (const thread of threads.nodes) {
+                const comments = thread.comments.nodes;
+                const author = comments[0]?.author?.login;
+                const answered = !thread.comments.pageInfo.hasNextPage &&
+                  comments.slice(1).some(comment =>
+                    comment.author?.login !== author &&
+                    (comment.body || "").trim().length >= 20);
                 for (const comment of thread.comments.nodes) {
-                  resolvedByComment.set(comment.databaseId, thread.isResolved);
+                  addressedByComment.set(comment.databaseId, thread.isResolved && answered);
                 }
               }
               cursor = threads.pageInfo.hasNextPage ? threads.pageInfo.endCursor : null;
@@ -221,7 +230,7 @@ jobs:
               return [
                 ...(latest ? [body] : []),
                 ...comments
-                  .filter(comment => !resolvedByComment.get(comment.id))
+                  .filter(comment => !addressedByComment.get(comment.id))
                   .map(comment => comment.body || ""),
               ];
             };

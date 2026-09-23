@@ -116,7 +116,7 @@ jobs:
             const linkedIssues = new Set(issues
               .filter(issue => issue.linkedBranches.nodes.some(link =>
                 link.ref?.name === pr.headRefName &&
-                link.ref?.repository?.nameWithOwner === `${owner}/${repo}`))
+                link.ref?.repository?.nameWithOwner === pr.headRepository?.nameWithOwner))
               .map(issue => issue.id));
             const recordedFailures = failures;
             const sameRepository = pr.headRepository?.nameWithOwner === `${owner}/${repo}`;

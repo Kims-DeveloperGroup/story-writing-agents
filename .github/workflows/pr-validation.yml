@@ -255,6 +255,10 @@ jobs:
                       continue
                   path, _, fragment = target.partition("#")
                   destination = (source.parent / unquote(path)).resolve() if path else source
+                  try:
+                      destination.relative_to(root)
+                  except ValueError:
+                      raise SystemExit(f"{source}: link leaves repository {target}")
                   if not destination.exists():
                       raise SystemExit(f"{source}: missing local link target {target}")
                   if fragment and destination.suffix.lower() == ".md":
