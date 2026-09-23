@@ -80,6 +80,7 @@ from story_writing_agents.conversations import (
 )
 from story_writing_agents.cli import _parse_backend_overrides, build_parser, main
 from story_writing_agents.backend import backend_configuration_snapshot
+from story_writing_agents.structured_output_validation import diagnose_json_text
 from story_writing_agents.agent_context import (
     ContextComponentKind,
     ProviderCallAccounting,
@@ -6826,6 +6827,35 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 json.dumps(duplicate_citations),
                 request=request,
                 action_index=1,
+            )
+
+    def test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence(self) -> None:
+        request = _retrieval_request()
+        omitted = json.dumps({"action": {
+            "kind": ConversationRetrievalActionKind.READ_HISTORY.value,
+            "citation_id": "s1h1", "start_sequence": 1,
+        }})
+        decoded = AgentBackend._decode_conversation_retrieval_action(
+            omitted, request=request, action_index=2,
+        )
+        self.assertIs(type(decoded), ConversationRetrievalReadAction)
+        self.assertIsNone(decoded.end_sequence)
+        explicit_null = json.dumps({"action": {
+            "kind": ConversationRetrievalActionKind.READ_HISTORY.value,
+            "citation_id": "s1h1", "start_sequence": 1, "end_sequence": None,
+        }})
+        self.assertEqual(
+            diagnose_json_text(
+                explicit_null,
+                AgentBackend._conversation_retrieval_action_schema(
+                    allowed_actions=(ConversationRetrievalActionKind.READ_HISTORY,),
+                ),
+            ),
+            ("$.action.end_sequence: expected integer, got null",),
+        )
+        with self.assertRaises(BackendProtocolError):
+            AgentBackend._decode_conversation_retrieval_action(
+                explicit_null, request=request, action_index=2,
             )
 
     async def test_retrieval_handler_declaration_and_exact_outcome_protocol(

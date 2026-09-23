@@ -5517,11 +5517,9 @@ class AgentBackend:
                 )
             if kind is ConversationRetrievalActionKind.READ_HISTORY:
                 start_sequence = positive_integer("start_sequence")
-                raw_end_sequence = value.get("end_sequence")
                 end_sequence = (
-                    None
-                    if raw_end_sequence is None
-                    else positive_integer("end_sequence")
+                    positive_integer("end_sequence")
+                    if "end_sequence" in value else None
                 )
                 if end_sequence is not None and end_sequence < start_sequence:
                     raise ConversationRetrievalSemanticError()

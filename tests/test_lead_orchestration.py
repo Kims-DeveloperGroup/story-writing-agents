@@ -2327,6 +2327,59 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             self.assertNotIn(secret, repr(result.validation_details))
             self.assertNotIn(secret, repr(history))
 
+    async def test_search_before_first_rejection_uses_attempt_labels(self) -> None:
+        private = "PRIVATE_LATE_RETRIEVAL_REJECTION_한🙂"
+
+        def malformed(call: ContextProviderCallRequest, _provider: object) -> str:
+            return _provider_envelope(call, [private])
+
+        def invalid_object(call: ContextProviderCallRequest, _provider: object) -> str:
+            return _provider_envelope(call, {"unknown": private})
+
+        cases = (
+            ("malformed_then_repaired", malformed,
+             _visible_outcome("answer", "Accepted after search."), False),
+            ("invalid_object_then_rejected", invalid_object,
+             invalid_object, True),
+        )
+        for label, original, repair, rejected_repair in cases:
+            with self.subTest(label=label):
+                backend = _LeadBackend()
+                runtime = StoryRuntime(self.workspace, backend)  # type: ignore[arg-type]
+                conversation_id = self.conversation(label)
+                backend.enqueue(_search_history, original)
+                backend.enqueue(repair)
+                result = await runtime.lead_turn(
+                    self.session_id, conversation_id,
+                    "Search before a rejected answer.",
+                )
+                reopened = compose_filesystem_conversation_storage(self.workspace).event_store
+                history = reopened.read(self.session_id, conversation_id)
+                project_collaboration_history(history)
+                submitted = tuple(event.payload for event in history
+                                  if type(event.payload) is CollaborationProviderCallPayload
+                                  and event.payload.state is CollaborationProviderCallState.SUBMITTED)
+                self.assertEqual(len(backend.calls), 3)
+                self.assertEqual(len(submitted), 3)
+                self.assertEqual(submitted[0].validation_details, ())
+                self.assertTrue(submitted[1].validation_details[0].startswith(
+                    "Original response"))
+                if rejected_repair:
+                    self.assertTrue(submitted[2].validation_details[0].startswith(
+                        "Repair response"))
+                else:
+                    self.assertEqual(submitted[2].validation_details, ())
+                    self.assertEqual(result.message, "Accepted after search.")
+                expected = tuple(chunk for payload in submitted
+                                 for chunk in payload.validation_details)
+                self.assertEqual(result.validation_details, expected)
+                notices = tuple(chunk for event in history
+                                if type(event.payload) is CollaborationMessagePayload
+                                for chunk in event.payload.validation_details)
+                self.assertEqual(notices, expected)
+                self.assertNotIn(private, repr(result.validation_details))
+                self.assertNotIn(private, repr(history))
+
     async def test_validation_details_do_not_grant_action_authority(self) -> None:
         conversation_id = self.conversation("Diagnostics grant no authority")
 

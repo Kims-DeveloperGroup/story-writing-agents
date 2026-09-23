@@ -958,7 +958,11 @@ class _AccountingContextProvider:
     def _label_validation_details(
         self, call_id: str, details: tuple[str, ...],
     ) -> tuple[str, ...]:
-        label = "Original response" if self._ordinals[call_id] == 1 else "Repair response"
+        first_diagnostic_call_id = next(iter(self._validation_details), call_id)
+        label = (
+            "Original response"
+            if call_id == first_diagnostic_call_id else "Repair response"
+        )
         return tuple(
             item.replace("Structured reply validation", label, 1)
             for item in details

@@ -145,6 +145,15 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str) -> list[st
                 ]
                 if len(matches) == 1:
                     return _diagnose(value, matches[0], path)
+                if len(matches) > 1:
+                    exact_shapes = [
+                        variant for variant in matches
+                        if isinstance(variant, Mapping)
+                        and isinstance(variant.get("properties"), Mapping)
+                        and value.keys() == variant["properties"].keys()
+                    ]
+                    if len(exact_shapes) == 1:
+                        return _diagnose(value, exact_shapes[0], path)
                 if candidates and not matches:
                     issues = [_issue(
                         _path(path, discriminator),
