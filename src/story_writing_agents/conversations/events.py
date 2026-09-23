@@ -2007,17 +2007,28 @@ class CollaborationExecutionResult:
 
 @dataclass(frozen=True, slots=True)
 class CollaborationMessagePayload:
-    """Bounded visible message without metadata or hidden reasoning."""
+    """Bounded visible message with optional diagnostic call correlation."""
 
     content: str
     trace: ReplyTrace | None = None
     validation_details: tuple[str, ...] = ()
+    validation_invocation_id: str | None = None
+    validation_call_id: str | None = None
 
     def __post_init__(self) -> None:
         _validate_visible_text(self.content, label="collaboration message")
         if self.trace is not None and type(self.trace) is not ReplyTrace:
             raise TypeError("collaboration message trace must be ReplyTrace or None")
         validate_details(self.validation_details)
+        if (self.validation_invocation_id is None) != (self.validation_call_id is None):
+            raise ValueError("message validation correlation requires both IDs")
+        if self.validation_invocation_id is not None:
+            if not self.validation_details:
+                raise ValueError("message validation correlation requires details")
+            _validate_identifier(
+                self.validation_invocation_id, label="message validation invocation ID",
+            )
+            _validate_identifier(self.validation_call_id, label="message validation call ID")
 
 
 @dataclass(frozen=True, slots=True)
@@ -3999,6 +4010,9 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
         }
         if payload.validation_details:
             value["validation_details"] = list(payload.validation_details)
+        if payload.validation_invocation_id is not None:
+            value["validation_invocation_id"] = payload.validation_invocation_id
+            value["validation_call_id"] = payload.validation_call_id
         return value
     if type(payload) is CollaborationLeadJudgmentPayload:
         return {
@@ -5034,7 +5048,7 @@ def _decode_payload(value: object) -> CollaborationPayload:
         item = _object_with_optional_extensions(
             value,
             {"content", "payload_type"},
-            {"trace", "validation_details"},
+            {"trace", "validation_details", "validation_invocation_id", "validation_call_id"},
             label="message payload",
         )
         return CollaborationMessagePayload(
@@ -5044,6 +5058,14 @@ def _decode_payload(value: object) -> CollaborationPayload:
                 tuple(_string(part, label="message validation detail") for part in
                       _array(item["validation_details"], label="message validation details"))
                 if "validation_details" in item else ()
+            ),
+            validation_invocation_id=(
+                _string(item["validation_invocation_id"], label="message validation invocation ID")
+                if "validation_invocation_id" in item else None
+            ),
+            validation_call_id=(
+                _string(item["validation_call_id"], label="message validation call ID")
+                if "validation_call_id" in item else None
             ),
         )
     if payload_type == "lead_judgment":

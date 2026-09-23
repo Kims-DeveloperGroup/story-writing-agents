@@ -4773,7 +4773,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `CollaborationMessagePayload` add optional bounded diagnostic chunks. Their
   strict codecs omit absent details and accept historical records without the
   field; provider-call details bind a submitted physical call, while runtime
-  messages can retain later domain-rejection details in order.
+  messages can retain later domain-rejection details in order. Diagnostic
+  messages may also carry an optional invocation/call ID pair, validated
+  together and omitted from historical records, so reconstruction associates
+  each message chunk with its submitted physical call without matching text.
 - **Recommendation contracts:** The closed `LeadRecommendationActionKind`
   permits only PREPARE_ARTIFACT and PREPARE_CONSULTATION. Immutable
   `LeadRecommendedAction` carries purpose, instruction, expected result,
@@ -6821,8 +6824,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   repair call, then a visible safe no-action fallback. Runtime records schema
   diagnostics per completed contextual call, adds only closed domain-rule
   diagnostics, and publishes ordered bounded details in the visible result and
-  durable collaboration events after provider work closes. These details do
-  not change repair, rejection, confirmation, Apply, or Commit authority.
+  durable collaboration events after provider work closes. It attaches runtime
+  invocation/call IDs to diagnostic messages and reconstructs execution details
+  in submitted-call order, using correlated message chunks for later validation
+  and submitted-fact chunks otherwise. These details do not change repair,
+  rejection, confirmation, Apply, or Commit authority.
   Ordinary synthesis uses
   the minimal `lead-synthesis-v3` contract and private `_LeadSynthesisResult` wrapper:
   optional action and `next_intent` are mutually exclusive. Non-actionable
@@ -7103,8 +7109,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   private confirmed-step, recommendation, and artifact-application capabilities,
   and live execution-attempt markers. The invocation-local contextual provider
   wrapper retains ordered safe diagnostic chunks and publishes typed call facts
-  and bounded visible diagnostic messages through the existing conversation
-  store after provider work closes.
+  and bounded visible diagnostic messages with exact call correlation through
+  the existing conversation store after provider work closes. Diagnostic
+  message event and batch IDs are deterministic; an exact existing batch is
+  accepted without adding duplicate messages.
   Runtime and bound sessions expose the same storage bundle; no raw
   schema-v1 event-store injection or property remains. Explicit lead turns may
   bind the lead, authorize ordered references and optional context evidence,

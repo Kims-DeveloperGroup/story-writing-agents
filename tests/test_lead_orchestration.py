@@ -1740,6 +1740,74 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
 
 
 class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
+    async def test_domain_rejection_without_repair_persists_safe_notice(
+        self,
+    ) -> None:
+        conversation_id = self.conversation("Direct lead domain rejection")
+        self.backend.enqueue(_visible_outcome("answer", ""))
+        with mock.patch.object(
+            orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", 1,
+        ):
+            result = await self.runtime.lead_turn(
+                self.session_id, conversation_id, "Reject an empty answer.",
+            )
+        self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
+        self.assertEqual(len(self.backend.calls), 1)
+        self.assertTrue(result.validation_details)
+        self.assertIn("rejected by a lead outcome rule", result.validation_details[0])
+        reopened = compose_filesystem_conversation_storage(self.workspace).event_store
+        history = reopened.read(self.session_id, conversation_id)
+        submitted = tuple(
+            event.payload for event in history
+            if type(event.payload) is CollaborationProviderCallPayload
+            and event.payload.state is CollaborationProviderCallState.SUBMITTED
+        )
+        self.assertEqual(len(submitted), 1)
+        self.assertEqual(submitted[0].validation_details, ())
+        notices = tuple(
+            detail for event in history
+            if type(event.payload) is CollaborationMessagePayload
+            for detail in event.payload.validation_details
+        )
+        self.assertEqual(notices, result.validation_details)
+        self.assertEqual(project_collaboration_history(history).physical_calls_spent, 1)
+
+    async def test_republishing_domain_notice_is_idempotent(self) -> None:
+        conversation_id = self.conversation("Idempotent domain notice")
+        self.backend.enqueue(_visible_outcome("answer", ""))
+        self.backend.enqueue(_visible_outcome("answer", "Accepted after repair."))
+        original_publish = (
+            orchestrator_module._AccountingContextProvider.publish_validation_messages
+        )
+        publish_attempts = 0
+
+        def publish_twice(provider: object) -> None:
+            nonlocal publish_attempts
+            publish_attempts += 1
+            original_publish(provider)
+            original_publish(provider)
+
+        with mock.patch.object(
+            orchestrator_module._AccountingContextProvider,
+            "publish_validation_messages", publish_twice,
+        ):
+            result = await self.runtime.lead_turn(
+                self.session_id, conversation_id, "Repair an empty answer.",
+            )
+        self.assertEqual(publish_attempts, 1)
+        self.assertEqual(result.message, "Accepted after repair.")
+        self.assertEqual(len(self.backend.calls), 2)
+        reopened = compose_filesystem_conversation_storage(self.workspace).event_store
+        history = reopened.read(self.session_id, conversation_id)
+        notices = tuple(
+            detail for event in history
+            if type(event.payload) is CollaborationMessagePayload
+            for detail in event.payload.validation_details
+        )
+        self.assertEqual(len(notices), 1)
+        self.assertEqual(notices, result.validation_details)
+        self.assertEqual(project_collaboration_history(history).physical_calls_spent, 2)
+
     async def _leave_genuine_confirmation_before_dispatch(self, proposed) -> None:
         with mock.patch.object(
             self.runtime,

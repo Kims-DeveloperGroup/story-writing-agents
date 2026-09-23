@@ -945,15 +945,21 @@ class _AccountingContextProvider:
 
         if self._validation_messages_published:
             return
-        self._validation_messages_published = True
-        if self.validation_details:
+        details_by_call = tuple(
+            (call_id, self._validation_details[call_id])
+            for call_id in self._ordinals
+            if call_id in self._validation_details
+        )
+        if details_by_call:
             self._runtime._append_validation_messages(
                 session_id=self._session_id,
                 conversation_id=self._conversation_id,
                 turn_id=self._turn_id,
                 step_id=self._step_id,
-                details=self.validation_details,
+                invocation_id=self._invocation_id,
+                details_by_call=details_by_call,
             )
+        self._validation_messages_published = True
 
     def _label_validation_details(
         self, call_id: str, details: tuple[str, ...],
@@ -4814,6 +4820,12 @@ class StoryRuntime:
         except BaseException as failure:
             if reference_operation is not None:
                 reference_operation.failure(failure)
+            if provider is not None:
+                try:
+                    provider.publish_validation_messages()
+                except Exception:
+                    # Diagnostic persistence must not replace the provider failure.
+                    pass
             facts = context_provider_failure_facts(failure)
             submitted = (
                 provider.submitted_physical_calls
@@ -5572,15 +5584,38 @@ class StoryRuntime:
         }
         if len(boundaries) != 2:
             return ()
-        return tuple(
-            detail
-            for event in events
+        execution_events = tuple(
+            event for event in events
             if boundaries[running_event_id] < event.sequence < boundaries[result_event_id]
             and event.turn_id == execution_turn_id
             and event.step_id == step_id
-            and type(event.payload) is CollaborationProviderCallPayload
+        )
+        messages_by_call: dict[tuple[str, str], list[str]] = {}
+        submitted_calls: set[tuple[str, str]] = set()
+        for event in execution_events:
+            payload = event.payload
+            if (type(payload) is CollaborationProviderCallPayload
+                and payload.state is CollaborationProviderCallState.SUBMITTED):
+                submitted_calls.add((payload.invocation_id, payload.call_id))
+            elif (type(payload) is CollaborationMessagePayload
+                and event.sender == _RUNTIME_ACTOR
+                and event.recipient == _USER_ACTOR
+                and payload.validation_invocation_id is not None
+                and payload.validation_call_id is not None
+                and len(payload.validation_details) == 1
+                and payload.content == payload.validation_details[0]):
+                key = (payload.validation_invocation_id, payload.validation_call_id)
+                if key in submitted_calls:
+                    messages_by_call.setdefault(key, []).append(payload.content)
+        return tuple(
+            detail
+            for event in execution_events
+            if type(event.payload) is CollaborationProviderCallPayload
             and event.payload.state is CollaborationProviderCallState.SUBMITTED
-            for detail in event.payload.validation_details
+            for detail in messages_by_call.get(
+                (event.payload.invocation_id, event.payload.call_id),
+                event.payload.validation_details,
+            )
         )
 
     def _finalize_artifact_result_locked(
@@ -10938,30 +10973,58 @@ class StoryRuntime:
 
     def _append_validation_messages(
         self, *, session_id: str, conversation_id: str, turn_id: str,
-        step_id: str, details: tuple[str, ...],
+        step_id: str, invocation_id: str,
+        details_by_call: tuple[tuple[str, tuple[str, ...]], ...],
     ) -> None:
         """Append ordered bounded chunks before the established fallback message."""
 
-        projection = self.conversation_storage_services.event_store.read_context(
+        drafts = tuple(
+            self._draft_with_id(
+                event_id=self._deterministic_id(
+                    "e", invocation_id, call_id, "validation", str(index),
+                ),
+                session_id=session_id,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                step_id=step_id,
+                kind=CollaborationEventKind.MESSAGE,
+                sender=_RUNTIME_ACTOR,
+                recipient=_USER_ACTOR,
+                payload=CollaborationMessagePayload(
+                    part,
+                    validation_details=(part,),
+                    validation_invocation_id=invocation_id,
+                    validation_call_id=call_id,
+                ),
+            )
+            for call_id, details in details_by_call
+            for index, part in enumerate(details)
+        )
+        events = self.conversation_storage_services.event_store.read(
             session_id, conversation_id,
         )
+        by_id = {event.event_id: event for event in events}
+        existing = tuple(by_id.get(draft.event_id) for draft in drafts)
+        if any(event is not None for event in existing):
+            if all(
+                event is not None
+                and event.session_id == draft.session_id
+                and event.conversation_id == draft.conversation_id
+                and event.turn_id == draft.turn_id
+                and event.step_id == draft.step_id
+                and event.kind is draft.kind
+                and event.sender == draft.sender
+                and event.recipient == draft.recipient
+                and event.payload == draft.payload
+                for event, draft in zip(existing, drafts, strict=True)
+            ):
+                return
+            raise BackendProtocolError("diagnostic message append is incomplete")
+        projection = project_collaboration_history(events)
         self._append_drafts(
             projection.last_sequence,
-            tuple(
-                self._draft(
-                    session_id=session_id,
-                    conversation_id=conversation_id,
-                    turn_id=turn_id,
-                    step_id=step_id,
-                    kind=CollaborationEventKind.MESSAGE,
-                    sender=_RUNTIME_ACTOR,
-                    recipient=_USER_ACTOR,
-                    payload=CollaborationMessagePayload(
-                        part, validation_details=(part,),
-                    ),
-                )
-                for part in details
-            ),
+            drafts,
+            batch_id=self._deterministic_id("b", invocation_id, "validation"),
         )
 
     @staticmethod

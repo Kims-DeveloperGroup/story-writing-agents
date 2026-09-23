@@ -280,6 +280,10 @@ details. If repair fails, the safe no-action reply retains both attempts. The
 optional field is empty for replies without validation findings and absent
 from older serialized history.
 
+Durable notices can be matched to their submitted provider calls, so
+diagnostics from concurrent specialists keep their physical-call order when a
+result is finalized after restart.
+
 The same front channel is available as ordinary input in the interactive
 shell. Exact prose is provider-generated, while the typed outcome and next
 action are runtime-owned:

@@ -25,6 +25,7 @@ from story_writing_agents.conversations import (
     CollaborationInputKind,
     CollaborationInvocationKind,
     CollaborationLeadSynthesisPayload,
+    CollaborationMessagePayload,
     CollaborationNextAction,
     CollaborationProviderCallKind,
     CollaborationProviderCallPayload,
@@ -697,6 +698,146 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertEqual(repeated, restored)
         self.assertEqual(self.history(conversation_id), complete)
         self.assertNotIn(private, repr(complete))
+
+    async def test_domain_rejection_details_survive_restarted_finalization(
+        self,
+    ) -> None:
+        for rejected_role in (PLOT_ARCHITECT, LEAD_ORCHESTRATOR):
+            with self.subTest(rejected_role=rejected_role):
+                conversation_id = self.conversation(
+                    f"Restart domain rejection from {rejected_role}"
+                )
+                proposed = await self.proposal(conversation_id)
+                if rejected_role == PLOT_ARCHITECT:
+                    self.backend.enqueue_for(
+                        PLOT_ARCHITECT,
+                        _specialist_outcome(message=""),
+                    )
+                    self.backend.enqueue_for(
+                        PLOT_ARCHITECT, _specialist_outcome(),
+                    )
+                else:
+                    self.backend.enqueue_for(
+                        PLOT_ARCHITECT, _specialist_outcome(),
+                    )
+                    self.backend.enqueue_for(
+                        LEAD_ORCHESTRATOR, _synthesis_outcome(message=""),
+                    )
+                self.backend.enqueue_for(
+                    LEAD_ORCHESTRATOR, _synthesis_outcome(),
+                )
+                with mock.patch.object(
+                    self.runtime, "_finalize_known_result_locked",
+                    side_effect=RuntimeError("test stopped after durable execution result"),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "durable execution result"):
+                        await self.runtime.decide_lead_step(
+                            _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+                        )
+
+                known = self.history(conversation_id)
+                projection = project_collaboration_history(known)
+                self.assertIs(projection.current_state, CollaborationStepState.RUNNING)
+                self.assertEqual(len(_payloads(known, CollaborationExecutionResult)), 1)
+                submitted = tuple(payload for payload in _payloads(
+                    known, CollaborationProviderCallPayload,
+                ) if payload.state is CollaborationProviderCallState.SUBMITTED)
+                self.assertFalse(any(payload.validation_details for payload in submitted))
+                expected = tuple(
+                    detail
+                    for payload in _payloads(known, CollaborationMessagePayload)
+                    for detail in payload.validation_details
+                )
+                self.assertTrue(expected)
+                self.assertTrue(expected[0].startswith("Original response"))
+                self.assertIn("rejected by a domain result rule", expected[0])
+
+                restarted_backend = _LeadBackend()
+                restarted = StoryRuntime(
+                    self.workspace, restarted_backend,  # type: ignore[arg-type]
+                )
+                restored = await restarted.lead_turn(
+                    self.session_id, conversation_id, "Finalize the known result.",
+                )
+                self.assertIs(restored.state, CollaborationStepState.COMPLETED)
+                self.assertEqual(restored.validation_details, expected)
+                self.assertEqual(restarted_backend.calls, [])
+                complete = self.history(conversation_id)
+                repeated = restarted._finalize_known_result_locked(known, projection)
+                self.assertEqual(repeated, restored)
+                self.assertEqual(self.history(conversation_id), complete)
+
+    async def test_concurrent_duplicate_domain_and_schema_reports_keep_call_order(
+        self,
+    ) -> None:
+        conversation_id = self.conversation("Concurrent diagnostic correlation")
+        proposed = await self.proposal(
+            conversation_id,
+            assignments=_assignments(
+                PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST,
+            ),
+        )
+        for role in (PLOT_ARCHITECT, CHARACTER_CUSTODIAN):
+            self.backend.enqueue_for(role, _specialist_outcome(message=""))
+            self.backend.enqueue_for(role, _specialist_outcome())
+        self.backend.enqueue_for(
+            EXECUTION_SPECIALIST,
+            _raw_outcome({"assessment": "supports", "message": 0}),
+        )
+        self.backend.enqueue_for(EXECUTION_SPECIALIST, _specialist_outcome())
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
+
+        with mock.patch.object(
+            self.runtime, "_finalize_known_result_locked",
+            side_effect=RuntimeError("test stopped after durable execution result"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "durable execution result"):
+                await self.runtime.decide_lead_step(
+                    _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+                )
+        known = self.history(conversation_id)
+        projection = project_collaboration_history(known)
+        messages_by_call: dict[tuple[str, str], list[str]] = {}
+        for event in known:
+            payload = event.payload
+            if (type(payload) is CollaborationMessagePayload
+                and payload.validation_invocation_id is not None
+                and payload.validation_call_id is not None):
+                key = (payload.validation_invocation_id, payload.validation_call_id)
+                messages_by_call.setdefault(key, []).extend(payload.validation_details)
+        submitted = tuple(payload for payload in _payloads(
+            known, CollaborationProviderCallPayload,
+        ) if payload.state is CollaborationProviderCallState.SUBMITTED)
+        expected = tuple(
+            detail
+            for payload in submitted
+            for detail in messages_by_call.get(
+                (payload.invocation_id, payload.call_id), payload.validation_details,
+            )
+        )
+        self.assertEqual(len(messages_by_call), 3)
+        self.assertEqual(len(expected), 3)
+        self.assertEqual(
+            sum("rejected by a domain result rule" in detail for detail in expected),
+            2,
+        )
+        self.assertEqual(
+            sum("expected string, got integer" in detail for detail in expected),
+            1,
+        )
+        restarted_backend = _LeadBackend()
+        restarted = StoryRuntime(
+            self.workspace, restarted_backend,  # type: ignore[arg-type]
+        )
+        restored = await restarted.lead_turn(
+            self.session_id, conversation_id, "Finalize concurrent results.",
+        )
+        self.assertIs(restored.state, CollaborationStepState.COMPLETED)
+        self.assertEqual(restored.validation_details, expected)
+        self.assertEqual(restarted_backend.calls, [])
+        self.assertEqual(
+            restarted._finalize_known_result_locked(known, projection), restored,
+        )
 
     async def test_synthesis_contract_is_semantic_and_runtime_derives_attribution(
         self,

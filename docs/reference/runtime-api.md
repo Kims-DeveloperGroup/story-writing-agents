@@ -368,6 +368,13 @@ findings. These details describe schema paths, expected versus actual JSON
 types, and fixed rules without provider values or unknown member names; they
 grant no confirmation or replay authority.
 
+Durable validation messages may carry optional
+`CollaborationMessagePayload.validation_invocation_id` and
+`validation_call_id` alongside their detail chunk. Runtime correlates those
+IDs with submitted provider-call facts to restore execution diagnostics in
+physical-call order after restart, including concurrent specialist work. Older
+messages without the optional IDs remain readable.
+
 A proposal result contains the complete runtime-built
 `CollaborationProposal`, state `awaiting_confirmation`, a fresh confirmation
 request ID, and next action `submit_confirmation`.

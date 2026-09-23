@@ -184,6 +184,13 @@ names, parser messages, and raw rejected responses. They remain plaintext in
 history and any archive or transfer copy. Older events without this optional
 field remain readable.
 
+Validation message events may also retain optional invocation and call IDs.
+These identify the submitted provider call for safe diagnostic recovery across
+restart, including when specialists ran concurrently. The IDs expose call
+correlation metadata in local history and its archive or transfer copies; they
+do not contain provider response values. Older messages without the IDs still
+decode.
+
 The runtime owns no archive file or retention policy. A caller that stores,
 transmits, logs, or otherwise retains the returned bytes owns protection and
 cleanup for every copy. See
