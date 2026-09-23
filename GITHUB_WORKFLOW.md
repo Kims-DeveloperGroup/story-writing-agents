@@ -92,7 +92,8 @@ open or resolve a finding that still needs work.
 
 ## Verification Policy
 
-Runtime-code changes require the current-head fast CI tier and relevant tests selected with
+Runtime-code changes, including runtime agent definitions under `config/agents/`, require the
+current-head fast CI tier and relevant tests selected with
 `PYTHONPATH=src python -m tests.runner run` and exact `--module` or `--id` selectors. Record
 the selected IDs, command, result, and head SHA in the PR. Add a behavioral test when changed
 behavior lacks one. Use the `test:full` label and reconcile both full-suite shards only when

@@ -64,6 +64,8 @@ jobs:
               path.startsWith("src/") ||
               path.startsWith("config/") ||
               path === "pyproject.toml" ||
+              path === "uv.lock" ||
+              path === ".gitmodules" ||
               path === "vendor/generic-rag" ||
               path === "vendor/jsonl-viewer";
             const runtime = truncated || paths.some(isRuntime);
@@ -126,6 +128,22 @@ jobs:
               data["description"].is_a?(String) && !data["description"].empty?
           end
           RB
+      - name: Validate locked vendor pins
+        run: |
+          python - <<'PY'
+          import subprocess
+          import tomllib
+
+          with open("uv.lock", "rb") as source:
+              packages = {package["name"]: package for package in tomllib.load(source)["package"]}
+          for name in ("generic-rag", "jsonl-viewer"):
+              pinned = packages[name]["source"]["git"].rsplit("#", 1)[-1]
+              gitlink = subprocess.check_output(
+                  ["git", "rev-parse", f"HEAD:vendor/{name}"], text=True
+              ).strip()
+              if pinned != gitlink:
+                  raise SystemExit(f"{name}: uv.lock pin {pinned} differs from gitlink {gitlink}")
+          PY
       - name: Validate policy artifacts
         run: |
           python - <<'PY'
@@ -219,12 +237,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: '0.12.17'
       - name: Install runtime test dependencies
-        run: >-
-          python -m pip install --no-deps --editable vendor/generic-rag
-          --editable vendor/jsonl-viewer --editable .
+        run: uv sync --locked --all-extras --python 3.11 --no-progress
       - name: Run fast runtime tests
-        run: PYTHONPATH=src python -m tests.runner run --tier fast --json "$RUNNER_TEMP/fast.json"
+        run: PYTHONPATH=src .venv/bin/python -m tests.runner run --tier fast --json "$RUNNER_TEMP/fast.json"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -249,12 +268,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: '0.12.17'
       - name: Install runtime test dependencies
-        run: >-
-          python -m pip install --no-deps --editable vendor/generic-rag
-          --editable vendor/jsonl-viewer --editable .
+        run: uv sync --locked --all-extras --python 3.11 --no-progress
       - name: Run full runtime shard
-        run: PYTHONPATH=src python -m tests.runner run --shard "${{ matrix.shard }}/2" --json "$RUNNER_TEMP/full-${{ matrix.shard }}.json"
+        run: PYTHONPATH=src .venv/bin/python -m tests.runner run --shard "${{ matrix.shard }}/2" --json "$RUNNER_TEMP/full-${{ matrix.shard }}.json"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -265,7 +285,9 @@ jobs:
   reconcile-full:
     name: Reconcile full runtime suite
     needs: [classify, full]
-    if: always() && needs.classify.outputs.full == 'true' && needs.full.result == 'success'
+    if: >-
+      always() && needs.classify.outputs.full == 'true' &&
+      (needs.full.result == 'success' || needs.full.result == 'failure')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

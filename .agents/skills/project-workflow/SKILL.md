@@ -40,8 +40,9 @@ template. Preserve all visible Issue, PR, evidence, and status-comment headings 
    porcelain. Move the Issue to `In progress`.
 3. Implement only accepted scope. Use `runtime_implementer` or `test_engineer` only under
    AGENTS routing; those agents never receive this skill's GitHub authority.
-4. Runtime code changes require affected runtime tests through the canonical runner. Other
-   policy/test/docs/config/index-only changes use static validation.
+4. Runtime code and runtime agent definition (`config/agents/`) changes require affected
+   runtime tests through the canonical runner. Policy, test, docs, development-agent
+   configuration (`.codex/agents/`), and index-only changes use static validation.
 5. Review the diff, then stage and create coherent commits under COMMIT_POLICY. Push normally;
    never force-push.
 
