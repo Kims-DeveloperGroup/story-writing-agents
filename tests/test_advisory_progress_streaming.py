@@ -2465,5 +2465,148 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         footer_row = rows[-1]
         self.assertIn("←/→: pan", footer_row)
 
+    def test_run_advisory_progress_frame_persists_when_keep_frame_true(self) -> None:
+        capabilities = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+        real_sleep = asyncio.sleep
+
+        async def fast_sleep(_delay: float) -> None:
+            await real_sleep(0)
+
+        output = io.StringIO()
+        with (
+            mock.patch.object(RawTerminalDriver, "capabilities", return_value=capabilities),
+            mock.patch.object(_driver.asyncio, "sleep", side_effect=fast_sleep),
+        ):
+            driver = RawTerminalDriver(
+                lambda _prompt: "",
+                io.StringIO(),
+                output,
+                lambda s, e: (s, None),
+                lambda s, e, h: (s, None),
+                lambda h, t: h,
+            )
+
+            async def successful_op() -> dict:
+                await real_sleep(0.01)
+                return {"status": "ok"}
+
+            res = asyncio.run(
+                driver.run_advisory_progress(
+                    successful_op(),
+                    lambda _f: "Running task...",
+                    keep_frame=True,
+                )
+            )
+            self.assertEqual(res, {"status": "ok"})
+            val = output.getvalue()
+            # The frame text is written and ended with newline \r\n (retained), not cleared at end
+            self.assertIn("Running task...", val)
+            self.assertTrue(val.endswith("\r\n"))
+
+    def test_run_advisory_progress_frame_clears_when_keep_frame_false(self) -> None:
+        capabilities = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+        real_sleep = asyncio.sleep
+
+        async def fast_sleep(_delay: float) -> None:
+            await real_sleep(0)
+
+        output = io.StringIO()
+        with (
+            mock.patch.object(RawTerminalDriver, "capabilities", return_value=capabilities),
+            mock.patch.object(_driver.asyncio, "sleep", side_effect=fast_sleep),
+        ):
+            driver = RawTerminalDriver(
+                lambda _prompt: "",
+                io.StringIO(),
+                output,
+                lambda s, e: (s, None),
+                lambda s, e, h: (s, None),
+                lambda h, t: h,
+            )
+
+            async def successful_op() -> dict:
+                await real_sleep(0.01)
+                return {"status": "ok"}
+
+            res = asyncio.run(
+                driver.run_advisory_progress(
+                    successful_op(),
+                    lambda _f: "Running task...",
+                    keep_frame=False,
+                )
+            )
+            self.assertEqual(res, {"status": "ok"})
+            val = output.getvalue()
+            self.assertTrue(val.endswith("\r\x1b[K"))
+
+    def test_terminal_progress_mode_persists_frame_when_on_and_clears_when_off(self) -> None:
+        from story_writing_agents.interactive_terminal._core import build_stream_terminal
+
+        capabilities = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+        real_sleep = asyncio.sleep
+
+        async def fast_sleep(_delay: float) -> None:
+            await real_sleep(0)
+
+        # 1. When progress_frame_collapsed is False (progress == on), frame persists
+        out_on = io.StringIO()
+        with (
+            mock.patch.object(RawTerminalDriver, "capabilities", return_value=capabilities),
+            mock.patch.object(_driver.asyncio, "sleep", side_effect=fast_sleep),
+        ):
+            terminal_on = build_stream_terminal(lambda _p: "", io.StringIO(), out_on)
+            terminal_on.progress_frame_collapsed = False
+            progress_on = InteractiveAdvisoryProgress(terminal_on)
+
+            async def op_on() -> str:
+                await real_sleep(0.01)
+                return "done"
+
+            res_on = asyncio.run(progress_on.run(op_on()))
+            self.assertEqual(res_on, "done")
+            self.assertTrue(out_on.getvalue().endswith("\r\n"))
+
+        # 2. When progress_frame_collapsed is True (progress == off), frame clears
+        out_off = io.StringIO()
+        with (
+            mock.patch.object(RawTerminalDriver, "capabilities", return_value=capabilities),
+            mock.patch.object(_driver.asyncio, "sleep", side_effect=fast_sleep),
+        ):
+            terminal_off = build_stream_terminal(lambda _p: "", io.StringIO(), out_off)
+            terminal_off.progress_frame_collapsed = True
+            progress_off = InteractiveAdvisoryProgress(terminal_off)
+
+            async def op_off() -> str:
+                await real_sleep(0.01)
+                return "done"
+
+            res_off = asyncio.run(progress_off.run(op_off()))
+            self.assertEqual(res_off, "done")
+            self.assertTrue(out_off.getvalue().endswith("\r\x1b[K"))
+
 
 

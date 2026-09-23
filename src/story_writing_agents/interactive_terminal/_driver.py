@@ -591,6 +591,7 @@ class RawTerminalDriver:
         | None = None,
         nested_scroll_renderer: _NestedScrollRenderer | None = None,
         toggle_callback: Callable[[], bool] | None = None,
+        keep_frame: bool | Callable[[], bool] | None = None,
     ) -> _T:
         """Join one advisory operation with a capable-terminal indicator."""
 
@@ -811,11 +812,28 @@ class RawTerminalDriver:
             raise
 
         inspector_failure: BaseException | None = None
-        if not failed:
+        should_keep = False
+        if callable(keep_frame):
             try:
-                self._clear_progress_frame()
-            except BaseException as exc:
-                clear_failure = exc
+                should_keep = bool(keep_frame())
+            except Exception:
+                should_keep = False
+        elif keep_frame is not None:
+            should_keep = bool(keep_frame)
+
+        if not failed:
+            if should_keep:
+                if self._progress_rows > 0:
+                    try:
+                        self._write_raw_text("\r\n")
+                    except Exception:
+                        pass
+                    self._progress_rows = 0
+            else:
+                try:
+                    self._clear_progress_frame()
+                except BaseException as exc:
+                    clear_failure = exc
         else:
             if (
                 scroll_state_provider is not None

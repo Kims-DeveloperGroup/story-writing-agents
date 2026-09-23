@@ -3015,6 +3015,7 @@ def build_stream_terminal(
             nested_scroll_transition=transition_nested_scroll,
             nested_scroll_renderer=render_nested_scroll_view,
             toggle_callback=terminal.toggle_progress_frame,
+            keep_frame=lambda: not terminal.progress_frame_collapsed,
         )
 
     async def run_debate_progress(
@@ -3031,6 +3032,7 @@ def build_stream_terminal(
             nested_scroll_transition=transition_nested_scroll,
             nested_scroll_renderer=render_nested_scroll_view,
             toggle_callback=terminal.toggle_progress_frame,
+            keep_frame=lambda: not terminal.progress_frame_collapsed,
         )
 
     terminal._advisory_progress = run_advisory_progress
