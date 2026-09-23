@@ -124,6 +124,7 @@ from ..interactive_terminal import (
     InteractiveError,
     InteractiveErrorCode,
     InteractiveExternalViewer,
+    ExternalViewUnavailableError,
     InteractivePickerInput,
     InteractivePromptInput,
     InteractiveSemanticOutput,
@@ -5486,7 +5487,14 @@ class InteractiveController:
             self._present_agent_exchange_projection_failure(failure)
             return
         try:
-            self._external_viewer.open(operation)
+            self._external_viewer.open(operation, transient_only=True)
+        except ExternalViewUnavailableError:
+            self._write_notice(
+                "Agent exchanges require a terminal with transient display support.",
+                label="agent exchanges",
+                role=SemanticRole.WARNING,
+                state=ViewState.CANCELLED,
+            )
         except AgentExchangeViewerError as failure:
             self._present_agent_exchange_viewer_failure(failure)
 

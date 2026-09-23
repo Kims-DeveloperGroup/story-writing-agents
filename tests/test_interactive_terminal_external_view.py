@@ -22,6 +22,7 @@ from story_writing_agents.interactive_terminal._controls import (
 )
 from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
 from story_writing_agents.interactive_terminal._external_view import (
+    ExternalViewUnavailableError,
     ExternalViewerHost,
 )
 
@@ -256,6 +257,17 @@ class ExternalViewContractTests(unittest.TestCase):
         viewer.open(lambda host: observed.append(host.read_event()))
         self.assertEqual(observed[-1], "line\tq")
 
+    def test_plain_terminal_refuses_transient_view_without_presenting_content(self) -> None:
+        writes: list[str] = []
+        terminal = InteractiveTerminal(lambda _prompt: "q", writes.append)
+        operation = mock.Mock()
+
+        with self.assertRaises(ExternalViewUnavailableError):
+            InteractiveExternalViewer(terminal).open(operation, transient_only=True)
+
+        operation.assert_not_called()
+        self.assertEqual(writes, [])
+
     def test_operation_and_cleanup_failure_precedence_preserves_identity(self) -> None:
         driver, *_rest = _raw_driver("q")
         active = RuntimeError("active")
@@ -285,7 +297,7 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
             events.extend(host.read_event() for _ in range(15))
             host.close_view()
         with mock.patch.object(driver_module._select, "select", return_value=((7,), (), ())):
-            driver.open_external_view(operation)
+            driver.open_external_view(operation, transient_only=True)
         self.assertEqual(events[:2], [(91, 27), True])
         self.assertEqual(events[2:], ["key\tup", "key\tdown", "key\tpage_up", "key\tpage_down"] + ["text\t" + c for c in "jkb nNmh?cq"])
         fallback.assert_not_called()
@@ -411,6 +423,20 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
         self.assertEqual("".join(output.records), "fallback frame\n")
         self.assertEqual(termios.events, [])
         self.assertEqual(fallback.call_count, 2)
+
+    def test_transient_view_refuses_line_fallback_before_writing_content(self) -> None:
+        driver, _input, output, fallback, termios = _raw_driver(
+            "", tty=False
+        )
+        operation = mock.Mock()
+
+        with self.assertRaises(ExternalViewUnavailableError):
+            driver.open_external_view(operation, transient_only=True)
+
+        operation.assert_not_called()
+        self.assertEqual(output.records, [])
+        self.assertEqual(termios.events, [])
+        fallback.assert_not_called()
 
     def test_reentry_and_progress_overlap_are_rejected_then_latch_releases(
         self,

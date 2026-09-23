@@ -45,6 +45,9 @@ from story_writing_agents.interactive_controller._exchange_viewer import (
 from story_writing_agents.models import DebateMessage
 from tests.test_interactive_controller import ControllerTestCase
 from story_writing_agents import interactive_terminal as terminal_module
+from story_writing_agents.interactive_terminal._external_view import (
+    ExternalViewUnavailableError,
+)
 from story_writing_agents.interactive_controller import _core as controller_core_module
 
 
@@ -830,7 +833,9 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
             controller._view_attached_agent_exchanges()
 
         prepare_view.assert_called_once()
-        open_view.assert_called_once_with(controller._external_viewer, operation)
+        open_view.assert_called_once_with(
+            controller._external_viewer, operation, transient_only=True
+        )
         self.assertEqual(len(picker.call_args_list), 2)
         scope_prompt, scope_choices = picker.call_args_list[0].args[1:3]
         agent_prompt, agent_choices = picker.call_args_list[1].args[1:3]
@@ -868,6 +873,46 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
         self.assertIs(controller._focused_conversation, original_focus)
         self.assertIs(controller._context, original_context)
         self.assertEqual(callbacks.records, [])
+
+    def test_attached_command_reports_unavailable_transient_display_without_content(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        controller, _backend, callbacks = self.make_controller(workspace)
+        conversation = controller._conversation_catalog.create(
+            "session_1", "Subject"
+        )
+        self._append(
+            workspace,
+            scope_kind=AgentExchangeScopeKind.CONVERSATION,
+            scope_id=conversation.conversation_id,
+            content="PRIVATE_VIEWER_CONTENT",
+        )
+        controller._attached_session_id = "session_1"
+        with (
+            mock.patch.object(
+                terminal_module.InteractivePickerInput,
+                "read_picker",
+                autospec=True,
+                side_effect=(
+                    self._commit(f"conversation:{conversation.conversation_id}"),
+                    self._commit(ROSTER[0]),
+                ),
+            ),
+            mock.patch.object(
+                terminal_module.InteractiveExternalViewer,
+                "open",
+                autospec=True,
+                side_effect=ExternalViewUnavailableError("PRIVATE_VIEWER_CONTENT"),
+            ),
+        ):
+            controller._view_attached_agent_exchanges()
+
+        rendered = "".join(callbacks.records)
+        self.assertIn(
+            "terminalwithtransientdisplaysupport", "".join(rendered.split())
+        )
+        self.assertNotIn("PRIVATE_VIEWER_CONTENT", rendered)
 
     def test_latest_first_same_id_kind_separation_debate_subject_and_empty_agent(
         self,

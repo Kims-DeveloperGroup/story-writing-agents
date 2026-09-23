@@ -906,10 +906,10 @@ checked separately.
 The isolated package neutralizes terminal and bidirectional controls and emits
 only printable text, newlines, and optionally semantic SGR. Story remains sole
 owner of input, output, raw mode, alternate screen, signals, geometry, and
-restoration. Capable close restores the prior shell surface; ordinary-line
-fallback necessarily leaves its plain frames and input in scrollback. Either
-path can be retained by terminal, remote-session, accessibility, recording, or
-operating-system infrastructure. Story picker state and viewer-owned drafts,
+restoration. Capable close restores the prior shell surface; `/exchanges`
+refuses line fallback before showing a viewer frame. Terminal, remote-session,
+accessibility, recording, and operating-system infrastructure can still retain
+displayed content. Story picker state and viewer-owned drafts,
 logical cursor, mode, search, match position, footer result/index, and help
 state are process-local and discarded on close;
 that does not erase exchange files, process memory, scrollback, screenshots, or

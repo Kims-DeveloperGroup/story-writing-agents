@@ -5635,6 +5635,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   runtime-checkable `ExternalViewerHost` protocol and `ExternalViewOperation`
   callable alias. The protocol exposes only terminal size, color permission,
   complete-frame presentation, closed event reads, and idempotent view close.
+  `ExternalViewUnavailableError` identifies a refused transient view before
+  any record is presented on a line-only terminal.
   Private validation admits printable text, newlines, and authorized ANSI SGR
   only, so cursor, alternate-screen, raw-mode, and arbitrary control sequences
   cannot cross from a viewer. The private ordinary-line host validates bounded
@@ -6248,7 +6250,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   and static paths: capable live frame replacement alone reserves the
   rightmost cell, while persistent/static fallback rendering uses the full
   configured width.
-  Package-internal `open_external_view` accepts only one generic operation,
+  Package-internal `open_external_view` accepts one generic operation and a
+  `transient_only` flag that refuses line fallback before rendering content,
   rejects reentry and progress overlap through the existing input latch, and
   supplies either a borrowed ordinary-line host or one raw-driver-owned host.
   The capable path alone owns raw activation, alternate-screen entry/exit,
@@ -6594,9 +6597,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   unchanged.
   Resource-free `InteractiveExternalViewer` retains only the terminal's
   package-internal generic operation opener. Callback construction binds a
-  borrowed plain-line host; stream construction binds the sole driver's
-  external-view lifecycle. Neither route imports the required external viewer
-  package, exposes terminal resources, nor retains operation, frame, input,
+  borrowed plain-line host only for views that allow line fallback; stream
+  construction binds the sole driver's external-view lifecycle. Neither route
+  imports the required external viewer package, exposes terminal resources,
+  nor retains operation, frame, input,
   search, or navigation state after return or failure.
 - **Direct internal dependencies:** `agent_context.progress`, `agents`, `conversations`,
   `interactive_commands`, `interactive_terminal._advisory_progress`,
