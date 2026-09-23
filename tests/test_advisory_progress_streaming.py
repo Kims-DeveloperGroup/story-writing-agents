@@ -2699,5 +2699,174 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             self.assertEqual(res2, "op2")
             self.assertTrue(out2.getvalue().endswith("\r\n"))
 
+    def test_success_response_invokes_nested_scroll_inspector_with_keep_frame_true(self) -> None:
+        """Verify successful operation with keep_frame=True invokes run_nested_scroll_inspector with keep_frame=True."""
+        capabilities = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+        out = io.StringIO()
+        driver = RawTerminalDriver(
+            lambda _p: "",
+            io.StringIO(),
+            out,
+            lambda s, e: (s, None),
+            lambda s, e, h: (s, None),
+            lambda h, t: h,
+        )
+        view = NestedScrollViewport(
+            view_id="lead:1",
+            title="Lead",
+            total_lines=5,
+            start_line=1,
+            visible_lines=("Done step 1",),
+            visible_height=1,
+            is_focused=True,
+            state=ViewState.IDLE,
+        )
+        scroll_state = MultiAgentScrollState((view,), 0)
+
+        async def successful_op() -> dict:
+            return {"status": "ok"}
+
+        inspector_called = []
+
+        def fake_inspector(state, transition, renderer, toggle_callback=None, keep_frame=False):
+            inspector_called.append({"state": state, "keep_frame": keep_frame})
+            return state
+
+        with (
+            mock.patch.object(RawTerminalDriver, "capabilities", return_value=capabilities),
+            mock.patch.object(RawTerminalDriver, "run_nested_scroll_inspector", side_effect=fake_inspector),
+        ):
+            res = asyncio.run(
+                driver.run_advisory_progress(
+                    successful_op(),
+                    lambda _f: "Running...",
+                    scroll_state_provider=lambda _r: scroll_state,
+                    nested_scroll_transition=mock.MagicMock(),
+                    nested_scroll_renderer=mock.MagicMock(),
+                    keep_frame=True,
+                )
+            )
+            self.assertEqual(res, {"status": "ok"})
+            self.assertEqual(len(inspector_called), 1)
+            self.assertEqual(inspector_called[0]["state"], scroll_state)
+            self.assertTrue(inspector_called[0]["keep_frame"])
+
+    def test_nested_scroll_inspector_focus_cycling_and_frame_retention_on_success(self) -> None:
+        """Verify inspector cycles focus across viewports on Tab and retains frame with newline when keep_frame=True."""
+        out = io.StringIO()
+        driver = RawTerminalDriver(
+            lambda _p: "",
+            io.StringIO(),
+            out,
+            lambda s, e: (s, None),
+            lambda s, e, h: (s, None),
+            lambda h, t: h,
+        )
+        v1 = NestedScrollViewport(
+            view_id="a1:1",
+            title="Agent 1",
+            total_lines=3,
+            start_line=1,
+            visible_lines=("agent 1 line",),
+            visible_height=1,
+            is_focused=True,
+            state=ViewState.IDLE,
+        )
+        v2 = NestedScrollViewport(
+            view_id="a2:1",
+            title="Agent 2",
+            total_lines=3,
+            start_line=1,
+            visible_lines=("agent 2 line",),
+            visible_height=1,
+            is_focused=False,
+            state=ViewState.IDLE,
+        )
+        initial_state = MultiAgentScrollState((v1, v2), 0)
+
+        fake_config = mock.MagicMock()
+        fake_caps = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+
+        # User presses Tab (cycle focus to Agent 2) then q (exit inspector)
+        with (
+            mock.patch.object(RawTerminalDriver, "_observe_input_capabilities", return_value=fake_caps),
+            mock.patch.object(RawTerminalDriver, "_prepare_input", return_value=(fake_caps, fake_config)),
+            mock.patch("story_writing_agents.interactive_terminal._driver._activate_terminal"),
+            mock.patch("story_writing_agents.interactive_terminal._driver._restore_terminal_or_raise"),
+            mock.patch.object(RawTerminalDriver, "_read_character", side_effect=["\t", "q"]),
+            mock.patch.object(RawTerminalDriver, "_clear_progress_frame") as mock_clear,
+        ):
+            final_state = driver.run_nested_scroll_inspector(
+                initial_state,
+                transition_nested_scroll,
+                render_nested_scroll_view,
+                keep_frame=True,
+            )
+
+        # Tab switched focus to agent 2
+        self.assertEqual(final_state.focused_index, 1)
+        self.assertFalse(final_state.views[0].is_focused)
+        self.assertTrue(final_state.views[1].is_focused)
+
+        # _clear_progress_frame was called once during Tab redraw, but NOT upon exit because keep_frame=True
+        self.assertEqual(mock_clear.call_count, 1)
+        self.assertTrue(out.getvalue().endswith("\r\n"))
+
+    def test_provide_scroll_state_on_success_sets_idle_state_and_does_not_record_error(self) -> None:
+        """Verify success response passes ViewState.IDLE and does not record result message as an error."""
+        from story_writing_agents.interactive_terminal._core import build_stream_terminal
+
+        terminal = build_stream_terminal(lambda _p: "", io.StringIO(), io.StringIO())
+        terminal.progress_frame_collapsed = False
+        progress = InteractiveAdvisoryProgress(terminal)
+        progress.begin(
+            (AdvisoryProgressRequest("lead", "turn_1", "Leading..."),)
+        )
+
+        class SuccessResult:
+            status = "completed"
+            message = "Draft generated successfully."
+
+        result_obj = SuccessResult()
+
+        captured_scroll_state = []
+
+        async def fake_advisory_progress(op, renderer=None, scroll_state_provider=None, **kwargs):
+            res = await op
+            if scroll_state_provider is not None:
+                state = scroll_state_provider(res)
+                captured_scroll_state.append(state)
+            return res
+
+        progress._run = fake_advisory_progress
+
+        async def op():
+            return result_obj
+
+        res = asyncio.run(progress.run(op(), is_failure=lambda r: getattr(r, "status", "") != "completed"))
+        self.assertIs(res, result_obj)
+        self.assertIsNone(progress._state.last_error_message)
+        self.assertEqual(len(captured_scroll_state), 1)
+        scroll_state = captured_scroll_state[0]
+        self.assertTrue(len(scroll_state.views) >= 1)
+        for view in scroll_state.views:
+            self.assertEqual(view.state, ViewState.IDLE)
+
 
 

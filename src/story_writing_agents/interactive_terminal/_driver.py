@@ -823,7 +823,39 @@ class RawTerminalDriver:
 
         if not failed:
             if should_keep:
-                if self._progress_rows > 0:
+                if (
+                    scroll_state_provider is not None
+                    and nested_scroll_renderer is not None
+                    and nested_scroll_transition is not None
+                ):
+                    try:
+                        try:
+                            scroll_state = scroll_state_provider(result)
+                        except TypeError:
+                            scroll_state = scroll_state_provider()
+                        if scroll_state.views:
+                            self.run_nested_scroll_inspector(
+                                scroll_state,
+                                nested_scroll_transition,
+                                nested_scroll_renderer,
+                                toggle_callback=toggle_callback,
+                                keep_frame=True,
+                            )
+                        elif self._progress_rows > 0:
+                            try:
+                                self._write_raw_text("\r\n")
+                            except Exception:
+                                pass
+                            self._progress_rows = 0
+                    except BaseException as exc:
+                        inspector_failure = exc
+                        if self._progress_rows > 0:
+                            try:
+                                self._write_raw_text("\r\n")
+                            except Exception:
+                                pass
+                            self._progress_rows = 0
+                elif self._progress_rows > 0:
                     try:
                         self._write_raw_text("\r\n")
                     except Exception:
@@ -899,6 +931,7 @@ class RawTerminalDriver:
         renderer: _NestedScrollRenderer,
         *,
         toggle_callback: Callable[[], bool] | None = None,
+        keep_frame: bool = False,
     ) -> MultiAgentScrollState:
         """Run interactive scrolling on the retained nested agent view."""
 
@@ -914,8 +947,12 @@ class RawTerminalDriver:
             capabilities, configuration = self._prepare_input(observed_capabilities)
             if configuration is None:
                 self._redraw_nested_scroll_frame(initial_state, capabilities, renderer)
-                self._write_raw_text("\r\n")
-                self._progress_rows = 0
+                if self._progress_rows > 0:
+                    try:
+                        self._write_raw_text("\r\n")
+                    except Exception:
+                        pass
+                    self._progress_rows = 0
                 return initial_state
             return self._run_live_nested_scroll_inspector(
                 initial_state,
@@ -924,6 +961,7 @@ class RawTerminalDriver:
                 transition,
                 renderer,
                 toggle_callback=toggle_callback,
+                keep_frame=keep_frame,
             )
 
     def _run_live_nested_scroll_inspector(
@@ -935,6 +973,7 @@ class RawTerminalDriver:
         renderer: _NestedScrollRenderer,
         *,
         toggle_callback: Callable[[], bool] | None = None,
+        keep_frame: bool = False,
     ) -> MultiAgentScrollState:
         """Run raw-mode interactive navigation for nested agent scroll view."""
 
@@ -1005,13 +1044,23 @@ class RawTerminalDriver:
         except BaseException as failure:
             active_failure = failure
         finally:
-            _restore_terminal_or_raise(
-                configuration, lifecycle_failure or active_failure
-            )
             try:
-                self._clear_progress_frame()
-            except Exception:
-                self._progress_rows = 0
+                _restore_terminal_or_raise(
+                    configuration, lifecycle_failure or active_failure
+                )
+            finally:
+                if keep_frame:
+                    if self._progress_rows > 0:
+                        try:
+                            self._write_raw_text("\r\n")
+                        except Exception:
+                            pass
+                        self._progress_rows = 0
+                else:
+                    try:
+                        self._clear_progress_frame()
+                    except Exception:
+                        self._progress_rows = 0
 
         if lifecycle_failure is not None:
             raise lifecycle_failure

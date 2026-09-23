@@ -2082,10 +2082,12 @@ class InteractiveAdvisoryProgress:
                     )
                 )
         if not views:
-            fallback_text = source_error or "Execution failed."
+            fallback_text = source_error or (
+                "Execution failed." if state == ViewState.ERROR else "Completed."
+            )
             fallback_lines = [
                 line for line in fallback_text.splitlines() if line
-            ] or ["Execution failed."]
+            ] or ["Execution failed." if state == ViewState.ERROR else "Completed."]
             total_lines = len(fallback_lines)
             views.append(
                 NestedScrollViewport(
@@ -2139,6 +2141,9 @@ class InteractiveAdvisoryProgress:
                 def _provide_scroll_state(
                     failure: BaseException | object | None = None,
                 ) -> MultiAgentScrollState:
+                    is_err = isinstance(failure, BaseException) or (
+                        failure is not None and failure_check(failure)
+                    )
                     if isinstance(failure, BaseException):
                         if not self._state.last_error_message:
                             if _is_content_safe_failure(failure):
@@ -2146,7 +2151,7 @@ class InteractiveAdvisoryProgress:
                             else:
                                 err_msg = "Unexpected failure during operation."
                             self._state.record_error(err_msg)
-                    elif failure is not None:
+                    elif is_err and failure is not None:
                         msg = getattr(failure, "message", None) or getattr(
                             failure, "last_error_message", None
                         )
@@ -2154,7 +2159,7 @@ class InteractiveAdvisoryProgress:
                             self._state.record_error(str(msg))
                     return self.to_scroll_state(
                         visible_height=6,
-                        state=ViewState.ERROR,
+                        state=ViewState.ERROR if is_err else ViewState.IDLE,
                     )
 
                 run_kwargs: dict[str, object] = {
