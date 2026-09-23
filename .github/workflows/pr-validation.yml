@@ -24,6 +24,7 @@ jobs:
       full: ${{ steps.paths.outputs.full }}
       base_sha: ${{ steps.paths.outputs.base_sha }}
       head_sha: ${{ steps.paths.outputs.head_sha }}
+      checkout_sha: ${{ steps.paths.outputs.checkout_sha }}
     steps:
       - name: Classify paths and select runtime evidence
         id: paths
@@ -77,6 +78,8 @@ jobs:
             core.setOutput("full", String(full));
             core.setOutput("base_sha", baseSha);
             core.setOutput("head_sha", headSha);
+            // Event SHA is the PR test merge or merge-group commit, pinned across jobs.
+            core.setOutput("checkout_sha", context.sha);
             core.summary
               .addHeading("Validation selection")
               .addTable([
@@ -94,7 +97,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ needs.classify.outputs.head_sha }}
+          ref: ${{ needs.classify.outputs.checkout_sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - name: Check patch whitespace
         env:
           BASE_SHA: ${{ needs.classify.outputs.base_sha }}
@@ -161,8 +167,28 @@ jobs:
             end
           end
           RB
-      - name: Validate runner timing seed
-        run: python -B -c 'from tests import suite_policy; suite_policy.load_timing_weights()'
+      - name: Validate runner metadata
+        run: |
+          python -B - <<'PY'
+          import ast
+          from pathlib import Path
+          from tests import suite_policy
+
+          suite_policy.load_timing_weights()
+          for identifier in suite_policy.FAST_TEST_IDS:
+              module, class_name, method_name = identifier.rsplit(".", 2)
+              path = Path(*module.split(".")).with_suffix(".py")
+              if not module.startswith("tests.") or not path.is_file():
+                  raise SystemExit(f"fast-tier module missing: {identifier}")
+              tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+              if not any(
+                  isinstance(node, ast.ClassDef) and node.name == class_name and
+                  any(isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) and
+                      method.name == method_name for method in node.body)
+                  for node in tree.body
+              ):
+                  raise SystemExit(f"fast-tier test missing: {identifier}")
+          PY
       - name: Validate locked vendor pins
         run: |
           python - <<'PY'
@@ -294,7 +320,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-          ref: ${{ needs.classify.outputs.head_sha }}
+          ref: ${{ needs.classify.outputs.checkout_sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -325,7 +351,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-          ref: ${{ needs.classify.outputs.head_sha }}
+          ref: ${{ needs.classify.outputs.checkout_sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -353,7 +379,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.classify.outputs.head_sha }}
+          ref: ${{ needs.classify.outputs.checkout_sha }}
       - uses: actions/download-artifact@v4
         with:
           pattern: full-*

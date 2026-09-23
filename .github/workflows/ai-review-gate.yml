@@ -145,6 +145,12 @@ jobs:
               .sort((left, right) =>
                 new Date(right.created_at) - new Date(left.created_at))[0];
             if (!marker) {
+              await github.rest.repos.createCommitStatus({
+                owner, repo, ref: pr.head.sha, state: "failure",
+                context: "ai-review-gate",
+                description: "Current-head review milestone missing",
+                target_url: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+              });
               await disableAutoMerge("current head has no review milestone");
               core.notice("No AI review milestone exists for the current head.");
               return;
