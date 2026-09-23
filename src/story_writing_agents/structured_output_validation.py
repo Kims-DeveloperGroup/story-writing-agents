@@ -9,12 +9,15 @@ from __future__ import annotations
 import json
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from enum import StrEnum
+from itertools import islice
 
 
 _PATH_MEMBER = re.compile(r"^[A-Za-z_][A-Za-z_0-9]*$")
 _MAX_CHUNK_BYTES = 32_000
+_MAX_ISSUES = 2_048
+_OMITTED_ISSUES_NOTICE = "$: additional validation issues omitted"
 
 
 class DomainValidationRule(StrEnum):
@@ -124,7 +127,7 @@ def _discriminator_schema(
     return child if isinstance(child, Mapping) else None
 
 
-def _diagnose(value: object, schema: Mapping[str, object], path: str) -> list[str]:
+def _diagnose(value: object, schema: Mapping[str, object], path: str) -> Iterator[str]:
     variants = schema.get("anyOf")
     if type(variants) is list and variants:
         if type(value) is dict:
@@ -147,7 +150,8 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str) -> list[st
                     if type(supplied) is str else []
                 )
                 if len(matches) == 1:
-                    return _diagnose(value, matches[0], path)
+                    yield from _diagnose(value, matches[0], path)
+                    return
                 if len(matches) > 1:
                     exact_shapes = [
                         variant for variant in matches
@@ -156,12 +160,13 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str) -> list[st
                         and value.keys() == variant["properties"].keys()
                     ]
                     if len(exact_shapes) == 1:
-                        return _diagnose(value, exact_shapes[0], path)
+                        yield from _diagnose(value, exact_shapes[0], path)
+                        return
                 if candidates and not matches:
-                    issues = [_issue(
+                    yield _issue(
                         _path(path, discriminator),
                         f"expected an allowed string value, got {json_type(supplied)}",
-                    )]
+                    )
                     properties = [
                         variant.get("properties")
                         for variant in variants
@@ -181,14 +186,14 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str) -> list[st
                                 for variant in variants
                             )
                             if name not in value and required_everywhere:
-                                issues.append(_issue(
+                                yield _issue(
                                     _path(path, name), "required property is missing",
-                                ))
+                                )
                             elif name in value and isinstance(child, Mapping):
-                                issues.extend(_diagnose(
+                                yield from _diagnose(
                                     value[name], child, _path(path, name),
-                                ))
-                    return issues
+                                )
+                    return
         compatible_variants = [
             variant for variant in variants
             if isinstance(variant, Mapping) and (
@@ -206,21 +211,44 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str) -> list[st
                 )
             )
         ]
-        alternatives = [
-            _diagnose(value, variant, path)
-            for variant in (compatible_variants or variants)
-            if isinstance(variant, Mapping)
-        ]
+        alternatives = []
+        for variant in compatible_variants or variants:
+            if isinstance(variant, Mapping):
+                findings = tuple(islice(
+                    _diagnose(value, variant, path), _MAX_ISSUES + 1,
+                ))
+                alternatives.append((
+                    findings,
+                    len(findings) > _MAX_ISSUES
+                    or _OMITTED_ISSUES_NOTICE in findings,
+                ))
         if alternatives:
-            fewest = min(map(len, alternatives))
-            closest = [item for item in alternatives if len(item) == fewest]
+            fewest = min(len(findings) for findings, _overflow in alternatives)
+            closest = [
+                item for item in alternatives if len(item[0]) == fewest
+            ]
             if len(closest) == 1:
-                return closest[0]
-            common = set(closest[0]).intersection(*map(set, closest[1:]))
+                findings, overflow = closest[0]
+                yield from findings
+                if overflow and _OMITTED_ISSUES_NOTICE not in findings:
+                    yield _OMITTED_ISSUES_NOTICE
+                return
+            common = set(closest[0][0]).intersection(
+                *(set(findings) for findings, _overflow in closest[1:])
+            )
             if common:
-                return [item for item in closest[0] if item in common]
-            return [_issue(path, "does not match any allowed schema variant")]
-        return [_issue(path, "does not match the required schema")]
+                shared = tuple(item for item in closest[0][0] if item in common)
+                yield from shared
+                if (any(overflow for _findings, overflow in closest)
+                    and _OMITTED_ISSUES_NOTICE not in shared):
+                    yield _OMITTED_ISSUES_NOTICE
+                return
+            yield _issue(path, "does not match any allowed schema variant")
+            if any(overflow for _findings, overflow in closest):
+                yield _OMITTED_ISSUES_NOTICE
+            return
+        yield _issue(path, "does not match the required schema")
+        return
 
     raw_type = schema.get("type")
     expected = (
@@ -229,20 +257,21 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str) -> list[st
         if type(raw_type) is list else ()
     )
     if expected and not any(_matches_type(value, item) for item in expected):
-        return [_issue(path, f"expected {' or '.join(expected)}, got {json_type(value)}")]
+        yield _issue(path, f"expected {' or '.join(expected)}, got {json_type(value)}")
+        return
     if type(value) is float and not math.isfinite(value):
-        return [_issue(path, "expected a finite number, got number")]
+        yield _issue(path, "expected a finite number, got number")
+        return
 
-    issues: list[str] = []
     allowed = schema.get("enum")
     if type(allowed) is list and not any(
         type(value) is type(item) and value == item for item in allowed
     ):
         enum_types = tuple(dict.fromkeys(json_type(item) for item in allowed))
         expected_type = " or ".join(enum_types) if enum_types else "JSON"
-        issues.append(_issue(
+        yield _issue(
             path, f"expected an allowed {expected_type} value, got {json_type(value)}",
-        ))
+        )
     if type(value) is dict:
         properties = schema.get("properties")
         if isinstance(properties, Mapping):
@@ -253,46 +282,48 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str) -> list[st
             )
             for name in names:
                 if name not in value:
-                    issues.append(_issue(_path(path, name), "required property is missing"))
+                    yield _issue(_path(path, name), "required property is missing")
             if schema.get("additionalProperties") is False:
                 unknown_count = len(value.keys() - properties.keys())
                 if unknown_count:
-                    issues.append(_issue(path, f"contains {unknown_count} unexpected properties (names withheld)"))
+                    yield _issue(path, f"contains {unknown_count} unexpected properties (names withheld)")
             for name, child in properties.items():
                 if name in value and type(name) is str and isinstance(child, Mapping):
-                    issues.extend(_diagnose(value[name], child, _path(path, name)))
+                    yield from _diagnose(value[name], child, _path(path, name))
     elif type(value) is list:
         minimum = schema.get("minItems")
         maximum = schema.get("maxItems")
         if type(minimum) is int and len(value) < minimum:
-            issues.append(_issue(path, f"expected at least {minimum} items, got {len(value)}"))
+            yield _issue(path, f"expected at least {minimum} items, got {len(value)}")
         if type(maximum) is int and len(value) > maximum:
-            issues.append(_issue(path, f"expected at most {maximum} items, got {len(value)}"))
+            yield _issue(path, f"expected at most {maximum} items, got {len(value)}")
         item_schema = schema.get("items")
         if isinstance(item_schema, Mapping):
             for index, item in enumerate(value):
-                issues.extend(_diagnose(item, item_schema, f"{path}[{index}]"))
+                yield from _diagnose(item, item_schema, f"{path}[{index}]")
     elif type(value) is str:
         minimum = schema.get("minLength")
         maximum = schema.get("maxLength")
         if type(minimum) is int and len(value) < minimum:
-            issues.append(_issue(path, f"expected at least {minimum} characters, got {len(value)}"))
+            yield _issue(path, f"expected at least {minimum} characters, got {len(value)}")
         if type(maximum) is int and len(value) > maximum:
-            issues.append(_issue(path, f"expected at most {maximum} characters, got {len(value)}"))
+            yield _issue(path, f"expected at most {maximum} characters, got {len(value)}")
     elif type(value) in {int, float}:
         minimum = schema.get("minimum")
         maximum = schema.get("maximum")
         if type(minimum) in {int, float} and value < minimum:
-            issues.append(_issue(path, f"expected at least {minimum}, got {json_type(value)}"))
+            yield _issue(path, f"expected at least {minimum}, got {json_type(value)}")
         if type(maximum) in {int, float} and value > maximum:
-            issues.append(_issue(path, f"expected at most {maximum}, got {json_type(value)}"))
-    return issues
+            yield _issue(path, f"expected at most {maximum}, got {json_type(value)}")
 
 
 def diagnose_value(value: object, schema: Mapping[str, object]) -> tuple[str, ...]:
-    """Collect every independently detectable schema issue in stable order."""
+    """Collect a bounded ordered prefix of independently detectable issues."""
 
-    return tuple(_diagnose(value, schema, "$"))
+    issues = tuple(islice(_diagnose(value, schema, "$"), _MAX_ISSUES + 1))
+    if len(issues) > _MAX_ISSUES:
+        return (*issues[:_MAX_ISSUES], _OMITTED_ISSUES_NOTICE)
+    return issues
 
 
 def diagnose_json_text(text: str, schema: Mapping[str, object]) -> tuple[str, ...]:
@@ -316,6 +347,11 @@ def bounded_chunks(
 
     if not issues:
         return ()
+    if len(issues) > _MAX_ISSUES and not (
+        len(issues) == _MAX_ISSUES + 1
+        and issues[-1] == _OMITTED_ISSUES_NOTICE
+    ):
+        issues = (*islice(issues, _MAX_ISSUES), _OMITTED_ISSUES_NOTICE)
     chunks: list[str] = []
     current = prefix
     for issue in issues:

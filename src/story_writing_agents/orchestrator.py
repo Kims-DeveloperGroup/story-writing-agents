@@ -945,11 +945,7 @@ class _AccountingContextProvider:
 
         if self._validation_messages_published:
             return
-        details_by_call = tuple(
-            (call_id, self._validation_details[call_id])
-            for call_id in self._ordinals
-            if call_id in self._validation_details
-        )
+        details_by_call = self.validation_details_by_call
         if details_by_call:
             self._runtime._append_validation_messages(
                 session_id=self._session_id,
@@ -960,6 +956,29 @@ class _AccountingContextProvider:
                 details_by_call=details_by_call,
             )
         self._validation_messages_published = True
+
+    def publish_or_defer_validation_messages(
+        self,
+    ) -> tuple[str, tuple[tuple[str, tuple[str, ...]], ...]] | None:
+        """Retain an exact retry batch when diagnostic persistence fails."""
+
+        try:
+            self.publish_validation_messages()
+        except Exception:
+            details_by_call = self.validation_details_by_call
+            if details_by_call:
+                return self._invocation_id, details_by_call
+        return None
+
+    @property
+    def validation_details_by_call(self) -> tuple[tuple[str, tuple[str, ...]], ...]:
+        """Return ordered safe chunks with their submitted call identities."""
+
+        return tuple(
+            (call_id, self._validation_details[call_id])
+            for call_id in self._ordinals
+            if call_id in self._validation_details
+        )
 
     def _label_validation_details(
         self, call_id: str, details: tuple[str, ...],
@@ -1128,6 +1147,7 @@ class _CollaborationInvocationResult:
     failure: BaseException | None = None
     submission_uncertain: bool = False
     trace: ReplyTrace | None = None
+    pending_validation: tuple[str, tuple[tuple[str, tuple[str, ...]], ...]] | None = None
 
     def __post_init__(self) -> None:
         if self.trace is not None and type(self.trace) is not ReplyTrace:
@@ -4728,7 +4748,7 @@ class StoryRuntime:
                 if remaining < correction_cost:
                     reference_operation.failure(first_failure)
                     fallback_value = decoder(fallback_answer)
-                    provider.publish_validation_messages()
+                    pending_validation = provider.publish_or_defer_validation_messages()
                     return _CollaborationInvocationResult(
                         fallback_value,
                         provider.submitted_physical_calls,
@@ -4739,6 +4759,7 @@ class StoryRuntime:
                             result=None,
                             origin=ReplyTraceOrigin.RUNTIME_FALLBACK,
                         ),
+                        pending_validation=pending_validation,
                     )
                 trace_origin = ReplyTraceOrigin.RECOVERED
                 reference_read = reference_operation.begin_invocation(
@@ -4791,7 +4812,7 @@ class StoryRuntime:
                         raise
                     reference_operation.failure(correction_failure)
                     fallback_value = decoder(fallback_answer)
-                    provider.publish_validation_messages()
+                    pending_validation = provider.publish_or_defer_validation_messages()
                     return _CollaborationInvocationResult(
                         fallback_value,
                         provider.submitted_physical_calls,
@@ -4802,10 +4823,11 @@ class StoryRuntime:
                             result=None,
                             origin=ReplyTraceOrigin.RUNTIME_FALLBACK,
                         ),
+                        pending_validation=pending_validation,
                     )
             value = decoded if decoded is not None else decoder(result.answer)
             reference_operation.finish()
-            provider.publish_validation_messages()
+            pending_validation = provider.publish_or_defer_validation_messages()
             return _CollaborationInvocationResult(
                 value,
                 provider.submitted_physical_calls,
@@ -4816,16 +4838,14 @@ class StoryRuntime:
                     result=result,
                     origin=trace_origin,
                 ),
+                pending_validation=pending_validation,
             )
         except BaseException as failure:
             if reference_operation is not None:
                 reference_operation.failure(failure)
-            if provider is not None:
-                try:
-                    provider.publish_validation_messages()
-                except Exception:
-                    # Diagnostic persistence must not replace the provider failure.
-                    pass
+            pending_validation = (
+                None if provider is None else provider.publish_or_defer_validation_messages()
+            )
             facts = context_provider_failure_facts(failure)
             submitted = (
                 provider.submitted_physical_calls
@@ -4837,6 +4857,7 @@ class StoryRuntime:
                 submitted,
                 failure,
                 facts.submission_uncertain,
+                pending_validation=pending_validation,
             )
         finally:
             if bound_agent is not None:
@@ -4953,6 +4974,20 @@ class StoryRuntime:
     ) -> None:
         if len(assignment_results) != len(proposal.assignments):
             raise BackendProtocolError("assignment result count is not authoritative")
+        for invocation_result in (
+            *assignment_results,
+            *((synthesis_result,) if synthesis_result is not None else ()),
+        ):
+            if invocation_result.pending_validation is not None:
+                invocation_id, details_by_call = invocation_result.pending_validation
+                self._append_validation_messages(
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    step_id=proposal.step_id,
+                    invocation_id=invocation_id,
+                    details_by_call=details_by_call,
+                )
         assignments_succeeded = all(item.failure is None for item in assignment_results)
         if (
             assignments_succeeded

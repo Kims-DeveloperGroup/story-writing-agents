@@ -184,6 +184,11 @@ names, parser messages, and raw rejected responses. They remain plaintext in
 history and any archive or transfer copy. Older events without this optional
 field remain readable.
 
+Reports that exceed the diagnostic cap retain up to 2,048 schema findings and a
+fixed content-free notice that additional issues were omitted; ordinary
+reports list every detectable finding. Each generated display chunk remains
+below 32,000 UTF-8 bytes.
+
 Validation message events may also retain optional invocation and call IDs.
 These identify the submitted provider call for safe diagnostic recovery across
 restart, including when specialists ran concurrently. The IDs expose call

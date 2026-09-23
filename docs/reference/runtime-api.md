@@ -368,6 +368,11 @@ findings. These details describe schema paths, expected versus actual JSON
 types, and fixed rules without provider values or unknown member names; they
 grant no confirmation or replay authority.
 
+Ordinary reports include every independently detectable schema finding. A
+report that exceeds the diagnostic cap keeps up to 2,048 findings in order and
+ends with the fixed `$: additional validation issues omitted` notice. Display
+chunks remain below 32,000 UTF-8 bytes each.
+
 Durable validation messages may carry optional
 `CollaborationMessagePayload.validation_invocation_id` and
 `validation_call_id` alongside their detail chunk. Runtime correlates those

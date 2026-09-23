@@ -2561,6 +2561,55 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertIn("$.action.result.authoring_scope.target_paths[1499]",
                       "\n".join(result.validation_details))
 
+    async def test_huge_invalid_array_truncates_safe_durable_report(self) -> None:
+        conversation_id = self.conversation("Huge validation report")
+        secret = "PRIVATE_HUGE_REJECTED_RESPONSE_한🙂"
+
+        def huge_invalid_array(
+            call: ContextProviderCallRequest, provider: _LeadContextProvider,
+        ) -> str:
+            value = json.loads(_visible_outcome("answer", secret)(call, provider))
+            value["action"]["result"]["authoring_scope"]["target_paths"] = [7] * 12_000
+            return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+        self.backend.enqueue(huge_invalid_array)
+        self.backend.enqueue(_visible_outcome("answer", "Accepted after repair."))
+        result = await self.runtime.lead_turn(
+            self.session_id, conversation_id, "Explain the workflow.",
+        )
+        self.assertEqual(result.message, "Accepted after repair.")
+        self.assertEqual(len(self.backend.calls), 2)
+        details = result.validation_details
+        report = "\n".join(details)
+        self.assertTrue(details)
+        self.assertLessEqual(len(details), 8)
+        self.assertLess(sum(len(chunk.encode("utf-8")) for chunk in details), 256_000)
+        self.assertTrue(all(len(chunk.encode("utf-8")) < 32_768 for chunk in details))
+        self.assertIn("$.action.result.authoring_scope.target_paths[0]", report)
+        self.assertTrue("$: additional validation issues omitted" in report,
+                        "bounded report lacks the omitted-issues notice")
+        self.assertFalse("$.action.result.authoring_scope.target_paths[11999]" in report,
+                         "bounded report includes an out-of-budget array index")
+        self.assertFalse(secret in report, "bounded report contains provider text")
+
+        reopened = compose_filesystem_conversation_storage(self.workspace).event_store
+        history = reopened.read(self.session_id, conversation_id)
+        submitted = tuple(event.payload for event in history
+                          if type(event.payload) is CollaborationProviderCallPayload
+                          and event.payload.state is CollaborationProviderCallState.SUBMITTED)
+        self.assertEqual(len(submitted), 2)
+        self.assertTrue(submitted[0].validation_details == details,
+                        "durable provider report differs from returned report")
+        self.assertEqual(submitted[1].validation_details, ())
+        notices = tuple(event.payload for event in history
+                        if type(event.payload) is CollaborationMessagePayload
+                        and event.payload.validation_details)
+        self.assertEqual(len(notices), len(details))
+        self.assertLessEqual(len(notices), 8)
+        self.assertTrue(tuple(item.validation_details[0] for item in notices) == details,
+                        "durable notices differ from returned report")
+        self.assertFalse(secret in repr(history), "durable history contains provider text")
+
     async def test_minimal_reference_answer_needs_no_provider_correction(self) -> None:
         backend = _LeadBackend(persist_context_threads=True)
         runtime = StoryRuntime(self.workspace, backend)  # type: ignore[arg-type]

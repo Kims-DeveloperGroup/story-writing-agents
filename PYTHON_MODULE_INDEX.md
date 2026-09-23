@@ -6827,8 +6827,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   durable collaboration events after provider work closes. It attaches runtime
   invocation/call IDs to diagnostic messages and reconstructs execution details
   in submitted-call order, using correlated message chunks for later validation
-  and submitted-fact chunks otherwise. These details do not change repair,
-  rejection, confirmation, Apply, or Commit authority.
+  and submitted-fact chunks otherwise. Specialist and synthesis invocations
+  retain unpublished per-call chunks across success, fallback, and failure for
+  one deterministic, sequential retry before terminal-result persistence; a
+  continuing append failure leaves the execution unfinalized for existing
+  recovery. These details do not change repair, rejection, confirmation, Apply,
+  or Commit authority.
   Ordinary synthesis uses
   the minimal `lead-synthesis-v3` contract and private `_LeadSynthesisResult` wrapper:
   optional action and `next_intent` are mutually exclusive. Non-actionable
@@ -7112,7 +7116,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   and bounded visible diagnostic messages with exact call correlation through
   the existing conversation store after provider work closes. Diagnostic
   message event and batch IDs are deterministic; an exact existing batch is
-  accepted without adding duplicate messages.
+  accepted without adding duplicate messages. The terminal writer retries
+  unpublished per-call batches after concurrent assignments join and before
+  any execution result or outcome-unknown marker is written.
   Runtime and bound sessions expose the same storage bundle; no raw
   schema-v1 event-store injection or property remains. Explicit lead turns may
   bind the lead, authorize ordered references and optional context evidence,
@@ -7555,8 +7561,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   property-count, enum, length, numeric-bound, item-count, and nested variant
   issues; it suppresses provider values and unknown key names. Strict JSON
   parsing reports duplicate-key or malformed-text categories without exposing
-  parser messages. Chunks preserve issue order and remain below the visible
-  text byte limit; boundary validation rejects oversized or non-UTF-8 chunks.
+  parser messages. The lazy walker retains the first 2,048 findings in order
+  and adds a fixed omission notice when further issues exist; chunk packaging
+  applies the same aggregate limit to caller-supplied issue sequences. Chunks
+  remain below the visible text byte limit; boundary validation rejects
+  oversized or non-UTF-8 chunks.
 - **Direct internal dependencies:** None; standard library only.
 - **State, resources, and side effects:** Pure deterministic computation with
   immutable rule vocabulary and a compiled local path pattern. It owns no

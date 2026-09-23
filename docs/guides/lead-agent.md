@@ -268,9 +268,11 @@ content.
 
 When structured validation rejects a provider reply, the live Lead result and
 `/history` show ordered `validation` notices. Each chunk identifies the
-`Original response` or `Repair response` and lists every independently
-detectable issue using trusted JSON property paths, expected and actual JSON
-types, or a fixed rule. For example, a missing
+`Original response` or `Repair response`; together the chunks list every
+independently detectable issue in ordinary reports using trusted JSON property
+paths, expected and actual JSON types, or a fixed rule. Reports that exceed the
+diagnostic cap list up to 2,048 findings, then say additional issues were omitted.
+For example, a missing
 `$.action.result.authoring_scope` is described as a missing required property;
 unexpected property names and provider values are never printed. Python
 callers can read the same ordered chunks from `LeadTurnResult.validation_details`;
