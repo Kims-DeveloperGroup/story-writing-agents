@@ -3043,12 +3043,12 @@ def _decode_context_action(
 
 def _context_validation_details(
     response_text: str,
-    schema: Mapping[str, object],
+    schema_issues: tuple[str, ...],
     failure: ContextExecutionError,
 ) -> tuple[str, ...]:
     """Describe schema issues and selected known semantic rules without response text."""
 
-    issues = list(diagnose_json_text(response_text, schema))
+    issues = list(schema_issues)
     if not issues:
         try:
             parsed = json.loads(
@@ -4919,7 +4919,8 @@ class AgentContextService:
                     pending_read = None
                 stage = "decode"
                 try:
-                    if diagnose_json_text(result.response_text, schema):
+                    schema_issues = diagnose_json_text(result.response_text, schema)
+                    if schema_issues:
                         raise _execution_error(ContextExecutionErrorCode.MALFORMED_ACTION)
                     action = _decode_context_action(
                         result.response_text,
@@ -4937,7 +4938,7 @@ class AgentContextService:
                         _require_sync_none(validation_sink(
                             call_id,
                             _context_validation_details(
-                                result.response_text, schema, decode_failure,
+                                result.response_text, schema_issues, decode_failure,
                             ),
                         ))
                     if (

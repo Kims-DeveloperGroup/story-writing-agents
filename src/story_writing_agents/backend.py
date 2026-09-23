@@ -4443,9 +4443,8 @@ class AgentBackend:
                             else self._structured_rejection_code(failure)
                         ),
                     )
-                issues = diagnose_json_text(result.response_text, schema)
                 details = bounded_chunks(
-                    issues or ("$: rejected by a domain result rule",),
+                    schema_issues or ("$: rejected by a domain result rule",),
                     prefix="Structured response",
                 )
                 raise _StructuredOutputRejected(str(failure), details) from failure
@@ -4506,8 +4505,7 @@ class AgentBackend:
                 else "Antigravity CLI returned malformed structured output"
             )
             details = bounded_chunks(
-                diagnose_json_text(result.response_text, schema)
-                or ("$: malformed JSON",),
+                schema_issues or ("$: malformed JSON",),
                 prefix="Structured response",
             )
             raise _StructuredOutputRejected(diagnostic, details) from exc
