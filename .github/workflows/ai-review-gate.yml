@@ -94,7 +94,10 @@ jobs:
             });
 
             const disableAutoMerge = async reason => {
-              if (!pr.auto_merge) return;
+              const {data: currentPr} = await github.rest.pulls.get({
+                owner, repo, pull_number: pullNumber,
+              });
+              if (!currentPr.auto_merge) return;
               for (let attempt = 1; attempt <= 3; attempt++) {
                 try {
                   await github.graphql(`
@@ -103,7 +106,7 @@ jobs:
                         pullRequestId: $pullRequestId
                       }) { pullRequest { number } }
                     }
-                  `, {pullRequestId: pr.node_id});
+                  `, {pullRequestId: currentPr.node_id});
                   core.notice(`Auto-merge disabled: ${reason}`);
                   return;
                 } catch (error) {
@@ -265,28 +268,14 @@ jobs:
             });
             const stillManaged = latestPr.labels.some(
               label => label.name === "workflow:managed");
-            const canArmAutoMerge = state === "success" &&
+            const mergeGatesReady = state === "success" &&
               stillManaged && latestPr.head.sha === pr.head.sha &&
               latestPr.mergeable_state === "clean";
-
-            if (!canArmAutoMerge) {
+            if (!mergeGatesReady) {
               await disableAutoMerge(
                 "AI, human-review, or required-check gates are not all current and clean");
-            } else if (!latestPr.auto_merge) {
-              try {
-                await github.graphql(`
-                  mutation($pullRequestId: ID!) {
-                    enablePullRequestAutoMerge(input: {
-                      pullRequestId: $pullRequestId,
-                      mergeMethod: SQUASH
-                    }) {
-                      pullRequest { number }
-                    }
-                  }
-                `, {pullRequestId: latestPr.node_id});
-              } catch (error) {
-                core.warning(`Auto-merge was not enabled: ${error.message}`);
-              }
+            } else {
+              core.notice("Review gate passed; auto-merge requires a separate authorized action.");
             }
             core.summary
               .addHeading("AI review gate")
@@ -295,8 +284,8 @@ jobs:
                 [{data: "Copilot current-head review", header: true}, copilot.length ? "present" : "pending"],
                 [{data: "Codex current-head review", header: true}, codex.length ? "present" : "pending"],
                 [{data: "PR validation", header: true}, validation ? `${validation.status}/${validation.conclusion || "pending"}` : "pending"],
-                [{data: "Merge gates", header: true}, canArmAutoMerge ? "clean" : latestPr.mergeable_state],
+                [{data: "Merge gates", header: true}, mergeGatesReady ? "clean" : latestPr.mergeable_state],
                 [{data: "Gate", header: true}, `${state}: ${description}`],
               ])
-              .addRaw("\nBranch rulesets continue to enforce required human reviews, conversations, and checks independently.\n")
+              .addRaw("\nBranch rulesets enforce required reviews and checks; this gate never enables auto-merge.\n")
               .write();

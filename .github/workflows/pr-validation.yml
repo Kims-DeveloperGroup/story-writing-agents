@@ -109,7 +109,14 @@ jobs:
 
           for path in pathlib.Path(".").glob("**/*.toml"):
               if ".git" not in path.parts:
-                  tomllib.loads(path.read_text(encoding="utf-8"))
+                  data = tomllib.loads(path.read_text(encoding="utf-8"))
+                  if path.parent == pathlib.Path(".codex/agents"):
+                      if data.get("name") != path.stem:
+                          raise SystemExit(f"{path}: agent name must match filename")
+                      for field in ("description", "developer_instructions"):
+                          value = data.get(field)
+                          if not isinstance(value, str) or not value.strip():
+                              raise SystemExit(f"{path}: missing {field}")
           for path in pathlib.Path(".").glob("**/*.json"):
               if ".git" not in path.parts:
                   json.loads(path.read_text(encoding="utf-8"))
@@ -117,7 +124,7 @@ jobs:
               compile(path.read_text(encoding="utf-8"), str(path), "exec", dont_inherit=True)
           PY
           ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}"].each { |path| YAML.parse_file(path) }'
-          ruby -ryaml <<'RB'
+          ruby -ryaml -ropen3 <<'RB'
           Dir[".agents/skills/*/SKILL.md"].each do |path|
             source = File.read(path)
             match = source.match(/\A---\r?\n(.*?)\r?\n---(?:\r?\n|\z)/m)
@@ -127,7 +134,35 @@ jobs:
               data.is_a?(Hash) && data["name"].is_a?(String) && !data["name"].empty? &&
               data["description"].is_a?(String) && !data["description"].empty?
           end
+          issue_path = ".github/ISSUE_TEMPLATE/work_item.md"
+          issue_source = File.read(issue_path)
+          issue_match = issue_source.match(/\A---\r?\n(.*?)\r?\n---(?:\r?\n|\z)/m)
+          abort "#{issue_path}: missing YAML frontmatter" unless issue_match
+          issue = YAML.safe_load(issue_match[1], aliases: false)
+          abort "#{issue_path}: invalid frontmatter mapping" unless issue.is_a?(Hash)
+          %w[name about title labels assignees].each do |field|
+            value = issue[field]
+            abort "#{issue_path}: missing or non-string #{field}" unless value.is_a?(String)
+          end
+          %w[name about].each do |field|
+            abort "#{issue_path}: empty #{field}" if issue[field].strip.empty?
+          end
+          Dir[".github/workflows/*.{yml,yaml}"].each do |path|
+            document = YAML.safe_load(File.read(path), aliases: false)
+            document.fetch("jobs").each do |job_name, job|
+              job.fetch("steps", []).each do |step|
+                script = step["with"]&.fetch("script", nil)
+                next unless script
+                _, error, status = Open3.capture3(
+                  "node", "--input-type=module", "--check",
+                  stdin_data: "async function main() {\n#{script}\n}")
+                abort "#{path} #{job_name}: #{error}" unless status.success?
+              end
+            end
+          end
           RB
+      - name: Validate runner timing seed
+        run: python -B -c 'from tests import suite_policy; suite_policy.load_timing_weights()'
       - name: Validate locked vendor pins
         run: |
           python - <<'PY'
@@ -147,6 +182,7 @@ jobs:
       - name: Validate policy artifacts
         run: |
           python - <<'PY'
+          import functools
           import pathlib
           import re
           from urllib.parse import unquote
@@ -181,15 +217,32 @@ jobs:
               if actual != expected:
                   raise SystemExit(f"{relative}: template headings changed: {actual!r}")
 
-          issue_lines = (root / ".github/ISSUE_TEMPLATE/work_item.md").read_text(
-              encoding="utf-8").splitlines()
-          if not issue_lines or issue_lines[0] != "---" or "---" not in issue_lines[1:]:
-              raise SystemExit("work item template frontmatter is missing")
-          issue_end = issue_lines[1:].index("---") + 1
-          issue_frontmatter = "\n".join(issue_lines[1:issue_end])
-          for key in ("name", "about", "title", "labels", "assignees"):
-              if not re.search(rf"^{key}:\s*", issue_frontmatter, re.MULTILINE):
-                  raise SystemExit(f"work item template frontmatter is missing {key}")
+          @functools.lru_cache(maxsize=None)
+          def anchors(path):
+              text = path.read_text(encoding="utf-8")
+              found = set(re.findall(
+                  r'<(?:a|span)\s+(?:name|id)=["\']([^"\']+)["\']', text))
+              occurrences = {}
+              fenced = False
+              for line in text.splitlines():
+                  if re.match(r"^\s*(```|~~~)", line):
+                      fenced = not fenced
+                      continue
+                  if fenced:
+                      continue
+                  heading = re.match(r"^ {0,3}#{1,6}\s+(.+?)\s*#*\s*$", line)
+                  if heading is None:
+                      continue
+                  name = heading.group(1)
+                  name = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", name)
+                  name = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", name)
+                  name = re.sub(r"<[^>]+>", "", name)
+                  name = re.sub(r"[^\w\- ]", "", name.lower().replace("`", "").replace("*", ""))
+                  name = re.sub(r"\s", "-", name)
+                  duplicate = occurrences.get(name, 0)
+                  occurrences[name] = duplicate + 1
+                  found.add(name if duplicate == 0 else f"{name}-{duplicate}")
+              return found
 
           markdown = [path for path in root.rglob("*.md")
                       if ".git" not in path.parts and "vendor" not in path.parts]
@@ -198,11 +251,15 @@ jobs:
               text = re.sub(r"```.*?```|~~~.*?~~~", "", text, flags=re.DOTALL)
               for raw in re.findall(r"\[[^\]]+\]\(([^)]+)\)", text):
                   target = raw.strip().strip("<>").split()[0]
-                  if not target or target.startswith(("http://", "https://", "mailto:", "#")):
+                  if not target or target.startswith(("http://", "https://", "mailto:")):
                       continue
-                  path = unquote(target.split("#", 1)[0])
-                  if path and not (source.parent / path).resolve().exists():
+                  path, _, fragment = target.partition("#")
+                  destination = (source.parent / unquote(path)).resolve() if path else source
+                  if not destination.exists():
                       raise SystemExit(f"{source}: missing local link target {target}")
+                  if fragment and destination.suffix.lower() == ".md":
+                      if unquote(fragment) not in anchors(destination):
+                          raise SystemExit(f"{source}: missing Markdown anchor {target}")
 
           agents = {path.name for path in (root / ".codex/agents").glob("*.toml")}
           if agents != {"runtime_implementer.toml", "test_engineer.toml"}:

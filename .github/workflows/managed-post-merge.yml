@@ -118,31 +118,47 @@ jobs:
                 link.ref?.name === pr.headRefName &&
                 link.ref?.repository?.nameWithOwner === `${owner}/${repo}`))
               .map(issue => issue.id));
-            await new Promise(resolve => setTimeout(resolve, 10000));
+            const recordedFailures = failures;
+            const sameRepository = pr.headRepository?.nameWithOwner === `${owner}/${repo}`;
+            const protectedHead = pr.headRefName === repository.defaultBranchRef.name;
+            if (!issues.length) {
+              failures.push("PR has no verifiable owning Issue reference");
+            }
+            if (!sameRepository) {
+              warnings.push("fork head branch cleanup belongs to the fork owner");
+            }
+            for (let attempt = 1; attempt <= 6 && issues.length; attempt++) {
+              const failures = [];
+              if (attempt > 1) {
+                await new Promise(resolve => setTimeout(
+                  resolve, Math.min(2 ** (attempt - 1) * 1000, 10000)));
+              }
 
-            for (const issue of issues) {
-              try {
-                const projectResponse = await github.graphql(`
-                  query($id: ID!) {
-                    node(id: $id) {
-                      ... on Issue {
-                        state
-                        projectItems(first: 20) {
-                        nodes {
-                          project {
-                            title
-                            number
-                            owner {
-                              ... on Organization { login }
-                              ... on User { login }
-                            }
-                          }
-                            fieldValues(first: 50) {
-                              nodes {
-                                ... on ProjectV2ItemFieldSingleSelectValue {
-                                  name
-                                  field {
-                                    ... on ProjectV2SingleSelectField { name }
+              for (const issue of issues) {
+                try {
+                  const projectResponse = await github.graphql(`
+                    query($id: ID!) {
+                      node(id: $id) {
+                        ... on Issue {
+                          state
+                          projectItems(first: 100) {
+                            pageInfo { hasNextPage endCursor }
+                            nodes {
+                              project {
+                                title
+                                number
+                                owner {
+                                  ... on Organization { login }
+                                  ... on User { login }
+                                }
+                              }
+                              fieldValues(first: 50) {
+                                nodes {
+                                  ... on ProjectV2ItemFieldSingleSelectValue {
+                                    name
+                                    field {
+                                      ... on ProjectV2SingleSelectField { name }
+                                    }
                                   }
                                 }
                               }
@@ -151,52 +167,84 @@ jobs:
                         }
                       }
                     }
+                  `, {id: issue.id});
+                const projectItems = [...projectResponse.node.projectItems.nodes];
+                let cursor = projectResponse.node.projectItems.pageInfo.hasNextPage
+                  ? projectResponse.node.projectItems.pageInfo.endCursor : null;
+                while (cursor) {
+                  const page = await github.graphql(`
+                    query($id: ID!, $cursor: String!) {
+                      node(id: $id) {
+                        ... on Issue {
+                          projectItems(first: 100, after: $cursor) {
+                            pageInfo { hasNextPage endCursor }
+                            nodes {
+                              project {
+                                number
+                                owner {
+                                  ... on Organization { login }
+                                  ... on User { login }
+                                }
+                              }
+                              fieldValues(first: 50) {
+                                nodes {
+                                  ... on ProjectV2ItemFieldSingleSelectValue {
+                                    name
+                                    field {
+                                      ... on ProjectV2SingleSelectField { name }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  `, {id: issue.id, cursor});
+                  const connection = page.node.projectItems;
+                  projectItems.push(...connection.nodes);
+                  cursor = connection.pageInfo.hasNextPage ? connection.pageInfo.endCursor : null;
+                }
+                  const completing = completingIssueIds.has(issue.id);
+                  if (completing && projectResponse.node.state !== "CLOSED") {
+                    failures.push(
+                      `#${issue.number} is ${projectResponse.node.state}, not CLOSED`);
                   }
-                `, {id: issue.id});
-                const completing = completingIssueIds.has(issue.id);
-                if (completing && projectResponse.node.state !== "CLOSED") {
-                  failures.push(
-                    `#${issue.number} is ${projectResponse.node.state}, not CLOSED`);
-                }
-                if (!linkedIssues.has(issue.id)) {
-                  failures.push(
-                    `#${issue.number} has no Development-linked branch ${pr.headRefName}`);
-                }
-
-                const items = projectResponse.node.projectItems.nodes.filter(item =>
-                  item.project.number === 1 && item.project.owner?.login === owner);
-                if (!items.length) {
-                  failures.push(`#${issue.number} has no readable ${owner} Project #1 item`);
-                }
-                for (const item of items) {
-                  const status = item.fieldValues.nodes.find(value => value.field?.name === "Status");
-                  if (!status) {
-                    failures.push(`#${issue.number} has no readable Project Status`);
-                  } else if (completing && status.name !== "Done") {
-                    failures.push(`#${issue.number} Project Status is ${status.name}, not Done`);
+                  if (!linkedIssues.has(issue.id)) {
+                    failures.push(
+                      `#${issue.number} has no Development-linked branch ${pr.headRefName}`);
                   }
-                }
-              } catch (error) {
-                failures.push(`#${issue.number} Project status unreadable: ${error.message}`);
-              }
-            }
-            if (!issues.length) {
-              failures.push("PR has no verifiable owning Issue reference");
-            }
 
-            const sameRepository = pr.headRepository?.nameWithOwner === `${owner}/${repo}`;
-            const protectedHead = pr.headRefName === repository.defaultBranchRef.name;
-            if (sameRepository && !protectedHead) {
-              try {
-                await github.rest.git.getRef({
-                  owner, repo, ref: `heads/${pr.headRefName}`,
-                });
-                failures.push(`remote branch ${pr.headRefName} still exists`);
-              } catch (error) {
-                if (error.status !== 404) throw error;
+                  const items = projectItems.filter(item =>
+                    item.project.number === 1 && item.project.owner?.login === owner);
+                  if (!items.length) {
+                    failures.push(`#${issue.number} has no readable ${owner} Project #1 item`);
+                  }
+                  for (const item of items) {
+                    const status = item.fieldValues.nodes.find(value => value.field?.name === "Status");
+                    if (!status) {
+                      failures.push(`#${issue.number} has no readable Project Status`);
+                    } else if (completing && status.name !== "Done") {
+                      failures.push(`#${issue.number} Project Status is ${status.name}, not Done`);
+                    }
+                  }
+                } catch (error) {
+                  failures.push(`#${issue.number} Project status unreadable: ${error.message}`);
+                }
               }
-            } else if (!sameRepository) {
-              warnings.push("fork head branch cleanup belongs to the fork owner");
+              if (sameRepository && !protectedHead) {
+                try {
+                  await github.rest.git.getRef({
+                    owner, repo, ref: `heads/${pr.headRefName}`,
+                  });
+                  failures.push(`remote branch ${pr.headRefName} still exists`);
+                } catch (error) {
+                  if (error.status !== 404) throw error;
+                }
+              }
+              if (!failures.length) break;
+              if (attempt === 6) recordedFailures.push(...failures);
             }
 
             core.summary.addHeading("Managed post-merge verification");
