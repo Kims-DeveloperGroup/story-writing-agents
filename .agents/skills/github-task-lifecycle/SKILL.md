@@ -89,3 +89,7 @@ test ! -e "$worktree"
 Follow [completion](../../../GITHUB_WORKFLOW.md#completion-and-exceptions) and
 [cleanup](../../../GITHUB_WORKFLOW.md#worktree-disposition-and-cleanup) rules. Never auto-merge/
 close/clean or force-remove.
+
+For PR review comments, follow [review comments](../../../GITHUB_WORKFLOW.md#review-comments):
+verify each finding against the current diff, reply with the applied change or rejection
+rationale, and resolve the thread after that reply. Recheck outdated or drifted threads.
