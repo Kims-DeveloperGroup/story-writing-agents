@@ -2328,12 +2328,19 @@ class StoryRuntime:
         source = next(item for item in events if item.event_id == request.source_recommendation_event_id)
         if self._recommendation_event_digest(source) != request.source_recommendation_digest:
             raise BackendProtocolError("recommendation source no longer matches its disclosure")
+        validation_details = (
+            self._execution_validation_details(
+                events, request.source_execution_attempt_id, source.step_id,
+            )
+            if request.source_execution_attempt_id is not None else ()
+        )
         return LeadTurnResult(
             event.session_id, event.conversation_id, event.turn_id, event.step_id,
             LeadOutcomeKind.RECOMMENDATION, source.payload.message, None, None, None,
             CollaborationNextAction.SUBMIT_RECOMMENDATION_DECISION,
             evidence=request.basis.evidence, recommendation_request=request,
             trace=getattr(source.payload, "trace", None),
+            validation_details=validation_details,
         )
 
     def _recommendation_closure_draft(
@@ -5294,6 +5301,9 @@ class StoryRuntime:
         if proposal is None or result is None or result_event_id is None:
             raise BackendProtocolError("known result finalization lacks authority")
         turn_id = self._deterministic_id("t", result_event_id, "finalize")
+        validation_details = self._execution_validation_details(
+            events, result.execution_attempt_id, proposal.step_id,
+        )
         synthesis_event = next(
             (
                 event
@@ -5321,6 +5331,7 @@ class StoryRuntime:
                 result_event_id=result_event_id,
                 candidate=artifact_candidate,
                 turn_id=turn_id,
+                validation_details=validation_details,
             )
         next_proposal: CollaborationProposal | None = None
         continuation_exceeds_budget = False
@@ -5417,6 +5428,7 @@ class StoryRuntime:
                 request_id,
                 CollaborationNextAction.SUBMIT_CONFIRMATION,
                 next_proposal.basis.evidence,
+                validation_details=validation_details,
             )
 
         state = {
@@ -5527,6 +5539,44 @@ class StoryRuntime:
             state,
             None,
             CollaborationNextAction.CONTINUE_WITH_LEAD,
+            validation_details=validation_details,
+        )
+
+    def _execution_validation_details(
+        self,
+        events: tuple[CollaborationEvent, ...],
+        execution_attempt_id: str,
+        step_id: str,
+    ) -> tuple[str, ...]:
+        """Recover safe call diagnostics from this execution's durable facts."""
+
+        execution_turn_id = self._deterministic_id(
+            "t", execution_attempt_id, "execution",
+        )
+        running_event_id = self._deterministic_id(
+            "e", execution_attempt_id, "running",
+        )
+        result_event_id = self._deterministic_id(
+            "e", execution_attempt_id, "result",
+        )
+        boundaries = {
+            event.event_id: event.sequence
+            for event in events
+            if event.event_id in {running_event_id, result_event_id}
+            and event.turn_id == execution_turn_id
+            and event.step_id == step_id
+        }
+        if len(boundaries) != 2:
+            return ()
+        return tuple(
+            detail
+            for event in events
+            if boundaries[running_event_id] < event.sequence < boundaries[result_event_id]
+            and event.turn_id == execution_turn_id
+            and event.step_id == step_id
+            and type(event.payload) is CollaborationProviderCallPayload
+            and event.payload.state is CollaborationProviderCallState.SUBMITTED
+            for detail in event.payload.validation_details
         )
 
     def _finalize_artifact_result_locked(
@@ -5539,6 +5589,7 @@ class StoryRuntime:
         result_event_id: str,
         candidate: ArtifactReviewCandidatePayload,
         turn_id: str,
+        validation_details: tuple[str, ...],
     ) -> LeadTurnResult:
         """Finalize known review facts without granting artifact-write authority."""
 
@@ -5838,6 +5889,7 @@ class StoryRuntime:
             None,
             ArtifactProposalResult(state, candidate, reviewed_proposal),
             application_payload,
+            validation_details=validation_details,
         )
 
     def _terminal_state_draft(

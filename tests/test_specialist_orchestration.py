@@ -6,6 +6,7 @@ import asyncio
 import json
 import unittest
 from dataclasses import replace
+from unittest import mock
 
 from story_writing_agents import ReplyTraceOrigin, StoryRuntime
 from story_writing_agents.agents import (
@@ -629,7 +630,8 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             "message": "", "PRIVATE_SYNTHESIS_KEY": "PRIVATE_SYNTHESIS_VALUE",
         })
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, rejected)
-        await self.runtime.decide_lead_step(
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
+        decision = await self.runtime.decide_lead_step(
             _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
         )
         history = self.history(conversation_id)
@@ -642,8 +644,59 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertTrue(synthesis[0].validation_details[0].startswith("Original response"))
         self.assertIn("$.action.result: contains 1 unexpected properties",
                       repr(synthesis[0].validation_details))
+        self.assertIs(decision.turn.state, CollaborationStepState.COMPLETED)
+        self.assertEqual(
+            decision.turn.validation_details,
+            tuple(chunk for payload in submitted for chunk in payload.validation_details),
+        )
         self.assertNotIn("PRIVATE_SYNTHESIS_KEY", repr(history))
         self.assertNotIn("PRIVATE_SYNTHESIS_VALUE", repr(history))
+
+    async def test_restarted_finalization_restores_only_this_execution_diagnostics(
+        self,
+    ) -> None:
+        conversation_id = self.conversation("Restart diagnostic finalization")
+        proposed = await self.proposal(conversation_id)
+        private = "PRIVATE_RESTARTED_SPECIALIST_VALUE"
+        self.backend.enqueue_for(
+            PLOT_ARCHITECT,
+            _raw_outcome({"message": 0, "assessment": "supports", private: private}),
+        )
+        self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
+        with mock.patch.object(
+            self.runtime, "_finalize_known_result_locked",
+            side_effect=RuntimeError("test stopped after durable execution result"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "durable execution result"):
+                await self.runtime.decide_lead_step(
+                    _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+                )
+
+        known = self.history(conversation_id)
+        projection = project_collaboration_history(known)
+        self.assertIs(projection.current_state, CollaborationStepState.RUNNING)
+        self.assertEqual(len(_payloads(known, CollaborationExecutionResult)), 1)
+        expected = tuple(
+            chunk
+            for payload in _payloads(known, CollaborationProviderCallPayload)
+            if payload.state is CollaborationProviderCallState.SUBMITTED
+            for chunk in payload.validation_details
+        )
+        self.assertTrue(expected)
+        restarted_backend = _LeadBackend()
+        restarted = StoryRuntime(self.workspace, restarted_backend)  # type: ignore[arg-type]
+        restored = await restarted.lead_turn(
+            self.session_id, conversation_id, "Finalize the known result.",
+        )
+        self.assertIs(restored.state, CollaborationStepState.COMPLETED)
+        self.assertEqual(restored.validation_details, expected)
+        self.assertEqual(restarted_backend.calls, [])
+        complete = self.history(conversation_id)
+        repeated = restarted._finalize_known_result_locked(known, projection)
+        self.assertEqual(repeated, restored)
+        self.assertEqual(self.history(conversation_id), complete)
+        self.assertNotIn(private, repr(complete))
 
     async def test_synthesis_contract_is_semantic_and_runtime_derives_attribution(
         self,
@@ -838,6 +891,11 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 },
             )
 
+        private = "PRIVATE_CONTINUATION_SYNTHESIS_VALUE"
+        self.backend.enqueue_for(
+            LEAD_ORCHESTRATOR,
+            _raw_outcome({"message": "", private: private}),
+        )
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, continue_lineage)
         first_decision = await self.runtime.decide_lead_step(
             _decision(first, CollaborationConfirmationDecision.CONFIRM)
@@ -853,7 +911,17 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         )
         self.assertEqual(second.proposal.budget.rounds_spent, 1)
         self.assertEqual(second.proposal.budget.rounds_added, 1)
-        self.assertEqual(second.proposal.budget.physical_calls_spent, 3)
+        self.assertEqual(second.proposal.budget.physical_calls_spent, 4)
+        first_history = self.history(conversation_id)
+        expected_details = tuple(
+            chunk
+            for payload in _payloads(first_history, CollaborationProviderCallPayload)
+            if payload.state is CollaborationProviderCallState.SUBMITTED
+            for chunk in payload.validation_details
+        )
+        self.assertTrue(expected_details)
+        self.assertEqual(second.validation_details, expected_details)
+        self.assertNotIn(private, repr(first_history))
         self.assertEqual(
             tuple(item.kind for item in second.proposal.basis.inputs),
             (
@@ -873,6 +941,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         )
         self.assertIs(second_decision.turn.state, CollaborationStepState.COMPLETED)
         self.assertIsNone(second_decision.turn.proposal)
+        self.assertEqual(second_decision.turn.validation_details, ())
         history = self.history(conversation_id)
         syntheses = _payloads(history, CollaborationLeadSynthesisPayload)
         self.assertEqual(len(syntheses), 2)

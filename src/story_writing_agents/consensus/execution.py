@@ -310,6 +310,7 @@ class ConsensusExecutionCoordinator:
 
         invocations: list[ConsensusPhaseInvocation] = []
         outputs: list[ConsensusProviderResult] = []
+        reports: list[tuple[str, ...]] = []
         try:
             result = await self._invoke_phase(
                 request,
@@ -318,6 +319,7 @@ class ConsensusExecutionCoordinator:
                 terminal_id,
                 invocations,
                 outputs,
+                reports,
             )
         except ConsensusProviderOutcomeUnknown:
             result = self._result(
@@ -347,9 +349,8 @@ class ConsensusExecutionCoordinator:
                 prior_result_event_id=running_id,
             )
 
-        reports = tuple(output.validation_details for output in outputs)
         if any(reports):
-            result = replace(result, validation_details_by_provider=reports)
+            result = replace(result, validation_details_by_provider=tuple(reports))
         terminal_event = ConsensusEvent(terminal_id, terminal_sequence, result)
         try:
             self._append(terminal_event)
@@ -381,6 +382,7 @@ class ConsensusExecutionCoordinator:
         terminal_event_id: str,
         invocations: list[ConsensusPhaseInvocation],
         outputs: list[ConsensusProviderResult],
+        reports: list[tuple[str, ...]],
     ) -> ConsensusPhaseResult:
         agents = (
             CONSENSUS_AUDITORS
@@ -405,6 +407,7 @@ class ConsensusExecutionCoordinator:
             output = await self._invoke(invocation)
             if type(output) is not ConsensusProviderResult:
                 raise TypeError("consensus provider result is invalid")
+            reports.append(output.validation_details)
             _validate_provider_result(request, output)
             outputs.append(output)
             if output.kind is ConsensusPhaseOutputKind.FAILURE:

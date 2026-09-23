@@ -287,6 +287,60 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
             (first_details,),
         )
 
+    async def test_returned_provider_failure_persists_safe_validation_details(self) -> None:
+        details = ("Original response\n$.message: expected string, got integer",)
+
+        async def invoke(_invocation):
+            return ConsensusProviderResult(
+                ConsensusPhaseOutputKind.FAILURE,
+                "8" * 64,
+                None,
+                validation_details=details,
+            )
+
+        appended = []
+        _, _, _, _, receipt = await self.execute(
+            ConsensusPhase.DRAFT, appended.append, invoke,
+        )
+        self.assertIs(receipt.state, ConsensusPhaseState.FAILED)
+        self.assertEqual(receipt.provider_results[0].validation_details, details)
+        self.assertEqual(
+            receipt.terminal_event.payload.validation_details_by_provider,
+            (details,),
+        )
+        self.assertEqual(appended[-1], receipt.terminal_event)
+
+    async def test_invalid_typed_provider_result_keeps_report_without_accepting_result(
+        self,
+    ) -> None:
+        details = ("Original response\n$.candidate: expected a new candidate",)
+        cases = (
+            (ConsensusPhase.DRAFT, _INPUT_MATERIAL),
+            (ConsensusPhase.AUDIT, _CANDIDATE_MATERIAL),
+        )
+        for phase, material in cases:
+            with self.subTest(phase=phase):
+                appended = []
+
+                async def invoke(_invocation):
+                    return ConsensusProviderResult(
+                        ConsensusPhaseOutputKind.CANDIDATE,
+                        "8" * 64,
+                        material,
+                        validation_details=details,
+                    )
+
+                _, _, _, _, receipt = await self.execute(
+                    phase, appended.append, invoke,
+                )
+                self.assertIs(receipt.state, ConsensusPhaseState.FAILED)
+                self.assertEqual(receipt.provider_results, ())
+                self.assertEqual(
+                    receipt.terminal_event.payload.validation_details_by_provider,
+                    (details,),
+                )
+                self.assertEqual(appended[-1], receipt.terminal_event)
+
     async def test_tail_request_decision_binding_and_capability_replay_fail_before_callbacks(
         self,
     ) -> None:

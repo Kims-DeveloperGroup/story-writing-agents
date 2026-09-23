@@ -6614,6 +6614,69 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     self.assertIn("after one repair attempt", reply.content)
                     self.assertNotIn("forbidden sixth call", reply.content)
 
+    async def test_repaired_search_and_read_diagnostics_reach_clean_final_answer(
+        self,
+    ) -> None:
+        session_id = "retrieval_repaired_actions"
+        request = self.retrieval_request(session_id=session_id)
+        private = "PRIVATE_RETRIEVAL_ACTION_VALUE_한🙂"
+        outputs = (
+            f'{{"private":"{private}",',
+            _retrieval_action_json(
+                request,
+                kind=ConversationRetrievalActionKind.SEARCH_CONVERSATIONS,
+                action_index=1,
+                query="Needle source",
+            ),
+            f'{{"private":"{private}",',
+            _retrieval_action_json(
+                request,
+                kind=ConversationRetrievalActionKind.READ_HISTORY,
+                action_index=2,
+                citation_id="s1h1",
+                start_sequence=1,
+                end_sequence=None,
+            ),
+            _retrieval_action_json(
+                request,
+                kind=ConversationRetrievalActionKind.ANSWER,
+                action_index=3,
+                content="Clean final answer.",
+                citation_ids=["s1h1"],
+            ),
+        )
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        handler = _RecordingRetrievalHandler()
+        with mock.patch.dict(
+            os.environ,
+            {"STORY_FAKE_CODEX_PHYSICAL_OUTPUTS": json.dumps(outputs, ensure_ascii=False)},
+        ):
+            reply = await bound.converse_with_retrieval(request, handler)
+
+        self.assertEqual(reply.content, "Clean final answer.")
+        self.assertEqual(len(self.provider_invocations()), 5)
+        self.assertEqual(
+            tuple(type(action) for action in handler.actions),
+            (ConversationRetrievalSearchAction, ConversationRetrievalReadAction,
+             ConversationRetrievalAnswerAction),
+        )
+        self.assertTrue(all(
+            len(action.validation_details) == 1
+            and action.validation_details[0].startswith("Original response")
+            and "$: malformed JSON" in action.validation_details[0]
+            for action in handler.actions[:2]
+        ))
+        self.assertEqual(handler.actions[2].validation_details, ())
+        self.assertEqual(
+            reply.validation_details,
+            (*handler.actions[0].validation_details,
+             *handler.actions[1].validation_details),
+        )
+        self.assertNotIn(private, repr(reply.validation_details))
+
     def test_retrieval_schema_uses_supported_strict_object_subset(self) -> None:
         schema = AgentBackend._conversation_retrieval_action_schema()
         self.assertEqual(schema.get("type"), "object")
