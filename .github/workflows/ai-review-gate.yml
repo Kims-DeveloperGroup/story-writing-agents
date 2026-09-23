@@ -226,15 +226,13 @@ jobs:
               const ids = new Set(selected.map(review => review.id));
               const comments = reviewComments.filter(comment =>
                 ids.has(comment.pull_request_review_id));
-              const latest = [...selected].sort((left, right) =>
-                new Date(right.submitted_at) - new Date(left.submitted_at))[0];
               // Copilot mirrors inline findings in a details list; resolved thread text
               // must not remain a blocker through that stale review-body summary.
-              const body = (latest?.body || "").replace(
+              const bodies = selected.map(review => (review.body || "").replace(
                 /<details\b[^>]*>[\s\S]*?<\/details>/gi,
-                section => /#discussion_r\d+/.test(section) ? "" : section);
+                section => /#discussion_r\d+/.test(section) ? "" : section));
               return [
-                ...(latest ? [body] : []),
+                ...bodies,
                 ...comments
                   .filter(comment => !addressedByComment.get(comment.id))
                   .map(comment => comment.body || ""),

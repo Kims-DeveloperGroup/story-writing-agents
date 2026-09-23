@@ -3,8 +3,8 @@ Use this record to show what verification demonstrates, how it was obtained, and
 uncertain. Read the authoring guide and this complete source first:
 ../../.agents/skills/github-task-lifecycle/references/issue-pr-authoring.md
 
-Runtime-code changes retain canonical-runner exact IDs, JSON evidence, group/timing/shard
-identity, outcomes, and reconciliation. Policy/docs/templates/skills/development-agent config/
+Runtime-code changes retain canonical-runner exact IDs, JSON evidence, outcomes, and optional
+full-shard reconciliation when required. Policy/docs/templates/skills/development-agent config/
 module-index-only/test-only changes report static validation instead. Review evidence matches
 the current head SHA. Never convert missing, stale, cancelled, interrupted, or aggregate
 evidence into a pass. Remove this comment and every placeholder before publication. Preserve

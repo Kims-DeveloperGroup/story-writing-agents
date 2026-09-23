@@ -46,11 +46,6 @@ jobs:
                         number
                         state
                         url
-                        linkedBranches(first: 50) {
-                          nodes {
-                            ref { name repository { nameWithOwner } }
-                          }
-                        }
                       }
                     }
                     manuallyLinkedIssues: closingIssuesReferences(
@@ -62,11 +57,6 @@ jobs:
                         number
                         state
                         url
-                        linkedBranches(first: 50) {
-                          nodes {
-                            ref { name repository { nameWithOwner } }
-                          }
-                        }
                       }
                     }
                   }
@@ -93,11 +83,6 @@ jobs:
                       number
                       state
                       url
-                      linkedBranches(first: 50) {
-                        nodes {
-                          ref { name repository { nameWithOwner } }
-                        }
-                      }
                     }
                   }
                 }
@@ -111,13 +96,11 @@ jobs:
             }
             const issues = [...issuesByNumber.values()];
 
-            // Capture Development links before native branch deletion can remove
-            // them, then allow Issue/Project and remote-branch automation to settle.
-            const linkedIssues = new Set(issues
-              .filter(issue => issue.linkedBranches.nodes.some(link =>
-                link.ref?.name === pr.headRefName &&
-                link.ref?.repository?.nameWithOwner === pr.headRepository?.nameWithOwner))
-              .map(issue => issue.id));
+            // PR-to-Issue relations survive deletion of the head branch after merge.
+            const linkedIssues = new Set([
+              ...pr.allClosingIssues.nodes,
+              ...pr.manuallyLinkedIssues.nodes,
+            ].map(issue => issue.id));
             const recordedFailures = failures;
             const sameRepository = pr.headRepository?.nameWithOwner === `${owner}/${repo}`;
             const protectedHead = pr.headRefName === repository.defaultBranchRef.name;
@@ -213,7 +196,7 @@ jobs:
                   }
                   if (!linkedIssues.has(issue.id)) {
                     failures.push(
-                      `#${issue.number} has no Development-linked branch ${pr.headRefName}`);
+                      `#${issue.number} has no retained Development-linked PR relation`);
                   }
 
                   const items = projectItems.filter(item =>
