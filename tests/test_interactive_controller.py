@@ -13798,6 +13798,29 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         res = adapter._run_operation(fake_op())
         self.assertIs(res, expected_result)
 
+    def test_unexpected_exception_in_submit_propagates_to_fatal_boundary(self) -> None:
+        """Verify unexpected/fatal errors in submit() propagate rather than being swallowed."""
+        from story_writing_agents.interactive_controller._lead_policy import InteractiveLeadAdapter
+
+        session = mock.MagicMock(spec=RuntimeSession)
+        session.lead_turn = mock.Mock()
+        runner = asyncio.Runner()
+        self.addCleanup(runner.close)
+
+        adapter = InteractiveLeadAdapter(
+            session,
+            runner,
+            mock.MagicMock(),
+            mock.MagicMock(),
+            mock.MagicMock(),
+            mock.MagicMock(),
+        )
+
+        with mock.patch.object(InteractiveLeadAdapter, "_run_turn", side_effect=RuntimeError("terminal restoration crashed")):
+            with self.assertRaises(RuntimeError) as ctx:
+                adapter.submit("conv_1", "test request")
+            self.assertIn("terminal restoration crashed", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

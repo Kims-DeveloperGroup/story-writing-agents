@@ -232,22 +232,6 @@ class InteractiveLeadAdapter:
             )
             self._write_elapsed()
             return False
-        except Exception:
-            error_message = "Unexpected failure during Lead turn."
-            self._semantic_output.write_component(
-                project_lead_error_result(error_message)
-            )
-            self._semantic_output.write_component(
-                Notice(
-                    f"Lead turn failed: {error_message} "
-                    "Inspect /history and /exchanges before continuing.",
-                    label="turn failure",
-                    role=SemanticRole.ERROR,
-                    state=ViewState.ERROR,
-                )
-            )
-            self._write_elapsed()
-            return False
 
     def _present_and_decide(self, turn: LeadTurnResult) -> bool:
         """Render typed turns and consume only explicit structured controls."""
