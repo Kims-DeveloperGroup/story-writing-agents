@@ -799,7 +799,7 @@ def _run_interactive_startup_progress(
         """Keep the progress loop responsive while startup work blocks."""
 
         progress = InteractiveAdvisoryProgress(terminal)
-        return await progress.run(asyncio.to_thread(operation))
+        return await progress.run(asyncio.to_thread(operation), keep_frame=False)
 
     with asyncio.Runner() as runner:
         return cast(_StartupT, runner.run(run()))

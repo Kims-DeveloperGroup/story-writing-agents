@@ -2113,6 +2113,7 @@ class InteractiveAdvisoryProgress:
         operation: Awaitable[object],
         *,
         is_failure: Callable[[object], bool] | None = None,
+        keep_frame: bool | None = None,
     ) -> object:
         """Join one advisory operation with the terminal-owned indicator."""
 
@@ -2156,10 +2157,15 @@ class InteractiveAdvisoryProgress:
                         state=ViewState.ERROR,
                     )
 
+                run_kwargs: dict[str, object] = {
+                    "scroll_state_provider": _provide_scroll_state,
+                    "is_failure": failure_check,
+                }
+                if keep_frame is not None:
+                    run_kwargs["keep_frame"] = keep_frame
                 result = await self._run(
                     operation,
-                    scroll_state_provider=_provide_scroll_state,
-                    is_failure=failure_check,
+                    **run_kwargs,
                 )
             else:
                 result = await self._run(operation)
@@ -3006,7 +3012,20 @@ def build_stream_terminal(
         *,
         scroll_state_provider=None,
         is_failure=None,
+        keep_frame=None,
     ):
+        def _resolve_keep_frame() -> bool:
+            if keep_frame is not None:
+                if callable(keep_frame):
+                    return bool(keep_frame())
+                return bool(keep_frame)
+            active_state = active_advisory_progress_state()
+            is_active_turn = (
+                active_state is not None
+                and (active_state.started_at is not None or bool(active_state.requests))
+            )
+            return (not terminal.progress_frame_collapsed) and is_active_turn
+
         return await driver.run_advisory_progress(
             operation,
             render_advisory_progress_frame,
@@ -3015,7 +3034,7 @@ def build_stream_terminal(
             nested_scroll_transition=transition_nested_scroll,
             nested_scroll_renderer=render_nested_scroll_view,
             toggle_callback=terminal.toggle_progress_frame,
-            keep_frame=lambda: not terminal.progress_frame_collapsed,
+            keep_frame=_resolve_keep_frame,
         )
 
     async def run_debate_progress(
@@ -3023,7 +3042,15 @@ def build_stream_terminal(
         *,
         scroll_state_provider=None,
         is_failure=None,
+        keep_frame=None,
     ):
+        def _resolve_keep_frame() -> bool:
+            if keep_frame is not None:
+                if callable(keep_frame):
+                    return bool(keep_frame())
+                return bool(keep_frame)
+            return not terminal.progress_frame_collapsed
+
         return await driver.run_advisory_progress(
             operation,
             render_advisory_progress_frame,
@@ -3032,7 +3059,7 @@ def build_stream_terminal(
             nested_scroll_transition=transition_nested_scroll,
             nested_scroll_renderer=render_nested_scroll_view,
             toggle_callback=terminal.toggle_progress_frame,
-            keep_frame=lambda: not terminal.progress_frame_collapsed,
+            keep_frame=_resolve_keep_frame,
         )
 
     terminal._advisory_progress = run_advisory_progress

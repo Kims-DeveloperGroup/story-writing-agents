@@ -4077,7 +4077,7 @@ class InteractiveController:
             return await asyncio.to_thread(operation)
 
         try:
-            return runner.run(self._advisory_progress.run(load()))
+            return runner.run(self._advisory_progress.run(load(), keep_frame=False))
         except AdvisoryProgressError:
             raise _ControllerAbort(
                 InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
