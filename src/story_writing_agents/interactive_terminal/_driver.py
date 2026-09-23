@@ -831,7 +831,7 @@ class RawTerminalDriver:
             except BaseException as exc:
                 clear_failure = exc
         elif not failed:
-            if should_keep:
+            if should_keep and result is not None:
                 if (
                     scroll_state_provider is not None
                     and nested_scroll_renderer is not None

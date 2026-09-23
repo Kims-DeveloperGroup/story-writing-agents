@@ -3027,6 +3027,56 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                     self.assertEqual(len(inspector_called), 0)
                     self.assertTrue(mock_clear.called)
 
+    def test_none_result_handoff_clears_frame_and_bypasses_inspector_under_keep_frame(self) -> None:
+        """Verify None result (e.g. auth recovery handoff) clears frame and does not open inspector even if keep_frame=True."""
+        capabilities = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+        out = io.StringIO()
+        driver = RawTerminalDriver(
+            lambda _p: "",
+            io.StringIO(),
+            out,
+            lambda s, e: (s, None),
+            lambda s, e, h: (s, None),
+            lambda h, t: h,
+        )
+
+        async def none_op():
+            return None
+
+        inspector_called = []
+
+        def fake_inspector(*args, **kwargs):
+            inspector_called.append(True)
+
+        with (
+            mock.patch.object(RawTerminalDriver, "capabilities", return_value=capabilities),
+            mock.patch.object(RawTerminalDriver, "run_nested_scroll_inspector", side_effect=fake_inspector),
+            mock.patch.object(RawTerminalDriver, "_clear_progress_frame") as mock_clear,
+        ):
+            res = asyncio.run(
+                driver.run_advisory_progress(
+                    none_op(),
+                    lambda _f: "Running...",
+                    scroll_state_provider=lambda _r: mock.MagicMock(),
+                    nested_scroll_transition=mock.MagicMock(),
+                    nested_scroll_renderer=mock.MagicMock(),
+                    keep_frame=True,
+                )
+            )
+
+            self.assertIsNone(res)
+            self.assertEqual(len(inspector_called), 0)
+            self.assertTrue(mock_clear.called)
+
+
 
 
 
