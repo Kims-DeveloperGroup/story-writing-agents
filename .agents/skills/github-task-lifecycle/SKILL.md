@@ -58,4 +58,9 @@ After merge, verify the merged SHA, current-head review/check evidence, Issue cl
 record worktree/branch/HEAD/porcelain, integration, recoverability, and authority. Remove only
 clean integrated worktrees without force, delete branches separately, and verify absence.
 
+For PR review comments, follow [review comments](../../../GITHUB_WORKFLOW.md#review-comments):
+verify each finding against the current diff, reply with the applied change and verification or
+rejection rationale, then resolve the thread. Recheck outdated or drifted threads; do not
+resolve findings that still need work.
+
 Report all mutations, failures, preserved state, current head/base, and the next owner/action.

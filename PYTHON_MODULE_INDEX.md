@@ -13,6 +13,9 @@ Paths below are import paths relative to `story_writing_agents`; each maps to th
 below `src/story_writing_agents/` with `.py` or `/__init__.py`. A package name in an
 inventory includes its `__init__.py`.
 
+Importable production units indexed: 143. Direct internal dependency edges indexed: 574.
+Directed internal dependency cycles indexed: 0.
+
 ## Supported public surfaces
 
 - `story_writing_agents` is the library facade. Its `__all__` is the supported top-level
@@ -245,7 +248,7 @@ live composition, reference activation, collaboration presentation, and the term
 - `interactive_terminal._viewer_controls`, `interactive_terminal._viewer_render`
 
 Presentation modules may consume public runtime/domain contracts but never own runtime state.
-The external viewer integration is lazy; private model/render/control modules are not APIs.
+The external viewer integration is lazy. `transient_only` refuses line fallback before content is rendered; `ExternalViewUnavailableError` identifies that refusal. Borrowed plain-line hosts remain for views that allow fallback. Private model/render/control modules are not APIs.
 
 ### Interactive support
 

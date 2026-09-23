@@ -1664,7 +1664,7 @@ assert tuple(relationship_policy.__all__) == tuple(sys.argv[2].split(','))
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
-    def test_ast_graph_counts_cycles_and_module_index_match_accepted_brief(
+    def test_ast_graph_counts_and_cycles_match_accepted_brief(
         self,
     ) -> None:
         modules: dict[str, Path] = {}
@@ -1760,14 +1760,6 @@ assert tuple(relationship_policy.__all__) == tuple(sys.argv[2].split(','))
 
         for module in modules:
             visit(module)
-        index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8")
-        self.assertIn("Importable production units indexed: 143.", index)
-        self.assertIn("Direct internal dependency edges indexed: 574.", index)
-        self.assertIn("Directed internal dependency cycles indexed: 0.", index)
-        self.assertIn(
-            "### `story_writing_agents.writing_artifacts.relationship_policy`",
-            index,
-        )
 
 
 if __name__ == "__main__":

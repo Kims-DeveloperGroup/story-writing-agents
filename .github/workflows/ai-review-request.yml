@@ -90,6 +90,11 @@ jobs:
             const {data: pr} = await github.rest.pulls.get({
               owner, repo, pull_number: pullNumber,
             });
+            if (pr.state !== "open" || pr.draft ||
+                !pr.labels.some(label => label.name === "workflow:managed")) {
+              core.setFailed("PR is no longer open, ready, and workflow:managed.");
+              return;
+            }
             if (pr.head.sha !== process.env.HEAD_SHA) {
               core.setFailed(
                 `PR head moved from ${process.env.HEAD_SHA} to ${pr.head.sha}; ` +
@@ -121,6 +126,11 @@ jobs:
             const {data: pr} = await github.rest.pulls.get({
               owner, repo, pull_number: pullNumber,
             });
+            if (pr.state !== "open" || pr.draft ||
+                !pr.labels.some(label => label.name === "workflow:managed")) {
+              core.setFailed("PR is no longer open, ready, and workflow:managed.");
+              return;
+            }
             if (pr.head.sha !== process.env.HEAD_SHA) {
               core.setFailed(
                 `PR head moved from ${process.env.HEAD_SHA} to ${pr.head.sha}; ` +
@@ -152,6 +162,11 @@ jobs:
             const {data: pr} = await github.rest.pulls.get({
               owner, repo, pull_number: pullNumber,
             });
+            if (pr.state !== "open" || pr.draft ||
+                !pr.labels.some(label => label.name === "workflow:managed")) {
+              core.setFailed("PR is no longer open, ready, and workflow:managed.");
+              return;
+            }
             if (pr.head.sha !== process.env.HEAD_SHA) {
               core.setFailed(
                 `PR head moved from ${process.env.HEAD_SHA} to ${pr.head.sha}; ` +
@@ -187,6 +202,11 @@ jobs:
             const {data: pr} = await github.rest.pulls.get({
               owner, repo, pull_number: pullNumber,
             });
+            if (pr.state !== "open" || pr.draft ||
+                !pr.labels.some(label => label.name === "workflow:managed")) {
+              core.setFailed("PR is no longer open, ready, and workflow:managed.");
+              return;
+            }
             if (pr.head.sha !== process.env.HEAD_SHA) {
               core.setFailed(
                 `PR head moved from ${process.env.HEAD_SHA} to ${pr.head.sha}; ` +

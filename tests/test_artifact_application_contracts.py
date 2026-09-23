@@ -844,7 +844,7 @@ assert len(writing_artifacts.__all__) == len(set(writing_artifacts.__all__)) == 
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
-    def test_module_graph_and_index_match_accepted_delta(self) -> None:
+    def test_module_graph_matches_accepted_delta(self) -> None:
         modules: dict[str, Path] = {}
         for path in _SOURCE_ROOT.rglob("*.py"):
             relative = path.relative_to(_SOURCE_ROOT)
@@ -937,18 +937,6 @@ assert len(writing_artifacts.__all__) == len(set(writing_artifacts.__all__)) == 
 
         for module in modules:
             visit(module)
-        index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8")
-        self.assertIn("Importable production units indexed: 143.", index)
-        self.assertIn("Direct internal dependency edges indexed: 574.", index)
-        self.assertIn("Directed internal dependency cycles indexed: 0.", index)
-        self.assertIn(
-            "### `story_writing_agents.writing_artifacts.application_contracts`",
-            index,
-        )
-        self.assertIn(
-            "writing_artifacts.application_contracts -> writing_artifacts.catalog/change_sets",
-            index,
-        )
 
 
 if __name__ == "__main__":

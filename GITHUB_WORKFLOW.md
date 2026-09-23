@@ -82,6 +82,14 @@ poll on a schedule without checking out code. Enable auto-merge or the merge que
 all gates pass. Post-merge automation verifies Issue closure, Project `Done`, Development
 links, and remote-branch cleanup; failures remain visible for root repair.
 
+### Review Comments
+
+Verify each PR review finding against the current diff and relevant evidence, including
+threads whose location has drifted or become outdated. For an applied finding, reply in its
+thread with the change and verification, then resolve it. For a rejected finding, reply with
+the reason and supporting evidence, then resolve it. Never leave an already addressed thread
+open or resolve a finding that still needs work.
+
 ## Verification Policy
 
 Runtime-code changes require the current-head fast CI tier and relevant tests selected with

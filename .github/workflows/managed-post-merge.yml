@@ -75,16 +75,13 @@ jobs:
             `, {owner, repo, number: pullNumber});
             const repository = response.repository;
             const pr = repository.pullRequest;
-            const manuallyLinkedIssueIds = new Set(
-              pr.manuallyLinkedIssues.nodes.map(issue => issue.id));
-            const completingIssues = pr.allClosingIssues.nodes.filter(
-              issue => !manuallyLinkedIssueIds.has(issue.id));
+            const completingIssues = pr.allClosingIssues.nodes;
             const completingIssueIds = new Set(completingIssues.map(issue => issue.id));
             const issuesByNumber = new Map([
               ...pr.allClosingIssues.nodes,
               ...pr.manuallyLinkedIssues.nodes,
             ].map(issue => [issue.number, issue]));
-            const referencedNumbers = [...pr.body.matchAll(/\bRefs\s*:?\s*#(\d+)\b/gim)]
+            const referencedNumbers = [...(pr.body || "").matchAll(/\bRefs\s*:?\s*#(\d+)\b/gim)]
               .map(match => Number(match[1]));
             for (const issueNumber of referencedNumbers) {
               if (issuesByNumber.has(issueNumber)) continue;

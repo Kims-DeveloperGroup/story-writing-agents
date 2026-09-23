@@ -54,14 +54,8 @@ jobs:
                 owner, repo, basehead: `${baseSha}...${headSha}`, per_page: 100,
               });
               files = comparison.data.files || [];
-              truncated = files.length >= 300;
-              for (const candidate of group.pull_requests || []) {
-                if (!candidate.number) continue;
-                const response = await github.rest.pulls.get({
-                  owner, repo, pull_number: candidate.number,
-                });
-                labels.push(...response.data.labels.map(label => label.name));
-              }
+              // A full page may hide later files. Fail closed rather than infer a partial diff.
+              truncated = !Array.isArray(comparison.data.files) || files.length >= 100;
             }
 
             const paths = files.flatMap(file =>
@@ -69,9 +63,13 @@ jobs:
             const isRuntime = path =>
               path.startsWith("src/") ||
               path.startsWith("config/") ||
-              path === "pyproject.toml";
+              path === "pyproject.toml" ||
+              path === "vendor/generic-rag" ||
+              path === "vendor/jsonl-viewer";
             const runtime = truncated || paths.some(isRuntime);
-            const full = runtime && (truncated || labels.includes("test:full"));
+            // Merge-group payloads do not reliably identify constituent PR labels.
+            const full = runtime && (
+              truncated || context.eventName === "merge_group" || labels.includes("test:full"));
             core.setOutput("runtime", String(runtime));
             core.setOutput("policy_only", String(!runtime));
             core.setOutput("full", String(full));
@@ -94,6 +92,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ needs.classify.outputs.head_sha }}
       - name: Check patch whitespace
         env:
           BASE_SHA: ${{ needs.classify.outputs.base_sha }}
@@ -112,8 +111,21 @@ jobs:
           for path in pathlib.Path(".").glob("**/*.json"):
               if ".git" not in path.parts:
                   json.loads(path.read_text(encoding="utf-8"))
+          for path in (*pathlib.Path("src").rglob("*.py"), *pathlib.Path("tests").glob("*.py")):
+              compile(path.read_text(encoding="utf-8"), str(path), "exec", dont_inherit=True)
           PY
           ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}"].each { |path| YAML.parse_file(path) }'
+          ruby -ryaml <<'RB'
+          Dir[".agents/skills/*/SKILL.md"].each do |path|
+            source = File.read(path)
+            match = source.match(/\A---\r?\n(.*?)\r?\n---(?:\r?\n|\z)/m)
+            abort "#{path}: missing YAML frontmatter" unless match
+            data = YAML.safe_load(match[1], aliases: false)
+            abort "#{path}: missing name or description" unless
+              data.is_a?(Hash) && data["name"].is_a?(String) && !data["name"].empty? &&
+              data["description"].is_a?(String) && !data["description"].empty?
+          end
+          RB
       - name: Validate policy artifacts
         run: |
           python - <<'PY'
@@ -161,17 +173,6 @@ jobs:
               if not re.search(rf"^{key}:\s*", issue_frontmatter, re.MULTILINE):
                   raise SystemExit(f"work item template frontmatter is missing {key}")
 
-          for skill in sorted((root / ".agents/skills").glob("*/SKILL.md")):
-              lines = skill.read_text(encoding="utf-8").splitlines()
-              if not lines or lines[0] != "---" or "---" not in lines[1:]:
-                  raise SystemExit(f"{skill}: missing skill frontmatter")
-              end = lines[1:].index("---") + 1
-              frontmatter = "\n".join(lines[1:end])
-              if not re.search(r"^name:\s*\S+", frontmatter, re.MULTILINE):
-                  raise SystemExit(f"{skill}: missing skill name")
-              if not re.search(r"^description:\s*(?:\S|>)", frontmatter, re.MULTILINE):
-                  raise SystemExit(f"{skill}: missing skill description")
-
           markdown = [path for path in root.rglob("*.md")
                       if ".git" not in path.parts and "vendor" not in path.parts]
           for source in markdown:
@@ -214,6 +215,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+          ref: ${{ needs.classify.outputs.head_sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -243,6 +245,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+          ref: ${{ needs.classify.outputs.head_sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -266,6 +269,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.classify.outputs.head_sha }}
       - uses: actions/download-artifact@v4
         with:
           pattern: full-*

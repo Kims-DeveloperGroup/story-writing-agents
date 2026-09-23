@@ -1885,7 +1885,7 @@ def operation(host):
     host.present("external read-only frame")
     events.append(host.read_event())
 
-viewer.open(operation)
+viewer.open(operation, transient_only=True)
 print(f"VIEW_EVENT={events[0]}")
 print(f"SHELL_VALUE={input('shell> ')}")
 """
@@ -1938,7 +1938,7 @@ source = b"".join((json.dumps({"content": "개요 개요 " + str(i)}, ensure_asc
 original = bytes(source)
 operation = prepare_agent_exchange_view(source, session_id="s", scope_kind=AgentExchangeScopeKind.CONVERSATION, scope_id="c", scope_subject="Subject", agent_id="lead_orchestrator")
 viewer = InteractiveExternalViewer(build_stream_terminal(input, sys.stdin, sys.stdout))
-viewer.open(operation)
+viewer.open(operation, transient_only=True)
 assert source == original
 print("SOURCE_UNCHANGED=True")
 print(f"SHELL_VALUE={input('shell> ')}")

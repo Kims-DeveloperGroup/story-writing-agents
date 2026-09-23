@@ -35,7 +35,7 @@ all visible headings and their meaning.
 
 ## Technical provenance and artifacts
 
-**Selection and identity:** {{Affected runtime groups/exact IDs and JSON/shards, or static check inventory; input identity and reuse decision.}}
+**Selection and identity:** {{Relevant runtime modules/exact IDs and JSON; full-suite shards only when required, or static check inventory; input identity and reuse decision.}}
 
 **Review milestones:** {{Ready/final head SHAs; Copilot/Codex findings; affected CI and required-human results.}}
 

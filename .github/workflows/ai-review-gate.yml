@@ -23,7 +23,7 @@ on:
 
 permissions:
   actions: read
-  contents: write
+  contents: read
   issues: read
   pull-requests: write
   statuses: write
@@ -95,17 +95,25 @@ jobs:
 
             const disableAutoMerge = async reason => {
               if (!pr.auto_merge) return;
-              try {
-                await github.graphql(`
-                  mutation($pullRequestId: ID!) {
-                    disablePullRequestAutoMerge(input: {
-                      pullRequestId: $pullRequestId
-                    }) { pullRequest { number } }
+              for (let attempt = 1; attempt <= 3; attempt++) {
+                try {
+                  await github.graphql(`
+                    mutation($pullRequestId: ID!) {
+                      disablePullRequestAutoMerge(input: {
+                        pullRequestId: $pullRequestId
+                      }) { pullRequest { number } }
+                    }
+                  `, {pullRequestId: pr.node_id});
+                  core.notice(`Auto-merge disabled: ${reason}`);
+                  return;
+                } catch (error) {
+                  if (attempt === 3) {
+                    core.setFailed(`Auto-merge could not be disabled: ${error.message}`);
+                    throw error;
                   }
-                `, {pullRequestId: pr.node_id});
-                core.notice(`Auto-merge disabled: ${reason}`);
-              } catch (error) {
-                core.warning(`Auto-merge could not be disabled: ${error.message}`);
+                  core.warning(`Auto-merge disable attempt ${attempt} failed: ${error.message}`);
+                  await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+                }
               }
             };
             const managed = pr.labels.some(label => label.name === "workflow:managed");
@@ -202,10 +210,8 @@ jobs:
                 ids.has(comment.pull_request_review_id));
               const latest = [...selected].sort((left, right) =>
                 new Date(right.submitted_at) - new Date(left.submitted_at))[0];
-              const latestHasInline = latest && comments.some(comment =>
-                comment.pull_request_review_id === latest.id);
               return [
-                ...(latest && !latestHasInline ? [latest.body || ""] : []),
+                ...(latest ? [latest.body || ""] : []),
                 ...comments
                   .filter(comment => !resolvedByComment.get(comment.id))
                   .map(comment => comment.body || ""),

@@ -18,7 +18,7 @@ status-comment templates.
   development-agent configuration, module-index-only, and test-only changes need static checks
   and diff review instead.
 - Treat `PYTHONPATH=src python -m tests.runner run` as the canonical runtime runner. Preserve exact
-  IDs and JSON evidence, groups, timing weights, shards, and reconciliation.
+  relevant module/ID selections and JSON evidence; retain shards and reconciliation for full runs.
 - Review is milestone-based: one request when ready and one final request after material fixes.
   Do not request or expect re-review after every push.
 - Mutating workflow automation is allowed only with the `workflow:managed` label. Auto-merge or

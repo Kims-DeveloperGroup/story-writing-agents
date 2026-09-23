@@ -175,10 +175,11 @@ isolated read-only JSONL viewer. Story validates the pinned 0.3.0 API and
 the older 0.1.1 and 0.2.0 APIs are incompatible. The viewer owns key bindings,
 ordinary-line grammar, a single full-text search draft, goto drafts, editing,
 and cancellation. Search focuses individual keyword occurrences with `n`/`N`
-traversal. Story transports decoded
-physical text/keys or literal lines and owns terminal modes, geometry, frame
-presentation, and restoration. Closing the view returns to the same shell
-scope. It cannot call or replay a provider.
+traversal. Story transports decoded physical text/keys and owns terminal
+modes, geometry, frame presentation, and restoration. Closing the view returns
+to the same shell scope. It cannot call or replay a provider. For `/exchanges`,
+Story requires alternate-screen support. In line mode it shows a content-free
+notice instead of displaying exchange records in scrollback.
 
 ## Safety
 

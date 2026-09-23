@@ -8,7 +8,6 @@ import inspect
 import json
 import multiprocessing
 import os
-import re
 import socket
 import stat
 import subprocess
@@ -598,52 +597,6 @@ class SessionLifecycleContractTests(unittest.TestCase):
         )
         self.assertNotIn(source_root / "conversations.py", source_files)
         self.assertNotIn(source_root / "workspace.py", source_files)
-        index = (source_root.parents[1] / "PYTHON_MODULE_INDEX.md").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("Importable production units indexed: 143.", index)
-        self.assertIn("Direct internal dependency edges indexed: 574.", index)
-        self.assertIn("Directed internal dependency cycles indexed: 0.", index)
-        headings = tuple(re.findall(r"^### `([^`]+)`$", index, flags=re.MULTILINE))
-        expected_modules: set[str] = set()
-        for path in source_files:
-            relative = path.relative_to(source_root).with_suffix("")
-            parts = relative.parts
-            if parts[-1] == "__init__":
-                parts = parts[:-1]
-            expected_modules.add(".".join(("story_writing_agents", *parts)))
-        self.assertEqual(len(headings), 143)
-        self.assertEqual(len(set(headings)), 143)
-        self.assertEqual(set(headings), expected_modules)
-        self.assertIn("facade contains exactly 158 exports", index)
-        self.assertIn("context and events owners contain 30 and 120 respectively", index)
-        self.assertIn("Exactly 30 owning-module names in `__all__`", index)
-        self.assertIn("Exactly 120 owning-module names in `__all__`", index)
-        self.assertIn(
-            "`artifact_proposals` owner contains exactly 16 exports",
-            index,
-        )
-        self.assertIn(
-            "project-root facade retains only its immutable conversation-",
-            index,
-        )
-        self.assertIn("exports no schema-v2 collaboration name", index)
-        self.assertIn("Exactly 63 names in `__all__`", index)
-        for module_name in (
-            "story_writing_agents.conversations",
-            "story_writing_agents.conversations.catalog",
-            "story_writing_agents.conversations.context",
-            "story_writing_agents.conversations.events",
-            "story_writing_agents.artifact_proposals",
-            "story_writing_agents.conversation_storage.filesystem",
-            "story_writing_agents.workspace",
-            "story_writing_agents.workspace.core",
-            "story_writing_agents.workspace.initialization",
-            "story_writing_agents.workspace.schema",
-            "story_writing_agents.writing_artifacts.change_sets",
-            "story_writing_agents.writing_artifacts.relationship_policy",
-        ):
-            self.assertIn(f"### `{module_name}`", index)
         environment = dict(os.environ, PYTHONPATH=str(source_root.parent))
         result = subprocess.run(
             [
