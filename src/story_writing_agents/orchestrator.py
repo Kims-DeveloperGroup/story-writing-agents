@@ -7375,7 +7375,7 @@ class StoryRuntime:
                 )
             if provider is None or provider.last_submitted_call_id is None:
                 raise
-            return self._lead_outcome_failure_result(
+            failed = self._lead_outcome_failure_result(
                 session_id=session_id,
                 conversation_id=conversation_id,
                 turn_id=turn_id,
@@ -7395,6 +7395,8 @@ class StoryRuntime:
                     else CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED
                 ),
             )
+            provider.publish_validation_messages()
+            return replace(failed, validation_details=provider.validation_details)
         except BaseException as failure:
             reference_failure = reference_operation.failure(failure)
             if isinstance(failure, SessionContextCapacityError):
@@ -7426,7 +7428,7 @@ class StoryRuntime:
                 and provider is not None
                 and provider.last_submitted_call_id is not None
             ):
-                return self._lead_outcome_failure_result(
+                failed = self._lead_outcome_failure_result(
                     session_id=session_id,
                     conversation_id=conversation_id,
                     turn_id=turn_id,
@@ -7437,6 +7439,8 @@ class StoryRuntime:
                         CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED
                     ),
                 )
+                provider.publish_validation_messages()
+                return replace(failed, validation_details=provider.validation_details)
             recovered = self._close_failed_lead_attempt(
                 session_id, conversation_id, failure=failure,
                 turn_id=turn_id, step_id=step_id,
@@ -7493,7 +7497,7 @@ class StoryRuntime:
                 except _LeadOutcomeValidationError:
                     assert provider is not None
                     assert provider.last_submitted_call_id is not None
-                    return self._lead_outcome_failure_result(
+                    failed = self._lead_outcome_failure_result(
                         session_id=session_id,
                         conversation_id=conversation_id,
                         turn_id=turn_id,
@@ -7504,6 +7508,7 @@ class StoryRuntime:
                             CollaborationLeadOutcomeFailureCode.ARTIFACT_INTENT_REJECTED
                         ),
                     )
+                    return replace(failed, validation_details=provider.validation_details)
             intent = outcome.proposal
             assert intent is not None
             refreshed = self.conversation_storage_services.event_store.read_context(

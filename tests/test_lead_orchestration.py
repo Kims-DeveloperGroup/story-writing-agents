@@ -2296,10 +2296,23 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
 
         reopened = compose_filesystem_conversation_storage(self.workspace).event_store
         history = reopened.read(self.session_id, conversation_id)
+        projected = project_collaboration_history(history)
+        self.assertEqual(projected.physical_calls_spent, 2)
+        prepared = tuple(event.payload for event in history
+                         if type(event.payload) is CollaborationProviderCallPayload
+                         and event.payload.state is CollaborationProviderCallState.PREPARED)
         submitted = tuple(event.payload for event in history
                           if type(event.payload) is CollaborationProviderCallPayload
                           and event.payload.state is CollaborationProviderCallState.SUBMITTED)
+        self.assertEqual(len(prepared), 2)
         self.assertEqual(len(submitted), 2)
+        self.assertTrue(all(not payload.validation_details for payload in prepared))
+        for before, after in zip(prepared, submitted, strict=True):
+            self.assertEqual(
+                before,
+                replace(after, state=CollaborationProviderCallState.PREPARED,
+                        validation_details=()),
+            )
         self.assertTrue(submitted[0].validation_details[0].startswith("Original response"))
         self.assertTrue(submitted[1].validation_details[0].startswith("Repair response"))
         self.assertEqual(
@@ -2507,6 +2520,52 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                     if type(event.payload) is CollaborationLeadOutcomeFailurePayload
                 )
                 self.assertEqual(len(failures), 1)
+
+    async def test_no_repair_capacity_preserves_validation_notice_without_authority(
+        self,
+    ) -> None:
+        conversation_id = self.conversation("No repair capacity diagnostics")
+        private = "PRIVATE_NO_REPAIR_PROVIDER_VALUE_한🙂"
+
+        def malformed(_call: ContextProviderCallRequest, _provider: object) -> str:
+            return json.dumps({
+                "action": {
+                    "kind": "answer",
+                    "result": [private],
+                    "used_handles": [],
+                },
+            }, ensure_ascii=False)
+
+        self.backend.enqueue(malformed)
+        with mock.patch.object(
+            orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", 1,
+        ):
+            result = await self.runtime.lead_turn(
+                self.session_id, conversation_id,
+                "Reject an invalid result without another provider call.",
+            )
+        self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
+        self.assertEqual(len(self.backend.calls), 1)
+        self.assertEqual(len(self.backend.providers), 1)
+        self.assertEqual(len(result.validation_details), 1)
+        self.assertTrue(result.validation_details[0].startswith("Original response"))
+        self.assertIn("$.action.result", result.validation_details[0])
+        self.assertNotIn(private, repr(result.validation_details))
+
+        reopened = compose_filesystem_conversation_storage(self.workspace).event_store
+        history = reopened.read(self.session_id, conversation_id)
+        self.assertEqual(project_collaboration_history(history).physical_calls_spent, 1)
+        submitted = tuple(event.payload for event in history
+                          if type(event.payload) is CollaborationProviderCallPayload
+                          and event.payload.state is CollaborationProviderCallState.SUBMITTED)
+        self.assertEqual(len(submitted), 1)
+        self.assertEqual(submitted[0].validation_details, result.validation_details)
+        messages = tuple(event.payload.content for event in history
+                         if type(event.payload) is CollaborationMessagePayload)
+        self.assertTrue(any("Original response" in message for message in messages))
+        self.assertFalse(any(type(event.payload) is CollaborationProposal
+                             for event in history))
+        self.assertNotIn(private, repr(history))
 
     async def test_restart_after_completed_execution_accepts_a_new_lead_turn(
         self,

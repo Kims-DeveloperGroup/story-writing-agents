@@ -2997,16 +2997,10 @@ def _project_validated_collaboration_history(
                             "submitted provider call requires one unmatched preparation"
                         )
                     prepared_step_id, prepared_payload = prepared
-                    if prepared_step_id != event.step_id or prepared_payload != (
-                        CollaborationProviderCallPayload(
-                            invocation_id=payload.invocation_id,
-                            call_id=payload.call_id,
-                            ordinal=payload.ordinal,
-                            role=payload.role,
-                            invocation_kind=payload.invocation_kind,
-                            call_kind=payload.call_kind,
-                            state=CollaborationProviderCallState.PREPARED,
-                        )
+                    if prepared_step_id != event.step_id or prepared_payload != replace(
+                        payload,
+                        state=CollaborationProviderCallState.PREPARED,
+                        validation_details=(),
                     ):
                         raise ValueError(
                             "submitted provider call drifts from its preparation"
