@@ -116,6 +116,14 @@ Use `Refs #N` for partial/child work; manually close child after squash/integrat
 `Closes #N` only for completing `main` PRs. Merge requires authorization. Closure triggers
 `Done`; verify Issue/PR/Project.
 
+### Review Comments
+
+Inspect each PR review comment against the current diff and relevant evidence. For an
+applied comment, reply in its thread with the change and verification, then resolve the
+thread. For a rejected comment, reply with the reason and supporting evidence, then
+resolve the thread. Recheck comments whose code location has drifted or become outdated;
+do not leave an already addressed thread open or resolve a comment that still needs work.
+
 ### Worktree Disposition and Cleanup
 
 Record one [AGENTS disposition](AGENTS.md#worktree-disposition). Completion inventories

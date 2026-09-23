@@ -841,11 +841,10 @@ the existing terminal-error and restoration path. These failures are not draft
 cancellation. Restoration failure remains fatal; an active operation failure
 takes precedence over host-close failure.
 
-Fallback uses the existing borrowed line callbacks, forces plain frames, and
-never enters raw mode or an alternate screen. It forwards bounded literal
-lines as `line<TAB>COMMAND` without applying command grammar or adding a
-Story-authored viewer prompt. Complete frames and typed input remain in
-scrollback. Neither path closes borrowed
+`/exchanges` refuses line fallback before presenting a frame and shows a
+content-free notice; line mode cannot remove already printed content from
+scrollback. The generic external-view host still supports borrowed line
+callbacks when transient display is not required. Neither path closes borrowed
 streams or retains the operation, source, frame, event, cursor, search, match,
 footer result/index, help, picker, or mode after return. This is transient
 lifecycle state, not secure erasure from terminal infrastructure or process

@@ -216,13 +216,9 @@ Escape dismisses help, then search, then a transient status; with nothing left
 to dismiss it closes. This main-view behavior begins after a prompt has
 finished or been cancelled; draft Escape preserves the committed view.
 Ctrl-C applies the same cancel behavior in the main view and closes the view
-during a draft. EOF always closes; `q` closes from the main view. In
-ordinary-line fallback,
-use `g LINE`, `/ QUERY`, `j`/`down`, `k`/`up`, `pgdn`, `pgup`, `n`, `N`,
-`m`, `h`, `c`, and `q`/`quit`. `/ correlation token mismatch` searches that
-whole phrase; the space after `/` is required in line mode. `// QUERY` is an
-optional full-text alias with the same separator requirement. The viewer
-interprets these complete literal lines; Story adds no prompt of its own.
+during a draft. EOF always closes; `q` closes from the main view. A terminal
+without alternate-screen support receives a content-free notice; `/exchanges`
+does not print viewer frames into ordinary scrollback.
 
 ### Where color is used
 
@@ -361,8 +357,8 @@ Simple mode is not redaction, authorization, or access control. Request payloads
 and provider response text can contain story content or secrets. Verbose can
 display every outer field, and full-text search includes all retained keys
 and values, including bounded decoded nested content. Protect the workspace,
-process memory, terminal infrastructure,
-fallback scrollback, copied frames, backups, and redirected output as plaintext
+process memory, terminal infrastructure, copied frames, backups, and
+redirected output as plaintext
 provider-call data. The capable view uses one alternate screen, but terminal or
 remote-session software can retain its own copies.
 
