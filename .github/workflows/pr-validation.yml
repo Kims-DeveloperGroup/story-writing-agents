@@ -175,15 +175,42 @@ jobs:
           from tests import suite_policy
 
           weights = suite_policy.load_timing_weights()
-          source_groups = {
-              f"tests.{path.stem}.{node.name}"
-              for path in Path("tests").glob("test*.py")
-              for node in ast.parse(path.read_text(encoding="utf-8"), filename=str(path)).body
-              if isinstance(node, ast.ClassDef)
-          }
-          stale_groups = sorted(set(weights.group_weights_microseconds) - source_groups)
+          classes = {}
+          imports = {}
+          for path in Path("tests").glob("*.py"):
+              module = f"tests.{path.stem}"
+              tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+              imports[module] = {
+                  alias.asname or alias.name: f"{node.module}.{alias.name}"
+                  for node in tree.body
+                  if isinstance(node, ast.ImportFrom) and node.level == 0
+                  and node.module and node.module.startswith("tests.")
+                  for alias in node.names
+              }
+              classes.update({
+                  f"{module}.{node.name}": node
+                  for node in tree.body if isinstance(node, ast.ClassDef)
+              })
+
+          def has_test_method(group, seen):
+              if group in seen or group not in classes:
+                  return False
+              node = classes[group]
+              if any(isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
+                     and method.name.startswith("test") for method in node.body):
+                  return True
+              module = group.rsplit(".", 1)[0]
+              for base in node.bases:
+                  if isinstance(base, ast.Name):
+                      parent = imports[module].get(base.id, f"{module}.{base.id}")
+                      if has_test_method(parent, seen | {group}):
+                          return True
+              return False
+
+          stale_groups = sorted(group for group in weights.group_weights_microseconds
+                                if not has_test_method(group, set()))
           if stale_groups:
-              raise SystemExit("timing manifest stale test classes: " + ", ".join(stale_groups))
+              raise SystemExit("timing manifest stale test groups: " + ", ".join(stale_groups))
           for identifier in suite_policy.FAST_TEST_IDS:
               module, class_name, method_name = identifier.rsplit(".", 2)
               path = Path(*module.split(".")).with_suffix(".py")

@@ -251,11 +251,17 @@ jobs:
                 ids.has(comment.pull_request_review_id));
               // Copilot mirrors inline findings in a details list; resolved thread text
               // must not remain a blocker through that stale review-body summary.
-              const latest = selected.sort((left, right) =>
-                new Date(right.submitted_at) - new Date(left.submitted_at))[0];
-              const bodies = latest ? [(latest.body || "").replace(
-                /<details\b[^>]*>[\s\S]*?<\/details>/gi,
-                section => /#discussion_r\d+/.test(section) ? "" : section)] : [];
+              const bodies = selected
+                .filter(review => !issueComments.some(comment =>
+                  comment.user?.type === "User" &&
+                  ["OWNER", "MEMBER", "COLLABORATOR"].includes(
+                    comment.author_association) &&
+                  new Date(comment.created_at) >= new Date(review.submitted_at) &&
+                  comment.body?.includes(`<!-- ai-review-body-disposition:${review.id} -->`) &&
+                  comment.body.replace(/<!--[^>]*-->/g, "").trim().length >= 20))
+                .map(review => (review.body || "").replace(
+                  /<details\b[^>]*>[\s\S]*?<\/details>/gi,
+                  section => /#discussion_r\d+/.test(section) ? "" : section));
               return [
                 ...bodies,
                 ...comments

@@ -91,6 +91,12 @@ threads whose location has drifted or become outdated. For an applied finding, r
 thread with the change and verification, then resolve it. For a rejected finding, reply with
 the reason and supporting evidence, then resolve it. Never leave an already addressed thread
 open or resolve a finding that still needs work.
+For a blocking finding in a review body with no inline thread, a repository member or
+collaborator posts a substantive PR comment explaining the applied change or
+evidence-backed rejection and includes
+`<!-- ai-review-body-disposition:REVIEW_ID -->` with the numeric review ID. The AI gate
+continues to count that same-head review body until this comment exists; a later clean
+review alone does not silently erase it. A code change starts a new-head review cycle.
 
 ## Verification Policy
 
