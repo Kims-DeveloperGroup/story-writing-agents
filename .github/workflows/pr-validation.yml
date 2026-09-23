@@ -174,7 +174,16 @@ jobs:
           from pathlib import Path
           from tests import suite_policy
 
-          suite_policy.load_timing_weights()
+          weights = suite_policy.load_timing_weights()
+          source_groups = {
+              f"tests.{path.stem}.{node.name}"
+              for path in Path("tests").glob("test*.py")
+              for node in ast.parse(path.read_text(encoding="utf-8"), filename=str(path)).body
+              if isinstance(node, ast.ClassDef)
+          }
+          stale_groups = sorted(set(weights.group_weights_microseconds) - source_groups)
+          if stale_groups:
+              raise SystemExit("timing manifest stale test classes: " + ", ".join(stale_groups))
           for identifier in suite_policy.FAST_TEST_IDS:
               module, class_name, method_name = identifier.rsplit(".", 2)
               path = Path(*module.split(".")).with_suffix(".py")

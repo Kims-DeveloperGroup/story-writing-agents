@@ -171,6 +171,27 @@ jobs:
             const reviewComments = await github.paginate(github.rest.pulls.listReviewComments, {
               owner, repo, pull_number: pullNumber, per_page: 100,
             });
+            const fullLabelAddedAt = pr.labels.some(label => label.name === "test:full")
+              ? (await github.paginate(github.rest.issues.listEvents, {
+                  owner, repo, issue_number: pullNumber, per_page: 100,
+                }))
+                  .filter(event => event.event === "labeled" &&
+                    event.label?.name === "test:full")
+                  .sort((left, right) =>
+                    new Date(right.created_at) - new Date(left.created_at))[0]?.created_at
+              : null;
+            if (pr.labels.some(label => label.name === "test:full") &&
+                !fullLabelAddedAt) {
+              await github.rest.repos.createCommitStatus({
+                owner, repo, ref: pr.head.sha, state: "failure",
+                context: "ai-review-gate",
+                description: "Cannot establish test:full label history",
+                target_url: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+              });
+              core.setFailed("Cannot establish when test:full was added");
+              await disableAutoMerge("test:full label history unavailable");
+              return;
+            }
             const validationRuns = await github.paginate(
               github.rest.actions.listWorkflowRuns,
               {
@@ -183,7 +204,9 @@ jobs:
             );
             const validation = validationRuns
               .filter(run => (run.pull_requests || []).some(
-                linked => linked.number === pullNumber))
+                linked => linked.number === pullNumber) &&
+                (!fullLabelAddedAt ||
+                  new Date(run.created_at) >= new Date(fullLabelAddedAt)))
               .sort((left, right) =>
                 new Date(right.created_at) - new Date(left.created_at))[0];
             const addressedByComment = new Map();
@@ -228,9 +251,11 @@ jobs:
                 ids.has(comment.pull_request_review_id));
               // Copilot mirrors inline findings in a details list; resolved thread text
               // must not remain a blocker through that stale review-body summary.
-              const bodies = selected.map(review => (review.body || "").replace(
+              const latest = selected.sort((left, right) =>
+                new Date(right.submitted_at) - new Date(left.submitted_at))[0];
+              const bodies = latest ? [(latest.body || "").replace(
                 /<details\b[^>]*>[\s\S]*?<\/details>/gi,
-                section => /#discussion_r\d+/.test(section) ? "" : section));
+                section => /#discussion_r\d+/.test(section) ? "" : section)] : [];
               return [
                 ...bodies,
                 ...comments
