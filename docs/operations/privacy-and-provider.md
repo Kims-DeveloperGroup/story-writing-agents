@@ -607,7 +607,10 @@ Provider execution additionally supports an additive, process-local
 instances (`STATUS`, `THOUGHT_DELTA`, `TEXT_DELTA`). While SEARCH and READ cards
 never display provider responses or excerpts, active capable raw terminals may
 render transient status notices and a bounded rolling preview of streamed
-output that is erased cleanly prior to persistent output. Like
+output. Frame retention upon turn completion is mode-dependent: under `/progress on`
+(expanded mode), the completed frame remains visible as an interactive nested scroll
+view for inspection, whereas under `/progress off` (collapsed mode) it is cleared
+cleanly before persistent output. Like
 `action_progress_sink`, stream events are not durable ledger records or public
 lifecycle events; callers binding or retaining a custom stream sink receive
 raw deltas and own access control, retention, and cleanup for that stream.

@@ -67,8 +67,8 @@ line, or record boundary. Completion retains those locators and ranges and adds
 the exact UTF-8 byte count for each retrieved selection. SEARCH and READ cards never
 include source snippets or excerpts, provider answers, absolute paths,
 credentials, or hidden reasoning. During provider generation, active capable terminals may
-display transient status notices and a bounded rolling preview of streamed output
-that is erased cleanly prior to persistent output.
+display transient status notices and a bounded rolling preview of streamed output;
+frame retention upon turn completion is mode-dependent as detailed below.
 
 The raw driver redraws the whole multiline frame in ANSI-capable and plain
 `NO_COLOR` modes. When `/progress on` (expanded mode) is active during an agent

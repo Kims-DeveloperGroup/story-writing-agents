@@ -97,7 +97,8 @@ workspace-relative locators/ranges; READ cards show selected locators and exact
 boundaries. SEARCH and READ cards never display source excerpts, provider answers, absolute
 paths, or hidden reasoning. During provider generation, active terminals may
 display transient status indicators and a bounded rolling preview of streamed output
-that is erased cleanly before final output. Final specialist request/answer/status panels
+whose retention is mode-dependent (/progress on retains the frame for interactive inspection,
+while /progress off clears it before final output). Final specialist request/answer/status panels
 precede the Lead result and elapsed time. Terminal capture or scrollback may
 retain the transient query, locator, or preview text.
 
