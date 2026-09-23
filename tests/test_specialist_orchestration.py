@@ -817,10 +817,12 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         )
         self.assertEqual(len(messages_by_call), 3)
         self.assertEqual(len(expected), 3)
-        self.assertEqual(
-            sum("rejected by a domain result rule" in detail for detail in expected),
-            2,
+        domain_details = tuple(
+            detail for detail in expected
+            if "rejected by a domain result rule" in detail
         )
+        self.assertEqual(len(domain_details), 2)
+        self.assertEqual(domain_details[0], domain_details[1])
         self.assertEqual(
             sum("expected string, got integer" in detail for detail in expected),
             1,
