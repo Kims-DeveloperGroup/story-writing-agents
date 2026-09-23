@@ -64,6 +64,10 @@ from story_writing_agents.agent_context.sources import (
     ContextSourceSearchMatch,
     ContextSourceSnapshot,
 )
+from story_writing_agents.structured_output_validation import (
+    bounded_chunks,
+    diagnose_json_text,
+)
 
 
 _PRIVATE_ANSWER = "PRIVATE_FINAL_ANSWER_한🙂"
@@ -76,6 +80,87 @@ _SCOPE = ContextScope(
     "conversation",
     "lead_orchestrator",
 )
+
+
+class StructuredOutputValidationTests(unittest.TestCase):
+    def test_diagnose_json_text_reports_all_independent_safe_issues(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "minLength": 1},
+                "count": {"type": "integer", "minimum": 1},
+                "items": {
+                    "type": "array", "items": {"type": "string", "minLength": 1},
+                },
+                "required_note": {"type": "string"},
+            },
+            "required": ["message", "count", "items", "required_note"],
+            "additionalProperties": False,
+        }
+        secret = "PRIVATE_PROVIDER_VALUE_한🙂"
+        body = json.dumps({
+            "message": "", "count": 0, "items": ["", 3], secret: secret,
+        }, ensure_ascii=False)
+        issues = diagnose_json_text(body, schema)
+        self.assertEqual(issues, (
+            "$.required_note: required property is missing",
+            "$: contains 1 unexpected properties (names withheld)",
+            "$.message: expected at least 1 characters, got 0",
+            "$.count: expected at least 1, got integer",
+            "$.items[0]: expected at least 1 characters, got 0",
+            "$.items[1]: expected string, got integer",
+        ))
+        self.assertNotIn(secret, repr(issues))
+
+    def test_union_selects_matching_branch_without_other_branch_noise(self) -> None:
+        schema = {"anyOf": [
+            {"type": "object", "properties": {
+                "kind": {"type": "string", "enum": ["search"]},
+                "query": {"type": "string"},
+            }, "required": ["kind", "query"], "additionalProperties": False},
+            {"type": "object", "properties": {
+                "kind": {"type": "string", "enum": ["answer"]},
+                "message": {"type": "string", "minLength": 1},
+                "citation_ids": {"type": "array"},
+            }, "required": ["kind", "message", "citation_ids"],
+                "additionalProperties": False},
+        ]}
+        issues = diagnose_json_text(
+            '{"kind":"answer","message":0,"PRIVATE_UNKNOWN":"secret"}', schema,
+        )
+        self.assertEqual(issues, (
+            "$.citation_ids: required property is missing",
+            "$: contains 1 unexpected properties (names withheld)",
+            "$.message: expected string, got integer",
+        ))
+        self.assertNotIn("query", repr(issues))
+        self.assertNotIn("PRIVATE_UNKNOWN", repr(issues))
+
+    def test_malformed_and_duplicate_json_have_value_free_diagnostics(self) -> None:
+        schema = {"type": "object", "properties": {}, "additionalProperties": False}
+        self.assertEqual(
+            diagnose_json_text('{"private":"secret",', schema),
+            ("$: malformed JSON",),
+        )
+        self.assertEqual(
+            diagnose_json_text('{"private":"first","private":"second"}', schema),
+            ("$: duplicate object key",),
+        )
+        self.assertEqual(diagnose_json_text("{}", schema), ())
+
+    def test_bounded_chunks_preserve_order_and_over_32k_content(self) -> None:
+        properties = {f"field_{index:04d}": {"type": "string"} for index in range(1500)}
+        schema = {"type": "object", "properties": properties,
+                  "required": list(properties), "additionalProperties": False}
+        issues = diagnose_json_text("{}", schema)
+        chunks = bounded_chunks(issues)
+        self.assertGreater(sum(len(chunk.encode()) for chunk in chunks), 32_768)
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(len(chunk.encode()) < 32_768 for chunk in chunks))
+        self.assertEqual(
+            tuple(line for chunk in chunks for line in chunk.splitlines()[1:]),
+            issues,
+        )
 
 
 def _digest(body: bytes) -> str:

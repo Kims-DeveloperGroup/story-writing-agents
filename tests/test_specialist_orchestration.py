@@ -609,7 +609,41 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                     ReplyTraceOrigin.RUNTIME_FALLBACK,
                 )
                 self.assertEqual(reply.trace.action, "none")
+                reports = tuple(
+                    chunk for payload in _payloads(
+                        self.history(conversation_id), CollaborationProviderCallPayload,
+                    ) if payload.state is CollaborationProviderCallState.SUBMITTED
+                    for chunk in payload.validation_details
+                )
+                self.assertTrue(any(chunk.startswith("Original response") for chunk in reports))
+                self.assertTrue(any(chunk.startswith("Repair response") for chunk in reports))
                 self.assertNotIn("private_state", repr(self.history(conversation_id)))
+
+    async def test_specialist_and_synthesis_validation_details_are_private_and_correlated(
+        self,
+    ) -> None:
+        conversation_id = self.conversation("Rejected synthesis details")
+        proposed = await self.proposal(conversation_id)
+        self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
+        rejected = _raw_outcome({
+            "message": "", "PRIVATE_SYNTHESIS_KEY": "PRIVATE_SYNTHESIS_VALUE",
+        })
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, rejected)
+        await self.runtime.decide_lead_step(
+            _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+        )
+        history = self.history(conversation_id)
+        submitted = tuple(payload for payload in _payloads(
+            history, CollaborationProviderCallPayload,
+        ) if payload.state is CollaborationProviderCallState.SUBMITTED)
+        synthesis = tuple(payload for payload in submitted
+                          if payload.role == LEAD_ORCHESTRATOR and payload.validation_details)
+        self.assertEqual(len(synthesis), 1)
+        self.assertTrue(synthesis[0].validation_details[0].startswith("Original response"))
+        self.assertIn("$.action.result: contains 1 unexpected properties",
+                      repr(synthesis[0].validation_details))
+        self.assertNotIn("PRIVATE_SYNTHESIS_KEY", repr(history))
+        self.assertNotIn("PRIVATE_SYNTHESIS_VALUE", repr(history))
 
     async def test_synthesis_contract_is_semantic_and_runtime_derives_attribution(
         self,

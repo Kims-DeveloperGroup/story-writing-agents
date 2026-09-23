@@ -5170,6 +5170,47 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     )
                 )
 
+    async def test_completed_rejections_report_each_attempt_and_repaired_success(
+        self,
+    ) -> None:
+        session_id = "validation_attempts"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        private = "PRIVATE_VALIDATION_SENTINEL_한🙂"
+        responses = [
+            json.dumps({"message": 0, private: private}, ensure_ascii=False),
+            json.dumps({"message": "", "other": private}, ensure_ascii=False),
+        ]
+        with mock.patch.dict(os.environ, {"STORY_FAKE_CODEX_PHYSICAL_OUTPUTS": json.dumps(responses)}):
+            rejected = await bound.converse(self.conversation_request(session_id=session_id))
+        self.assertIs(rejected.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
+        self.assertEqual(len(rejected.validation_details), 2)
+        original, repair = rejected.validation_details
+        self.assertTrue(original.startswith("Original response"))
+        self.assertIn("$.message: expected string", original)
+        self.assertIn("unexpected properties", original)
+        self.assertTrue(repair.startswith("Repair response"))
+        self.assertIn("$.message: expected at least 1", repair)
+        self.assertNotIn(private, repr(rejected.validation_details))
+
+        responses = ["unused", "unused", json.dumps({"message": 0}),
+                     json.dumps({"message": "Repaired."})]
+        with mock.patch.dict(os.environ, {"STORY_FAKE_CODEX_PHYSICAL_OUTPUTS": json.dumps(responses)}):
+            repaired = await bound.converse(
+                self.conversation_request(session_id=session_id, turn_id="repaired_turn")
+            )
+        self.assertEqual(repaired.content, "Repaired.")
+        self.assertIs(repaired.trace.origin, ReplyTraceOrigin.RECOVERED)
+        self.assertEqual(len(repaired.validation_details), 1)
+        self.assertTrue(repaired.validation_details[0].startswith("Original response"))
+        normal = await bound.converse(
+            self.conversation_request(session_id=session_id, turn_id="normal_turn")
+        )
+        self.assertIs(normal.trace.origin, ReplyTraceOrigin.PROVIDER)
+        self.assertEqual(normal.validation_details, ())
+
     async def test_structured_decode_failures_taint_existing_thread_once(
         self,
     ) -> None:
@@ -8316,6 +8357,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn("after one repair attempt", debate_reply.content)
         self.assertIs(debate_reply.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
         self.assertEqual(debate_reply.trace.action, "none")
+        self.assertEqual(len(debate_reply.validation_details), 2)
+        self.assertTrue(debate_reply.validation_details[0].startswith("Original response"))
+        self.assertTrue(debate_reply.validation_details[1].startswith("Repair response"))
+        self.assertNotIn("PRIVATE_REJECTED_RESPONSE", repr(debate_reply.validation_details))
         self.assertIs(self.thread(debate_session)["tainted"], True)
         self.assertEqual(self.thread(debate_session)["thread_id"], seeded_thread)
 
@@ -8350,6 +8395,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             conversation_reply.trace.origin,
             ReplyTraceOrigin.RUNTIME_FALLBACK,
         )
+        self.assertEqual(len(conversation_reply.validation_details), 2)
+        self.assertIn("malformed JSON", "\n".join(conversation_reply.validation_details))
+        self.assertNotIn(conversation_body, repr(conversation_reply.validation_details))
 
         records = _provider_error_records(self.workspace)
         self.assertEqual(len(records), 4)
@@ -8416,6 +8464,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         retrieval_id = "capture_retrieval_conversation"
         retrieval_body = "PRIVATE_RETRIEVAL_MALFORMED"
         backend.create_session_with_access(retrieval_session)
+        retrieval_handler = _RecordingRetrievalHandler()
         with mock.patch.dict(
             os.environ,
             {
@@ -8429,7 +8478,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     session_id=retrieval_session,
                     conversation_id=retrieval_id,
                 ),
-                _RecordingRetrievalHandler(),
+                retrieval_handler,
             )
         self.assertIn("after one repair attempt", retrieval_reply.content)
         self.assertIs(
@@ -8437,6 +8486,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             ReplyTraceOrigin.RUNTIME_FALLBACK,
         )
         self.assertEqual(retrieval_reply.trace.action, "none")
+        self.assertEqual(len(retrieval_handler.actions[0].validation_details), 2)
+        self.assertEqual(retrieval_reply.validation_details,
+                         retrieval_handler.actions[0].validation_details)
+        self.assertNotIn(retrieval_body, repr(retrieval_handler.actions[0].validation_details))
 
         prelude_session = "capture_reference_prelude_session"
         prelude_debate = "capture_reference_prelude_debate"
@@ -8483,6 +8536,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 reference_read=substantive,
             )
         self.assertIn("after one repair attempt", substantive_reply.content)
+        self.assertEqual(len(substantive_reply.validation_details), 2)
+        self.assertNotIn(substantive_body, repr(substantive_reply.validation_details))
 
         records = {
             record["body"]: record for record in _provider_error_records(self.workspace)

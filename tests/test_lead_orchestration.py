@@ -2245,6 +2245,140 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertNotIn("FIRST_REJECTED_BODY", repr(history))
         self.assertNotIn("SECOND_REJECTED_BODY", repr(history))
 
+    async def test_original_and_repair_validation_details_persist_across_restart(
+        self,
+    ) -> None:
+        conversation_id = self.conversation("Persist both validation reports")
+        secrets = ("PRIVATE_ORIGINAL_VALUE", "PRIVATE_REPAIR_VALUE")
+
+        def invalid(value: object):
+            def respond(call: ContextProviderCallRequest, _provider: object) -> str:
+                return _provider_envelope(call, value)
+            return respond
+
+        self.backend.enqueue(invalid([secrets[0]]))
+        self.backend.enqueue(invalid({"unknown": secrets[1]}))
+        result = await self.runtime.lead_turn(
+            self.session_id, conversation_id, "A rejected response grants no action.",
+        )
+        self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
+        self.assertEqual(len(self.backend.calls), 2)
+        self.assertGreaterEqual(len(result.validation_details), 2)
+        self.assertTrue(result.validation_details[0].startswith("Original response"))
+        self.assertTrue(result.validation_details[-1].startswith("Repair response"))
+        self.assertIn("$.action.result", "\n".join(result.validation_details))
+        self.assertFalse(any(type(event.payload) is CollaborationProposal
+                             for event in self.history(conversation_id)))
+
+        reopened = compose_filesystem_conversation_storage(self.workspace).event_store
+        history = reopened.read(self.session_id, conversation_id)
+        submitted = tuple(event.payload for event in history
+                          if type(event.payload) is CollaborationProviderCallPayload
+                          and event.payload.state is CollaborationProviderCallState.SUBMITTED)
+        self.assertEqual(len(submitted), 2)
+        self.assertTrue(submitted[0].validation_details[0].startswith("Original response"))
+        self.assertTrue(submitted[1].validation_details[0].startswith("Repair response"))
+        self.assertEqual(
+            tuple(chunk for payload in submitted for chunk in payload.validation_details),
+            result.validation_details,
+        )
+        messages = tuple(event.payload.content for event in history
+                         if type(event.payload) is CollaborationMessagePayload)
+        self.assertTrue(any("Original response" in message for message in messages))
+        self.assertTrue(any("Repair response" in message for message in messages))
+        for secret in secrets:
+            self.assertNotIn(secret, repr(result.validation_details))
+            self.assertNotIn(secret, repr(history))
+
+    async def test_validation_details_do_not_grant_action_authority(self) -> None:
+        conversation_id = self.conversation("Diagnostics grant no authority")
+
+        def invalid_proposal(call: ContextProviderCallRequest, _provider: object) -> str:
+            response = json.loads(_proposal_outcome([
+                {
+                    "agent_id": PLOT_ARCHITECT,
+                    "instruction": "Review the request.",
+                    "input_ids": ["user_input"],
+                },
+            ])(call, _provider))
+            response["action"]["result"]["proposal"]["assignments"] = []
+            response["action"]["result"]["message"] = "PRIVATE_PROPOSAL_TEXT"
+            return json.dumps(response, separators=(",", ":"))
+
+        self.backend.enqueue(invalid_proposal)
+        self.backend.enqueue(invalid_proposal)
+        result = await self.runtime.lead_turn(
+            self.session_id, conversation_id, "Propose specialist work.",
+        )
+        self.assertTrue(result.validation_details)
+        self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
+        history = self.history(conversation_id)
+        self.assertFalse(any(type(event.payload) is CollaborationProposal for event in history))
+        self.assertNotIn("PRIVATE_PROPOSAL_TEXT", repr(result.validation_details))
+        self.assertEqual(len(self.backend.calls), 2)
+
+    async def test_untrusted_answer_diagnostic_cannot_publish_private_text(self) -> None:
+        conversation_id = self.conversation("Diagnostic callback privacy")
+        private = "PRIVATE_CALLBACK_SECRET_한🙂"
+
+        def invalid(call: ContextProviderCallRequest, _provider: object) -> str:
+            return json.dumps({"action": {"kind": "answer", "result": {
+                "authoring_scope": _compact_scope(_live_scope(
+                    call, activity="review", domains=("plot_structure",),
+                )),
+                "kind": "answer",
+                "message": "A result with inconsistent objective semantics.",
+                "objective_intent": {
+                    "action": "start", "target_paths": [], "next_step": "clarify",
+                },
+            }}}, separators=(",", ":"))
+        self.backend.enqueue(invalid)
+        self.backend.enqueue(invalid)
+        with mock.patch.object(
+            StoryRuntime, "_lead_outcome_validation_details", return_value=(private,),
+        ) as diagnostic:
+            result = await self.runtime.lead_turn(
+                self.session_id, conversation_id, "Propose a review.",
+            )
+        self.assertGreaterEqual(diagnostic.call_count, 1)
+        self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
+        self.assertTrue(result.validation_details)
+        self.assertNotIn(private, repr(result.validation_details))
+        self.assertNotIn(private, repr(self.history(conversation_id)))
+        self.assertFalse(any(type(event.payload) is CollaborationProposal
+                             for event in self.history(conversation_id)))
+
+    async def test_long_validation_details_survive_history_restart_in_chunks(self) -> None:
+        conversation_id = self.conversation("Long validation report")
+
+        def many_independent_issues(
+            call: ContextProviderCallRequest, provider: _LeadContextProvider,
+        ) -> str:
+            value = json.loads(_visible_outcome("answer")(call, provider))
+            value["action"]["result"]["authoring_scope"]["target_paths"] = [7] * 1500
+            return json.dumps(value, separators=(",", ":"))
+
+        self.backend.enqueue(many_independent_issues)
+        self.backend.enqueue(_visible_outcome("answer", "Accepted after repair."))
+        result = await self.runtime.lead_turn(
+            self.session_id, conversation_id, "Explain the workflow.",
+        )
+        self.assertEqual(result.message, "Accepted after repair.")
+        self.assertGreater(len(result.validation_details), 1)
+        self.assertGreater(sum(len(item.encode()) for item in result.validation_details), 32_768)
+        self.assertTrue(all(len(item.encode()) < 32_768
+                            for item in result.validation_details))
+        reopened = compose_filesystem_conversation_storage(self.workspace).event_store
+        history = reopened.read(self.session_id, conversation_id)
+        submitted = tuple(event.payload for event in history
+                          if type(event.payload) is CollaborationProviderCallPayload
+                          and event.payload.state is CollaborationProviderCallState.SUBMITTED)
+        self.assertEqual(len(submitted), 2)
+        self.assertEqual(submitted[0].validation_details, result.validation_details)
+        self.assertEqual(submitted[1].validation_details, ())
+        self.assertIn("$.action.result.authoring_scope.target_paths[1499]",
+                      "\n".join(result.validation_details))
+
     async def test_minimal_reference_answer_needs_no_provider_correction(self) -> None:
         backend = _LeadBackend(persist_context_threads=True)
         runtime = StoryRuntime(self.workspace, backend)  # type: ignore[arg-type]

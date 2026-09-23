@@ -675,6 +675,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                     "invocation_kind",
                     "call_kind",
                     "state",
+                    "validation_details",
                 ),
             ),
         )

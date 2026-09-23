@@ -12,6 +12,7 @@ from typing import Mapping, Protocol
 
 from ..errors import SessionIdError
 from ..reply_trace import ReplyTrace
+from ..structured_output_validation import validate_details
 from ..specialist_routing import SpecialistAssignmentMode
 from .events import (
     ArtifactDraftSource,
@@ -871,6 +872,7 @@ class LeadTurnResult:
     story_commit_request: StoryCommitRequestPayload | None = None
     recommendation_request: LeadRecommendationRequestPayload | None = None
     trace: ReplyTrace | None = None
+    validation_details: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for value, label in (
@@ -886,6 +888,7 @@ class LeadTurnResult:
             raise TypeError("lead result kind must be LeadOutcomeKind")
         if self.trace is not None and type(self.trace) is not ReplyTrace:
             raise TypeError("lead result trace must be ReplyTrace or None")
+        validate_details(self.validation_details)
         if type(self.message) is not str or not self.message:
             raise ValueError("lead result message must be nonempty text")
         try:

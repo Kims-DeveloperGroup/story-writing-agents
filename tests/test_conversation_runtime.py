@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import unittest
-from dataclasses import MISSING, FrozenInstanceError, fields
+from dataclasses import MISSING, FrozenInstanceError, fields, replace
 
 from story_writing_agents import (
     CONVERSATION_EVENT_SCHEMA_VERSION,
@@ -53,6 +53,7 @@ class ConversationResultContractTests(unittest.TestCase):
                 "context",
                 "reference_operation_id",
                 "trace",
+                "validation_details",
             ),
         )
         self.assertEqual(
@@ -61,8 +62,16 @@ class ConversationResultContractTests(unittest.TestCase):
                 for field in result_fields
                 if field.default is not MISSING
             ),
-            (("reference_operation_id", None), ("trace", None)),
+            (("reference_operation_id", None), ("trace", None),
+             ("validation_details", ())),
         )
+        self.assertEqual(result.validation_details, ())
+        reported = replace(result, validation_details=(
+            "Original response\n$.message: expected string, got integer",
+        ))
+        self.assertEqual(reported.validation_details[0].splitlines()[0],
+                         "Original response")
+        self.assertEqual(result.validation_details, ())
         self.assertFalse(hasattr(result, "__dict__"))
         with self.assertRaises(FrozenInstanceError):
             result.content = "changed"  # type: ignore[misc]

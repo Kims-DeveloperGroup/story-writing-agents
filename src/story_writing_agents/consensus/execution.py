@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Protocol
 
 from ..agents import EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR
 from ..reply_trace import ReplyTrace
+from ..structured_output_validation import validate_details
 from .contracts import (
     CONSENSUS_AUDITORS,
     ConsensusAudit,
@@ -95,6 +96,7 @@ class ConsensusProviderResult:
     next_phase: ConsensusPhase | None = None
     conflict_material: ConsensusMaterialHandle | None = None
     trace: ReplyTrace | None = None
+    validation_details: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.kind) is not ConsensusPhaseOutputKind:
@@ -113,6 +115,7 @@ class ConsensusProviderResult:
             raise TypeError("consensus provider conflict material is invalid")
         if self.trace is not None and type(self.trace) is not ReplyTrace:
             raise TypeError("consensus provider trace must be ReplyTrace or None")
+        validate_details(self.validation_details)
         if self.kind in {
             ConsensusPhaseOutputKind.AUDIT,
             ConsensusPhaseOutputKind.CONFLICT,
@@ -344,6 +347,9 @@ class ConsensusExecutionCoordinator:
                 prior_result_event_id=running_id,
             )
 
+        reports = tuple(output.validation_details for output in outputs)
+        if any(reports):
+            result = replace(result, validation_details_by_provider=reports)
         terminal_event = ConsensusEvent(terminal_id, terminal_sequence, result)
         try:
             self._append(terminal_event)

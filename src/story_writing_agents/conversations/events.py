@@ -20,6 +20,7 @@ from ..artifact_proposals import (
 )
 from ..errors import SessionIdError
 from ..reply_trace import ReplyTrace
+from ..structured_output_validation import validate_details
 from ..specialist_routing import (
     ArtifactReviewDomain,
     AuthoringActivity,
@@ -2010,11 +2011,13 @@ class CollaborationMessagePayload:
 
     content: str
     trace: ReplyTrace | None = None
+    validation_details: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_visible_text(self.content, label="collaboration message")
         if self.trace is not None and type(self.trace) is not ReplyTrace:
             raise TypeError("collaboration message trace must be ReplyTrace or None")
+        validate_details(self.validation_details)
 
 
 @dataclass(frozen=True, slots=True)
@@ -3186,6 +3189,7 @@ class CollaborationProviderCallPayload:
     invocation_kind: CollaborationInvocationKind
     call_kind: CollaborationProviderCallKind
     state: CollaborationProviderCallState
+    validation_details: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.invocation_id) is not str or type(self.call_id) is not str:
@@ -3210,6 +3214,9 @@ class CollaborationProviderCallPayload:
             CollaborationProviderCallState,
             "provider call state",
         )
+        validate_details(self.validation_details)
+        if self.validation_details and self.state is not CollaborationProviderCallState.SUBMITTED:
+            raise ValueError("only submitted calls may carry validation details")
         if self.invocation_kind in {
             CollaborationInvocationKind.LEAD,
             CollaborationInvocationKind.LEAD_SYNTHESIS,
@@ -3985,11 +3992,14 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
     if type(payload) is CollaborationProposal:
         return {"payload_type": "proposal", "proposal": _proposal_value(payload)}
     if type(payload) is CollaborationMessagePayload:
-        return {
+        value = {
             "content": payload.content,
             "payload_type": "message",
             **_reply_trace_fields(payload.trace),
         }
+        if payload.validation_details:
+            value["validation_details"] = list(payload.validation_details)
+        return value
     if type(payload) is CollaborationLeadJudgmentPayload:
         return {
             "evidence": _lead_evidence_value(payload.evidence),
@@ -4081,7 +4091,7 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
             "submitted_physical_calls": payload.submitted_physical_calls,
         }
     if type(payload) is CollaborationProviderCallPayload:
-        return {
+        value = {
             "call_id": payload.call_id,
             "call_kind": payload.call_kind.value,
             "invocation_id": payload.invocation_id,
@@ -4091,6 +4101,9 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
             "role": payload.role,
             "state": payload.state.value,
         }
+        if payload.validation_details:
+            value["validation_details"] = list(payload.validation_details)
+        return value
     if type(payload) is CollaborationLeadOutcomeFailurePayload:
         return {
             "call_id": payload.call_id,
@@ -5021,12 +5034,17 @@ def _decode_payload(value: object) -> CollaborationPayload:
         item = _object_with_optional_extensions(
             value,
             {"content", "payload_type"},
-            {"trace"},
+            {"trace", "validation_details"},
             label="message payload",
         )
         return CollaborationMessagePayload(
             content=_string(item["content"], label="message content"),
             trace=_decode_optional_reply_trace(item),
+            validation_details=(
+                tuple(_string(part, label="message validation detail") for part in
+                      _array(item["validation_details"], label="message validation details"))
+                if "validation_details" in item else ()
+            ),
         )
     if payload_type == "lead_judgment":
         item = _object_with_optional_extensions(
@@ -5347,7 +5365,7 @@ def _decode_payload(value: object) -> CollaborationPayload:
                 "payload_type",
                 "role",
                 "state",
-            },
+            } | ({"validation_details"} if "validation_details" in value else set()),
             label="provider-call payload",
         )
         return CollaborationProviderCallPayload(
@@ -5372,6 +5390,11 @@ def _decode_payload(value: object) -> CollaborationPayload:
                 CollaborationProviderCallState,
                 item["state"],
                 label="provider call state",
+            ),
+            validation_details=(
+                tuple(_string(part, label="provider validation detail") for part in
+                      _array(item["validation_details"], label="provider validation details"))
+                if "validation_details" in item else ()
             ),
         )
     if payload_type == "artifact_review_candidate":

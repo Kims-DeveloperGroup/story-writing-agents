@@ -259,6 +259,7 @@ class ConversationRetrievalContractTests(unittest.TestCase):
             turn_id=TURN_ID,
             content=answer.content,
             sources=(source,),
+            validation_details=("Original response\n$: malformed JSON",),
         )
         result = ConversationRetrievalResult(
             session_id=SESSION_ID,
@@ -268,8 +269,10 @@ class ConversationRetrievalContractTests(unittest.TestCase):
             content=reply.content,
             context=context,
             sources=reply.sources,
+            validation_details=reply.validation_details,
         )
         self.assertEqual(result.sources, (source,))
+        self.assertEqual(result.validation_details, reply.validation_details)
 
     def test_search_and_history_observations_serialize_closed_readable_fields(
         self,
