@@ -7677,8 +7677,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   generic safe path resolution, strict UTF-8/JSON persistence, overrides, agent
   and debate state, logs, results, and immutable debate-context sidecars under
   `discussion_logs/<session_id>/<debate_id>.context.json`, and generic atomic
-  text/JSON replacement. Construction delegates one nonmutating root
-  classification and exact-ready verification to `workspace.initialization`,
+  text/JSON replacement. Debate-message reads admit the optional bounded
+  `validation_details` list independently of the optional trace, while legacy
+  entries without either field remain readable; malformed entries still fail
+  through the workspace format boundary. Construction delegates one nonmutating
+  root classification and exact-ready verification to `workspace.initialization`,
   retaining canonical path, physical identity, main/session role and session
   identity, readiness, and terminal-attempt state. `initialize()` delegates the
   descriptor-bound lifecycle once; failure

@@ -14,7 +14,7 @@ import tempfile
 import tomllib
 import unittest
 from collections.abc import Awaitable, Callable
-from dataclasses import MISSING, FrozenInstanceError, fields
+from dataclasses import MISSING, FrozenInstanceError, fields, replace
 from pathlib import Path
 from unittest import mock
 
@@ -843,6 +843,46 @@ class PersistenceValidationTests(unittest.TestCase):
         self.assertNotIn("trace", raw[0])
         self.assertEqual(set(raw[1]), {*base_fields, "trace"})
         self.assertEqual(raw[1]["trace"], trace.to_dict())
+
+    def test_persisted_debate_log_reopens_validation_details_with_optional_trace(
+        self,
+    ) -> None:
+        workspace = pristine_initialized_workspace(self)
+        relative = "discussion_logs/session_a/debate_a.jsonl"
+        detail = "Original response:\n$.action.result: expected object, got array"
+        trace = ReplyTrace(
+            role="plot_architect",
+            action="audit",
+            context_sources=("current_input",),
+            recovered_fields=("structured_reply",),
+            origin=ReplyTraceOrigin.RECOVERED,
+        )
+        legacy = self._message()
+        untraced = replace(legacy, validation_details=(detail,))
+        traced = replace(self._message(trace=trace), validation_details=(detail,))
+        for message in (legacy, untraced, traced):
+            workspace.append_debate_message("session_a", "debate_a", message)
+
+        self.assertEqual(
+            workspace.read_debate_messages("session_a", "debate_a"),
+            (legacy, untraced, traced),
+        )
+        raw = tuple(json.loads(line) for line in workspace.read_text(relative).splitlines())
+        self.assertNotIn("validation_details", raw[0])
+        self.assertNotIn("trace", raw[1])
+        self.assertEqual(raw[1]["validation_details"], [detail])
+        self.assertEqual(raw[2]["validation_details"], [detail])
+        self.assertEqual(raw[2]["trace"], trace.to_dict())
+
+        workspace.write_text(
+            relative,
+            workspace.read_text(relative)
+            + json.dumps({**raw[2], "unknown": "not a valid extension"}) + "\n",
+        )
+        with self.assertRaisesRegex(
+            WorkspaceFormatError, r"^invalid debate log entry at line 4$",
+        ):
+            workspace.read_debate_messages("session_a", "debate_a")
 
     def test_persisted_debate_log_rejects_noncanonical_fields_values_and_rounds(
         self,
