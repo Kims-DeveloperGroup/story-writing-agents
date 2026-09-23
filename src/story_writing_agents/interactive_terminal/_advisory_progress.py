@@ -131,9 +131,8 @@ class AdvisoryProgressState:
             if target_key not in self.agent_buffers:
                 self.agent_buffers[target_key] = prev_buf[-2000:]
             else:
-                self.agent_buffers[target_key].extend(prev_buf)
-                if len(self.agent_buffers[target_key]) > 2000:
-                    self.agent_buffers[target_key] = self.agent_buffers[target_key][-2000:]
+                combined_buf = prev_buf + self.agent_buffers[target_key]
+                self.agent_buffers[target_key] = combined_buf[-2000:]
         if provisional_key in self.agent_errors:
             if target_key not in self.agent_errors:
                 self.agent_errors[target_key] = self.agent_errors.pop(provisional_key)
@@ -174,11 +173,10 @@ class AdvisoryProgressState:
             lower = sanitized.lower()
             if (
                 lower.startswith("error:")
-                or " error:" in lower
-                or "error" in lower
-                or "failed" in lower
-                or "overloaded" in lower
-                or "capacity" in lower
+                or lower.startswith("error ")
+                or lower.startswith("failure:")
+                or lower.startswith("failed:")
+                or lower.startswith("fatal:")
             ):
                 self.agent_errors[key] = sanitized
                 self.last_error_message = sanitized
@@ -300,7 +298,7 @@ class AdvisoryProgressState:
             lines.append("")
             lines.append(request.agent_id)
             if request.request:
-                lines.append(f"  Request: {request.request[:80]}")
+                lines.append(f"  Request: {request.request}")
             status = self.stream_status.get(key)
             preview = self.stream_preview.get(key)
             if not related:

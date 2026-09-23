@@ -2176,6 +2176,8 @@ class InteractiveAdvisoryProgress:
                 result = await self._run(operation)
 
             if result is not None and not failure_check(result):
+                self._state.last_error_message = None
+                self._state.agent_errors.clear()
                 self._state.dismiss_failure_snapshot()
             return result
         except BaseException as exc:

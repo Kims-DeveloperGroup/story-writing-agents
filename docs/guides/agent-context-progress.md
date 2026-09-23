@@ -51,14 +51,16 @@ card. A specialist card retains its exact request. Before an action, the card
 says `Preparing context`; once an action is known, it shows the indexed
 `SEARCH` or `READ` and whether it is running or completed.
 
-A SEARCH start displays every exact literal query as `Searching for: "..."`
+A SEARCH start displays its active literal query as `Searching for: "..."`
 and the exact requested resource/source-kind values (`runtime_input`,
 `agent_definition`, `writing_artifact`, `conversation`, `active_debate`, or
 `own_agent_state`). Its `Scope` includes those kinds and an optional safe
 workspace-relative artifact prefix after `under`. Completion replaces the
-start details with each safe relative result locator, its exact line or record
-range when bounded, and its UTF-8 byte count. It says `Found: no matches` when
-empty and `Results: truncated` when the bounded result set was truncated.
+start details with bounded result locators: sets of up to two entries display
+each safe relative result locator with its exact line or record range when
+bounded and its UTF-8 byte count, while larger sets summarize the count and
+latest locator. It says `Found: no matches` when empty and `Results: truncated`
+when the bounded result set was truncated.
 
 A READ start displays every selected safe relative locator and its exact whole,
 line, or record boundary. Completion retains those locators and ranges and adds

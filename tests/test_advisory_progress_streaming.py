@@ -2868,5 +2868,113 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         for view in scroll_state.views:
             self.assertEqual(view.state, ViewState.IDLE)
 
+    def test_provisional_buffer_migration_prepends_rows_preserving_chronology(self) -> None:
+        """Verify provisional rows are prepended before authoritative rows on migration."""
+        state = AdvisoryProgressState()
+        state.begin()
+        state.agent_buffers[("lead", "")] = ["prov row 1", "prov row 2"]
+        state.agent_buffers[("lead", "op_1")] = ["auth row 1", "auth row 2"]
+
+        event = ContextActionProgressEvent(
+            kind=ContextActionProgressKind.READ_COMPLETED,
+            agent_id="lead",
+            operation_id="op_1",
+            action_index=1,
+        )
+        state.observe(event)
+
+        merged = state.agent_buffers.get(("lead", "op_1"))
+        self.assertEqual(
+            merged,
+            ["prov row 1", "prov row 2", "auth row 1", "auth row 2"],
+        )
+
+    def test_benign_status_prose_is_not_marked_as_error(self) -> None:
+        """Verify benign prose like 'Checking capacity' or 'No errors found' does not set last_error_message."""
+        state = AdvisoryProgressState()
+        state.begin((AdvisoryProgressRequest("agent_1", "op_1", "Task 1"),))
+
+        # Benign status with 'capacity'
+        state.observe_stream(
+            ProviderStreamEvent(
+                ProviderStreamEventKind.STATUS,
+                "agent_1",
+                "Checking capacity for selected models",
+                operation_id="op_1",
+            )
+        )
+        self.assertIsNone(state.last_error_message)
+        self.assertNotIn(("agent_1", "op_1"), state.agent_errors)
+
+        # Benign status with 'error'
+        state.observe_stream(
+            ProviderStreamEvent(
+                ProviderStreamEventKind.STATUS,
+                "agent_1",
+                "No errors found in generated output",
+                operation_id="op_1",
+            )
+        )
+        self.assertIsNone(state.last_error_message)
+        self.assertNotIn(("agent_1", "op_1"), state.agent_errors)
+
+        # Explicit error prefix
+        state.observe_stream(
+            ProviderStreamEvent(
+                ProviderStreamEventKind.STATUS,
+                "agent_1",
+                "Error: Backend service overloaded",
+                operation_id="op_1",
+            )
+        )
+        self.assertEqual(state.last_error_message, "Error: Backend service overloaded")
+        self.assertEqual(state.agent_errors.get(("agent_1", "op_1")), "Error: Backend service overloaded")
+
+    def test_advisory_progress_frame_renders_full_request_without_truncation(self) -> None:
+        """Verify agent card renders full request without 80-char truncation."""
+        state = AdvisoryProgressState()
+        long_req = "Analyze chapter 1 for stylistic consistency, character voice adherence, and pacing without altering the overall plot outline."
+        self.assertGreater(len(long_req), 80)
+        state.begin((AdvisoryProgressRequest("editor", "op_edit", long_req),))
+
+        frame = state.render(0)
+        self.assertIn(f"  Request: {long_req}", frame)
+
+    def test_successful_run_clears_live_errors_preventing_snapshot_resurrection(self) -> None:
+        """Verify success clears live error fields so finish() does not recreate a stale snapshot."""
+        from story_writing_agents.interactive_terminal._core import build_stream_terminal
+
+        terminal = build_stream_terminal(lambda _p: "", io.StringIO(), io.StringIO())
+        progress = InteractiveAdvisoryProgress(terminal)
+
+        # Simulate previous failed turn that recorded an error
+        progress._state.record_error("Previous turn auth failure")
+        self.assertEqual(progress._state.last_error_message, "Previous turn auth failure")
+        self.assertIsNotNone(progress._state.failure_snapshot)
+
+        async def successful_retry():
+            return {"status": "ok"}
+
+        async def fake_advisory_progress(op, **kwargs):
+            return await op
+
+        progress._run = fake_advisory_progress
+
+        res = asyncio.run(
+            progress.run(
+                successful_retry(),
+                is_failure=lambda r: r.get("status") != "ok",
+            )
+        )
+        self.assertEqual(res, {"status": "ok"})
+        # Live error message and snapshot should be cleared
+        self.assertIsNone(progress._state.last_error_message)
+        self.assertEqual(len(progress._state.agent_errors), 0)
+        self.assertIsNone(progress._state.failure_snapshot)
+
+        # Subsequent finish() should NOT resurrect snapshot
+        progress.finish()
+        self.assertIsNone(progress._state.failure_snapshot)
+
 
 
