@@ -1427,7 +1427,7 @@ def transition_nested_scroll(
 
     # 1. Focus Cycling across agent boxes
     if (
-        event.kind in {KeyKind.TAB, KeyKind.RIGHT}
+        event.kind is KeyKind.TAB
         or (event.kind is KeyKind.TEXT and event.text == "]")
     ):
         new_idx = (idx + 1) % len(state.views)
@@ -1438,7 +1438,7 @@ def transition_nested_scroll(
         return MultiAgentScrollState(updated_views, new_idx, collapsed=state.collapsed)
 
     if (
-        event.kind in {KeyKind.SHIFT_TAB, KeyKind.LEFT}
+        event.kind is KeyKind.SHIFT_TAB
         or (event.kind is KeyKind.TEXT and event.text == "[")
     ):
         new_idx = (idx - 1) % len(state.views)
@@ -1448,7 +1448,26 @@ def transition_nested_scroll(
         )
         return MultiAgentScrollState(updated_views, new_idx, collapsed=state.collapsed)
 
-    # 2. Viewport Scrolling for Focused Box
+    # 2. Horizontal Scrolling (Panning) for Focused Box
+    if event.kind is KeyKind.RIGHT or (event.kind is KeyKind.TEXT and event.text == "l"):
+        new_h_offset = focused.h_offset + 4
+        if new_h_offset != focused.h_offset:
+            updated_focused = replace(focused, h_offset=new_h_offset)
+            updated_views = list(state.views)
+            updated_views[idx] = updated_focused
+            return MultiAgentScrollState(tuple(updated_views), idx, collapsed=state.collapsed)
+        return state
+
+    if event.kind is KeyKind.LEFT or (event.kind is KeyKind.TEXT and event.text == "h"):
+        new_h_offset = max(0, focused.h_offset - 4)
+        if new_h_offset != focused.h_offset:
+            updated_focused = replace(focused, h_offset=new_h_offset)
+            updated_views = list(state.views)
+            updated_views[idx] = updated_focused
+            return MultiAgentScrollState(tuple(updated_views), idx, collapsed=state.collapsed)
+        return state
+
+    # 3. Viewport Scrolling for Focused Box
     max_start = max(1, focused.total_lines - focused.visible_height + 1)
     new_start = focused.start_line
     auto_scroll = focused.auto_scroll

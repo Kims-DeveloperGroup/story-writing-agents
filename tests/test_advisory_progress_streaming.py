@@ -2293,5 +2293,177 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         # Live buffer itself was cleared
         self.assertEqual(len(state.agent_buffers), 0)
 
+    def test_nested_scroll_viewport_h_offset_validation_and_default(self) -> None:
+        viewport = NestedScrollViewport(
+            view_id="test:1",
+            title="Agent",
+            total_lines=1,
+            start_line=1,
+            visible_lines=("line 1",),
+            visible_height=1,
+            is_focused=True,
+        )
+        self.assertEqual(viewport.h_offset, 0)
+
+        viewport_with_offset = NestedScrollViewport(
+            view_id="test:1",
+            title="Agent",
+            total_lines=1,
+            start_line=1,
+            visible_lines=("line 1",),
+            visible_height=1,
+            is_focused=True,
+            h_offset=8,
+        )
+        self.assertEqual(viewport_with_offset.h_offset, 8)
+
+        with self.assertRaises(ValueError):
+            NestedScrollViewport(
+                view_id="test:1",
+                title="Agent",
+                total_lines=1,
+                start_line=1,
+                visible_lines=("line 1",),
+                visible_height=1,
+                is_focused=True,
+                h_offset=-1,
+            )
+
+        with self.assertRaises(ValueError):
+            NestedScrollViewport(
+                view_id="test:1",
+                title="Agent",
+                total_lines=1,
+                start_line=1,
+                visible_lines=("line 1",),
+                visible_height=1,
+                is_focused=True,
+                h_offset="invalid",  # type: ignore[arg-type]
+            )
+
+    def test_clip_cells_horizontal_scroll_offset_and_markers(self) -> None:
+        from story_writing_agents.interactive_terminal._viewer_render import _clip_cells
+
+        # offset == 0 preserves standard ellipsis truncation
+        clipped_0 = _clip_cells("abcdefghijklmnopqrstuvwxyz", 10, offset=0)
+        self.assertEqual(clipped_0, "abcdefghi…")
+
+        # offset > 0 with both left and right overflow
+        clipped_pan = _clip_cells("abcdefghijklmnopqrstuvwxyz", 10, offset=4)
+        self.assertEqual(clipped_pan, "←efghijkl→")
+        self.assertEqual(len(clipped_pan), 10)
+
+        # offset > 0 with left overflow only (end of line fits within width)
+        clipped_end = _clip_cells("abcdefgh", 10, offset=2)
+        self.assertEqual(clipped_end, "←cdefgh")
+        self.assertTrue(len(clipped_end) <= 10)
+
+        # offset > 0 with all text scrolled off to the left
+        clipped_empty_window = _clip_cells("abc", 10, offset=5)
+        self.assertEqual(clipped_empty_window, "←")
+
+        # empty line returns empty string regardless of offset
+        self.assertEqual(_clip_cells("", 10, offset=4), "")
+
+        # width == 1 returns left marker when content exists
+        self.assertEqual(_clip_cells("abcdef", 1, offset=2), "←")
+
+        # width == 2 returns both markers when right overflow exists
+        self.assertEqual(_clip_cells("abcdef", 2, offset=2), "←→")
+
+        # negative or invalid offset raises ValueError
+        with self.assertRaises(ValueError):
+            _clip_cells("abc", 10, offset=-1)
+        with self.assertRaises(ValueError):
+            _clip_cells("abc", 10, offset="invalid")  # type: ignore[arg-type]
+
+    def test_transition_nested_scroll_horizontal_scrolling(self) -> None:
+        viewport_1 = NestedScrollViewport(
+            view_id="a1:1",
+            title="Agent 1",
+            total_lines=10,
+            start_line=1,
+            visible_lines=("line 1", "line 2"),
+            visible_height=2,
+            is_focused=True,
+            h_offset=0,
+        )
+        viewport_2 = NestedScrollViewport(
+            view_id="a2:1",
+            title="Agent 2",
+            total_lines=10,
+            start_line=1,
+            visible_lines=("line 1", "line 2"),
+            visible_height=2,
+            is_focused=False,
+            h_offset=0,
+        )
+        state = MultiAgentScrollState((viewport_1, viewport_2), 0)
+
+        # Pan right with RIGHT key
+        state_r1 = transition_nested_scroll(state, KeyEvent(KeyKind.RIGHT))
+        self.assertEqual(state_r1.views[0].h_offset, 4)
+        self.assertEqual(state_r1.views[1].h_offset, 0)
+
+        # Pan right with 'l' key
+        state_r2 = transition_nested_scroll(state_r1, KeyEvent(KeyKind.TEXT, text="l"))
+        self.assertEqual(state_r2.views[0].h_offset, 8)
+
+        # Pan left with LEFT key
+        state_l1 = transition_nested_scroll(state_r2, KeyEvent(KeyKind.LEFT))
+        self.assertEqual(state_l1.views[0].h_offset, 4)
+
+        # Pan left with 'h' key
+        state_l2 = transition_nested_scroll(state_l1, KeyEvent(KeyKind.TEXT, text="h"))
+        self.assertEqual(state_l2.views[0].h_offset, 0)
+
+        # Pan left at 0 remains 0 (bounded)
+        state_l3 = transition_nested_scroll(state_l2, KeyEvent(KeyKind.LEFT))
+        self.assertEqual(state_l3.views[0].h_offset, 0)
+
+        # Tab switches focused agent and preserves each agent's h_offset
+        state_tab = transition_nested_scroll(state_r2, KeyEvent(KeyKind.TAB))
+        self.assertEqual(state_tab.focused_index, 1)
+        self.assertEqual(state_tab.views[0].h_offset, 8)
+        self.assertEqual(state_tab.views[1].h_offset, 0)
+
+        # Pan on agent 2 adjusts agent 2's h_offset independently
+        state_a2_pan = transition_nested_scroll(state_tab, KeyEvent(KeyKind.RIGHT))
+        self.assertEqual(state_a2_pan.views[0].h_offset, 8)
+        self.assertEqual(state_a2_pan.views[1].h_offset, 4)
+
+    def test_render_nested_scroll_view_with_horizontal_offset(self) -> None:
+        long_line = "This is a very long text line that easily exceeds standard terminal widths."
+        viewport = NestedScrollViewport(
+            view_id="a:1",
+            title="Agent",
+            total_lines=1,
+            start_line=1,
+            visible_lines=(long_line,),
+            visible_height=1,
+            is_focused=True,
+            h_offset=10,
+        )
+        state = MultiAgentScrollState((viewport,), 0)
+        caps = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            30,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+        rendered = render_nested_scroll_view(state, caps)
+        self.assertEqual(rendered.h_offset, 10)
+        rows = rendered.text.split("\n")
+        # Body line (row index 1) contains overflow indicators
+        body_row = rows[1]
+        self.assertIn("←", body_row)
+        self.assertIn("→", body_row)
+        # Footer contains pan hint
+        footer_row = rows[-1]
+        self.assertIn("←/→: pan", footer_row)
+
 
 

@@ -889,6 +889,7 @@ class NestedScrollViewport:
     state: ViewState = ViewState.IDLE
     auto_scroll: bool = True
     buffer_lines: tuple[str, ...] = ()
+    h_offset: int = 0
 
     def __post_init__(self) -> None:
         """Validate bounded scroll viewport geometry."""
@@ -918,6 +919,8 @@ class NestedScrollViewport:
             type(line) is not str for line in self.buffer_lines
         ):
             raise TypeError("buffer_lines must be a tuple of strings")
+        if type(self.h_offset) is not int or self.h_offset < 0:
+            raise ValueError("h_offset must be a non-negative integer")
 
 
 @dataclass(frozen=True, slots=True)

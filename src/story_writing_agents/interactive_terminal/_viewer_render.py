@@ -229,53 +229,109 @@ def _line_is_selected(
     return selection is not None and selection[0] <= number <= selection[1]
 
 
-def _clip_cells(text: str, width: int) -> str:
+def _clip_cells(text: str, width: int, offset: int = 0) -> str:
     """Sanitize and clip one live row with width-bounded source work."""
 
-    return _clip_cell_parts((text,), width)
+    return _clip_cell_parts((text,), width, offset=offset)
 
 
-def _clip_cell_parts(parts: tuple[str, ...], width: int) -> str:
+def _clip_cell_parts(parts: tuple[str, ...], width: int, offset: int = 0) -> str:
     """Sanitize bounded source from ordered parts without joining their tails."""
 
     if type(width) is not int or width <= 0:
         raise ValueError("width must be positive")
+    if type(offset) is not int or offset < 0:
+        raise ValueError("offset must be a non-negative integer")
     if type(parts) is not tuple or any(not isinstance(part, str) for part in parts):
         raise TypeError("terminal text parts must be strings")
 
-    sanitized: list[tuple[str, int]] = []
-    cells = 0
-    truncated = False
-    scan_limit = width + _LIVE_SOURCE_SCAN_ALLOWANCE
+    if offset == 0:
+        sanitized: list[tuple[str, int]] = []
+        cells = 0
+        truncated = False
+        scan_limit = width + _LIVE_SOURCE_SCAN_ALLOWANCE
+        scanned = 0
+        for part in parts:
+            for source_character in part:
+                if scanned >= scan_limit:
+                    truncated = True
+                    break
+                scanned += 1
+                safe_fragment = sanitize_terminal_text(source_character)
+                for safe_character in safe_fragment:
+                    character_width = display_character_width(safe_character)
+                    sanitized.append((safe_character, character_width))
+                    cells += character_width
+                if cells > width:
+                    truncated = True
+                    break
+            if truncated:
+                break
+        if not truncated:
+            return "".join(character for character, _width in sanitized)
+
+        available = width - display_character_width(_ELLIPSIS)
+        rendered: list[str] = []
+        cells = 0
+        for character, character_width in sanitized:
+            if character_width > 0 and cells + character_width > available:
+                break
+            rendered.append(character)
+            cells += character_width
+        return f"{''.join(rendered)}{_ELLIPSIS}"
+
+    # offset > 0: horizontal panning with overflow indicators
+    sanitized = []
+    total_cells = 0
+    scan_limit = offset + width + _LIVE_SOURCE_SCAN_ALLOWANCE
     scanned = 0
+    truncated_source = False
     for part in parts:
         for source_character in part:
             if scanned >= scan_limit:
-                truncated = True
+                truncated_source = True
                 break
             scanned += 1
             safe_fragment = sanitize_terminal_text(source_character)
             for safe_character in safe_fragment:
                 character_width = display_character_width(safe_character)
                 sanitized.append((safe_character, character_width))
-                cells += character_width
-            if cells > width:
-                truncated = True
-                break
-        if truncated:
+                total_cells += character_width
+        if truncated_source:
             break
-    if not truncated:
-        return "".join(character for character, _width in sanitized)
 
-    available = width - display_character_width(_ELLIPSIS)
-    rendered: list[str] = []
-    cells = 0
-    for character, character_width in sanitized:
-        if character_width > 0 and cells + character_width > available:
+    if total_cells == 0:
+        return ""
+
+    left_marker = "←"
+    if width <= 1:
+        return left_marker
+
+    right_marker = "→"
+    col = 0
+    chars_in_window: list[tuple[str, int]] = []
+    for safe_character, character_width in sanitized:
+        char_start = col
+        col += character_width
+        if char_start < offset:
+            continue
+        chars_in_window.append((safe_character, character_width))
+
+    remaining_width = width - 1  # 1 cell reserved for left_marker
+    total_window_width = sum(w for _, w in chars_in_window)
+    if total_window_width <= remaining_width and not truncated_source:
+        return f"{left_marker}{''.join(c for c, _ in chars_in_window)}"
+
+    content_available = remaining_width - 1  # 1 cell reserved for right_marker
+    rendered_chars: list[str] = []
+    used_cells = 0
+    for safe_character, character_width in chars_in_window:
+        if character_width > 0 and used_cells + character_width > content_available:
             break
-        rendered.append(character)
-        cells += character_width
-    return f"{''.join(rendered)}{_ELLIPSIS}"
+        rendered_chars.append(safe_character)
+        used_cells += character_width
+
+    return f"{left_marker}{''.join(rendered_chars)}{right_marker}"
 
 
 def _decorate(text: str, role: str) -> str:
@@ -319,7 +375,7 @@ def render_nested_scroll_view(
             f"[{prefix} {focused.title}] {counter_str}{content} • press 't' to expand",
             width,
         )
-        return RenderedFrame(compact_line, width, 1)
+        return RenderedFrame(compact_line, width, 1, h_offset=focused.h_offset)
 
     # 1. Header / Tab Row
     tab_parts: list[str] = []
@@ -356,7 +412,7 @@ def render_nested_scroll_view(
         line_content = (
             focused.visible_lines[y] if y < len(focused.visible_lines) else ""
         )
-        safe_content = _clip_cells(line_content, inner_width)
+        safe_content = _clip_cells(line_content, inner_width, offset=focused.h_offset)
         pad_needed = max(
             0, inner_width - sum(display_character_width(c) for c in safe_content)
         )
@@ -365,13 +421,13 @@ def render_nested_scroll_view(
         body_lines.append(_clip_cells(f"│ {padded} {bar}│", width))
 
     # 3. Footer Line
-    hints = "↑/↓: scroll • Tab: switch agent • t: toggle view • Enter/Esc: dismiss"
+    hints = "↑/↓: scroll • ←/→: pan • Tab: switch agent • t: toggle view • Enter/Esc: dismiss"
     footer_left = f"└─ {hints} "
     footer_fill = max(0, width - len(footer_left) - 1)
     footer_line = _clip_cells(f"{footer_left}{'─' * footer_fill}┘", width)
 
     all_rows = [header_line, *body_lines, footer_line]
-    return RenderedFrame("\n".join(all_rows), width, len(all_rows))
+    return RenderedFrame("\n".join(all_rows), width, len(all_rows), h_offset=focused.h_offset)
 
 
 __all__ = [
