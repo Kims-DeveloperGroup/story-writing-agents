@@ -480,6 +480,17 @@ def _payload_items(
     if type(payload) is LeadRecommendationResultPayload:
         return (Field("Preparation", payload.state.value), _message("Result", payload.message))
     if type(payload) is CollaborationMessagePayload:
+        if payload.validation_details:
+            return (
+                *((_message("Message", payload.content),)
+                  if (len(payload.validation_details) != 1
+                      or payload.content != payload.validation_details[0]) else ()),
+                *(
+                    Notice(detail, label="validation", role=SemanticRole.ERROR)
+                    for detail in payload.validation_details
+                ),
+                *_reply_trace_items(payload.trace),
+            )
         return (
             _message("Message", payload.content),
             *_reply_trace_items(payload.trace),

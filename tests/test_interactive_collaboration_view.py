@@ -17,6 +17,8 @@ from story_writing_agents.interactive_terminal._render import (
 from story_writing_agents.reply_trace import ReplyTrace, ReplyTraceOrigin
 
 from tests.collaboration_contract_fixture import (
+    RUNTIME,
+    USER,
     awaiting_history,
     executed_history,
 )
@@ -29,6 +31,8 @@ from story_writing_agents.conversations import (
     ArtifactApplicationDecisionKind,
     CollaborationLeadJudgmentPayload,
     CollaborationLeadSynthesisPayload,
+    CollaborationEventKind,
+    CollaborationMessagePayload,
     CollaborationNextAction,
     CollaborationAssignmentDispatchPayload,
     CollaborationExecutionResult,
@@ -41,6 +45,47 @@ from story_writing_agents.git.story_commit_contracts import StoryCommitDecision
 
 
 class CollaborationViewTests(unittest.TestCase):
+    def test_correlated_validation_message_is_one_notice_not_ordinary_chat(self) -> None:
+        history, _proposal = awaiting_history()
+        detail = "Original response: $.action.result: expected object, got array"
+        diagnostic = replace(
+            history[0],
+            kind=CollaborationEventKind.MESSAGE,
+            sender=RUNTIME,
+            recipient=USER,
+            payload=CollaborationMessagePayload(
+                detail,
+                validation_details=(detail,),
+                validation_invocation_id="invocation_1",
+                validation_call_id="call_1",
+            ),
+        )
+        panel = _collaboration_view.project_collaboration_event(diagnostic)
+        notices = tuple(item for item in panel.items
+                        if isinstance(item, _collaboration_view.Notice))
+        self.assertEqual(len(notices), 1)
+        self.assertEqual(notices[0].label, "validation")
+        self.assertEqual(notices[0].text, detail)
+        self.assertFalse(any(
+            isinstance(item, _collaboration_view.Message) and item.content == detail
+            for item in panel.items
+        ))
+        rendered = render_component(panel, _capability(CapabilityProfile.LINE, width=120)).text
+        self.assertEqual(rendered.count(detail), 1)
+
+        ordinary = replace(
+            diagnostic,
+            payload=CollaborationMessagePayload("Ordinary status."),
+        )
+        ordinary_items = _collaboration_view.project_collaboration_event(ordinary).items
+        self.assertEqual(
+            tuple(item.content for item in ordinary_items
+                  if isinstance(item, _collaboration_view.Message)),
+            ("Ordinary status.",),
+        )
+        self.assertFalse(any(isinstance(item, _collaboration_view.Notice)
+                             for item in ordinary_items))
+
     def test_specialist_result_panels_follow_proposal_order_and_durable_truth(self) -> None:
         history, proposal, _ = executed_history()
         panels = _collaboration_view.project_specialist_results(history, proposal)

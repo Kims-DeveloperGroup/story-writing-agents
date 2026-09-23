@@ -10,11 +10,13 @@ from unittest import mock
 
 from story_writing_agents import Workspace
 from story_writing_agents.consensus import (
+    ConsensusAuditVerdict,
     ConsensusDecision,
     ConsensusEvent,
     ConsensusInputKind,
     ConsensusPhase,
     ConsensusPhaseDecision,
+    ConsensusPhaseState,
     ConsensusProviderResult,
     ConsensusRuntimeAdapter,
     ConsensusRuntimeDecision,
@@ -276,6 +278,118 @@ class ConsensusEventStoreTests(unittest.TestCase):
 
 
 class DurableConsensusRestartTests(unittest.IsolatedAsyncioTestCase):
+    async def test_partial_and_complete_audit_reports_round_trip_with_old_events(
+        self,
+    ) -> None:
+        class AuditPort(_DurableConsensusPort):
+            def __init__(self, workspace: Workspace, *, fail_second: bool) -> None:
+                super().__init__(workspace)
+                self.fail_second = fail_second
+
+            async def invoke_provider(self, invocation):
+                if invocation.phase is ConsensusPhase.DRAFT:
+                    return await super().invoke_provider(invocation)
+                self.provider_calls.append(invocation)
+                if self.fail_second and invocation.ordinal == 2:
+                    raise RuntimeError("second auditor failed")
+                return ConsensusProviderResult(
+                    ConsensusPhaseOutputKind.AUDIT,
+                    f"{invocation.ordinal + 5}" * 64,
+                    invocation.candidate_material,
+                    audit_verdict=ConsensusAuditVerdict.APPROVE,
+                    validation_details=(
+                        f"Original response\n$.auditor_{invocation.ordinal}: expected string",
+                    ),
+                )
+
+        for fail_second in (False, True):
+            with self.subTest(fail_second=fail_second):
+                workspace = pristine_initialized_workspace(self)
+                port = AuditPort(workspace, fail_second=fail_second)
+                adapter = ConsensusRuntimeAdapter(port)
+                submitted = adapter.submit_prompt(
+                    session_id="session-1",
+                    conversation_id="conversation-1",
+                    input_material=_PROMPT_MATERIAL,
+                )
+                workflow_id = submitted.submission.workflow_id
+
+                def decision_for_tail() -> ConsensusRuntimeDecision:
+                    event = port.load_workflow(
+                        "session-1", "conversation-1", workflow_id,
+                    ).events[-1]
+                    request = event.payload
+                    return ConsensusRuntimeDecision(
+                        workflow_id=request.workflow_id,
+                        execution_identity=request.execution_identity,
+                        phase_request_id=request.phase_request_id,
+                        proposal_id=request.proposal_id,
+                        revision_id=request.revision_id,
+                        request_digest=request.request_digest,
+                        request_event_id=event.event_id,
+                        request_event_sequence=event.sequence,
+                        current_tail_sequence=event.sequence,
+                        confirmation_id=f"confirmation-{event.sequence}",
+                        decision=ConsensusDecision.CONFIRM,
+                    )
+
+                draft = await adapter.confirm(decision_for_tail())
+                self.assertIs(draft.execution.state, ConsensusPhaseState.COMPLETED)
+                adapter.request_next_phase(
+                    session_id="session-1",
+                    conversation_id="conversation-1",
+                    workflow_id=workflow_id,
+                )
+                audit = await adapter.confirm(decision_for_tail())
+                receipt = audit.execution
+                self.assertIsNotNone(receipt)
+                expected_count = 1 if fail_second else 3
+                self.assertIs(
+                    receipt.state,
+                    ConsensusPhaseState.FAILED if fail_second
+                    else ConsensusPhaseState.COMPLETED,
+                )
+                expected = tuple(
+                    (f"Original response\n$.auditor_{ordinal}: expected string",)
+                    for ordinal in range(1, expected_count + 1)
+                )
+                self.assertEqual(
+                    receipt.terminal_event.payload.validation_details_by_provider,
+                    expected,
+                )
+                stored = ConsensusEventStore(workspace).load_workflow(
+                    "session-1", "conversation-1", workflow_id,
+                )
+                self.assertEqual(
+                    stored.events[-1].payload.validation_details_by_provider,
+                    expected,
+                )
+                resumed = ConsensusRuntimeAdapter(_DurableConsensusPort(workspace)).resume(
+                    session_id="session-1",
+                    conversation_id="conversation-1",
+                    workflow_id=workflow_id,
+                )
+                self.assertEqual(resumed.projection.state, receipt.state)
+                self.assertFalse(resumed.capability_available)
+
+                target = ConsensusEventStoreTests.workflow_path(
+                    workspace.root, _IDENTITY, workflow_id,
+                )
+                encoded = json.loads(target.read_bytes())
+                self.assertEqual(
+                    encoded["events"][-1]["payload"].pop(
+                        "validation_details_by_provider"
+                    ),
+                    [list(report) for report in expected],
+                )
+                target.write_bytes(json.dumps(encoded, separators=(",", ":")).encode())
+                legacy = ConsensusEventStore(workspace).load_workflow(
+                    "session-1", "conversation-1", workflow_id,
+                )
+                self.assertEqual(
+                    legacy.events[-1].payload.validation_details_by_provider, (),
+                )
+
     async def completed_with_details(self):
         workspace = pristine_initialized_workspace(self)
         details = (
