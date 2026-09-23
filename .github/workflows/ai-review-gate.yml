@@ -2,7 +2,7 @@ name: AI review gate
 
 on:
   pull_request_target:
-    types: [synchronize, reopened, labeled, unlabeled]
+    types: [synchronize, reopened, labeled, unlabeled, edited]
   pull_request_review:
     types: [submitted, edited, dismissed]
   pull_request_review_comment:
@@ -36,9 +36,11 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'workflow_run' ||
       (github.event_name == 'pull_request_target' &&
+       (github.event.action != 'edited' || github.event.changes.base != null) &&
        (github.event.action == 'unlabeled' && github.event.label.name == 'workflow:managed' ||
         contains(github.event.pull_request.labels.*.name, 'workflow:managed'))) ||
-      contains(github.event.pull_request.labels.*.name, 'workflow:managed') ||
+      (github.event_name != 'pull_request_target' &&
+       contains(github.event.pull_request.labels.*.name, 'workflow:managed')) ||
       contains(github.event.issue.labels.*.name, 'workflow:managed')
     runs-on: ubuntu-latest
     outputs:
@@ -140,7 +142,7 @@ jobs:
             const marker = issueComments
               .filter(comment =>
                 comment.user?.login === "github-actions[bot]" &&
-                comment.body?.includes(`:${pr.head.sha} -->`) &&
+                comment.body?.includes(`:${pr.base.sha}:${pr.head.sha} -->`) &&
                 comment.body?.includes("<!-- ai-review-milestone-open:"))
               .sort((left, right) =>
                 new Date(right.created_at) - new Date(left.created_at))[0];
@@ -167,6 +169,24 @@ jobs:
             const codexLogin = "chatgpt-codex-connector[bot]";
             const copilot = current.filter(review => review.user?.login === copilotLogin);
             const codex = current.filter(review => review.user?.login === codexLogin);
+
+            const updatedAtByReview = new Map();
+            const botReviews = [...copilot, ...codex];
+            for (let offset = 0; offset < botReviews.length; offset += 100) {
+              const batch = botReviews.slice(offset, offset + 100);
+              const response = await github.graphql(`
+                query($ids: [ID!]!) {
+                  nodes(ids: $ids) {
+                    ... on PullRequestReview { databaseId updatedAt }
+                  }
+                }
+              `, {ids: batch.map(review => review.node_id)});
+              for (const review of response.nodes) {
+                if (review?.databaseId) {
+                  updatedAtByReview.set(review.databaseId, review.updatedAt);
+                }
+              }
+            }
 
             const reviewComments = await github.paginate(github.rest.pulls.listReviewComments, {
               owner, repo, pull_number: pullNumber, per_page: 100,
@@ -204,7 +224,8 @@ jobs:
             );
             const validation = validationRuns
               .filter(run => (run.pull_requests || []).some(
-                linked => linked.number === pullNumber) &&
+                linked => linked.number === pullNumber &&
+                  linked.base?.sha === pr.base.sha) &&
                 (!fullLabelAddedAt ||
                   new Date(run.created_at) >= new Date(fullLabelAddedAt)))
               .sort((left, right) =>
@@ -256,9 +277,12 @@ jobs:
                   comment.user?.type === "User" &&
                   ["OWNER", "MEMBER", "COLLABORATOR"].includes(
                     comment.author_association) &&
-                  new Date(comment.created_at) >= new Date(review.submitted_at) &&
+                  new Date(comment.created_at) >
+                    new Date(updatedAtByReview.get(review.id)) &&
                   comment.body?.includes(`<!-- ai-review-body-disposition:${review.id} -->`) &&
-                  comment.body.replace(/<!--[^>]*-->/g, "").trim().length >= 20))
+                  /^Decision: (Applied|Rejected)$/im.test(comment.body) &&
+                  /^Reason: \S.{39,}$/im.test(comment.body) &&
+                  /^Evidence: https:\/\/github\.com\/\S+$/im.test(comment.body)))
                 .map(review => (review.body || "").replace(
                   /<details\b[^>]*>[\s\S]*?<\/details>/gi,
                   section => /#discussion_r\d+/.test(section) ? "" : section));

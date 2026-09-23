@@ -2,7 +2,7 @@ name: PR validation
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, edited]
   merge_group:
     types: [checks_requested]
 
@@ -17,6 +17,7 @@ concurrency:
 jobs:
   classify:
     name: Classify changed paths
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     outputs:
       runtime: ${{ steps.paths.outputs.runtime }}
@@ -105,7 +106,7 @@ jobs:
         env:
           BASE_SHA: ${{ needs.classify.outputs.base_sha }}
           HEAD_SHA: ${{ needs.classify.outputs.head_sha }}
-        run: git diff --check "$BASE_SHA" "$HEAD_SHA"
+        run: git diff --check "$BASE_SHA...$HEAD_SHA"
       - name: Parse repository configuration
         run: |
           python - <<'PY'
@@ -136,9 +137,9 @@ jobs:
             match = source.match(/\A---\r?\n(.*?)\r?\n---(?:\r?\n|\z)/m)
             abort "#{path}: missing YAML frontmatter" unless match
             data = YAML.safe_load(match[1], aliases: false)
-            abort "#{path}: missing name or description" unless
-              data.is_a?(Hash) && data["name"].is_a?(String) && !data["name"].empty? &&
-              data["description"].is_a?(String) && !data["description"].empty?
+            abort "#{path}: name must match directory and description must be nonempty" unless
+              data.is_a?(Hash) && data["name"] == File.basename(File.dirname(path)) &&
+              data["description"].is_a?(String) && !data["description"].strip.empty?
           end
           issue_path = ".github/ISSUE_TEMPLATE/work_item.md"
           issue_source = File.read(issue_path)
@@ -184,13 +185,22 @@ jobs:
                   alias.asname or alias.name: f"{node.module}.{alias.name}"
                   for node in tree.body
                   if isinstance(node, ast.ImportFrom) and node.level == 0
-                  and node.module and node.module.startswith("tests.")
+                  and node.module
                   for alias in node.names
               }
               classes.update({
                   f"{module}.{node.name}": node
                   for node in tree.body if isinstance(node, ast.ClassDef)
               })
+
+          def parents(group):
+              module = group.rsplit(".", 1)[0]
+              for base in classes[group].bases:
+                  if isinstance(base, ast.Name):
+                      yield imports[module].get(base.id, f"{module}.{base.id}")
+                  elif isinstance(base, ast.Attribute) and isinstance(base.value, ast.Name):
+                      root = imports[module].get(base.value.id, base.value.id)
+                      yield f"{root}.{base.attr}"
 
           def has_test_method(group, seen):
               if group in seen or group not in classes:
@@ -199,16 +209,20 @@ jobs:
               if any(isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
                      and method.name.startswith("test") for method in node.body):
                   return True
-              module = group.rsplit(".", 1)[0]
-              for base in node.bases:
-                  if isinstance(base, ast.Name):
-                      parent = imports[module].get(base.id, f"{module}.{base.id}")
-                      if has_test_method(parent, seen | {group}):
-                          return True
-              return False
+              return any(has_test_method(parent, seen | {group}) for parent in parents(group))
+
+          def is_test_case(group, seen):
+              if group in ("unittest.TestCase", "unittest.case.TestCase",
+                           "unittest.IsolatedAsyncioTestCase",
+                           "unittest.async_case.IsolatedAsyncioTestCase"):
+                  return True
+              if group in seen or group not in classes:
+                  return False
+              return any(is_test_case(parent, seen | {group}) for parent in parents(group))
 
           stale_groups = sorted(group for group in weights.group_weights_microseconds
-                                if not has_test_method(group, set()))
+                                if not has_test_method(group, set())
+                                or not is_test_case(group, set()))
           if stale_groups:
               raise SystemExit("timing manifest stale test groups: " + ", ".join(stale_groups))
           for identifier in suite_policy.FAST_TEST_IDS:

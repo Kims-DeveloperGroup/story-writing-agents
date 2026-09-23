@@ -74,7 +74,8 @@ Review is milestone-based:
 Copilot uses Lite by default and Balanced only for high-risk changes. Merge blocks only on
 unresolved Copilot **High**, Codex **P0/P1**, branch-protection approvals, and required checks.
 Lower-severity feedback is nonblocking and may become follow-up work. Review/check evidence
-must match the current head SHA.
+must match the current base and head SHAs; retargeting the base restarts validation
+and review milestones.
 
 Automation that mutates Issues, Projects, PRs, merge state, or cleanup state runs only for the
 `workflow:managed` label. Removing that label authorizes only revocation of previously enabled
@@ -93,10 +94,13 @@ the reason and supporting evidence, then resolve it. Never leave an already addr
 open or resolve a finding that still needs work.
 For a blocking finding in a review body with no inline thread, a repository member or
 collaborator posts a substantive PR comment explaining the applied change or
-evidence-backed rejection and includes
-`<!-- ai-review-body-disposition:REVIEW_ID -->` with the numeric review ID. The AI gate
+evidence-backed rejection. Include the numeric review ID and these separate lines:
+`<!-- ai-review-body-disposition:REVIEW_ID -->`, `Decision: Applied` or
+`Decision: Rejected`, `Reason: ` followed by at least 40 characters, and
+`Evidence: ` followed by a relevant GitHub URL. The AI gate
 continues to count that same-head review body until this comment exists; a later clean
-review alone does not silently erase it. A code change starts a new-head review cycle.
+review alone does not silently erase it. If the review body is edited, post a fresh
+disposition after the edit. A code change starts a new-head review cycle.
 
 ## Verification Policy
 
