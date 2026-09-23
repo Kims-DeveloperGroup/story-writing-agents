@@ -1859,6 +1859,8 @@ class InteractiveExternalViewer:
     ) -> None:
         """Run one injected view while its host owns no terminal resource."""
 
+        if type(transient_only) is not bool:
+            raise TypeError("transient_only must be a bool")
         if not callable(operation):
             raise TypeError("operation must be callable")
         self._open(operation, transient_only=transient_only)
@@ -2208,6 +2210,8 @@ def _plain_external_view_opener(
         *,
         transient_only: bool = False,
     ) -> None:
+        if type(transient_only) is not bool:
+            raise TypeError("transient_only must be a bool")
         if not callable(operation):
             raise TypeError("operation must be callable")
         if transient_only:

@@ -268,6 +268,27 @@ class ExternalViewContractTests(unittest.TestCase):
         operation.assert_not_called()
         self.assertEqual(writes, [])
 
+    def test_viewer_and_callback_opener_reject_non_boolean_transient_flag(self) -> None:
+        writes: list[str] = []
+        read_line = mock.Mock(return_value="q")
+        terminal = InteractiveTerminal(read_line, writes.append)
+        operation = mock.Mock()
+
+        for value in (1, None):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(TypeError, "transient_only must be a bool"):
+                    InteractiveExternalViewer(terminal).open(  # type: ignore[arg-type]
+                        operation, transient_only=value
+                    )
+                with self.assertRaisesRegex(TypeError, "transient_only must be a bool"):
+                    terminal._external_view_open(  # type: ignore[arg-type]
+                        operation, transient_only=value
+                    )
+
+        operation.assert_not_called()
+        read_line.assert_not_called()
+        self.assertEqual(writes, [])
+
     def test_operation_and_cleanup_failure_precedence_preserves_identity(self) -> None:
         driver, *_rest = _raw_driver("q")
         active = RuntimeError("active")
@@ -432,6 +453,22 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
 
         with self.assertRaises(ExternalViewUnavailableError):
             driver.open_external_view(operation, transient_only=True)
+
+        operation.assert_not_called()
+        self.assertEqual(output.records, [])
+        self.assertEqual(termios.events, [])
+        fallback.assert_not_called()
+
+    def test_driver_rejects_non_boolean_transient_flag_before_terminal_access(self) -> None:
+        driver, _input, output, fallback, termios = _raw_driver("q")
+        operation = mock.Mock()
+
+        for value in (1, None):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(TypeError, "transient_only must be a bool"):
+                    driver.open_external_view(  # type: ignore[arg-type]
+                        operation, transient_only=value
+                    )
 
         operation.assert_not_called()
         self.assertEqual(output.records, [])

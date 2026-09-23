@@ -2361,6 +2361,8 @@ class RawTerminalDriver:
     ) -> None:
         """Run one injected viewer while retaining sole terminal ownership."""
 
+        if type(transient_only) is not bool:
+            raise TypeError("transient_only must be a bool")
         if not callable(operation):
             raise TypeError("operation must be callable")
         if self._progress_active:

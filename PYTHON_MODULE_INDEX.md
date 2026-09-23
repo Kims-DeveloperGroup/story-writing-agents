@@ -6251,7 +6251,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   rightmost cell, while persistent/static fallback rendering uses the full
   configured width.
   Package-internal `open_external_view` accepts one generic operation and a
-  `transient_only` flag that refuses line fallback before rendering content,
+  strict boolean `transient_only` flag that refuses line fallback before
+  rendering content,
   rejects reentry and progress overlap through the existing input latch, and
   supplies either a borrowed ordinary-line host or one raw-driver-owned host.
   The capable path alone owns raw activation, alternate-screen entry/exit,
