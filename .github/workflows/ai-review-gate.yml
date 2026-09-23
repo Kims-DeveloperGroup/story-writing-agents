@@ -36,7 +36,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'workflow_run' ||
       (github.event_name == 'pull_request_target' &&
-       (github.event.action == 'unlabeled' ||
+       (github.event.action == 'unlabeled' && github.event.label.name == 'workflow:managed' ||
         contains(github.event.pull_request.labels.*.name, 'workflow:managed'))) ||
       contains(github.event.pull_request.labels.*.name, 'workflow:managed') ||
       contains(github.event.issue.labels.*.name, 'workflow:managed')
@@ -109,6 +109,14 @@ jobs:
               }
             };
             const managed = pr.labels.some(label => label.name === "workflow:managed");
+            const managedLabelRemoved =
+              context.eventName === "pull_request_target" &&
+              context.payload.action === "unlabeled" &&
+              context.payload.label?.name === "workflow:managed";
+            if (!managed && !managedLabelRemoved) {
+              core.notice("PR is not workflow:managed; no status or merge state changed.");
+              return;
+            }
             if (pr.state !== "open" || pr.draft || !managed) {
               await disableAutoMerge("PR is closed, draft, or outside workflow:managed scope");
               core.notice("PR is closed, draft, or not workflow:managed; no status published.");
@@ -157,6 +165,8 @@ jobs:
               },
             );
             const validation = validationRuns
+              .filter(run => (run.pull_requests || []).some(
+                linked => linked.number === pullNumber))
               .sort((left, right) =>
                 new Date(right.created_at) - new Date(left.created_at))[0];
             const resolvedByComment = new Map();

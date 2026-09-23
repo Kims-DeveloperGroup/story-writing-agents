@@ -40,10 +40,7 @@ jobs:
                     body
                     headRefName
                     headRepository { nameWithOwner }
-                    completingIssues: closingIssuesReferences(
-                      first: 50
-                      excludeUserLinked: true
-                    ) {
+                    allClosingIssues: closingIssuesReferences(first: 50) {
                       nodes {
                         id
                         number
@@ -78,10 +75,13 @@ jobs:
             `, {owner, repo, number: pullNumber});
             const repository = response.repository;
             const pr = repository.pullRequest;
-            const completingIssues = pr.completingIssues.nodes;
+            const manuallyLinkedIssueIds = new Set(
+              pr.manuallyLinkedIssues.nodes.map(issue => issue.id));
+            const completingIssues = pr.allClosingIssues.nodes.filter(
+              issue => !manuallyLinkedIssueIds.has(issue.id));
             const completingIssueIds = new Set(completingIssues.map(issue => issue.id));
             const issuesByNumber = new Map([
-              ...completingIssues,
+              ...pr.allClosingIssues.nodes,
               ...pr.manuallyLinkedIssues.nodes,
             ].map(issue => [issue.number, issue]));
             const referencedNumbers = [...pr.body.matchAll(/\bRefs\s*:?\s*#(\d+)\b/gim)]
