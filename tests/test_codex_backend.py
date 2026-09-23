@@ -6858,6 +6858,27 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 explicit_null, request=request, action_index=2,
             )
 
+    def test_retrieval_non_string_kind_reports_exact_type_and_common_issues(self) -> None:
+        secret = "PRIVATE_NON_STRING_RETRIEVAL_KIND_한🙂"
+        schema = AgentBackend._conversation_retrieval_action_schema(
+            allowed_actions=(ConversationRetrievalActionKind.READ_HISTORY,),
+        )
+        issues = diagnose_json_text(
+            json.dumps({"action": {
+                "kind": {"private": secret},
+                "citation_id": 5,
+                "start_sequence": "invalid",
+            }}),
+            schema,
+        )
+        self.assertEqual(issues, (
+            "$.action.kind: expected an allowed string value, got object",
+            "$.action.citation_id: expected string, got integer",
+            "$.action.start_sequence: expected integer, got string",
+        ))
+        self.assertNotIn(secret, repr(issues))
+        self.assertNotIn("private", repr(issues))
+
     async def test_retrieval_handler_declaration_and_exact_outcome_protocol(
         self,
     ) -> None:

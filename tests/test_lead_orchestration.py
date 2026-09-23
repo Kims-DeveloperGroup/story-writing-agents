@@ -1099,6 +1099,30 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             "$.message: expected string, got integer",
         ))
 
+    async def test_non_string_lead_kind_reports_exact_type_and_common_issues(self) -> None:
+        conversation_id = self.conversation("Non-string Lead result discriminator")
+        self.backend.enqueue(_visible_outcome("answer"))
+        await self.runtime.lead_turn(
+            self.session_id, conversation_id, "Explain the collaboration workflow.",
+        )
+        action_variants = self.backend.calls[-1].schema["properties"]["action"]["anyOf"]
+        answer_variant = next(
+            variant for variant in action_variants
+            if variant["properties"]["kind"].get("enum") == ["answer"]
+        )
+        secret = "PRIVATE_NON_STRING_LEAD_KIND_한🙂"
+        issues = diagnose_json_text(
+            json.dumps({"kind": {"private": secret}, "message": 7}),
+            answer_variant["properties"]["result"],
+        )
+        self.assertEqual(issues, (
+            "$.kind: expected an allowed string value, got object",
+            "$.authoring_scope: required property is missing",
+            "$.message: expected string, got integer",
+        ))
+        self.assertNotIn(secret, repr(issues))
+        self.assertNotIn("private", repr(issues))
+
     async def test_front_schema_is_minimal_closed_and_provider_strict(self) -> None:
         conversation_id = self.conversation("Minimal schema")
         self.backend.enqueue(_visible_outcome("answer"))

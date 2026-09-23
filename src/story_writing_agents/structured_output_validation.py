@@ -129,20 +129,23 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str) -> list[st
     if type(variants) is list and variants:
         if type(value) is dict:
             for discriminator in ("kind", "action", "decision", "operation"):
-                supplied = value.get(discriminator)
-                if type(supplied) is not str:
+                if discriminator not in value:
                     continue
+                supplied = value[discriminator]
                 candidates = [
                     child
                     for variant in variants
                     if (child := _discriminator_schema(variant, discriminator)) is not None
                     and type(child.get("enum")) is list
                 ]
-                matches = [
-                    variant for variant in variants
-                    if (child := _discriminator_schema(variant, discriminator)) is not None
-                    and supplied in child.get("enum", ())
-                ]
+                matches = (
+                    [
+                        variant for variant in variants
+                        if (child := _discriminator_schema(variant, discriminator)) is not None
+                        and supplied in child.get("enum", ())
+                    ]
+                    if type(supplied) is str else []
+                )
                 if len(matches) == 1:
                     return _diagnose(value, matches[0], path)
                 if len(matches) > 1:
