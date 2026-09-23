@@ -18,12 +18,12 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 143.
 
-Direct internal dependency edges indexed: 575.
+Direct internal dependency edges indexed: 576.
 
 Directed internal dependency cycles indexed: 0.
 
 Edge and cycle totals exclude annotation-only `TYPE_CHECKING` imports. The
-all-import AST graph has 577 edges. Its two annotation-only edges are
+all-import AST graph has 578 edges. Its two annotation-only edges are
 `config -> workspace` and `interactive_terminal._core -> conversations`; the
 workspace cycle was already present in the 135-unit baseline
 (528 all-import / 526 runtime edges).
@@ -121,6 +121,7 @@ interactive_settings -> agents/config/errors/workspace
 interactive_terminal -> interactive_terminal._advisory_progress/interactive_terminal._core
 interactive_terminal._core -> agents/interactive_commands
                            -> agent_context.progress
+                           -> errors
                            -> interactive_terminal._advisory_progress
                            -> interactive_terminal._controls
                            -> interactive_terminal._driver
@@ -210,7 +211,7 @@ orchestrator -> agent_context.progress/artifact_proposals/backend/config/consens
              -> prompts/reply_trace/specialist_routing/workspace/workspace.initialization
              -> writing_artifacts/repository/runtime_references
 models -> conversations/agents/errors/reply_trace
-agent_context -> agent_context.accounting
+agent_context -> agent_context.accounting/agent_context.progress
 agent_context.accounting -> (standard library only)
 agent_context.actions -> agent_context.manifest/planning
 agent_context.continuation -> agent_context.manifest
@@ -8471,7 +8472,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- The combined runtime has 143 production units, 575 runtime edges, 577
+- The combined runtime has 143 production units, 576 runtime edges, 578
   all-import edges, and no directed runtime cycle. Whole-source path parity is
   exact. Specialist routing adds one pure module and five net inward runtime
   edges over the provider-recovery baseline: artifact proposals replace their

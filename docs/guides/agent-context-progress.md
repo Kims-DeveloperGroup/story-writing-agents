@@ -71,10 +71,16 @@ display transient status notices and a bounded rolling preview of streamed outpu
 that is erased cleanly prior to persistent output.
 
 The raw driver redraws the whole multiline frame in ANSI-capable and plain
-`NO_COLOR` modes and clears it before persistent output. Ordinary line-input,
-non-TTY, `TERM=dumb`, non-POSIX, and uncertain-capability paths await the same
-operation silently. Native authentication temporarily owns the terminal during
-recovery, but the same monotonic timer resumes afterward rather than restarting.
+`NO_COLOR` modes. When `/progress on` (expanded mode) is active during an agent
+turn, the frame remains visible upon turn completion as an interactive nested
+scroll view allowing inspection before proceeding. When `/progress off` (collapsed
+mode) is set, transient progress frames are cleared cleanly upon completion
+before persistent output. Non-turn background operations (such as startup storage
+activation, auth probes, and picker preparation) are always cleared upon completion.
+Ordinary line-input, non-TTY, `TERM=dumb`, non-POSIX, and uncertain-capability paths
+await the same operation silently. Native authentication temporarily owns the
+terminal during recovery, but the same monotonic timer resumes afterward rather
+than restarting.
 
 Intermediate SEARCH/READ cards are transient. After confirmed specialist work,
 persistent specialist panels follow proposal order. A successful panel includes

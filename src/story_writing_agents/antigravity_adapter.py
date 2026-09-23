@@ -1193,23 +1193,31 @@ class AntigravityAdapter:
                 "content_delta",
                 "token",
                 "agent_message",
+                "agent_response",
                 "text",
             }:
-                raw_text = (
-                    event.get("text")
-                    if "text" in event
-                    else event.get("delta")
-                    if "delta" in event
-                    else event.get("content")
+                is_agent_response = (
+                    event_type in {"agent_message", "agent_response"}
+                    and str(event.get("step_type") or "agent_response").strip().lower() == "agent_response"
+                ) or (
+                    str(event.get("step_type") or "").strip().lower() == "agent_response"
                 )
-                if isinstance(raw_text, str) and raw_text:
-                    emit_stream_event(
-                        ProviderStreamEvent(
-                            ProviderStreamEventKind.TEXT_DELTA,
-                            agent_id,
-                            raw_text,
-                        )
+                if is_agent_response:
+                    raw_text = (
+                        event.get("text")
+                        if "text" in event
+                        else event.get("delta")
+                        if "delta" in event
+                        else event.get("content")
                     )
+                    if isinstance(raw_text, str) and raw_text:
+                        emit_stream_event(
+                            ProviderStreamEvent(
+                                ProviderStreamEventKind.TEXT_DELTA,
+                                agent_id,
+                                raw_text,
+                            )
+                        )
             elif event_type == "init":
                 init_data = event.get("init")
                 if init_data is not None and type(init_data) is not dict:

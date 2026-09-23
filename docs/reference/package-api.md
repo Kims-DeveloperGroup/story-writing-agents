@@ -24,8 +24,8 @@ The stable inventories in this revision are:
 | `story_writing_agents.writing_artifacts` | 76 | Canonical artifact/reference values plus pure exact change-set, relationship-policy, and artifact-application contracts |
 | `story_writing_agents.artifact_proposals` | 16 | Direct-only pure intent, evidence, exact candidate, reviewer-map, and strict candidate-codec contracts |
 
-The production graph has 143 modules, 575 runtime dependency edges, no runtime
-cycles, and 577 edges when annotation-only imports are included. The package
+The production graph has 143 modules, 576 runtime dependency edges, no runtime
+cycles, and 578 edges when annotation-only imports are included. The package
 root has 106 exports. The conversations facade contributes 120 event exports
 and 30 context exports; its bindings are identical to the owner bindings.
 Session-transition integration contributes accepted orchestration-facing edges

@@ -613,7 +613,7 @@ class InteractiveLeadAdapter:
                     self._progress.run(wait_for_operation_or_auth())
                 )
                 if task.done():
-                    return outcome
+                    return task.result()
                 key = recovery.next_request()
                 # Runner and progress have both returned before native TTY use.
                 authenticated = self._recover_authentication(key[0])

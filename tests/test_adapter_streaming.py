@@ -214,7 +214,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         stream_lines = [
             b'{"type":"turn_start"}\n',
             b'{"type":"thought","text":"Assessing historical parallels..."}\n',
-            b'{"type":"text_delta","text":"The banners waved in the freezing mist."}\n',
+            b'{"type":"agent_message","text":"The banners waved in the freezing mist."}\n',
             terminal_json_bytes,
         ]
 
@@ -2241,6 +2241,58 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         text_deltas = [e for e in events if e.kind == ProviderStreamEventKind.TEXT_DELTA]
         self.assertEqual(len(text_deltas), 0)
+
+    async def test_antigravity_adapter_generic_untyped_text_delta_ignored_without_agent_response_shape(self) -> None:
+        """Verify generic text_delta without step_type='agent_response' is ignored, while explicit shapes emit."""
+        adapter, binding = self._make_agy_binding("session_untyped_delta")
+        events: list[ProviderStreamEvent] = []
+
+        invocation = ProviderInvocation(
+            session_id="session_untyped_delta",
+            schema={"type": "object"},
+            payload={},
+            thread_id="thread_agy_untyped",
+            stream_sink=events.append,
+        )
+
+        terminal_result = {
+            "conversation_id": "thread_agy_untyped",
+            "status": "SUCCESS",
+            "structured_output": {},
+            "json_schema": {"type": "object"},
+        }
+        stream_lines = [
+            b'{"type":"text_delta","text":"generic text ignored"}\n',
+            b'{"type":"content_delta","content":"generic content ignored"}\n',
+            b'{"type":"text_delta","step_type":"agent_response","text":"typed delta accepted"}\n',
+            b'{"type":"agent_message","text":"agent message accepted"}\n',
+            b'{"type":"agent_response","text":"agent response accepted"}\n',
+            b'{"type":"agent_message","step_type":"thought","text":"mismatched step_type ignored"}\n',
+            json.dumps(terminal_result).encode("utf-8") + b"\n",
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            await adapter.invoke(binding, invocation)
+
+        text_deltas = [e.text for e in events if e.kind == ProviderStreamEventKind.TEXT_DELTA]
+        self.assertEqual(
+            text_deltas,
+            [
+                "typed delta accepted",
+                "agent message accepted",
+                "agent response accepted",
+            ],
+        )
 
 
 if __name__ == "__main__":

@@ -13763,6 +13763,41 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             ).submit(_UNIQUE_C, "cancel commit")
             self.assertEqual(tuple(label for label, _value in calls), ("application",))
 
+    def test_run_operation_returns_task_result_when_task_completes_after_auth_ready(self) -> None:
+        """Verify _run_operation reads authoritative task result if task completes during progress cleanup."""
+        import asyncio
+        from story_writing_agents.interactive_controller._lead_policy import InteractiveLeadAdapter
+
+        expected_result = object()
+
+        async def fake_op():
+            return expected_result
+
+        runner = asyncio.Runner()
+        self.addCleanup(runner.close)
+
+        class FakeProgress:
+            def run(self, coro, **kwargs):
+                async def wrapper():
+                    await coro
+                    # Simulate progress returning None (e.g. from wait_for_operation_or_auth when auth was ready)
+                    return None
+                return wrapper()
+
+        session = RuntimeSession.__new__(RuntimeSession)
+        adapter = InteractiveLeadAdapter(
+            session,
+            runner,
+            FakeProgress(),  # type: ignore[arg-type]
+            mock.MagicMock(),
+            mock.MagicMock(),
+            mock.MagicMock(),
+            recover_authentication=lambda _provider: True,
+        )
+
+        res = adapter._run_operation(fake_op())
+        self.assertIs(res, expected_result)
+
 
 if __name__ == "__main__":
     unittest.main()
