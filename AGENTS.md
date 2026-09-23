@@ -37,13 +37,5 @@ permits read-only work only. Load `$github-task-lifecycle` and follow
 
 ## Verification
 
-Runtime code changes require runtime tests through the canonical runner:
-
-```bash
-PYTHONPATH=src python -m tests.runner run
-```
-
-Start with affected selectors and broaden only for risk, failure, or a changed dependency
-surface. Reuse unchanged successful evidence. Policy, documentation, templates, skills,
-development-agent configuration, module-index-only, and test-only changes require static
-validation and diff review, not runtime tests.
+Runtime tests are required only for runtime-code changes. Follow the verification rule in
+[GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md); other changes need static validation and diff review.

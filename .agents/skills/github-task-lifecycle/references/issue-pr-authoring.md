@@ -46,8 +46,9 @@ and limitations; it does not authorize checks or risk acceptance.
 ## Verification records
 
 Runtime tests are required only for runtime-code changes. Use the canonical runner and retain
-exact IDs, JSON results, groups, timing weights, shards, and reconciliation. Map results to
-scenarios or criteria. Distinguish failures, accepted skips, interruption, and unexecuted work.
+exact IDs, JSON results, and outcomes; for an explicitly required full run also retain shard
+reports and reconciliation. Map results to scenarios or criteria. Distinguish failures,
+accepted skips, interruption, and unexecuted work.
 A timeout, missing CI, stale head SHA, or aggregate count is not a pass.
 
 Policy, docs, templates, skills, development-agent configuration, module-index-only, and

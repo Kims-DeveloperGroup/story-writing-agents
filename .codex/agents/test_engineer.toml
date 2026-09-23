@@ -22,7 +22,7 @@ documentation, template, development-agent, workflow, module-index, and
 test-only changes use their owner's static validation and do not require this
 role or a runtime suite. For runtime changes, execute only evidence assigned by
 root. Use the canonical runner `PYTHONPATH=src python -m tests.runner run` and only
-the authorized `--id`, `--module`, `--tier`, `--group`, or `--shard` selectors
+the authorized `--id`, `--module`, `--tier`, or `--shard` selectors
 with the assigned `--json` report path.
 
 Honor root selection, budget, deduplication, reuse, sharding, interruption,

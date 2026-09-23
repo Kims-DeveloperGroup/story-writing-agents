@@ -84,10 +84,12 @@ links, and remote-branch cleanup; failures remain visible for root repair.
 
 ## Verification Policy
 
-Runtime code changes require runtime tests through
-`PYTHONPATH=src python -m tests.runner run`. Select affected groups first and retain exact IDs,
-JSON evidence, timing weights, shard identity, outcomes, and reconciliation. Expand only for a
-concrete risk or failure.
+Runtime-code changes require the current-head fast CI tier and relevant tests selected with
+`PYTHONPATH=src python -m tests.runner run` and exact `--module` or `--id` selectors. Record
+the selected IDs, command, result, and head SHA in the PR. Add a behavioral test when changed
+behavior lacks one. Use the `test:full` label and reconcile both full-suite shards only when
+impact cannot be bounded or a
+full run is explicitly required; it is not the default PR gate.
 
 Policy, docs, templates, skills, development-agent configuration, module-index-only, and
 test-only changes use static validation and diff review; they do not require runtime tests.

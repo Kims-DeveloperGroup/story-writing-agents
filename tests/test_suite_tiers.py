@@ -67,105 +67,6 @@ def _write_weights(path: Path, *, groups: dict[str, int] | None = None) -> None:
 
 
 class LanePolicyTests(unittest.TestCase):
-    def test_repository_groups_keep_the_slow_storage_split_explicit(self):
-        self.assertEqual(
-            set(suite_policy.AFFECTED_GROUPS),
-            {
-                "artifact-storage",
-                "database",
-                "git-storage",
-                "interactive-terminal",
-                "provider-process",
-                "runner",
-                "session-runtime",
-                "workspace-core",
-                "workspace-session",
-            },
-        )
-        git_modules = {
-            selector.module
-            for selector in suite_policy.AFFECTED_GROUPS["git-storage"]
-        }
-        workspace_session_modules = {
-            selector.module
-            for selector in suite_policy.AFFECTED_GROUPS["workspace-session"]
-        }
-        session_runtime_modules = {
-            selector.module
-            for selector in suite_policy.AFFECTED_GROUPS["session-runtime"]
-        }
-        database_modules = {
-            selector.module
-            for selector in suite_policy.AFFECTED_GROUPS["database"]
-        }
-        workspace_modules = {
-            selector.module
-            for selector in suite_policy.AFFECTED_GROUPS["workspace-core"]
-        }
-        artifact_modules = {
-            selector.module
-            for selector in suite_policy.AFFECTED_GROUPS["artifact-storage"]
-        }
-        self.assertFalse(git_modules & database_modules)
-        self.assertFalse(database_modules & workspace_modules)
-        self.assertFalse(database_modules & artifact_modules)
-        self.assertFalse(workspace_modules & artifact_modules)
-        self.assertFalse(git_modules & workspace_session_modules)
-        self.assertFalse(git_modules & session_runtime_modules)
-        self.assertFalse(workspace_session_modules & session_runtime_modules)
-        self.assertFalse(database_modules & workspace_session_modules)
-        self.assertEqual(
-            git_modules,
-            {
-                "tests.test_git_adapter_integration",
-                "tests.test_git_adapter_process",
-                "tests.test_git_contracts",
-                "tests.test_git_external_operation_inspection",
-                "tests.test_git_linked_worktree_reads",
-                "tests.test_git_process",
-                "tests.test_git_process_profiles",
-                "tests.test_git_repository_lock",
-                "tests.test_git_session_checkpoint_classifier",
-                "tests.test_git_session_checkpoint_contracts",
-                "tests.test_git_session_checkpoint_process",
-                "tests.test_git_session_checkpoints",
-                "tests.test_git_session_contracts",
-                "tests.test_git_session_history",
-                "tests.test_git_session_history_contracts",
-                "tests.test_git_session_resources",
-                "tests.test_git_story_commit_candidates",
-                "tests.test_git_story_commit_contracts",
-                "tests.test_git_story_commit_process",
-                "tests.test_git_story_commits",
-            },
-        )
-        self.assertIn("tests.test_git_session_checkpoints", git_modules)
-        self.assertIn("tests.test_session_lifecycle", session_runtime_modules)
-        self.assertEqual(
-            workspace_session_modules,
-            {
-                "tests.test_workspace_session_history",
-                "tests.test_workspace_session_resources",
-            },
-        )
-        self.assertEqual(
-            database_modules,
-            {
-                "tests.test_sqlite_collaboration_event_store",
-                "tests.test_sqlite_conversation_storage",
-                "tests.test_sqlite_database",
-            },
-        )
-        self.assertEqual(
-            workspace_modules,
-            {
-                "tests.test_workspace_and_config",
-                "tests.test_workspace_fixtures",
-                "tests.test_workspace_v2_initialization",
-            },
-        )
-        self.assertEqual(artifact_modules, {"tests.test_writing_artifacts"})
-
     def test_fast_lane_is_exact_canonical_order_and_missing_ids_fail(self):
         canonical = ("z.Case.test_z", "a.Case.test_a", "m.Case.test_m")
         with mock.patch.object(
@@ -178,31 +79,6 @@ class LanePolicyTests(unittest.TestCase):
                 suite_policy.SuitePolicyError, "missing canonical IDs"
             ):
                 suite_policy.select_fast(canonical[:2])
-
-    def test_named_groups_form_union_and_reject_unknown_or_empty_selectors(self):
-        canonical = (
-            "tests.alpha.First.test_one",
-            "tests.alpha.Second.test_two",
-            "tests.beta.Only.test_three",
-        )
-        groups = {
-            "alpha": (suite_policy.GroupSelector("tests.alpha"),),
-            "one": (suite_policy.GroupSelector("tests.alpha", "First"),),
-            "empty": (suite_policy.GroupSelector("tests.missing"),),
-        }
-        with mock.patch.object(suite_policy, "AFFECTED_GROUPS", groups):
-            self.assertEqual(
-                suite_policy.select_affected_groups(canonical, ("one", "alpha")),
-                canonical[:2],
-            )
-            with self.assertRaisesRegex(
-                suite_policy.SuitePolicyError, "unknown affected groups"
-            ):
-                suite_policy.select_affected_groups(canonical, ("unknown",))
-            with self.assertRaisesRegex(
-                suite_policy.SuitePolicyError, "empty selector"
-            ):
-                suite_policy.select_affected_groups(canonical, ("empty",))
 
     def test_shard_selector_rejects_other_selectors_and_invalid_identity(self):
         collection = _passing_collection()
