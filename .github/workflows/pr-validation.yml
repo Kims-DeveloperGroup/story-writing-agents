@@ -17,7 +17,6 @@ concurrency:
 jobs:
   classify:
     name: Classify changed paths
-    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     outputs:
       runtime: ${{ steps.paths.outputs.runtime }}
@@ -330,7 +329,9 @@ jobs:
                   if not target or target.startswith(("http://", "https://", "mailto:")):
                       continue
                   path, _, fragment = target.partition("#")
-                  destination = (source.parent / unquote(path)).resolve() if path else source
+                  decoded = unquote(path)
+                  destination = ((root / decoded.lstrip("/")) if decoded.startswith("/")
+                                 else (source.parent / decoded)).resolve() if path else source
                   try:
                       destination.relative_to(root)
                   except ValueError:

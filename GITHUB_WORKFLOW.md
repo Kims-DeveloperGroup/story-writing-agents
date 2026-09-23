@@ -92,6 +92,11 @@ threads whose location has drifted or become outdated. For an applied finding, r
 thread with the change and verification, then resolve it. For a rejected finding, reply with
 the reason and supporting evidence, then resolve it. Never leave an already addressed thread
 open or resolve a finding that still needs work.
+For a blocking inline finding, the reply uses separate `Decision: Applied` or
+`Decision: Rejected`, `Reason: ` (at least 40 characters), and `Evidence: ` (a relevant
+GitHub URL) lines before resolving. The reply must come from a repository member or
+collaborator and be newer than the finding's last edit; a bare acknowledgment does not
+clear the gate.
 For a blocking finding in a review body with no inline thread, a repository member or
 collaborator posts a substantive PR comment explaining the applied change or
 evidence-backed rejection. Include the numeric review ID and these separate lines:
