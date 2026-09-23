@@ -821,7 +821,16 @@ class RawTerminalDriver:
         elif keep_frame is not None:
             should_keep = bool(keep_frame)
 
-        if not failed:
+        is_cancelled = isinstance(
+            operation_failure, (asyncio.CancelledError, KeyboardInterrupt)
+        ) or isinstance(progress_failure, (asyncio.CancelledError, KeyboardInterrupt))
+
+        if is_cancelled:
+            try:
+                self._clear_progress_frame()
+            except BaseException as exc:
+                clear_failure = exc
+        elif not failed:
             if should_keep:
                 if (
                     scroll_state_provider is not None

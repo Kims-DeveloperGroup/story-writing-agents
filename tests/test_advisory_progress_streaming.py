@@ -2976,5 +2976,57 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         progress.finish()
         self.assertIsNone(progress._state.failure_snapshot)
 
+    def test_cancellation_clears_frame_and_does_not_open_nested_scroll_inspector_under_keep_frame(self) -> None:
+        """Verify CancelledError and KeyboardInterrupt clear frame and bypass inspector even with keep_frame=True."""
+        capabilities = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+        out = io.StringIO()
+        driver = RawTerminalDriver(
+            lambda _p: "",
+            io.StringIO(),
+            out,
+            lambda s, e: (s, None),
+            lambda s, e, h: (s, None),
+            lambda h, t: h,
+        )
+
+        for error_type in (asyncio.CancelledError, KeyboardInterrupt):
+            with self.subTest(error_type=error_type):
+                async def failing_op():
+                    raise error_type()
+
+                inspector_called = []
+
+                def fake_inspector(*args, **kwargs):
+                    inspector_called.append(True)
+
+                with (
+                    mock.patch.object(RawTerminalDriver, "capabilities", return_value=capabilities),
+                    mock.patch.object(RawTerminalDriver, "run_nested_scroll_inspector", side_effect=fake_inspector),
+                    mock.patch.object(RawTerminalDriver, "_clear_progress_frame") as mock_clear,
+                ):
+                    with self.assertRaises(error_type):
+                        asyncio.run(
+                            driver.run_advisory_progress(
+                                failing_op(),
+                                lambda _f: "Running...",
+                                scroll_state_provider=lambda _r: mock.MagicMock(),
+                                nested_scroll_transition=mock.MagicMock(),
+                                nested_scroll_renderer=mock.MagicMock(),
+                                keep_frame=True,
+                            )
+                        )
+
+                    self.assertEqual(len(inspector_called), 0)
+                    self.assertTrue(mock_clear.called)
+
+
 
 
