@@ -66,19 +66,28 @@ AFFECTED_GROUPS: Mapping[str, tuple[GroupSelector, ...]] = {
             "tests.test_git_adapter_integration",
             "tests.test_git_adapter_process",
             "tests.test_git_contracts",
-            "tests.test_git_session_history",
-            "tests.test_git_session_resources",
-        )
-    ),
-    "session-runtime": tuple(
-        GroupSelector(module)
-        for module in (
+            "tests.test_git_external_operation_inspection",
+            "tests.test_git_linked_worktree_reads",
+            "tests.test_git_process",
+            "tests.test_git_process_profiles",
+            "tests.test_git_repository_lock",
             "tests.test_git_session_checkpoint_classifier",
             "tests.test_git_session_checkpoint_contracts",
             "tests.test_git_session_checkpoint_process",
             "tests.test_git_session_checkpoints",
             "tests.test_git_session_contracts",
+            "tests.test_git_session_history",
             "tests.test_git_session_history_contracts",
+            "tests.test_git_session_resources",
+            "tests.test_git_story_commit_candidates",
+            "tests.test_git_story_commit_contracts",
+            "tests.test_git_story_commit_process",
+            "tests.test_git_story_commits",
+        )
+    ),
+    "session-runtime": tuple(
+        GroupSelector(module)
+        for module in (
             "tests.test_session_lifecycle",
             "tests.test_session_recovery_contracts",
             "tests.test_session_recovery_reconciliation",

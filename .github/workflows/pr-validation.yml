@@ -78,6 +78,7 @@ jobs:
             for (const path of paths.filter(isRuntime)) {
               if (path.includes("/git/")) add("git-storage");
               if (path.includes("session_")) add("session-runtime");
+              if (path.includes("/conversation_storage/sqlite")) add("database");
               if (path.includes("workspace/") || path.includes("conversation_storage/") || path.includes("conversations/")) {
                 add("workspace-session");
                 add("workspace-core");

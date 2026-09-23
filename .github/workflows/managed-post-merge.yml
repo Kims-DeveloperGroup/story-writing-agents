@@ -37,9 +37,29 @@ jobs:
                 repository(owner: $owner, name: $repo) {
                   defaultBranchRef { name }
                   pullRequest(number: $number) {
+                    body
                     headRefName
                     headRepository { nameWithOwner }
-                    closingIssuesReferences(first: 50) {
+                    completingIssues: closingIssuesReferences(
+                      first: 50
+                      excludeUserLinked: true
+                    ) {
+                      nodes {
+                        id
+                        number
+                        state
+                        url
+                        linkedBranches(first: 50) {
+                          nodes {
+                            ref { name repository { nameWithOwner } }
+                          }
+                        }
+                      }
+                    }
+                    manuallyLinkedIssues: closingIssuesReferences(
+                      first: 50
+                      userLinkedOnly: true
+                    ) {
                       nodes {
                         id
                         number
@@ -58,7 +78,41 @@ jobs:
             `, {owner, repo, number: pullNumber});
             const repository = response.repository;
             const pr = repository.pullRequest;
-            const issues = pr.closingIssuesReferences.nodes;
+            const completingIssues = pr.completingIssues.nodes;
+            const completingIssueIds = new Set(completingIssues.map(issue => issue.id));
+            const issuesByNumber = new Map([
+              ...completingIssues,
+              ...pr.manuallyLinkedIssues.nodes,
+            ].map(issue => [issue.number, issue]));
+            const referencedNumbers = [...pr.body.matchAll(/\bRefs\s*:?\s*#(\d+)\b/gim)]
+              .map(match => Number(match[1]));
+            for (const issueNumber of referencedNumbers) {
+              if (issuesByNumber.has(issueNumber)) continue;
+              const issueResponse = await github.graphql(`
+                query($owner: String!, $repo: String!, $number: Int!) {
+                  repository(owner: $owner, name: $repo) {
+                    issue(number: $number) {
+                      id
+                      number
+                      state
+                      url
+                      linkedBranches(first: 50) {
+                        nodes {
+                          ref { name repository { nameWithOwner } }
+                        }
+                      }
+                    }
+                  }
+                }
+              `, {owner, repo, number: issueNumber});
+              const issue = issueResponse.repository.issue;
+              if (issue) {
+                issuesByNumber.set(issue.number, issue);
+              } else {
+                failures.push(`Refs #${issueNumber} does not resolve to an Issue`);
+              }
+            }
+            const issues = [...issuesByNumber.values()];
 
             // Capture Development links before native branch deletion can remove
             // them, then allow Issue/Project and remote-branch automation to settle.
@@ -102,7 +156,8 @@ jobs:
                     }
                   }
                 `, {id: issue.id});
-                if (projectResponse.node.state !== "CLOSED") {
+                const completing = completingIssueIds.has(issue.id);
+                if (completing && projectResponse.node.state !== "CLOSED") {
                   failures.push(
                     `#${issue.number} is ${projectResponse.node.state}, not CLOSED`);
                 }
@@ -120,16 +175,16 @@ jobs:
                   const status = item.fieldValues.nodes.find(value => value.field?.name === "Status");
                   if (!status) {
                     failures.push(`#${issue.number} has no readable Project Status`);
-                  } else if (status.name !== "Done") {
+                  } else if (completing && status.name !== "Done") {
                     failures.push(`#${issue.number} Project Status is ${status.name}, not Done`);
                   }
                 }
               } catch (error) {
-                warnings.push(`#${issue.number} Project status unreadable: ${error.message}`);
+                failures.push(`#${issue.number} Project status unreadable: ${error.message}`);
               }
             }
             if (!issues.length) {
-              warnings.push("PR has no closing Issue reference; manual Issue lifecycle may still be required");
+              failures.push("PR has no verifiable owning Issue reference");
             }
 
             const sameRepository = pr.headRepository?.nameWithOwner === `${owner}/${repo}`;
@@ -149,7 +204,8 @@ jobs:
 
             core.summary.addHeading("Managed post-merge verification");
             core.summary.addList([
-              `${issues.length} closing Issue(s) inspected`,
+              `${issues.length} owning Issue candidate(s) inspected`,
+              `${completingIssueIds.size} completing Issue(s) expected CLOSED and Done`,
               sameRepository ? `remote head checked: ${pr.headRefName}` : "fork head not mutated",
             ]);
             if (warnings.length) core.summary.addHeading("Warnings", 3).addList(warnings);

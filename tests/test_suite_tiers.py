@@ -114,11 +114,32 @@ class LanePolicyTests(unittest.TestCase):
         self.assertFalse(git_modules & session_runtime_modules)
         self.assertFalse(workspace_session_modules & session_runtime_modules)
         self.assertFalse(database_modules & workspace_session_modules)
-        self.assertIn("tests.test_git_session_resources", git_modules)
-        self.assertIn(
-            "tests.test_git_session_checkpoints",
-            session_runtime_modules,
+        self.assertEqual(
+            git_modules,
+            {
+                "tests.test_git_adapter_integration",
+                "tests.test_git_adapter_process",
+                "tests.test_git_contracts",
+                "tests.test_git_external_operation_inspection",
+                "tests.test_git_linked_worktree_reads",
+                "tests.test_git_process",
+                "tests.test_git_process_profiles",
+                "tests.test_git_repository_lock",
+                "tests.test_git_session_checkpoint_classifier",
+                "tests.test_git_session_checkpoint_contracts",
+                "tests.test_git_session_checkpoint_process",
+                "tests.test_git_session_checkpoints",
+                "tests.test_git_session_contracts",
+                "tests.test_git_session_history",
+                "tests.test_git_session_history_contracts",
+                "tests.test_git_session_resources",
+                "tests.test_git_story_commit_candidates",
+                "tests.test_git_story_commit_contracts",
+                "tests.test_git_story_commit_process",
+                "tests.test_git_story_commits",
+            },
         )
+        self.assertIn("tests.test_git_session_checkpoints", git_modules)
         self.assertIn("tests.test_session_lifecycle", session_runtime_modules)
         self.assertEqual(
             workspace_session_modules,
