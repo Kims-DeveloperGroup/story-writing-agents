@@ -4431,9 +4431,17 @@ class AgentBackend:
                     if stored is not None:
                         taint_thread()
                 finally:
+                    malformed_precheck = schema_issues in {
+                        ("$: malformed JSON",),
+                        ("$: duplicate object key",),
+                    }
                     self._capture_rejected_without_replacing(
                         exchange,
-                        self._structured_rejection_code(failure),
+                        (
+                            AgentExchangeTerminalCode.MALFORMED_STRUCTURED_RESPONSE
+                            if malformed_precheck
+                            else self._structured_rejection_code(failure)
+                        ),
                     )
                 issues = diagnose_json_text(result.response_text, schema)
                 details = bounded_chunks(

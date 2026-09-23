@@ -68,6 +68,7 @@ from story_writing_agents.conversation_storage import (
     compose_filesystem_conversation_storage,
 )
 from story_writing_agents.errors import BackendProtocolError
+from story_writing_agents.structured_output_validation import diagnose_json_text
 from story_writing_agents.writing_artifacts.authorization import (
     ReferenceAuthorizationErrorCode,
 )
@@ -1074,6 +1075,29 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 )
                 self.assertEqual(len(visible), 1)
                 self.assertEqual(visible[0].content, result.message)
+
+    async def test_kind_bearing_lead_result_reports_common_anyof_issues(self) -> None:
+        conversation_id = self.conversation("Lead result schema diagnostics")
+        self.backend.enqueue(_visible_outcome("answer"))
+        await self.runtime.lead_turn(
+            self.session_id, conversation_id, "Explain the collaboration workflow.",
+        )
+        action_variants = self.backend.calls[-1].schema["properties"]["action"]["anyOf"]
+        answer_variant = next(
+            variant for variant in action_variants
+            if variant["properties"]["kind"].get("enum") == ["answer"]
+        )
+        result_schema = answer_variant["properties"]["result"]
+        self.assertTrue(any("kind" not in variant["properties"]
+                            for variant in result_schema["anyOf"]))
+        issues = diagnose_json_text(
+            json.dumps({"kind": "unknown_kind", "message": 7}), result_schema,
+        )
+        self.assertEqual(issues, (
+            "$.kind: expected an allowed string value, got string",
+            "$.authoring_scope: required property is missing",
+            "$.message: expected string, got integer",
+        ))
 
     async def test_front_schema_is_minimal_closed_and_provider_strict(self) -> None:
         conversation_id = self.conversation("Minimal schema")

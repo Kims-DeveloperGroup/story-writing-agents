@@ -112,6 +112,18 @@ def _issue(path: str, problem: str) -> str:
     return f"{path}: {problem}"
 
 
+def _discriminator_schema(
+    variant: object, discriminator: str,
+) -> Mapping[str, object] | None:
+    if not isinstance(variant, Mapping):
+        return None
+    properties = variant.get("properties")
+    if not isinstance(properties, Mapping):
+        return None
+    child = properties.get(discriminator)
+    return child if isinstance(child, Mapping) else None
+
+
 def _diagnose(value: object, schema: Mapping[str, object], path: str) -> list[str]:
     variants = schema.get("anyOf")
     if type(variants) is list and variants:
@@ -121,19 +133,15 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str) -> list[st
                 if type(supplied) is not str:
                     continue
                 candidates = [
-                    variant["properties"][discriminator]
+                    child
                     for variant in variants
-                    if isinstance(variant, Mapping)
-                    and isinstance(variant.get("properties"), Mapping)
-                    and isinstance(variant["properties"].get(discriminator), Mapping)
-                    and type(variant["properties"][discriminator].get("enum")) is list
+                    if (child := _discriminator_schema(variant, discriminator)) is not None
+                    and type(child.get("enum")) is list
                 ]
                 matches = [
                     variant for variant in variants
-                    if isinstance(variant, Mapping)
-                    and isinstance(variant.get("properties"), Mapping)
-                    and isinstance(variant["properties"].get(discriminator), Mapping)
-                    and supplied in variant["properties"][discriminator].get("enum", ())
+                    if (child := _discriminator_schema(variant, discriminator)) is not None
+                    and supplied in child.get("enum", ())
                 ]
                 if len(matches) == 1:
                     return _diagnose(value, matches[0], path)
@@ -229,7 +237,7 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str) -> list[st
             required = schema.get("required")
             names = (
                 tuple(item for item in required if type(item) is str)
-                if type(required) is list else tuple(properties)
+                if type(required) is list else ()
             )
             for name in names:
                 if name not in value:

@@ -5211,6 +5211,39 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIs(normal.trace.origin, ReplyTraceOrigin.PROVIDER)
         self.assertEqual(normal.validation_details, ())
 
+    async def test_malformed_direct_json_keeps_terminal_code_and_safe_detail(self) -> None:
+        session_id = "malformed_terminal_code"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        private = "PRIVATE_MALFORMED_PROVIDER_VALUE_한🙂"
+        responses = [f'{{"message":"{private}",', '{"message":']
+        with mock.patch.dict(
+            os.environ,
+            {"STORY_FAKE_CODEX_PHYSICAL_OUTPUTS": json.dumps(responses)},
+        ):
+            reply = await bound.converse(
+                self.conversation_request(session_id=session_id)
+            )
+        self.assertIs(reply.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
+        self.assertEqual(len(reply.validation_details), 2)
+        self.assertTrue(reply.validation_details[0].startswith("Original response"))
+        self.assertTrue(reply.validation_details[1].startswith("Repair response"))
+        self.assertTrue(all("$: malformed JSON" in item
+                            for item in reply.validation_details))
+        self.assertNotIn(private, repr(reply.validation_details))
+        outcomes = [
+            json.loads(record["content"])
+            for record in _agent_exchange_records(self.workspace)
+            if record["session_id"] == session_id
+            and record["request_type"] == "outcome"
+        ]
+        self.assertEqual(outcomes, [
+            {"code": "malformed_structured_response", "outcome": "rejected"},
+            {"code": "malformed_structured_response", "outcome": "rejected"},
+        ])
+
     async def test_structured_decode_failures_taint_existing_thread_once(
         self,
     ) -> None:

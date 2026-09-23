@@ -148,6 +148,26 @@ class StructuredOutputValidationTests(unittest.TestCase):
         )
         self.assertEqual(diagnose_json_text("{}", schema), ())
 
+    def test_properties_omitted_from_required_remain_optional(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string"},
+                "optional_count": {"type": "integer"},
+            },
+            "required": ["message"],
+            "additionalProperties": False,
+        }
+        self.assertEqual(diagnose_json_text('{"message":"ok"}', schema), ())
+        self.assertEqual(
+            diagnose_json_text('{"message":"ok","optional_count":"bad"}', schema),
+            ("$.optional_count: expected integer, got string",),
+        )
+        self.assertEqual(
+            diagnose_json_text("{}", schema),
+            ("$.message: required property is missing",),
+        )
+
     def test_bounded_chunks_preserve_order_and_over_32k_content(self) -> None:
         properties = {f"field_{index:04d}": {"type": "string"} for index in range(1500)}
         schema = {"type": "object", "properties": properties,
