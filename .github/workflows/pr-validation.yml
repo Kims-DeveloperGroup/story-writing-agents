@@ -206,14 +206,16 @@ jobs:
                       root = imports[module].get(base.value.id, base.value.id)
                       yield f"{root}.{base.attr}"
 
-          def has_test_method(group, seen):
+          def has_test_method(group, seen, method_name=None):
               if group in seen or group not in classes:
                   return False
               node = classes[group]
               if any(isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
-                     and method.name.startswith("test") for method in node.body):
+                     and (method.name == method_name if method_name else
+                          method.name.startswith("test")) for method in node.body):
                   return True
-              return any(has_test_method(parent, seen | {group}) for parent in parents(group))
+              return any(has_test_method(parent, seen | {group}, method_name)
+                         for parent in parents(group))
 
           def is_test_case(group, seen):
               if group in ("unittest.TestCase", "unittest.case.TestCase",
@@ -234,13 +236,9 @@ jobs:
               path = Path(*module.split(".")).with_suffix(".py")
               if not module.startswith("tests.") or not path.is_file():
                   raise SystemExit(f"fast-tier module missing: {identifier}")
-              tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-              if not is_test_case(f"{module}.{class_name}", set()) or not any(
-                  isinstance(node, ast.ClassDef) and node.name == class_name and
-                  any(isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) and
-                      method.name == method_name for method in node.body)
-                  for node in tree.body
-              ):
+              group = f"{module}.{class_name}"
+              if not is_test_case(group, set()) or not has_test_method(
+                  group, set(), method_name):
                   raise SystemExit(f"fast-tier test missing: {identifier}")
           PY
       - name: Validate locked vendor pins
