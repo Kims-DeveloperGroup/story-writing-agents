@@ -66,6 +66,7 @@ jobs:
               path.startsWith("config/") ||
               path === "pyproject.toml" ||
               path === "uv.lock" ||
+              path === "MANIFEST.in" ||
               path === ".gitmodules" ||
               path === "vendor/generic-rag" ||
               path === "vendor/jsonl-viewer";
@@ -246,6 +247,10 @@ jobs:
           python - <<'PY'
           import subprocess
           import tomllib
+          from pathlib import Path
+
+          if Path("MANIFEST.in").read_text(encoding="utf-8") != "prune vendor/jsonl-viewer\n":
+              raise SystemExit("MANIFEST.in must exclude vendored jsonl-viewer source")
 
           with open("uv.lock", "rb") as source:
               packages = {package["name"]: package for package in tomllib.load(source)["package"]}

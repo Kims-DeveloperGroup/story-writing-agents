@@ -161,17 +161,20 @@ jobs:
             const reviews = await github.paginate(github.rest.pulls.listReviews, {
               owner, repo, pull_number: pullNumber, per_page: 100,
             });
-            const current = reviews.filter(review =>
+            const sameHead = reviews.filter(review =>
               review.commit_id === pr.head.sha &&
-              review.state !== "DISMISSED" &&
               new Date(review.submitted_at) >= new Date(marker.created_at));
+            const current = sameHead.filter(review => review.state !== "DISMISSED");
             const copilotLogin = "copilot-pull-request-reviewer[bot]";
             const codexLogin = "chatgpt-codex-connector[bot]";
             const copilot = current.filter(review => review.user?.login === copilotLogin);
             const codex = current.filter(review => review.user?.login === codexLogin);
 
             const updatedAtByReview = new Map();
-            const botReviews = [...copilot, ...codex];
+            // Dismissal revokes approval, but must not erase an undisposed finding
+            // from the same head and review milestone.
+            const botReviews = sameHead.filter(review =>
+              [copilotLogin, codexLogin].includes(review.user?.login));
             for (let offset = 0; offset < botReviews.length; offset += 100) {
               const batch = botReviews.slice(offset, offset + 100);
               const response = await github.graphql(`
@@ -302,8 +305,10 @@ jobs:
             const copilotHigh = /\bseverity\s*[:=-]\s*(?:\*\*)?high\b|\[(?:severity\s*:\s*)?high\]|(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*\*)?high(?:\*\*)?\s*(?:severity)?\s*[:—-]/im;
             const codexBlocking = /\[(?:P0|P1)(?:\s+Badge)?\]/i;
             const blockers = [];
-            if (textsFor(copilot).some(text => copilotHigh.test(text))) blockers.push("Copilot High");
-            if (textsFor(codex).some(text => codexBlocking.test(text))) blockers.push("Codex P0/P1");
+            if (textsFor(botReviews.filter(review => review.user?.login === copilotLogin))
+                .some(text => copilotHigh.test(text))) blockers.push("Copilot High");
+            if (textsFor(botReviews.filter(review => review.user?.login === codexLogin))
+                .some(text => codexBlocking.test(text))) blockers.push("Codex P0/P1");
 
             let state;
             let description;
