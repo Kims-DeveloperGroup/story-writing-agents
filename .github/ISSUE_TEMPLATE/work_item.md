@@ -35,7 +35,7 @@ visible headings and their meaning.
 ## Acceptance criteria
 
 - [ ] {{Named scenario and observable completion condition.}}
-- [ ] {{Relevant failure, compatibility, or safety condition.}}
+- [ ] {{Named scenario or use case: relevant failure, compatibility, or safety condition and observable result.}}
 
 ## Boundaries and dependencies
 

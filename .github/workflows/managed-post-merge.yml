@@ -49,6 +49,7 @@ jobs:
                     headRefName
                     headRepository { nameWithOwner }
                     allClosingIssues: closingIssuesReferences(first: 50) {
+                      pageInfo { hasNextPage }
                       nodes {
                         id
                         number
@@ -60,6 +61,7 @@ jobs:
                       first: 50
                       userLinkedOnly: true
                     ) {
+                      pageInfo { hasNextPage }
                       nodes {
                         id
                         number
@@ -73,6 +75,11 @@ jobs:
             `, {owner, repo, number: pullNumber});
             const repository = response.repository;
             const pr = repository.pullRequest;
+            if (pr.allClosingIssues.pageInfo.hasNextPage ||
+                pr.manuallyLinkedIssues.pageInfo.hasNextPage) {
+              core.setFailed("Issue link connection exceeds 50; verify all relations before completion");
+              return;
+            }
             const completingIssues = pr.allClosingIssues.nodes;
             const completingIssueIds = new Set(completingIssues.map(issue => issue.id));
             const issuesByNumber = new Map([
