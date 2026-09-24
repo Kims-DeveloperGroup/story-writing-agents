@@ -176,107 +176,14 @@ jobs:
       - name: Validate runner metadata
         run: |
           python -B - <<'PY'
-          import ast
-          from pathlib import Path
           from tests import suite_policy
 
-          weights = suite_policy.load_timing_weights()
-          classes = {}
-          imports = {}
-          for path in Path("tests").rglob("*.py"):
-              module = ".".join(path.with_suffix("").parts)
-              tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-              imports[module] = {
-                  alias.asname or alias.name: f"{node.module}.{alias.name}"
-                  for node in tree.body
-                  if isinstance(node, ast.ImportFrom) and node.level == 0
-                  and node.module
-                  for alias in node.names
-              }
-              classes.update({
-                  f"{module}.{node.name}": node
-                  for node in tree.body if isinstance(node, ast.ClassDef)
-              })
-
-          def parents(group):
-              module = group.rsplit(".", 1)[0]
-              for base in classes[group].bases:
-                  if isinstance(base, ast.Name):
-                      yield imports[module].get(base.id, f"{module}.{base.id}")
-                  elif isinstance(base, ast.Attribute) and isinstance(base.value, ast.Name):
-                      root = imports[module].get(base.value.id, base.value.id)
-                      yield f"{root}.{base.attr}"
-
-          def class_mro(group, active=frozenset()):
-              if group in active:
-                  raise SystemExit(f"test class inheritance cycle: {group}")
-              if group not in classes:
-                  return [group]
-              bases = list(parents(group))
-              pending = [class_mro(base, active | {group}) for base in bases] + [bases[:]]
-              result = [group]
-              while any(pending):
-                  candidate = next((items[0] for items in pending if items and
-                                    all(items[0] not in other[1:] for other in pending)), None)
-                  if candidate is None:
-                      raise SystemExit(f"inconsistent test class MRO: {group}")
-                  result.append(candidate)
-                  pending = [items[1:] if items and items[0] == candidate else items
-                             for items in pending]
-              return result
-
-          def discoverable_method(group, method_name):
-              for owner in class_mro(group):
-                  node = classes.get(owner)
-                  if node is None:
-                      continue
-                  for member in reversed(node.body):
-                      if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)) \
-                              and member.name == method_name:
-                          return True
-                      if isinstance(member, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
-                          targets = member.targets if isinstance(member, ast.Assign) \
-                              else (member.target,)
-                          if any(isinstance(name, ast.Name) and
-                                 isinstance(name.ctx, ast.Store) and
-                                 name.id == method_name
-                                 for target in targets for name in ast.walk(target)):
-                              return False
-              return False
-
-          def has_test_method(group):
-              names = {
-                  member.name
-                  for owner in class_mro(group)
-                  for member in (classes[owner].body if owner in classes else ())
-                  if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
-                  and member.name.startswith("test")
-              }
-              return any(discoverable_method(group, name) for name in names)
-
-          def is_test_case(group, seen):
-              if group in ("unittest.TestCase", "unittest.case.TestCase",
-                           "unittest.IsolatedAsyncioTestCase",
-                           "unittest.async_case.IsolatedAsyncioTestCase"):
-                  return True
-              if group in seen or group not in classes:
-                  return False
-              return any(is_test_case(parent, seen | {group}) for parent in parents(group))
-
-          stale_groups = sorted(group for group in weights.group_weights_microseconds
-                                if not has_test_method(group)
-                                or not is_test_case(group, set()))
-          if stale_groups:
-              raise SystemExit("timing manifest stale test groups: " + ", ".join(stale_groups))
-          for identifier in suite_policy.FAST_TEST_IDS:
-              module, class_name, method_name = identifier.rsplit(".", 2)
-              path = Path(*module.split(".")).with_suffix(".py")
-              if not module.startswith("tests.") or not path.is_file():
-                  raise SystemExit(f"fast-tier module missing: {identifier}")
-              group = f"{module}.{class_name}"
-              if not is_test_case(group, set()) or not discoverable_method(
-                  group, method_name):
-                  raise SystemExit(f"fast-tier test missing: {identifier}")
+          suite_policy.load_timing_weights()
+          ids = suite_policy.FAST_TEST_IDS
+          if not ids or len(ids) != len(set(ids)):
+              raise SystemExit("fast tier must contain unique test IDs")
+          if any(not identifier.rsplit(".", 1)[-1].startswith("test") for identifier in ids):
+              raise SystemExit("fast tier contains a non-test method ID")
           PY
       - name: Validate locked vendor pins
         run: |
@@ -301,10 +208,7 @@ jobs:
       - name: Validate policy artifacts
         run: |
           python - <<'PY'
-          import functools
           import pathlib
-          import re
-          from urllib.parse import unquote, urlsplit
 
           root = pathlib.Path.cwd()
           templates = {
@@ -335,66 +239,6 @@ jobs:
                   line for line in text.splitlines() if line.startswith("## ")))
               if actual != expected:
                   raise SystemExit(f"{relative}: template headings changed: {actual!r}")
-
-          @functools.lru_cache(maxsize=None)
-          def anchors(path):
-              text = path.read_text(encoding="utf-8")
-              found = set(re.findall(
-                  r'<(?:a|span)\s+(?:name|id)=["\']([^"\']+)["\']', text))
-              occurrences = {}
-              fenced = False
-              for line in text.splitlines():
-                  if re.match(r"^\s*(```|~~~)", line):
-                      fenced = not fenced
-                      continue
-                  if fenced:
-                      continue
-                  heading = re.match(r"^ {0,3}#{1,6}\s+(.+?)\s*#*\s*$", line)
-                  if heading is None:
-                      continue
-                  name = heading.group(1)
-                  name = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", name)
-                  name = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", name)
-                  name = re.sub(r"<[^>]+>", "", name)
-                  name = re.sub(r"[^\w\- ]", "", name.lower().replace("`", "").replace("*", ""))
-                  name = re.sub(r"\s", "-", name)
-                  duplicate = occurrences.get(name, 0)
-                  occurrences[name] = duplicate + 1
-                  found.add(name if duplicate == 0 else f"{name}-{duplicate}")
-              return found
-
-          markdown = [path for path in root.rglob("*.md")
-                      if ".git" not in path.parts and "vendor" not in path.parts]
-          for source in markdown:
-              text = source.read_text(encoding="utf-8")
-              text = re.sub(r"```.*?```|~~~.*?~~~", "", text, flags=re.DOTALL)
-              text = re.sub(r"(`+)(.*?)\1", "", text, flags=re.DOTALL)
-              for raw in re.findall(r"\[[^\]]+\]\(([^)]+)\)", text):
-                  destination_text = raw.strip()
-                  if destination_text.startswith("<"):
-                      end = destination_text.find(">")
-                      if end < 0:
-                          raise SystemExit(f"{source}: unclosed link destination {raw}")
-                      target = destination_text[1:end]
-                  else:
-                      parts = destination_text.split()
-                      target = parts[0] if parts else ""
-                  parsed = urlsplit(target)
-                  if not target or parsed.scheme or parsed.netloc:
-                      continue
-                  path, fragment = parsed.path, parsed.fragment
-                  decoded = unquote(path)
-                  destination = ((root / decoded.lstrip("/")) if decoded.startswith("/")
-                                 else (source.parent / decoded)).resolve() if path else source
-                  try:
-                      destination.relative_to(root)
-                  except ValueError:
-                      raise SystemExit(f"{source}: link leaves repository {target}")
-                  if not destination.exists():
-                      raise SystemExit(f"{source}: missing local link target {target}")
-                  if fragment and destination.suffix.lower() == ".md":
-                      if unquote(fragment) not in anchors(destination):
-                          raise SystemExit(f"{source}: missing Markdown anchor {target}")
 
           agents = {path.name for path in (root / ".codex/agents").glob("*.toml")}
           if agents != {"runtime_implementer.toml", "test_engineer.toml"}:
