@@ -184,13 +184,13 @@ jobs:
               query($pr: ID!) {
                 node(id: $pr) { ... on PullRequest {
                   reviewRequests(first: 100) { nodes {
-                    requestedReviewer { ... on Bot { login } }
+                    requestedReviewer { ... on Bot { id } }
                   } }
                 } }
               }
             `, {pr: pr.node_id});
             const pending = reviewState.reviewRequests.nodes.some(request =>
-              request.requestedReviewer?.login === "copilot-pull-request-reviewer");
+              request.requestedReviewer?.id === bot.node_id);
             const reviews = await github.paginate(github.rest.pulls.listReviews, {
               owner, repo, pull_number: pullNumber, per_page: 100,
             });
