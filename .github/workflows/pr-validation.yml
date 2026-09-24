@@ -235,8 +235,7 @@ jobs:
           }
           for relative, expected in templates.items():
               text = (root / relative).read_text(encoding="utf-8")
-              actual = list(dict.fromkeys(
-                  line for line in text.splitlines() if line.startswith("## ")))
+              actual = [line for line in text.splitlines() if line.startswith("## ")]
               if actual != expected:
                   raise SystemExit(f"{relative}: template headings changed: {actual!r}")
 

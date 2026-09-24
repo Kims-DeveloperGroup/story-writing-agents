@@ -106,9 +106,9 @@ collaborator posts a substantive PR comment explaining the applied change or
 evidence-backed rejection. Include the numeric review ID and these separate lines:
 `<!-- ai-review-body-disposition:REVIEW_ID -->`, `Decision: Applied` or
 `Decision: Rejected`, `Reason: ` followed by at least 40 characters, and
-`Evidence: ` followed by a relevant GitHub URL. The AI gate
-continues to count that same-head review body until this comment exists; a later clean
-review alone does not silently erase it. If the review body is edited, post a fresh
+`Evidence: ` followed by a relevant GitHub URL. The root must treat that same-head review
+body as blocking until this comment exists; a later clean review alone does not silently
+erase it. If the review body is edited, post a fresh
 disposition after the edit. A code change starts a new-head review cycle.
 
 ## Verification Policy

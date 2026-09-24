@@ -13,8 +13,7 @@ Paths below are import paths relative to `story_writing_agents`; each maps to th
 below `src/story_writing_agents/` with `.py` or `/__init__.py`. A package name in an
 inventory includes its `__init__.py`.
 
-Importable production units indexed: 144. Direct internal dependency edges indexed: 583.
-Directed internal dependency cycles indexed: 0.
+Exact module and import-edge counts are intentionally omitted; the source tree is authoritative.
 
 ## Supported public surfaces
 
