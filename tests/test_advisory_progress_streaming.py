@@ -3285,6 +3285,35 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         frame_1 = render_nested_scroll_view(scroll_state_1, caps)
         self.assertIn("[► Agent Beta] (2/2)", frame_1.text)
 
+    def test_to_scroll_state_idle_does_not_leak_failure_snapshot(self) -> None:
+        """Verify ViewState.IDLE projections do not fall back to previous turn failure snapshots."""
+        terminal = InteractiveTerminal(lambda p: "", lambda t: "", width=80)
+        progress = InteractiveAdvisoryProgress(terminal)
+        state = progress._state
+
+        # Simulate a previous failed turn that left a snapshot
+        state.agent_buffers[("lead", "op1")] = ["Initial work...", "Error: connection failed"]
+        state.last_error_message = "Error: connection failed"
+        state.snapshot_failure()
+        self.assertIsNotNone(state.failure_snapshot)
+
+        # Clear active buffers to simulate a new turn starting
+        state.agent_buffers.clear()
+        state.last_error_message = None
+
+        # 1. Error projection DOES use the failure snapshot
+        scroll_err = progress.to_scroll_state(state=ViewState.ERROR)
+        self.assertEqual(scroll_err.focused_view.state, ViewState.ERROR)
+        self.assertIn("Error: connection failed", scroll_err.focused_view.visible_lines[-1])
+
+        # 2. Idle/Success projection DOES NOT use the failure snapshot
+        scroll_idle = progress.to_scroll_state(state=ViewState.IDLE)
+        self.assertEqual(scroll_idle.focused_view.state, ViewState.IDLE)
+        for view in scroll_idle.views:
+            for line in view.visible_lines:
+                self.assertNotIn("Error: connection failed", line)
+        self.assertIn("Completed.", scroll_idle.focused_view.visible_lines[0])
+
 
 
 

@@ -2000,15 +2000,18 @@ class InteractiveAdvisoryProgress:
         source_buffers: dict[tuple[str, str], list[str] | tuple[str, ...]] = dict(
             self._state.agent_buffers
         )
-        source_error = self._state.last_error_message
-        source_agent_errors: dict[tuple[str, str], str] = dict(self._state.agent_errors)
+        source_error: str | None = None
+        source_agent_errors: dict[tuple[str, str], str] = {}
         using_snapshot = False
-        if not source_buffers and self._state.failure_snapshot is not None:
-            snap_buffers, snap_error = self._state.failure_snapshot
-            source_buffers = {k: list(v) for k, v in snap_buffers.items()}
-            source_error = snap_error or source_error
-            source_agent_errors = dict(self._state.failure_agent_errors)
-            using_snapshot = True
+        if state == ViewState.ERROR:
+            source_error = self._state.last_error_message
+            source_agent_errors = dict(self._state.agent_errors)
+            if not source_buffers and self._state.failure_snapshot is not None:
+                snap_buffers, snap_error = self._state.failure_snapshot
+                source_buffers = {k: list(v) for k, v in snap_buffers.items()}
+                source_error = snap_error or source_error
+                source_agent_errors = dict(self._state.failure_agent_errors)
+                using_snapshot = True
 
         if not using_snapshot:
             for req in self._state.requests:
