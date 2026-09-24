@@ -22,7 +22,12 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}
+  # Non-qualifying edits/labels must not replace a queued managed milestone.
+  group: >-
+    ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}-${{
+      github.event.action == 'edited' && !github.event.changes.base && github.run_id ||
+      github.event.action == 'labeled' && github.event.label.name != 'workflow:managed' && github.run_id ||
+      'managed' }}
   cancel-in-progress: false
 
 # Keep the repository Copilot review default at Lite. Select Balanced in the
@@ -167,13 +172,41 @@ jobs:
               core.setFailed("Copilot bot identity is unavailable");
               return;
             }
-            await github.graphql(`
-              mutation($pr: ID!, $bot: ID!) {
-                requestReviews(input: {pullRequestId: $pr, botIds: [$bot]}) {
-                  pullRequest { id }
-                }
+            const opened = comments.find(comment =>
+              comment.user?.login === "github-actions[bot]" &&
+              comment.body?.includes(
+                `<!-- ai-review-milestone-open:${process.env.MILESTONE}:${process.env.BASE_SHA}:${process.env.HEAD_SHA} -->`));
+            if (!opened) {
+              core.setFailed("Current review milestone has no open marker");
+              return;
+            }
+            const {node: reviewState} = await github.graphql(`
+              query($pr: ID!) {
+                node(id: $pr) { ... on PullRequest {
+                  reviewRequests(first: 100) { nodes {
+                    requestedReviewer { ... on Bot { login } }
+                  } }
+                } }
               }
-            `, {pr: pr.node_id, bot: bot.node_id});
+            `, {pr: pr.node_id});
+            const pending = reviewState.reviewRequests.nodes.some(request =>
+              request.requestedReviewer?.login === "copilot-pull-request-reviewer");
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner, repo, pull_number: pullNumber, per_page: 100,
+            });
+            const completed = reviews.some(review =>
+              review.user?.login === "copilot-pull-request-reviewer[bot]" &&
+              review.commit_id === process.env.HEAD_SHA &&
+              new Date(review.submitted_at) >= new Date(opened.created_at));
+            if (!pending && !completed) {
+              await github.graphql(`
+                mutation($pr: ID!, $bot: ID!) {
+                  requestReviews(input: {pullRequestId: $pr, botIds: [$bot]}) {
+                    pullRequest { id }
+                  }
+                }
+              `, {pr: pr.node_id, bot: bot.node_id});
+            }
             await github.rest.issues.createComment({
               owner, repo, issue_number: pullNumber, body: marker,
             });
