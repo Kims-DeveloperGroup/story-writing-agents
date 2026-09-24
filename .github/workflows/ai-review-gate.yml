@@ -307,7 +307,7 @@ jobs:
                   .map(comment => comment.body || ""),
               ];
             };
-            const copilotHigh = /\bseverity\s*[:=-]\s*(?:\*\*)?high\b|\[(?:severity\s*:\s*)?high\]|(?:^|\n)[ \t]*(?:#{1,6}[ \t]*)?(?:\*\*)?high(?:\*\*)?[ \t]*(?:(?:severity)?[ \t]*[:—-]|$)/im;
+            const copilotHigh = /\bseverity\s*[:=-]\s*(?:\*\*)?high\b|\[(?:severity\s*:\s*)?high\]|(?:^|\n)[ \t]*(?:#{1,6}[ \t]*)?(?:\*\*)?high(?:\*\*)?[ \t]*(?:(?:severity)?[ \t]*:|[ \t]+[-—][ \t]+|$)/im;
             const codexBlocking = /\[(?:P0|P1)(?:\s+Badge)?\]/i;
             const blockers = [];
             if (textsFor(botReviews.filter(review => review.user?.login === copilotLogin))

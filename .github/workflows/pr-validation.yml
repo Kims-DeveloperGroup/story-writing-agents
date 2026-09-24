@@ -211,11 +211,25 @@ jobs:
               if group in seen or group not in classes:
                   return False
               node = classes[group]
+              if method_name:
+                  for member in reversed(node.body):
+                      if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                              and member.name == method_name:
+                          return True
+                      if isinstance(member, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                          targets = member.targets if isinstance(member, ast.Assign) \
+                              else (member.target,)
+                          if any(isinstance(name, ast.Name) and
+                                 isinstance(name.ctx, ast.Store) and
+                                 name.id == method_name
+                                 for target in targets for name in ast.walk(target)):
+                              return False
+                  return any(has_test_method(parent, seen | {group}, method_name)
+                             for parent in parents(group))
               if any(isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
-                     and (method.name == method_name if method_name else
-                          method.name.startswith("test")) for method in node.body):
+                     and method.name.startswith("test") for method in node.body):
                   return True
-              return any(has_test_method(parent, seen | {group}, method_name)
+              return any(has_test_method(parent, seen | {group})
                          for parent in parents(group))
 
           def is_test_case(group, seen):
