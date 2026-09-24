@@ -19,18 +19,6 @@ class SuitePolicyError(ValueError):
     """A deterministic suite policy or timing-data error."""
 
 
-@dataclass(frozen=True)
-class GroupSelector:
-    module: str
-    class_name: str | None = None
-
-    @property
-    def group_id(self) -> str | None:
-        if self.class_name is None:
-            return None
-        return f"{self.module}.{self.class_name}"
-
-
 FAST_TEST_IDS = (
     "tests.test_agent_context_actions.ActionValueTests."
     "test_source_authority_boundary_matrix_and_exact_digest_bytes",
@@ -53,88 +41,6 @@ FAST_TEST_IDS = (
     "tests.test_interactive_terminal_foundation.CapabilityAndDriverFoundationTests."
     "test_capable_advisory_progress_orders_frames_and_serializes_writes",
 )
-
-
-AFFECTED_GROUPS: Mapping[str, tuple[GroupSelector, ...]] = {
-    "runner": (
-        GroupSelector("tests.test_suite_runner"),
-        GroupSelector("tests.test_suite_tiers"),
-    ),
-    "git-storage": tuple(
-        GroupSelector(module)
-        for module in (
-            "tests.test_git_adapter_integration",
-            "tests.test_git_adapter_process",
-            "tests.test_git_contracts",
-            "tests.test_git_session_history",
-            "tests.test_git_session_resources",
-        )
-    ),
-    "workspace-session": tuple(
-        GroupSelector(module)
-        for module in (
-            "tests.test_workspace_session_history",
-            "tests.test_workspace_session_resources",
-        )
-    ),
-    "database": tuple(
-        GroupSelector(module)
-        for module in (
-            "tests.test_sqlite_database",
-            "tests.test_sqlite_collaboration_event_store",
-            "tests.test_sqlite_conversation_storage",
-        )
-    ),
-    "workspace-core": tuple(
-        GroupSelector(module)
-        for module in (
-            "tests.test_workspace_fixtures",
-            "tests.test_workspace_v2_initialization",
-            "tests.test_workspace_and_config",
-        )
-    ),
-    "artifact-storage": (GroupSelector("tests.test_writing_artifacts"),),
-    "provider-process": tuple(
-        GroupSelector(module)
-        for module in (
-            "tests.test_antigravity_adapter",
-            "tests.test_antigravity_parity",
-            "tests.test_codex_backend",
-            "tests.test_provider_auth",
-            "tests.test_provider_auth_recovery",
-            "tests.test_provider_catalog",
-            "tests.test_provider_error_artifacts",
-            "tests.test_provider_timeout_recovery",
-        )
-    ),
-    "interactive-terminal": tuple(
-        GroupSelector(module)
-        for module in (
-            "tests.test_interactive_auth",
-            "tests.test_interactive_cancellation",
-            "tests.test_interactive_collaboration_view",
-            "tests.test_interactive_commands",
-            "tests.test_interactive_controller",
-            "tests.test_interactive_line_editor",
-            "tests.test_interactive_live_composer",
-            "tests.test_interactive_management",
-            "tests.test_interactive_pty",
-            "tests.test_interactive_settings",
-            "tests.test_interactive_terminal",
-            "tests.test_interactive_terminal_completion",
-            "tests.test_interactive_terminal_composer",
-            "tests.test_interactive_terminal_external_view",
-            "tests.test_interactive_terminal_foundation",
-            "tests.test_interactive_terminal_history",
-            "tests.test_interactive_terminal_input_lifecycle",
-            "tests.test_interactive_terminal_picker",
-            "tests.test_interactive_terminal_reference_activation",
-            "tests.test_interactive_terminal_viewer",
-            "tests.test_interactive_terminal_views",
-        )
-    ),
-}
-
 
 @dataclass(frozen=True)
 class TimingWeights:
@@ -175,47 +81,6 @@ def select_fast(canonical_ids: Sequence[str]) -> tuple[str, ...]:
     if missing:
         raise SuitePolicyError("fast tier has missing canonical IDs: " + ", ".join(missing))
     selected = set(FAST_TEST_IDS)
-    return tuple(identifier for identifier in canonical_ids if identifier in selected)
-
-
-def select_affected_groups(
-    canonical_ids: Sequence[str], names: Sequence[str]
-) -> tuple[str, ...]:
-    """Resolve repeatable named affected groups as one canonical-order union."""
-
-    requested = tuple(dict.fromkeys(names))
-    if any(not name or name != name.strip() for name in requested):
-        raise SuitePolicyError("--group values must be non-empty and contain no outer whitespace")
-    unknown = tuple(sorted(set(requested) - set(AFFECTED_GROUPS)))
-    if unknown:
-        raise SuitePolicyError("unknown affected groups: " + ", ".join(unknown))
-    if not requested:
-        return ()
-    selected: set[str] = set()
-    for name in requested:
-        group_selection: set[str] = set()
-        for selector in AFFECTED_GROUPS[name]:
-            prefix = selector.module + "."
-            selector_ids = {
-                identifier
-                for identifier in canonical_ids
-                if identifier.startswith(prefix)
-                and (
-                    selector.group_id is None
-                    or canonical_group_id(identifier) == selector.group_id
-                )
-            }
-            if not selector_ids:
-                label = selector.module
-                if selector.class_name is not None:
-                    label += "." + selector.class_name
-                raise SuitePolicyError(
-                    f"affected group {name!r} has empty selector: {label}"
-                )
-            group_selection.update(selector_ids)
-        if not group_selection:
-            raise SuitePolicyError(f"affected group {name!r} selected no tests")
-        selected.update(group_selection)
     return tuple(identifier for identifier in canonical_ids if identifier in selected)
 
 
@@ -324,9 +189,7 @@ def partition_two_shards(
 
 
 __all__ = [
-    "AFFECTED_GROUPS",
     "FAST_TEST_IDS",
-    "GroupSelector",
     "POLICY_VERSION",
     "SHARD_ALGORITHM",
     "ShardPlan",
@@ -336,6 +199,5 @@ __all__ = [
     "canonical_group_id",
     "load_timing_weights",
     "partition_two_shards",
-    "select_affected_groups",
     "select_fast",
 ]

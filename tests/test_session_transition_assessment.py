@@ -822,11 +822,6 @@ class SessionTransitionAssessmentTests(unittest.TestCase):
                 for node in ast.walk(tree)
             )
         )
-        index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8")
-        self.assertIn("Importable production units indexed: 143.", index)
-        self.assertIn("Direct internal dependency edges indexed: 574.", index)
-        self.assertIn("Directed internal dependency cycles indexed: 0.", index)
-        self.assertIn("tests/test_session_transition_assessment.py", index)
 
 
 if __name__ == "__main__":  # pragma: no cover

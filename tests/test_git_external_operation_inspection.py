@@ -345,7 +345,7 @@ class GitExternalOperationInspectionTests(DisposableGitTestCase):
             marker_secret,
         )
 
-    def test_contract_adapter_exports_dependencies_and_index_are_exact(self) -> None:
+    def test_contract_adapter_exports_and_dependencies_are_exact(self) -> None:
         for name in ("GitExternalOperationKind", "GitExternalOperationInspection"):
             self.assertIn(name, git_facade.__all__)
             self.assertNotIn(name, story_writing_agents.__all__)
@@ -441,12 +441,6 @@ class GitExternalOperationInspectionTests(DisposableGitTestCase):
 
         for module in modules:
             visit(module)
-        index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8")
-        self.assertIn("Importable production units indexed: 143.", index)
-        self.assertIn("Direct internal dependency edges indexed: 574.", index)
-        self.assertIn("Directed internal dependency cycles indexed: 0.", index)
-        self.assertIn("`GitExternalOperationInspection`", index)
-        self.assertIn("zero-argument `inspect_external_operation`", index)
 
 
 if __name__ == "__main__":

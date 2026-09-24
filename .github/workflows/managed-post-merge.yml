@@ -1,0 +1,258 @@
+name: Managed post-merge verification
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+# Required for managed PRs: PROJECT_STATUS_TOKEN must read organization ProjectV2
+# memberships and field values. The default GITHUB_TOKEN cannot be relied on here.
+jobs:
+  verify:
+    name: Verify managed status and cleanup
+    if: >-
+      github.event.pull_request.merged == true &&
+      contains(github.event.pull_request.labels.*.name, 'workflow:managed')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require Project status read access
+        env:
+          PROJECT_STATUS_TOKEN: ${{ secrets.PROJECT_STATUS_TOKEN }}
+        run: |
+          if [ -z "$PROJECT_STATUS_TOKEN" ]; then
+            echo "::error::Set PROJECT_STATUS_TOKEN with read access to organization ProjectV2 before using workflow:managed"
+            exit 1
+          fi
+      - uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECT_STATUS_TOKEN }}
+          script: |
+            const {owner, repo} = context.repo;
+            const pullNumber = context.payload.pull_request.number;
+            const failures = [];
+            const warnings = [];
+
+            const response = await github.graphql(`
+              query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  defaultBranchRef { name }
+                  pullRequest(number: $number) {
+                    body
+                    baseRefName
+                    headRefName
+                    headRepository { nameWithOwner }
+                    allClosingIssues: closingIssuesReferences(first: 50) {
+                      pageInfo { hasNextPage }
+                      nodes {
+                        id
+                        number
+                        state
+                        url
+                      }
+                    }
+                    manuallyLinkedIssues: closingIssuesReferences(
+                      first: 50
+                      userLinkedOnly: true
+                    ) {
+                      pageInfo { hasNextPage }
+                      nodes {
+                        id
+                        number
+                        state
+                        url
+                      }
+                    }
+                  }
+                }
+              }
+            `, {owner, repo, number: pullNumber});
+            const repository = response.repository;
+            const pr = repository.pullRequest;
+            if (pr.allClosingIssues.pageInfo.hasNextPage ||
+                pr.manuallyLinkedIssues.pageInfo.hasNextPage) {
+              core.setFailed("Issue link connection exceeds 50; verify all relations before completion");
+              return;
+            }
+            const completingIssues = pr.baseRefName === repository.defaultBranchRef.name
+              ? pr.allClosingIssues.nodes : [];
+            const completingIssueIds = new Set(completingIssues.map(issue => issue.id));
+            const issuesByNumber = new Map([
+              ...pr.allClosingIssues.nodes,
+              ...pr.manuallyLinkedIssues.nodes,
+            ].map(issue => [issue.number, issue]));
+            const referencedNumbers = [...(pr.body || "").matchAll(/\bRefs\s*:?\s*#(\d+)\b/gim)]
+              .map(match => Number(match[1]));
+            for (const issueNumber of referencedNumbers) {
+              if (issuesByNumber.has(issueNumber)) continue;
+              const issueResponse = await github.graphql(`
+                query($owner: String!, $repo: String!, $number: Int!) {
+                  repository(owner: $owner, name: $repo) {
+                    issue(number: $number) {
+                      id
+                      number
+                      state
+                      url
+                    }
+                  }
+                }
+              `, {owner, repo, number: issueNumber});
+              const issue = issueResponse.repository.issue;
+              if (issue) {
+                issuesByNumber.set(issue.number, issue);
+              } else {
+                failures.push(`Refs #${issueNumber} does not resolve to an Issue`);
+              }
+            }
+            const issues = [...issuesByNumber.values()];
+
+            // PR-to-Issue relations survive deletion of the head branch after merge.
+            const linkedIssues = new Set(
+              pr.manuallyLinkedIssues.nodes.map(issue => issue.id));
+            const recordedFailures = failures;
+            const sameRepository = pr.headRepository?.nameWithOwner === `${owner}/${repo}`;
+            const protectedHead = pr.headRefName === repository.defaultBranchRef.name;
+            if (!issues.length) {
+              failures.push("PR has no verifiable owning Issue reference");
+            }
+            if (!sameRepository) {
+              warnings.push("fork head branch cleanup belongs to the fork owner");
+            }
+            for (let attempt = 1; attempt <= 6 && issues.length; attempt++) {
+              const failures = [];
+              if (attempt > 1) {
+                await new Promise(resolve => setTimeout(
+                  resolve, Math.min(2 ** (attempt - 1) * 1000, 10000)));
+              }
+
+              for (const issue of issues) {
+                try {
+                  const projectResponse = await github.graphql(`
+                    query($id: ID!) {
+                      node(id: $id) {
+                        ... on Issue {
+                          state
+                          projectItems(first: 100) {
+                            pageInfo { hasNextPage endCursor }
+                            nodes {
+                              project {
+                                title
+                                number
+                                owner {
+                                  ... on Organization { login }
+                                  ... on User { login }
+                                }
+                              }
+                              fieldValues(first: 50) {
+                                nodes {
+                                  ... on ProjectV2ItemFieldSingleSelectValue {
+                                    name
+                                    field {
+                                      ... on ProjectV2SingleSelectField { name }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  `, {id: issue.id});
+                const projectItems = [...projectResponse.node.projectItems.nodes];
+                let cursor = projectResponse.node.projectItems.pageInfo.hasNextPage
+                  ? projectResponse.node.projectItems.pageInfo.endCursor : null;
+                while (cursor) {
+                  const page = await github.graphql(`
+                    query($id: ID!, $cursor: String!) {
+                      node(id: $id) {
+                        ... on Issue {
+                          projectItems(first: 100, after: $cursor) {
+                            pageInfo { hasNextPage endCursor }
+                            nodes {
+                              project {
+                                number
+                                owner {
+                                  ... on Organization { login }
+                                  ... on User { login }
+                                }
+                              }
+                              fieldValues(first: 50) {
+                                nodes {
+                                  ... on ProjectV2ItemFieldSingleSelectValue {
+                                    name
+                                    field {
+                                      ... on ProjectV2SingleSelectField { name }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  `, {id: issue.id, cursor});
+                  const connection = page.node.projectItems;
+                  projectItems.push(...connection.nodes);
+                  cursor = connection.pageInfo.hasNextPage ? connection.pageInfo.endCursor : null;
+                }
+                  const completing = completingIssueIds.has(issue.id);
+                  if (completing && projectResponse.node.state !== "CLOSED") {
+                    failures.push(
+                      `#${issue.number} is ${projectResponse.node.state}, not CLOSED`);
+                  }
+                  if (!linkedIssues.has(issue.id)) {
+                    failures.push(
+                      `#${issue.number} has no retained Development-linked PR relation`);
+                  }
+
+                  const items = projectItems.filter(item =>
+                    item.project.number === 1 && item.project.owner?.login === owner);
+                  if (!items.length) {
+                    failures.push(`#${issue.number} has no readable ${owner} Project #1 item`);
+                  }
+                  for (const item of items) {
+                    const status = item.fieldValues.nodes.find(value => value.field?.name === "Status");
+                    if (!status) {
+                      failures.push(`#${issue.number} has no readable Project Status`);
+                    } else if (completing && status.name !== "Done") {
+                      failures.push(`#${issue.number} Project Status is ${status.name}, not Done`);
+                    }
+                  }
+                } catch (error) {
+                  failures.push(`#${issue.number} Project status unreadable: ${error.message}`);
+                }
+              }
+              if (sameRepository && !protectedHead) {
+                try {
+                  await github.rest.git.getRef({
+                    owner, repo, ref: `heads/${pr.headRefName}`,
+                  });
+                  failures.push(`remote branch ${pr.headRefName} still exists`);
+                } catch (error) {
+                  if (error.status !== 404) throw error;
+                }
+              }
+              if (!failures.length) break;
+              if (attempt === 6) recordedFailures.push(...failures);
+            }
+
+            core.summary.addHeading("Managed post-merge verification");
+            core.summary.addList([
+              `${issues.length} owning Issue candidate(s) inspected`,
+              `${completingIssueIds.size} completing Issue(s) expected CLOSED and Done`,
+              sameRepository ? `remote head checked: ${pr.headRefName}` : "fork head not mutated",
+            ]);
+            if (warnings.length) core.summary.addHeading("Warnings", 3).addList(warnings);
+            if (failures.length) core.summary.addHeading("Required follow-up", 3).addList(failures);
+            await core.summary.write();
+            for (const warning of warnings) core.warning(warning);
+            if (failures.length) core.setFailed(failures.join("; "));

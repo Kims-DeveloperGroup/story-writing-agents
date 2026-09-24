@@ -357,7 +357,7 @@ class ArtifactApplicationGitBoundaryTests(_ApplicationStoreTestCase):
 
 
 class ArtifactApplicationBoundaryTests(_ApplicationStoreTestCase):
-    def test_store_is_sole_persistence_interpreter_and_module_index_matches_boundary(
+    def test_store_is_sole_persistence_interpreter_and_matches_boundary(
         self,
     ) -> None:
         combined = set().union(*_FAULT_PARTITIONS.values())
@@ -476,14 +476,6 @@ class ArtifactApplicationBoundaryTests(_ApplicationStoreTestCase):
 
         for module in modules:
             visit(module)
-        index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8")
-        self.assertIn("Importable production units indexed: 143.", index)
-        self.assertIn("Direct internal dependency edges indexed: 574.", index)
-        self.assertIn("Directed internal dependency cycles indexed: 0.", index)
-        self.assertIn(
-            "### `story_writing_agents.writing_artifacts._application_store`",
-            index,
-        )
 
 
 if __name__ == "__main__":

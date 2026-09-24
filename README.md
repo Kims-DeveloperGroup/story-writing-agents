@@ -394,42 +394,44 @@ and environment in JSON. Tests are expected to use local fakes and subprocesses,
 not live provider calls; do not supply provider credentials or treat live
 provider behavior as suite evidence.
 
-For fast feedback, run the exact policy-owned fast lane:
+For fast feedback on runtime-code changes, run the fast lane:
 
 ```bash
 report_dir="$(mktemp -d "${TMPDIR:-/tmp}/story-tests.XXXXXXXXXX")"
 chmod 700 "$report_dir"
-python -m tests.runner run --tier fast --json "$report_dir/fast.json"
+PYTHONPATH=src python -m tests.runner run --tier fast --json "$report_dir/fast.json"
 ```
 
-Run one or more affected groups by repeating `--group`. Available groups are
-`runner`, `git-storage`, `workspace-session`, `database`, `workspace-core`,
-`artifact-storage`, `provider-process`, and `interactive-terminal`:
+Run the relevant test modules with exact `--module` selectors (or `--id` for
+individual tests), then record the selected IDs, result, and head SHA in the PR.
+The implementer chooses modules from the changed behavior; CI does not infer them
+from source paths:
 
 ```bash
 report_dir="$(mktemp -d "${TMPDIR:-/tmp}/story-tests.XXXXXXXXXX")"
 chmod 700 "$report_dir"
-python -m tests.runner run \
-  --group workspace-core \
+PYTHONPATH=src python -m tests.runner run \
+  --module tests.test_artifact_proposals \
+  --module tests.test_artifact_proposal_orchestration \
   --json "$report_dir/affected.json"
 ```
 
-For complete-suite evidence, run exactly two complementary shards. Start no
+For an explicitly required full-suite run, use two complementary shards. Start no
 more than these two test processes concurrently, preserve both reports, and
 then reconcile them:
 
 ```bash
 report_dir="$(mktemp -d "${TMPDIR:-/tmp}/story-tests.XXXXXXXXXX")"
 chmod 700 "$report_dir"
-python -m tests.runner run --shard 1/2 --json "$report_dir/shard-1.json" &
+PYTHONPATH=src python -m tests.runner run --shard 1/2 --json "$report_dir/shard-1.json" &
 shard_one_pid=$!
-python -m tests.runner run --shard 2/2 --json "$report_dir/shard-2.json" &
+PYTHONPATH=src python -m tests.runner run --shard 2/2 --json "$report_dir/shard-2.json" &
 shard_two_pid=$!
 shard_status=0
 wait "$shard_one_pid" || shard_status=1
 wait "$shard_two_pid" || shard_status=1
 test "$shard_status" -eq 0
-python -m tests.runner reconcile \
+PYTHONPATH=src python -m tests.runner reconcile \
   "$report_dir/shard-1.json" \
   "$report_dir/shard-2.json" \
   --json "$report_dir/reconciliation.json"
@@ -457,10 +459,10 @@ provenance. Observed terminal class timings are used where available; unlisted
 classes use the manifest's deterministic fallback, so the weights are a
 partitioning input rather than proof of current performance.
 
-The feedback targets are: fast lane at most 300 seconds; each affected-group
-run at most 600 seconds; complete-suite sequential-equivalent wall time at
-most 5,102.566 seconds; and two-shard concurrent wall time at most 3,300
-seconds. The complete-suite target is a 70% reduction from the 17,008.554-second
+The feedback targets are: fast lane at most 300 seconds; complete-suite
+sequential-equivalent wall time at most 5,102.566 seconds; and two-shard
+concurrent wall time at most 3,300 seconds. The complete-suite target is a 70%
+reduction from the 17,008.554-second
 baseline: remove 70% and leave at most 30%, rather than reduce the runtime to
 70% of baseline. These are acceptance targets, not a claim that the current
 shards have passed them.
