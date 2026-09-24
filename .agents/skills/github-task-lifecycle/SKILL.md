@@ -43,9 +43,9 @@ affected CI. Batch blocking feedback. After material fixes, record the new SHA a
 final concurrent review request; never request again after every push. Only unresolved
 Copilot High, Codex P0/P1, required approvals, and required checks block merge.
 
-Mutating automation requires `workflow:managed`. Auto-merge or merge queue may be enabled
-only after gates pass. Use GitHub squash merge for every PR and include the owning Issue in
-the squash commit message.
+Mutating automation requires `workflow:managed`. Do not enable auto-merge or merge queue;
+recheck the current base/head, review threads, approvals, checks, and mergeability before
+manual GitHub squash merge. Include the owning Issue in the squash commit message.
 
 ## Verify and finish
 

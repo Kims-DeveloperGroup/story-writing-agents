@@ -62,8 +62,9 @@ template. Preserve all visible Issue, PR, evidence, and status-comment headings 
 
 ## 4. Integrate and close
 
-1. Enable auto-merge or merge queue only after current-head gates pass.
-2. Use GitHub **Squash and merge**. Include the owning Issue number in the squash commit.
+1. Recheck the accepted base, current head, all review threads, required approvals/checks,
+   and mergeability immediately before integration. Do not enable auto-merge or merge queue.
+2. Manually use GitHub **Squash and merge**. Include the owning Issue number in the squash commit.
 3. Verify the merged SHA on the target, Issue closure, Project `Done`, milestone state,
    Development links, and remote branch disposition. A child PR never closes its parent.
 4. Post or update the preserved status/evidence templates when a durable record is useful.

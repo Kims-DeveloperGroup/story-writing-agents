@@ -77,16 +77,15 @@ Lower-severity feedback is nonblocking and may become follow-up work. Review/che
 must match the current base and head SHAs; retargeting the base restarts validation
 and review milestones.
 After an ordinary accepted-base advance, update the PR branch from the new base before
-merge and repeat the final validation/review milestone. A base push invalidates managed
-PR gate status; it does not silently reuse old-base evidence.
+merge and repeat the final validation/review milestone; do not reuse old-base evidence.
 
 Automation that mutates Issues, Projects, PRs, merge state, or cleanup state runs only for the
-`workflow:managed` label. Removing that label authorizes only revocation of previously enabled
-auto-merge on that PR; it does not authorize new automation. `pr-validation` and
-`ai-review-gate` are event-driven; the latter may
-poll on a schedule without checking out code. Enable auto-merge or the merge queue only after
-all gates pass. Post-merge automation verifies Issue closure, Project `Done`, Development
-links, and remote-branch cleanup; failures remain visible for root repair.
+`workflow:managed` label. `pr-validation` and the managed review requester run asynchronously.
+The root audits the current base/head, every review thread, blocking review bodies, required
+approvals and checks, and mergeability immediately before manual squash merge. Do not enable
+auto-merge or the merge queue in this workflow. Post-merge automation verifies Issue closure,
+Project `Done`, Development links, and remote-branch cleanup; failures remain visible for
+root repair.
 Managed post-merge verification requires `PROJECT_STATUS_TOKEN` with read access to the
 organization ProjectV2; configure it before using `workflow:managed`.
 

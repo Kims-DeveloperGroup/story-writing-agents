@@ -21,6 +21,6 @@ status-comment templates.
   relevant module/ID selections and JSON evidence; retain shards and reconciliation for full runs.
 - Review is milestone-based: one request when ready and one final request after material fixes.
   Do not request or expect re-review after every push.
-- Mutating workflow automation is allowed only with the `workflow:managed` label. Auto-merge or
-  merge queue must wait for required reviews, human protections, checks, and current-head
-  evidence.
+- Mutating workflow automation is allowed only with the `workflow:managed` label. The root
+  manually squash-merges only after checking current-base/head reviews, threads, protections,
+  and checks; auto-merge and merge queue are not used.

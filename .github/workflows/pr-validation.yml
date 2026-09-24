@@ -207,11 +207,39 @@ jobs:
                       root = imports[module].get(base.value.id, base.value.id)
                       yield f"{root}.{base.attr}"
 
-          def has_test_method(group, seen, method_name=None):
+          def has_test_method(group, seen):
               if group in seen or group not in classes:
                   return False
               node = classes[group]
-              if method_name:
+              if any(isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
+                     and method.name.startswith("test") for method in node.body):
+                  return True
+              return any(has_test_method(parent, seen | {group})
+                         for parent in parents(group))
+
+          def class_mro(group, active=frozenset()):
+              if group in active:
+                  raise SystemExit(f"test class inheritance cycle: {group}")
+              if group not in classes:
+                  return [group]
+              bases = list(parents(group))
+              pending = [class_mro(base, active | {group}) for base in bases] + [bases[:]]
+              result = [group]
+              while any(pending):
+                  candidate = next((items[0] for items in pending if items and
+                                    all(items[0] not in other[1:] for other in pending)), None)
+                  if candidate is None:
+                      raise SystemExit(f"inconsistent test class MRO: {group}")
+                  result.append(candidate)
+                  pending = [items[1:] if items and items[0] == candidate else items
+                             for items in pending]
+              return result
+
+          def discoverable_method(group, method_name):
+              for owner in class_mro(group):
+                  node = classes.get(owner)
+                  if node is None:
+                      continue
                   for member in reversed(node.body):
                       if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)) \
                               and member.name == method_name:
@@ -224,13 +252,7 @@ jobs:
                                  name.id == method_name
                                  for target in targets for name in ast.walk(target)):
                               return False
-                  return any(has_test_method(parent, seen | {group}, method_name)
-                             for parent in parents(group))
-              if any(isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
-                     and method.name.startswith("test") for method in node.body):
-                  return True
-              return any(has_test_method(parent, seen | {group})
-                         for parent in parents(group))
+              return False
 
           def is_test_case(group, seen):
               if group in ("unittest.TestCase", "unittest.case.TestCase",
@@ -252,8 +274,8 @@ jobs:
               if not module.startswith("tests.") or not path.is_file():
                   raise SystemExit(f"fast-tier module missing: {identifier}")
               group = f"{module}.{class_name}"
-              if not is_test_case(group, set()) or not has_test_method(
-                  group, set(), method_name):
+              if not is_test_case(group, set()) or not discoverable_method(
+                  group, method_name):
                   raise SystemExit(f"fast-tier test missing: {identifier}")
           PY
       - name: Validate locked vendor pins
