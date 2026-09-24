@@ -2072,6 +2072,10 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 )
             self.assertIn("after one repair attempt", rejected_reply.content)
             self.assertEqual(rejected_reply.revision_id, "expected-revision")
+            self.assertEqual(len(rejected_reply.validation_details), 2)
+            self.assertTrue(rejected_reply.validation_details[0].startswith("Original response"))
+            self.assertTrue(rejected_reply.validation_details[1].startswith("Repair response"))
+            self.assertNotIn("PRIVATE_AGY_REJECTED", repr(rejected_reply.validation_details))
             taint.assert_called_once_with(debate_session, definition)
             failed_thread = self.manifest(debate_session)["provider_threads"][
                 "antigravity:plot_architect"
@@ -2151,6 +2155,8 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(conversation_reply.conversation_id, conversation_id)
         self.assertEqual(conversation_reply.turn_id, "agy-capture-turn")
         self.assertIn("after one repair attempt", conversation_reply.content)
+        self.assertEqual(len(conversation_reply.validation_details), 2)
+        self.assertNotIn("PRIVATE_AGY_CONVERSATION_REJECTED", repr(conversation_reply.validation_details))
         self.assertEqual(conversation_invoke.await_count, 2)
         self.assertEqual(
             self.manifest(conversation_session)["provider_threads"],
@@ -2352,6 +2358,12 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reply.conversation_id, request.conversation_id)
         self.assertEqual(reply.turn_id, request.turn_id)
         self.assertIn("after one repair attempt", reply.content)
+        self.assertEqual(len(reply.validation_details), 2)
+        self.assertEqual(
+            tuple("$.message: expected at least 1 characters, got 0" in chunk
+                  for chunk in reply.validation_details),
+            (True, True),
+        )
         taint.assert_called_once_with(session_id, definition)
         failure_calls = self.provider_invocations()[-2:]
         self.assertEqual(len(failure_calls), 2)

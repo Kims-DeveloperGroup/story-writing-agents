@@ -16,6 +16,7 @@ from ..agents import (
     PLOT_ARCHITECT,
 )
 from ..writing_artifacts.catalog import canonical_artifact_kind
+from ..structured_output_validation import validate_details
 
 
 CONSENSUS_AUDITORS = (
@@ -341,6 +342,7 @@ class ConsensusPhaseResult:
     next_phase: ConsensusPhase | None = None
     prior_result_event_id: str | None = None
     publication_allowed: bool = False
+    validation_details_by_provider: tuple[tuple[str, ...], ...] = ()
 
     def __post_init__(self) -> None:
         for value in (self.result_id, self.phase_request_id, self.decision_event_id, self.proposal_id):
@@ -362,6 +364,23 @@ class ConsensusPhaseResult:
         _optional_identifier(self.prior_result_event_id)
         if self.publication_allowed is not False:
             raise ValueError("consensus phase results never grant publication")
+        if (
+            type(self.validation_details_by_provider) is not tuple
+            or len(self.validation_details_by_provider) > (
+                3 if self.phase in {ConsensusPhase.AUDIT, ConsensusPhase.REAUDIT} else 1
+            )
+        ):
+            raise ValueError("consensus provider validation reports are invalid")
+        for report in self.validation_details_by_provider:
+            validate_details(report)
+        if self.state is ConsensusPhaseState.RUNNING and self.validation_details_by_provider:
+            raise ValueError("running consensus result cannot carry provider diagnostics")
+        if self.validation_details_by_provider and self.state is ConsensusPhaseState.COMPLETED:
+            expected = (
+                3 if self.phase in {ConsensusPhase.AUDIT, ConsensusPhase.REAUDIT} else 1
+            )
+            if len(self.validation_details_by_provider) != expected:
+                raise ValueError("completed consensus diagnostics require every provider position")
         if type(self.audits) is not tuple or any(type(item) is not ConsensusAudit for item in self.audits):
             raise TypeError("consensus audits are invalid")
         if self.audits:

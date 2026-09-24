@@ -6,6 +6,7 @@ import asyncio
 import json
 import unittest
 from dataclasses import replace
+from unittest import mock
 
 from story_writing_agents import ReplyTraceOrigin, StoryRuntime
 from story_writing_agents.agents import (
@@ -24,6 +25,7 @@ from story_writing_agents.conversations import (
     CollaborationInputKind,
     CollaborationInvocationKind,
     CollaborationLeadSynthesisPayload,
+    CollaborationMessagePayload,
     CollaborationNextAction,
     CollaborationProviderCallKind,
     CollaborationProviderCallPayload,
@@ -609,7 +611,424 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                     ReplyTraceOrigin.RUNTIME_FALLBACK,
                 )
                 self.assertEqual(reply.trace.action, "none")
+                reports = tuple(
+                    chunk for payload in _payloads(
+                        self.history(conversation_id), CollaborationProviderCallPayload,
+                    ) if payload.state is CollaborationProviderCallState.SUBMITTED
+                    for chunk in payload.validation_details
+                )
+                self.assertTrue(any(chunk.startswith("Original response") for chunk in reports))
+                self.assertTrue(any(chunk.startswith("Repair response") for chunk in reports))
                 self.assertNotIn("private_state", repr(self.history(conversation_id)))
+
+    async def test_specialist_and_synthesis_validation_details_are_private_and_correlated(
+        self,
+    ) -> None:
+        conversation_id = self.conversation("Rejected synthesis details")
+        proposed = await self.proposal(conversation_id)
+        self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
+        rejected = _raw_outcome({
+            "message": "", "PRIVATE_SYNTHESIS_KEY": "PRIVATE_SYNTHESIS_VALUE",
+        })
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, rejected)
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
+        decision = await self.runtime.decide_lead_step(
+            _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+        )
+        history = self.history(conversation_id)
+        submitted = tuple(payload for payload in _payloads(
+            history, CollaborationProviderCallPayload,
+        ) if payload.state is CollaborationProviderCallState.SUBMITTED)
+        synthesis = tuple(payload for payload in submitted
+                          if payload.role == LEAD_ORCHESTRATOR and payload.validation_details)
+        self.assertEqual(len(synthesis), 1)
+        self.assertTrue(synthesis[0].validation_details[0].startswith("Original response"))
+        self.assertIn("$.action.result: contains 1 unexpected properties",
+                      repr(synthesis[0].validation_details))
+        self.assertIs(decision.turn.state, CollaborationStepState.COMPLETED)
+        self.assertEqual(
+            decision.turn.validation_details,
+            tuple(chunk for payload in submitted for chunk in payload.validation_details),
+        )
+        self.assertNotIn("PRIVATE_SYNTHESIS_KEY", repr(history))
+        self.assertNotIn("PRIVATE_SYNTHESIS_VALUE", repr(history))
+
+    async def test_restarted_finalization_restores_only_this_execution_diagnostics(
+        self,
+    ) -> None:
+        conversation_id = self.conversation("Restart diagnostic finalization")
+        proposed = await self.proposal(conversation_id)
+        private = "PRIVATE_RESTARTED_SPECIALIST_VALUE"
+        self.backend.enqueue_for(
+            PLOT_ARCHITECT,
+            _raw_outcome({"message": 0, "assessment": "supports", private: private}),
+        )
+        self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
+        with mock.patch.object(
+            self.runtime, "_finalize_known_result_locked",
+            side_effect=RuntimeError("test stopped after durable execution result"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "durable execution result"):
+                await self.runtime.decide_lead_step(
+                    _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+                )
+
+        known = self.history(conversation_id)
+        projection = project_collaboration_history(known)
+        self.assertIs(projection.current_state, CollaborationStepState.RUNNING)
+        self.assertEqual(len(_payloads(known, CollaborationExecutionResult)), 1)
+        expected = tuple(
+            chunk
+            for payload in _payloads(known, CollaborationProviderCallPayload)
+            if payload.state is CollaborationProviderCallState.SUBMITTED
+            for chunk in payload.validation_details
+        )
+        self.assertTrue(expected)
+        restarted_backend = _LeadBackend()
+        restarted = StoryRuntime(self.workspace, restarted_backend)  # type: ignore[arg-type]
+        restored = await restarted.lead_turn(
+            self.session_id, conversation_id, "Finalize the known result.",
+        )
+        self.assertIs(restored.state, CollaborationStepState.COMPLETED)
+        self.assertEqual(restored.validation_details, expected)
+        self.assertEqual(restarted_backend.calls, [])
+        complete = self.history(conversation_id)
+        repeated = restarted._finalize_known_result_locked(known, projection)
+        self.assertEqual(repeated, restored)
+        self.assertEqual(self.history(conversation_id), complete)
+        self.assertNotIn(private, repr(complete))
+
+    async def test_domain_rejection_details_survive_restarted_finalization(
+        self,
+    ) -> None:
+        for rejected_role in (PLOT_ARCHITECT, LEAD_ORCHESTRATOR):
+            with self.subTest(rejected_role=rejected_role):
+                conversation_id = self.conversation(
+                    f"Restart domain rejection from {rejected_role}"
+                )
+                proposed = await self.proposal(conversation_id)
+                if rejected_role == PLOT_ARCHITECT:
+                    self.backend.enqueue_for(
+                        PLOT_ARCHITECT,
+                        _specialist_outcome(message=""),
+                    )
+                    self.backend.enqueue_for(
+                        PLOT_ARCHITECT, _specialist_outcome(),
+                    )
+                else:
+                    self.backend.enqueue_for(
+                        PLOT_ARCHITECT, _specialist_outcome(),
+                    )
+                    self.backend.enqueue_for(
+                        LEAD_ORCHESTRATOR, _synthesis_outcome(message=""),
+                    )
+                self.backend.enqueue_for(
+                    LEAD_ORCHESTRATOR, _synthesis_outcome(),
+                )
+                with mock.patch.object(
+                    self.runtime, "_finalize_known_result_locked",
+                    side_effect=RuntimeError("test stopped after durable execution result"),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "durable execution result"):
+                        await self.runtime.decide_lead_step(
+                            _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+                        )
+
+                known = self.history(conversation_id)
+                projection = project_collaboration_history(known)
+                self.assertIs(projection.current_state, CollaborationStepState.RUNNING)
+                self.assertEqual(len(_payloads(known, CollaborationExecutionResult)), 1)
+                submitted = tuple(payload for payload in _payloads(
+                    known, CollaborationProviderCallPayload,
+                ) if payload.state is CollaborationProviderCallState.SUBMITTED)
+                self.assertFalse(any(payload.validation_details for payload in submitted))
+                expected = tuple(
+                    detail
+                    for payload in _payloads(known, CollaborationMessagePayload)
+                    for detail in payload.validation_details
+                )
+                self.assertTrue(expected)
+                self.assertTrue(expected[0].startswith("Original response"))
+                self.assertIn("rejected by a domain result rule", expected[0])
+
+                restarted_backend = _LeadBackend()
+                restarted = StoryRuntime(
+                    self.workspace, restarted_backend,  # type: ignore[arg-type]
+                )
+                restored = await restarted.lead_turn(
+                    self.session_id, conversation_id, "Finalize the known result.",
+                )
+                self.assertIs(restored.state, CollaborationStepState.COMPLETED)
+                self.assertEqual(restored.validation_details, expected)
+                self.assertEqual(restarted_backend.calls, [])
+                complete = self.history(conversation_id)
+                repeated = restarted._finalize_known_result_locked(known, projection)
+                self.assertEqual(repeated, restored)
+                self.assertEqual(self.history(conversation_id), complete)
+
+    async def test_concurrent_duplicate_domain_and_schema_reports_keep_call_order(
+        self,
+    ) -> None:
+        conversation_id = self.conversation("Concurrent diagnostic correlation")
+        proposed = await self.proposal(
+            conversation_id,
+            assignments=_assignments(
+                PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST,
+            ),
+        )
+        for role in (PLOT_ARCHITECT, CHARACTER_CUSTODIAN):
+            self.backend.enqueue_for(role, _specialist_outcome(message=""))
+            self.backend.enqueue_for(role, _specialist_outcome())
+        self.backend.enqueue_for(
+            EXECUTION_SPECIALIST,
+            _raw_outcome({"assessment": "supports", "message": 0}),
+        )
+        self.backend.enqueue_for(EXECUTION_SPECIALIST, _specialist_outcome())
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
+
+        with mock.patch.object(
+            self.runtime, "_finalize_known_result_locked",
+            side_effect=RuntimeError("test stopped after durable execution result"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "durable execution result"):
+                await self.runtime.decide_lead_step(
+                    _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+                )
+        known = self.history(conversation_id)
+        projection = project_collaboration_history(known)
+        messages_by_call: dict[tuple[str, str], list[str]] = {}
+        for event in known:
+            payload = event.payload
+            if (type(payload) is CollaborationMessagePayload
+                and payload.validation_invocation_id is not None
+                and payload.validation_call_id is not None):
+                key = (payload.validation_invocation_id, payload.validation_call_id)
+                messages_by_call.setdefault(key, []).extend(payload.validation_details)
+        submitted = tuple(payload for payload in _payloads(
+            known, CollaborationProviderCallPayload,
+        ) if payload.state is CollaborationProviderCallState.SUBMITTED)
+        expected = tuple(
+            detail
+            for payload in submitted
+            for detail in messages_by_call.get(
+                (payload.invocation_id, payload.call_id), payload.validation_details,
+            )
+        )
+        self.assertEqual(len(messages_by_call), 3)
+        self.assertEqual(len(expected), 3)
+        domain_details = tuple(
+            detail for detail in expected
+            if "rejected by a domain result rule" in detail
+        )
+        self.assertEqual(len(domain_details), 2)
+        self.assertEqual(domain_details[0], domain_details[1])
+        self.assertEqual(
+            sum("expected string, got integer" in detail for detail in expected),
+            1,
+        )
+        restarted_backend = _LeadBackend()
+        restarted = StoryRuntime(
+            self.workspace, restarted_backend,  # type: ignore[arg-type]
+        )
+        restored = await restarted.lead_turn(
+            self.session_id, conversation_id, "Finalize concurrent results.",
+        )
+        self.assertIs(restored.state, CollaborationStepState.COMPLETED)
+        self.assertEqual(restored.validation_details, expected)
+        self.assertEqual(restarted_backend.calls, [])
+        self.assertEqual(
+            restarted._finalize_known_result_locked(known, projection), restored,
+        )
+
+    async def test_failed_specialist_retries_transient_validation_publication(
+        self,
+    ) -> None:
+        conversation_id = self.conversation("Retry failed specialist diagnostic append")
+        proposed = await self.proposal(conversation_id)
+        private = "PRIVATE_SPECIALIST_PROVIDER_FAILURE_한🙂"
+        self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome(message=""))
+        self.backend.enqueue_for(
+            PLOT_ARCHITECT, _SubmittedFailure(RuntimeError(private)),
+        )
+        original_append = self.runtime._append_validation_messages
+        attempts = 0
+
+        def fail_once(**kwargs) -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError("injected diagnostic append conflict")
+            original_append(**kwargs)
+
+        with (
+            mock.patch.object(self.runtime, "_append_validation_messages", fail_once),
+            mock.patch.object(
+                self.runtime, "_finalize_known_result_locked",
+                side_effect=RuntimeError("test stopped after durable execution result"),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "durable execution result"):
+                await self.runtime.decide_lead_step(
+                    _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+                )
+
+        self.assertEqual(attempts, 2)
+        known = self.history(conversation_id)
+        projection = project_collaboration_history(known)
+        self.assertIs(projection.current_state, CollaborationStepState.RUNNING)
+        result = _payloads(known, CollaborationExecutionResult)[0]
+        self.assertIs(result.overall_outcome, CollaborationExecutionOutcomeKind.FAILED)
+        self.assertIs(result.assignment_outcomes[0].outcome,
+                      CollaborationAssignmentOutcomeKind.FAILED)
+        self.assertEqual(result.assignment_outcomes[0].submitted_physical_calls, 2)
+        self.assertIs(result.synthesis_outcome,
+                      CollaborationSynthesisOutcomeKind.NOT_ATTEMPTED)
+        submitted = tuple(payload for payload in _payloads(
+            known, CollaborationProviderCallPayload,
+        ) if payload.state is CollaborationProviderCallState.SUBMITTED
+           and payload.invocation_kind is CollaborationInvocationKind.SPECIALIST_ASSIGNMENT)
+        self.assertEqual(len(submitted), 2)
+        self.assertTrue(all(not payload.validation_details for payload in submitted))
+        notices = tuple(payload for payload in _payloads(
+            known, CollaborationMessagePayload,
+        ) if payload.validation_details)
+        self.assertEqual(len(notices), 1)
+        self.assertEqual(notices[0].validation_call_id, submitted[0].call_id)
+        self.assertEqual(notices[0].validation_invocation_id,
+                         submitted[0].invocation_id)
+        self.assertIn("rejected by a domain result rule",
+                      notices[0].validation_details[0])
+        self.assertNotIn(private, repr(known))
+
+        restarted_backend = _LeadBackend()
+        restarted = StoryRuntime(
+            self.workspace, restarted_backend,  # type: ignore[arg-type]
+        )
+        restored = await restarted.lead_turn(
+            self.session_id, conversation_id, "Finalize failed specialist result.",
+        )
+        self.assertIs(restored.state, CollaborationStepState.FAILED)
+        self.assertEqual(restored.validation_details,
+                         notices[0].validation_details)
+        self.assertEqual(restarted_backend.calls, [])
+        self.assertNotIn(private, repr(self.history(conversation_id)))
+
+    async def test_recovered_reply_retries_transient_validation_publication(
+        self,
+    ) -> None:
+        for rejected_role in (PLOT_ARCHITECT, LEAD_ORCHESTRATOR):
+            with self.subTest(rejected_role=rejected_role):
+                conversation_id = self.conversation(
+                    f"Retry recovered diagnostic append {rejected_role}"
+                )
+                proposed = await self.proposal(conversation_id)
+                calls_before = len(self.backend.calls)
+                if rejected_role == PLOT_ARCHITECT:
+                    self.backend.enqueue_for(
+                        PLOT_ARCHITECT, _specialist_outcome(message=""),
+                    )
+                    self.backend.enqueue_for(
+                        PLOT_ARCHITECT, _specialist_outcome(),
+                    )
+                else:
+                    self.backend.enqueue_for(
+                        PLOT_ARCHITECT, _specialist_outcome(),
+                    )
+                    self.backend.enqueue_for(
+                        LEAD_ORCHESTRATOR, _synthesis_outcome(message=""),
+                    )
+                self.backend.enqueue_for(
+                    LEAD_ORCHESTRATOR, _synthesis_outcome(),
+                )
+                original_append = self.runtime._append_validation_messages
+                attempts = 0
+
+                def fail_once(**kwargs) -> None:
+                    nonlocal attempts
+                    attempts += 1
+                    if attempts == 1:
+                        raise RuntimeError("injected diagnostic append conflict")
+                    original_append(**kwargs)
+
+                with mock.patch.object(
+                    self.runtime, "_append_validation_messages", fail_once,
+                ):
+                    decision = await self.runtime.decide_lead_step(
+                        _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+                    )
+                self.assertEqual(attempts, 2)
+                self.assertIs(decision.turn.state, CollaborationStepState.COMPLETED)
+                self.assertEqual(len(self.backend.calls) - calls_before, 3)
+                history = self.history(conversation_id)
+                result = _payloads(history, CollaborationExecutionResult)[0]
+                self.assertIs(result.overall_outcome,
+                              CollaborationExecutionOutcomeKind.SUCCEEDED)
+                notices = tuple(payload for payload in _payloads(
+                    history, CollaborationMessagePayload,
+                ) if payload.validation_details)
+                self.assertEqual(len(notices), 1)
+                self.assertEqual(decision.turn.validation_details,
+                                 notices[0].validation_details)
+                self.assertTrue(notices[0].validation_details[0].startswith(
+                    "Original response"
+                ))
+                submitted = tuple(payload for payload in _payloads(
+                    history, CollaborationProviderCallPayload,
+                ) if payload.state is CollaborationProviderCallState.SUBMITTED
+                   and payload.invocation_kind in {
+                       CollaborationInvocationKind.SPECIALIST_ASSIGNMENT,
+                       CollaborationInvocationKind.LEAD_SYNTHESIS,
+                   })
+                self.assertEqual(len(submitted), 3)
+                rejected = next(payload for payload in submitted
+                                if payload.role == rejected_role
+                                and payload.call_id == notices[0].validation_call_id)
+                self.assertEqual(notices[0].validation_invocation_id,
+                                 rejected.invocation_id)
+
+    async def test_persistent_validation_publication_failure_keeps_result_unknown(
+        self,
+    ) -> None:
+        conversation_id = self.conversation("Persistent diagnostic append failure")
+        proposed = await self.proposal(conversation_id)
+        self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome(message=""))
+        self.backend.enqueue_for(
+            PLOT_ARCHITECT,
+            _SubmittedFailure(RuntimeError("definite provider failure")),
+        )
+        with mock.patch.object(
+            self.runtime, "_append_validation_messages",
+            side_effect=RuntimeError("persistent diagnostic append failure"),
+        ):
+            with self.assertRaisesRegex(RuntimeError,
+                                        "persistent diagnostic append failure"):
+                await self.runtime.decide_lead_step(
+                    _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+                )
+        known = self.history(conversation_id)
+        self.assertIs(project_collaboration_history(known).current_state,
+                      CollaborationStepState.RUNNING)
+        self.assertEqual(_payloads(known, CollaborationExecutionResult), ())
+        self.assertEqual(_payloads(known, CollaborationTerminalOutcomePayload), ())
+        submitted = tuple(payload for payload in _payloads(
+            known, CollaborationProviderCallPayload,
+        ) if payload.state is CollaborationProviderCallState.SUBMITTED
+           and payload.invocation_kind is CollaborationInvocationKind.SPECIALIST_ASSIGNMENT)
+        self.assertEqual(len(submitted), 2)
+        self.assertEqual(self.runtime._live_execution_markers, set())
+
+        restarted_backend = _LeadBackend()
+        restarted = StoryRuntime(
+            self.workspace, restarted_backend,  # type: ignore[arg-type]
+        )
+        recovered = await restarted.lead_turn(
+            self.session_id, conversation_id, "Inspect the uncertain attempt.",
+        )
+        self.assertIs(recovered.state, CollaborationStepState.OUTCOME_UNKNOWN)
+        self.assertEqual(restarted_backend.calls, [])
+        self.assertEqual(_payloads(self.history(conversation_id),
+                                   CollaborationExecutionResult), ())
 
     async def test_synthesis_contract_is_semantic_and_runtime_derives_attribution(
         self,
@@ -804,6 +1223,11 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 },
             )
 
+        private = "PRIVATE_CONTINUATION_SYNTHESIS_VALUE"
+        self.backend.enqueue_for(
+            LEAD_ORCHESTRATOR,
+            _raw_outcome({"message": "", private: private}),
+        )
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, continue_lineage)
         first_decision = await self.runtime.decide_lead_step(
             _decision(first, CollaborationConfirmationDecision.CONFIRM)
@@ -819,7 +1243,17 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         )
         self.assertEqual(second.proposal.budget.rounds_spent, 1)
         self.assertEqual(second.proposal.budget.rounds_added, 1)
-        self.assertEqual(second.proposal.budget.physical_calls_spent, 3)
+        self.assertEqual(second.proposal.budget.physical_calls_spent, 4)
+        first_history = self.history(conversation_id)
+        expected_details = tuple(
+            chunk
+            for payload in _payloads(first_history, CollaborationProviderCallPayload)
+            if payload.state is CollaborationProviderCallState.SUBMITTED
+            for chunk in payload.validation_details
+        )
+        self.assertTrue(expected_details)
+        self.assertEqual(second.validation_details, expected_details)
+        self.assertNotIn(private, repr(first_history))
         self.assertEqual(
             tuple(item.kind for item in second.proposal.basis.inputs),
             (
@@ -839,6 +1273,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         )
         self.assertIs(second_decision.turn.state, CollaborationStepState.COMPLETED)
         self.assertIsNone(second_decision.turn.proposal)
+        self.assertEqual(second_decision.turn.validation_details, ())
         history = self.history(conversation_id)
         syntheses = _payloads(history, CollaborationLeadSynthesisPayload)
         self.assertEqual(len(syntheses), 2)

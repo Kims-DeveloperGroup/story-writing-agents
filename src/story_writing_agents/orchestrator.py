@@ -38,6 +38,9 @@ from .agent_context.manifest import (
 )
 from .agent_context.planning import ContextMaterial, MandatoryReferenceReservation
 from .agent_context.continuation import ContextContinuationTransaction
+from .structured_output_validation import (
+    DomainValidationRule, bounded_chunks, diagnose_json_text,
+)
 from .conversations.session_context import SessionContextCapacityError
 from .agent_context.service import (
     AgentContextService,
@@ -823,6 +826,8 @@ class _AccountingContextProvider:
         self._invocation_kind = invocation_kind
         self._ordinals: dict[str, int] = {}
         self._submitted_call_ids: set[str] = set()
+        self._validation_details: dict[str, tuple[str, ...]] = {}
+        self._validation_messages_published = False
         self.provider_id = cast(str, getattr(delegate, "provider_id"))
         self.definition_fingerprint = cast(
             str,
@@ -919,8 +924,83 @@ class _AccountingContextProvider:
                 kind,
             )
             raise
-        self._record_result_submission(result, request.call_id, ordinal, kind)
+        details = (
+            bounded_chunks(diagnose_json_text(result.response_text, request.schema))
+            if type(result) is ContextProviderCallResult else ()
+        )
+        self._record_result_submission(result, request.call_id, ordinal, kind, details)
         return result
+
+    def record_validation_details(
+        self, call_id: str, details: tuple[str, ...],
+    ) -> None:
+        """Retain safe rejection details until the invocation closes."""
+
+        if call_id in self._submitted_call_ids and details:
+            labelled = self._label_validation_details(call_id, details)
+            self._validation_details[call_id] = labelled
+
+    def publish_validation_messages(self) -> None:
+        """Publish diagnostics only after contextual provider work has closed."""
+
+        if self._validation_messages_published:
+            return
+        details_by_call = self.validation_details_by_call
+        if details_by_call:
+            self._runtime._append_validation_messages(
+                session_id=self._session_id,
+                conversation_id=self._conversation_id,
+                turn_id=self._turn_id,
+                step_id=self._step_id,
+                invocation_id=self._invocation_id,
+                details_by_call=details_by_call,
+            )
+        self._validation_messages_published = True
+
+    def publish_or_defer_validation_messages(
+        self,
+    ) -> tuple[str, tuple[tuple[str, tuple[str, ...]], ...]] | None:
+        """Retain an exact retry batch when diagnostic persistence fails."""
+
+        try:
+            self.publish_validation_messages()
+        except Exception:
+            details_by_call = self.validation_details_by_call
+            if details_by_call:
+                return self._invocation_id, details_by_call
+        return None
+
+    @property
+    def validation_details_by_call(self) -> tuple[tuple[str, tuple[str, ...]], ...]:
+        """Return ordered safe chunks with their submitted call identities."""
+
+        return tuple(
+            (call_id, self._validation_details[call_id])
+            for call_id in self._ordinals
+            if call_id in self._validation_details
+        )
+
+    def _label_validation_details(
+        self, call_id: str, details: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        first_diagnostic_call_id = next(iter(self._validation_details), call_id)
+        label = (
+            "Original response"
+            if call_id == first_diagnostic_call_id else "Repair response"
+        )
+        return tuple(
+            item.replace("Structured reply validation", label, 1)
+            for item in details
+        )
+
+    @property
+    def validation_details(self) -> tuple[str, ...]:
+        """Return ordered diagnostics for this invocation's physical calls."""
+
+        chunks: list[str] = []
+        for call_id in self._ordinals:
+            chunks.extend(self._validation_details.get(call_id, ()))
+        return tuple(chunks)
 
     def complete_references(
         self,
@@ -991,6 +1071,7 @@ class _AccountingContextProvider:
         call_id: str,
         ordinal: int,
         kind: CollaborationProviderCallKind,
+        details: tuple[str, ...] = (),
     ) -> None:
         accounting = getattr(result, "accounting", None)
         if (
@@ -998,7 +1079,7 @@ class _AccountingContextProvider:
             or accounting.state is not ProviderCallState.SUBMITTED
         ):
             return
-        self._submitted(call_id, ordinal, kind, accounting)
+        self._submitted(call_id, ordinal, kind, accounting, details)
 
     def _submitted(
         self,
@@ -1006,12 +1087,16 @@ class _AccountingContextProvider:
         ordinal: int,
         kind: CollaborationProviderCallKind,
         accounting: ProviderCallAccounting,
+        details: tuple[str, ...] = (),
     ) -> None:
         if call_id in self._submitted_call_ids:
             raise BackendProtocolError("provider call was submitted more than once")
         if accounting.payload.call_kind is ProviderCallKind.UNCLASSIFIED:
             raise BackendProtocolError("submitted provider call is unclassified")
         self._submitted_call_ids.add(call_id)
+        if details:
+            details = self._label_validation_details(call_id, details)
+            self._validation_details[call_id] = details
         self._runtime._append_provider_call_fact(
             session_id=self._session_id,
             conversation_id=self._conversation_id,
@@ -1024,6 +1109,7 @@ class _AccountingContextProvider:
             state=CollaborationProviderCallState.SUBMITTED,
             role=self._role,
             invocation_kind=self._invocation_kind,
+            validation_details=details,
         )
 
     @property
@@ -1061,6 +1147,7 @@ class _CollaborationInvocationResult:
     failure: BaseException | None = None
     submission_uncertain: bool = False
     trace: ReplyTrace | None = None
+    pending_validation: tuple[str, tuple[tuple[str, tuple[str, ...]], ...]] | None = None
 
     def __post_init__(self) -> None:
         if self.trace is not None and type(self.trace) is not ReplyTrace:
@@ -1364,6 +1451,7 @@ class StoryRuntime:
                     digest,
                     None,
                     trace=reply.trace,
+                    validation_details=reply.validation_details,
                 )
             candidate = invocation.candidate_material
             if candidate is None:
@@ -1373,6 +1461,7 @@ class StoryRuntime:
                 digest,
                 candidate,
                 trace=reply.trace,
+                validation_details=reply.validation_details,
             )
         if invocation.phase in {ConsensusPhase.DRAFT, ConsensusPhase.REPAIR}:
             if (
@@ -1388,6 +1477,7 @@ class StoryRuntime:
                 digest,
                 authored_material,
                 trace=reply.trace,
+                validation_details=reply.validation_details,
             )
         candidate = invocation.candidate_material
         if candidate is None:
@@ -1419,6 +1509,7 @@ class StoryRuntime:
                 ConsensusAuditVerdict(reply.verdict.value),
                 conflict_material=authored_material,
                 trace=reply.trace,
+                validation_details=reply.validation_details,
             )
         if authored_material is not None:
             raise ValueError("consensus phase does not accept authored material")
@@ -1434,6 +1525,7 @@ class StoryRuntime:
                 candidate,
                 next_phase=ConsensusPhase(reply.next_phase.value),
                 trace=reply.trace,
+                validation_details=reply.validation_details,
             )
         if (
             invocation.phase is not ConsensusPhase.FINALIZATION
@@ -1445,6 +1537,7 @@ class StoryRuntime:
             digest,
             candidate,
             trace=reply.trace,
+            validation_details=reply.validation_details,
         )
 
     def create_workflow(
@@ -2265,12 +2358,19 @@ class StoryRuntime:
         source = next(item for item in events if item.event_id == request.source_recommendation_event_id)
         if self._recommendation_event_digest(source) != request.source_recommendation_digest:
             raise BackendProtocolError("recommendation source no longer matches its disclosure")
+        validation_details = (
+            self._execution_validation_details(
+                events, request.source_execution_attempt_id, source.step_id,
+            )
+            if request.source_execution_attempt_id is not None else ()
+        )
         return LeadTurnResult(
             event.session_id, event.conversation_id, event.turn_id, event.step_id,
             LeadOutcomeKind.RECOMMENDATION, source.payload.message, None, None, None,
             CollaborationNextAction.SUBMIT_RECOMMENDATION_DECISION,
             evidence=request.basis.evidence, recommendation_request=request,
             trace=getattr(source.payload, "trace", None),
+            validation_details=validation_details,
         )
 
     def _recommendation_closure_draft(
@@ -2499,23 +2599,16 @@ class StoryRuntime:
         decision_event = by_id[start.decision_event_id]
         start_event = by_id[start.start_event_id]
         tail = events[-1]
-        lead_result = tail
-        if (
-            type(tail.payload) is CollaborationMessagePayload
-            and tail.sender == _LEAD_ACTOR
-            and tail.recipient == _USER_ACTOR
-            and tail.payload.content == _SAFE_STRUCTURED_FALLBACK_MESSAGE
-        ):
-            lead_result = next(
-                (
-                    event
-                    for event in reversed(events[:-1])
-                    if type(event.payload) is CollaborationLeadOutcomeFailurePayload
-                    and event.turn_id == start_event.turn_id
-                    and event.step_id == start_event.step_id
-                ),
-                tail,
-            )
+        lead_result = next(
+            (
+                event for event in reversed(events)
+                if type(event.payload) is CollaborationLeadOutcomeFailurePayload
+                and event.turn_id == start_event.turn_id
+                and event.step_id == start_event.step_id
+                and event.sequence >= start_event.sequence
+            ),
+            tail,
+        )
         if (type(lead_result.payload) is not CollaborationLeadOutcomeFailurePayload
             or lead_result.turn_id != start_event.turn_id
             or lead_result.step_id != start_event.step_id):
@@ -2558,11 +2651,22 @@ class StoryRuntime:
                     turn_id=start_event.turn_id, step_id=start_event.step_id)
         closure = self._recommendation_closure_draft(lead_result, request_event=request_event,
             decision_event=decision_event, start_event=start_event)
+        validation_details = tuple(
+            detail
+            for event in events
+            if event.turn_id == start_event.turn_id
+            and event.step_id == start_event.step_id
+            and type(event.payload) is CollaborationMessagePayload
+            and event.sender == _RUNTIME_ACTOR
+            and event.recipient == _USER_ACTOR
+            for detail in event.payload.validation_details
+        )
         self._append_drafts(projection.last_sequence, (closure,))
         return LeadTurnResult(session_id, conversation_id, lead_result.turn_id, lead_result.step_id,
             LeadOutcomeKind.ANSWER, closure.payload.message, None, None, None,
             CollaborationNextAction.CONTINUE_WITH_LEAD,
-            CollaborationLeadEvidence(LeadOutcomeScope.WORKFLOW_META, LeadEvidenceStatus.NOT_APPLICABLE, ()))
+            CollaborationLeadEvidence(LeadOutcomeScope.WORKFLOW_META, LeadEvidenceStatus.NOT_APPLICABLE, ()),
+            validation_details=validation_details)
 
     async def lead_turn(
         self,
@@ -4611,6 +4715,7 @@ class StoryRuntime:
                 "active_debate": authorities[2],
                 "own_agent_state": authorities[3],
                 "answer_validator": validate,
+                "validation_sink": provider.record_validation_details,
                 "progress_sink": action_progress_sink,
                 **self._lead_continuation_arguments(
                     session_id, conversation_id, turn_id, step_id,
@@ -4643,6 +4748,7 @@ class StoryRuntime:
                 if remaining < correction_cost:
                     reference_operation.failure(first_failure)
                     fallback_value = decoder(fallback_answer)
+                    pending_validation = provider.publish_or_defer_validation_messages()
                     return _CollaborationInvocationResult(
                         fallback_value,
                         provider.submitted_physical_calls,
@@ -4653,6 +4759,7 @@ class StoryRuntime:
                             result=None,
                             origin=ReplyTraceOrigin.RUNTIME_FALLBACK,
                         ),
+                        pending_validation=pending_validation,
                     )
                 trace_origin = ReplyTraceOrigin.RECOVERED
                 reference_read = reference_operation.begin_invocation(
@@ -4705,6 +4812,7 @@ class StoryRuntime:
                         raise
                     reference_operation.failure(correction_failure)
                     fallback_value = decoder(fallback_answer)
+                    pending_validation = provider.publish_or_defer_validation_messages()
                     return _CollaborationInvocationResult(
                         fallback_value,
                         provider.submitted_physical_calls,
@@ -4715,9 +4823,11 @@ class StoryRuntime:
                             result=None,
                             origin=ReplyTraceOrigin.RUNTIME_FALLBACK,
                         ),
+                        pending_validation=pending_validation,
                     )
             value = decoded if decoded is not None else decoder(result.answer)
             reference_operation.finish()
+            pending_validation = provider.publish_or_defer_validation_messages()
             return _CollaborationInvocationResult(
                 value,
                 provider.submitted_physical_calls,
@@ -4728,10 +4838,14 @@ class StoryRuntime:
                     result=result,
                     origin=trace_origin,
                 ),
+                pending_validation=pending_validation,
             )
         except BaseException as failure:
             if reference_operation is not None:
                 reference_operation.failure(failure)
+            pending_validation = (
+                None if provider is None else provider.publish_or_defer_validation_messages()
+            )
             facts = context_provider_failure_facts(failure)
             submitted = (
                 provider.submitted_physical_calls
@@ -4743,6 +4857,7 @@ class StoryRuntime:
                 submitted,
                 failure,
                 facts.submission_uncertain,
+                pending_validation=pending_validation,
             )
         finally:
             if bound_agent is not None:
@@ -4859,6 +4974,20 @@ class StoryRuntime:
     ) -> None:
         if len(assignment_results) != len(proposal.assignments):
             raise BackendProtocolError("assignment result count is not authoritative")
+        for invocation_result in (
+            *assignment_results,
+            *((synthesis_result,) if synthesis_result is not None else ()),
+        ):
+            if invocation_result.pending_validation is not None:
+                invocation_id, details_by_call = invocation_result.pending_validation
+                self._append_validation_messages(
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    step_id=proposal.step_id,
+                    invocation_id=invocation_id,
+                    details_by_call=details_by_call,
+                )
         assignments_succeeded = all(item.failure is None for item in assignment_results)
         if (
             assignments_succeeded
@@ -5223,6 +5352,9 @@ class StoryRuntime:
         if proposal is None or result is None or result_event_id is None:
             raise BackendProtocolError("known result finalization lacks authority")
         turn_id = self._deterministic_id("t", result_event_id, "finalize")
+        validation_details = self._execution_validation_details(
+            events, result.execution_attempt_id, proposal.step_id,
+        )
         synthesis_event = next(
             (
                 event
@@ -5250,6 +5382,7 @@ class StoryRuntime:
                 result_event_id=result_event_id,
                 candidate=artifact_candidate,
                 turn_id=turn_id,
+                validation_details=validation_details,
             )
         next_proposal: CollaborationProposal | None = None
         continuation_exceeds_budget = False
@@ -5346,6 +5479,7 @@ class StoryRuntime:
                 request_id,
                 CollaborationNextAction.SUBMIT_CONFIRMATION,
                 next_proposal.basis.evidence,
+                validation_details=validation_details,
             )
 
         state = {
@@ -5456,6 +5590,67 @@ class StoryRuntime:
             state,
             None,
             CollaborationNextAction.CONTINUE_WITH_LEAD,
+            validation_details=validation_details,
+        )
+
+    def _execution_validation_details(
+        self,
+        events: tuple[CollaborationEvent, ...],
+        execution_attempt_id: str,
+        step_id: str,
+    ) -> tuple[str, ...]:
+        """Recover safe call diagnostics from this execution's durable facts."""
+
+        execution_turn_id = self._deterministic_id(
+            "t", execution_attempt_id, "execution",
+        )
+        running_event_id = self._deterministic_id(
+            "e", execution_attempt_id, "running",
+        )
+        result_event_id = self._deterministic_id(
+            "e", execution_attempt_id, "result",
+        )
+        boundaries = {
+            event.event_id: event.sequence
+            for event in events
+            if event.event_id in {running_event_id, result_event_id}
+            and event.turn_id == execution_turn_id
+            and event.step_id == step_id
+        }
+        if len(boundaries) != 2:
+            return ()
+        execution_events = tuple(
+            event for event in events
+            if boundaries[running_event_id] < event.sequence < boundaries[result_event_id]
+            and event.turn_id == execution_turn_id
+            and event.step_id == step_id
+        )
+        messages_by_call: dict[tuple[str, str], list[str]] = {}
+        submitted_calls: set[tuple[str, str]] = set()
+        for event in execution_events:
+            payload = event.payload
+            if (type(payload) is CollaborationProviderCallPayload
+                and payload.state is CollaborationProviderCallState.SUBMITTED):
+                submitted_calls.add((payload.invocation_id, payload.call_id))
+            elif (type(payload) is CollaborationMessagePayload
+                and event.sender == _RUNTIME_ACTOR
+                and event.recipient == _USER_ACTOR
+                and payload.validation_invocation_id is not None
+                and payload.validation_call_id is not None
+                and len(payload.validation_details) == 1
+                and payload.content == payload.validation_details[0]):
+                key = (payload.validation_invocation_id, payload.validation_call_id)
+                if key in submitted_calls:
+                    messages_by_call.setdefault(key, []).append(payload.content)
+        return tuple(
+            detail
+            for event in execution_events
+            if type(event.payload) is CollaborationProviderCallPayload
+            and event.payload.state is CollaborationProviderCallState.SUBMITTED
+            for detail in messages_by_call.get(
+                (event.payload.invocation_id, event.payload.call_id),
+                event.payload.validation_details,
+            )
         )
 
     def _finalize_artifact_result_locked(
@@ -5468,6 +5663,7 @@ class StoryRuntime:
         result_event_id: str,
         candidate: ArtifactReviewCandidatePayload,
         turn_id: str,
+        validation_details: tuple[str, ...],
     ) -> LeadTurnResult:
         """Finalize known review facts without granting artifact-write authority."""
 
@@ -5767,6 +5963,7 @@ class StoryRuntime:
             None,
             ArtifactProposalResult(state, candidate, reviewed_proposal),
             application_payload,
+            validation_details=validation_details,
         )
 
     def _terminal_state_draft(
@@ -7061,6 +7258,8 @@ class StoryRuntime:
                     active_debate=authorities[2],
                     own_agent_state=authorities[3],
                     answer_validator=validate,
+                    answer_diagnostic=self._lead_outcome_validation_details,
+                    validation_sink=provider.record_validation_details,
                     event_sink=context_event_sink,
                     progress_sink=action_progress_sink,
                     **self._lead_continuation_arguments(
@@ -7148,12 +7347,14 @@ class StoryRuntime:
                         call_id=rejected_call_id,
                         failure_code=correction_failure_code,
                     )
+                    provider.publish_validation_messages()
                     return self._structured_fallback_lead_result(
                         session_id=session_id,
                         conversation_id=conversation_id,
                         turn_id=turn_id,
                         step_id=step_id,
                         persist_message=preparation is None,
+                        validation_details=provider.validation_details,
                         state=(
                             CollaborationStepState.SUPERSEDED
                             if previous_proposal is not None
@@ -7170,6 +7371,8 @@ class StoryRuntime:
                         active_debate=authorities[2],
                         own_agent_state=authorities[3],
                         answer_validator=validate,
+                        answer_diagnostic=self._lead_outcome_validation_details,
+                        validation_sink=provider.record_validation_details,
                         event_sink=context_event_sink,
                         progress_sink=action_progress_sink,
                         **self._lead_continuation_arguments(
@@ -7196,12 +7399,14 @@ class StoryRuntime:
                             call_id=provider.last_submitted_call_id,
                             failure_code=correction_failure_code,
                         )
+                        provider.publish_validation_messages()
                         return self._structured_fallback_lead_result(
                             session_id=session_id,
                             conversation_id=conversation_id,
                             turn_id=turn_id,
                             step_id=step_id,
                             persist_message=preparation is None,
+                            validation_details=provider.validation_details,
                             state=(
                                 CollaborationStepState.SUPERSEDED
                                 if previous_proposal is not None
@@ -7225,12 +7430,14 @@ class StoryRuntime:
                         call_id=rejected_call_id,
                         failure_code=correction_failure_code,
                     )
+                    provider.publish_validation_messages()
                     return self._structured_fallback_lead_result(
                         session_id=session_id,
                         conversation_id=conversation_id,
                         turn_id=turn_id,
                         step_id=step_id,
                         persist_message=preparation is None,
+                        validation_details=provider.validation_details,
                         state=(
                             CollaborationStepState.SUPERSEDED
                             if previous_proposal is not None
@@ -7275,12 +7482,17 @@ class StoryRuntime:
                     call_id=None if provider is None else provider.last_submitted_call_id,
                     failure_code=correction_failure_code,
                 )
+                if provider is not None:
+                    provider.publish_validation_messages()
                 return self._structured_fallback_lead_result(
                     session_id=session_id,
                     conversation_id=conversation_id,
                     turn_id=turn_id,
                     step_id=step_id,
                     persist_message=preparation is None,
+                    validation_details=(
+                        () if provider is None else provider.validation_details
+                    ),
                     state=(
                         CollaborationStepState.SUPERSEDED
                         if previous_proposal is not None
@@ -7289,7 +7501,7 @@ class StoryRuntime:
                 )
             if provider is None or provider.last_submitted_call_id is None:
                 raise
-            return self._lead_outcome_failure_result(
+            failed = self._lead_outcome_failure_result(
                 session_id=session_id,
                 conversation_id=conversation_id,
                 turn_id=turn_id,
@@ -7309,6 +7521,8 @@ class StoryRuntime:
                     else CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED
                 ),
             )
+            provider.publish_validation_messages()
+            return replace(failed, validation_details=provider.validation_details)
         except BaseException as failure:
             reference_failure = reference_operation.failure(failure)
             if isinstance(failure, SessionContextCapacityError):
@@ -7341,7 +7555,7 @@ class StoryRuntime:
                 and provider is not None
                 and provider.last_submitted_call_id is not None
             ):
-                return self._lead_outcome_failure_result(
+                failed = self._lead_outcome_failure_result(
                     session_id=session_id,
                     conversation_id=conversation_id,
                     turn_id=turn_id,
@@ -7353,6 +7567,8 @@ class StoryRuntime:
                     ),
                     failure=failure,
                 )
+                provider.publish_validation_messages()
+                return replace(failed, validation_details=provider.validation_details)
             recovered = self._close_failed_lead_attempt(
                 session_id, conversation_id, failure=failure,
                 turn_id=turn_id, step_id=step_id,
@@ -7381,11 +7597,13 @@ class StoryRuntime:
         finally:
             await self._release_bound_agent_use(bound_agent)
 
+        assert provider is not None
+        provider.publish_validation_messages()
         if outcome.kind is LeadOutcomeKind.PROPOSAL:
             if outcome.artifact_intent is not None:
                 assert decoded_artifact_candidate is not None
                 try:
-                    return self._build_artifact_proposal_result(
+                    return replace(self._build_artifact_proposal_result(
                         session_id=session_id,
                         conversation_id=conversation_id,
                         turn_id=turn_id,
@@ -7403,11 +7621,11 @@ class StoryRuntime:
                         objective_events=objective_events,
                         objective_projection=objective_projection,
                         preparation=preparation,
-                    )
+                    ), validation_details=provider.validation_details)
                 except _LeadOutcomeValidationError:
                     assert provider is not None
                     assert provider.last_submitted_call_id is not None
-                    return self._lead_outcome_failure_result(
+                    failed = self._lead_outcome_failure_result(
                         session_id=session_id,
                         conversation_id=conversation_id,
                         turn_id=turn_id,
@@ -7418,6 +7636,7 @@ class StoryRuntime:
                             CollaborationLeadOutcomeFailureCode.ARTIFACT_INTENT_REJECTED
                         ),
                     )
+                    return replace(failed, validation_details=provider.validation_details)
             intent = outcome.proposal
             assert intent is not None
             refreshed = self.conversation_storage_services.event_store.read_context(
@@ -7504,6 +7723,7 @@ class StoryRuntime:
                 CollaborationNextAction.SUBMIT_CONFIRMATION,
                 evidence,
                 trace=outcome.trace,
+                validation_details=provider.validation_details,
             )
 
         refreshed = self.conversation_storage_services.event_store.read_context(
@@ -7539,7 +7759,10 @@ class StoryRuntime:
                 previous=None if preparation is None else preparation.request_event.payload,
             )
             self._append_drafts(refreshed.last_sequence, (*final_drafts, request_draft))
-            return self._recommendation_turn_result(request_draft)
+            return replace(
+                self._recommendation_turn_result(request_draft),
+                validation_details=provider.validation_details,
+            )
         self._append_drafts(refreshed.last_sequence, final_drafts)
         return LeadTurnResult(
             session_id,
@@ -7562,6 +7785,7 @@ class StoryRuntime:
             ),
             evidence,
             trace=outcome.trace,
+            validation_details=provider.validation_details,
         )
 
     def _build_artifact_proposal_result(
@@ -8561,6 +8785,7 @@ class StoryRuntime:
         step_id: str,
         persist_message: bool = True,
         state: CollaborationStepState | None = None,
+        validation_details: tuple[str, ...] = (),
     ) -> LeadTurnResult:
         """Persist one visible no-action answer after exhausted schema repair."""
 
@@ -8612,6 +8837,7 @@ class StoryRuntime:
             CollaborationNextAction.CONTINUE_WITH_LEAD,
             evidence,
             trace=trace,
+            validation_details=validation_details,
         )
 
     @staticmethod
@@ -8650,6 +8876,33 @@ class StoryRuntime:
             objective = proposal.get("objective_intent", objective)
         prepare = type(objective) is dict and objective.get("next_step") == "prepare"
         return prepare if objective_prepare_only else prepare or artifact is not None
+
+    @staticmethod
+    def _lead_outcome_validation_details(
+        answer: str,
+    ) -> tuple[DomainValidationRule, ...]:
+        """Classify known lead rules without carrying provider text."""
+
+        try:
+            value = json.loads(answer)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return (DomainValidationRule.MALFORMED_RESULT,)
+        if type(value) is not dict:
+            return (DomainValidationRule.RESULT_OBJECT_REQUIRED,)
+        issues: list[DomainValidationRule] = []
+        kind = value.get("kind", LeadOutcomeKind.ANSWER.value)
+        has_recommendation = "recommended_action" in value
+        if kind == LeadOutcomeKind.RECOMMENDATION.value and not has_recommendation:
+            issues.append(DomainValidationRule.RECOMMENDATION_REQUIRED)
+        if kind != LeadOutcomeKind.RECOMMENDATION.value and has_recommendation:
+            issues.append(DomainValidationRule.RECOMMENDATION_ONLY)
+        if has_recommendation and "objective_intent" in value:
+            issues.append(DomainValidationRule.OBJECTIVE_RECOMMENDATION_CONFLICT)
+        if kind != LeadOutcomeKind.PROPOSAL.value and (
+            "proposal" in value or "artifact_intent" in value
+        ):
+            issues.append(DomainValidationRule.PROPOSAL_KIND_REQUIRED)
+        return tuple(issues or (DomainValidationRule.LEAD_OUTCOME_REJECTED,))
 
     @staticmethod
     def _decode_lead_outcome(
@@ -10749,6 +11002,7 @@ class StoryRuntime:
         state: CollaborationProviderCallState,
         role: str,
         invocation_kind: CollaborationInvocationKind,
+        validation_details: tuple[str, ...] = (),
     ) -> None:
         projection = self.conversation_storage_services.event_store.read_context(
             session_id,
@@ -10773,9 +11027,66 @@ class StoryRuntime:
                         invocation_kind=invocation_kind,
                         call_kind=call_kind,
                         state=state,
+                        validation_details=validation_details,
                     ),
                 ),
             ),
+        )
+
+    def _append_validation_messages(
+        self, *, session_id: str, conversation_id: str, turn_id: str,
+        step_id: str, invocation_id: str,
+        details_by_call: tuple[tuple[str, tuple[str, ...]], ...],
+    ) -> None:
+        """Append ordered bounded chunks before the established fallback message."""
+
+        drafts = tuple(
+            self._draft_with_id(
+                event_id=self._deterministic_id(
+                    "e", invocation_id, call_id, "validation", str(index),
+                ),
+                session_id=session_id,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                step_id=step_id,
+                kind=CollaborationEventKind.MESSAGE,
+                sender=_RUNTIME_ACTOR,
+                recipient=_USER_ACTOR,
+                payload=CollaborationMessagePayload(
+                    part,
+                    validation_details=(part,),
+                    validation_invocation_id=invocation_id,
+                    validation_call_id=call_id,
+                ),
+            )
+            for call_id, details in details_by_call
+            for index, part in enumerate(details)
+        )
+        events = self.conversation_storage_services.event_store.read(
+            session_id, conversation_id,
+        )
+        by_id = {event.event_id: event for event in events}
+        existing = tuple(by_id.get(draft.event_id) for draft in drafts)
+        if any(event is not None for event in existing):
+            if all(
+                event is not None
+                and event.session_id == draft.session_id
+                and event.conversation_id == draft.conversation_id
+                and event.turn_id == draft.turn_id
+                and event.step_id == draft.step_id
+                and event.kind is draft.kind
+                and event.sender == draft.sender
+                and event.recipient == draft.recipient
+                and event.payload == draft.payload
+                for event, draft in zip(existing, drafts, strict=True)
+            ):
+                return
+            raise BackendProtocolError("diagnostic message append is incomplete")
+        projection = project_collaboration_history(events)
+        self._append_drafts(
+            projection.last_sequence,
+            drafts,
+            batch_id=self._deterministic_id("b", invocation_id, "validation"),
         )
 
     @staticmethod

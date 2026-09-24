@@ -31,6 +31,7 @@ from ._live_composer import (
 from ._external_view import (
     _BorrowedLineViewerHost,
     _require_external_view_frame,
+    ExternalViewUnavailableError,
     ExternalViewerHost,
     ExternalViewOperation,
 )
@@ -2776,9 +2777,16 @@ class RawTerminalDriver:
                 viewport_renderer,
             )
 
-    def open_external_view(self, operation: ExternalViewOperation) -> None:
+    def open_external_view(
+        self,
+        operation: ExternalViewOperation,
+        *,
+        transient_only: bool = False,
+    ) -> None:
         """Run one injected viewer while retaining sole terminal ownership."""
 
+        if type(transient_only) is not bool:
+            raise TypeError("transient_only must be a bool")
         if not callable(operation):
             raise TypeError("operation must be callable")
         if self._progress_active:
@@ -2789,6 +2797,10 @@ class RawTerminalDriver:
             observed_capabilities = self._observe_input_capabilities()
             capabilities, configuration = self._prepare_input(observed_capabilities)
             if configuration is None:
+                if transient_only:
+                    raise ExternalViewUnavailableError(
+                        "external viewer requires an alternate screen"
+                    )
                 host = _BorrowedLineViewerHost(
                     lambda prompt: self._read_fallback_line(prompt, capabilities),
                     self._write_raw_text,

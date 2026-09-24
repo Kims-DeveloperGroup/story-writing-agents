@@ -675,6 +675,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                     "invocation_kind",
                     "call_kind",
                     "state",
+                    "validation_details",
                 ),
             ),
         )
@@ -993,6 +994,39 @@ class CollaborationValueContractTests(unittest.TestCase):
 
 
 class CollaborationWireContractTests(unittest.TestCase):
+    def test_validation_message_correlation_round_trips_and_old_message_decodes(
+        self,
+    ) -> None:
+        detail = "Original response:\n$.action.result: rejected by a domain result rule"
+        correlated = make_draft(
+            "validation_message", CollaborationEventKind.MESSAGE, RUNTIME, USER,
+            CollaborationMessagePayload(
+                detail, validation_details=(detail,),
+                validation_invocation_id="invocation_1",
+                validation_call_id="call_1",
+            ),
+        )
+        wire = encode_collaboration_event_draft(correlated)
+        self.assertEqual(decode_collaboration_event_draft(wire), correlated)
+        payload = json.loads(wire)["payload"]
+        self.assertEqual(payload["validation_invocation_id"], "invocation_1")
+        self.assertEqual(payload["validation_call_id"], "call_1")
+
+        old = make_draft(
+            "old_message", CollaborationEventKind.MESSAGE, RUNTIME, USER,
+            CollaborationMessagePayload("Visible old message."),
+        )
+        old_wire = encode_collaboration_event_draft(old)
+        self.assertEqual(decode_collaboration_event_draft(old_wire), old)
+        self.assertNotIn("validation_invocation_id", json.loads(old_wire)["payload"])
+        self.assertNotIn("validation_call_id", json.loads(old_wire)["payload"])
+        for missing in ("validation_invocation_id", "validation_call_id"):
+            with self.subTest(missing=missing):
+                malformed = json.loads(wire)
+                del malformed["payload"][missing]
+                with self.assertRaises(ValueError):
+                    decode_collaboration_event_draft(_canonical_json(malformed))
+
     def test_failure_closure_codes_round_trip_with_null_only_for_unsubmitted_request(self):
         for code in CollaborationLeadOutcomeFailureCode:
             with self.subTest(code=code):

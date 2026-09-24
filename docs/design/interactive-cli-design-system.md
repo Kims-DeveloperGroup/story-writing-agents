@@ -674,13 +674,13 @@ and retains no viewer draft or committed-frame cache. Escape input is forwarded
 for the engine to interpret. A malformed decoder input or incomplete-code-point
 deadline can instead fail through terminal restoration. The driver then closes
 the host, exits the screen, and restores terminal attributes under the
-established failure precedence. In fallback it borrows the existing line
-callbacks, supplies plain geometry/color facts, and forwards literal lines
-without interpreting command grammar or adding a Story viewer prompt. Complete
-frames and typed input remain in scrollback. Both paths release the operation
-and host; Story picker state and all external viewer state are discarded on
-return. The renderer's exact Simple/Verbose, gutter, search, color, responsive, recursive
-nested-JSON expansion, leaf-only truncation, and help rules
+established failure precedence. `/exchanges` requires that transient screen:
+if terminal setup falls back to line mode, Story opens no host and prints a
+content-free notice. The generic external-view operation can still use borrowed
+line callbacks when transient display is not required. Story picker state and
+all external viewer state are discarded on return. The renderer's exact
+Simple/Verbose, gutter, search, color, responsive, recursive nested-JSON
+expansion, leaf-only truncation, and help rules
 remain solely in the pinned external [design
 system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/ce57f560f3ca1366ea69dfe15cb1c598513e2c82/docs/design-system.md)
 and its [nine deterministic samples](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/ce57f560f3ca1366ea69dfe15cb1c598513e2c82/docs/samples).
@@ -2278,7 +2278,7 @@ edge.
 | Fixed command values | `SuggestionPalette`, `Field` | Canonical finite grammar choices, including metadata-exposed agent IDs/aliases; palette activity has no effects beyond call-local input state | #79 (implemented) |
 | Single-select and selectable-list choices | `Picker`, `ListView`, `Record`, `Notice` | Disabled-skipping clamped Up/Down highlight, Enter commit, Escape cancel, typed interrupt/EOF, bounded live/full fallback rendering, internal terminal states without a synthetic final control frame | #87 foundation, #93 and #142 consumers (implemented) |
 | Independent ranged text viewer | Private viewer document/state/viewport/result values, not a `Component` | Ordinary versus anchored clamped navigation, inclusive commit, typed noncommit exits, height-bounded alternate-screen rendering, strict complete-text fallback, and no retained caller or composer state | #162 foundation; #164 provider-bound shell caller (implemented) |
-| Hosted external JSONL viewer | Private `ExternalViewerHost`/operation plus external complete frames, not a Story `Component` | Story-owned safe frame/event bridge, sole-driver raw/alternate-screen lifecycle, ordinary-line fallback, reentry/progress exclusion, idempotent close, and no returned or retained content/view state | #414 integration; pinned external renderer (implemented) |
+| Hosted external JSONL viewer | Private `ExternalViewerHost`/operation plus external complete frames, not a Story `Component` | Story-owned safe frame/event bridge, sole-driver raw/alternate-screen lifecycle, content-free notice when transient display is unavailable, reentry/progress exclusion, idempotent close, and no returned or retained content/view state | #414 integration; pinned external renderer (implemented) |
 | Artifact-reference activation | Private marker projection plus existing palette/viewer controls | Provider-span-only `$` completion; immediate exact-`$$` ranged-source palette; direct `$${path}` or highlighted Enter/Tab viewer entry; exact origin restoration; multiple ordered indicators; fixed content-free errors; and fallback second confirmation | #164 (implemented) |
 | Live omitted-resume choices | `SuggestionPalette`, `Picker`, `Prompt`, `Field` | Exact capable command only; controller-owned ordered rows/highlight/fresh validation; Up/Down preview; one-Enter explicit commit; Escape dismissal; Tab no-op; submitted omitted command uses a live capable or numbered fallback picker only after a successful fresh read returns eligible rows; empty/error short-circuit | #142 (implemented) |
 | Settings field and action navigation | `Panel`, `Prompt`, `Picker`, `Field`, `Notice` | Single focus; Settings-only form presentation, including borrowed authentication, with simple titles and textual active/selected/disabled cues; Settings > Conversation RAG and Settings > Agents > Agent settings navigation; retained Language/Persona/rounds/Conversation storage/RAG Provider/RAG Automatic/Message details/Provider/Model/Custom model/Effort editors; first-commit reopen and second-consecutive-equivalent-commit return; clean root with seven choices and no persistence actions; dirty root with all nine rows plus Apply/Discard confirmation and final recheck; details-only live presentation fast path; RAG-only system-config persistence with no authentication, storage, runtime, route/thread, composition, probe/install, catalog, subprocess, socket, or network work; mixed full authentication/activation with next-shell-only storage and RAG; candidate-specific scope notices; subordinate authentication return to Provider; universal capable cleanup and honest fallback visibility; and unchanged standard generic picker navigation and session-resume behavior | #93, #106, #115, #142, #252, #261, #270, #271, #287, #299, #303, #312, #319, #321, #349, #350, and #377 (implemented) |

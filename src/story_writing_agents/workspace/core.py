@@ -522,11 +522,18 @@ class Workspace:
                     "content",
                     "timestamp",
                 }
-                valid_fields = (base_fields, {*base_fields, "trace"})
+                valid_fields = (
+                    base_fields,
+                    {*base_fields, "trace"},
+                    {*base_fields, "validation_details"},
+                    {*base_fields, "trace", "validation_details"},
+                )
                 if not isinstance(value, dict) or set(value) not in valid_fields:
                     raise TypeError("debate log entry has an invalid schema")
                 if "trace" in value and type(value["trace"]) is not dict:
                     raise TypeError("debate log trace must be an object")
+                if "validation_details" in value and type(value["validation_details"]) is not list:
+                    raise TypeError("debate log validation details must be an array")
                 string_fields = base_fields.difference({"round"})
                 if any(not isinstance(value[field], str) for field in string_fields):
                     raise TypeError("debate log string field has an invalid type")

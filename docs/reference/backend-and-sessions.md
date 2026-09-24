@@ -90,6 +90,14 @@ or story bytes. Missing or invalid semantic output still receives one bounded
 repair; a second rejection returns a visible `action=none` fallback so the
 conversation remains usable without inferring authority.
 
+Direct Python `AgentReply` and `ConversationReply` values also expose
+`validation_details: tuple[str, ...]`. The ordered, bounded chunks describe
+trusted JSON paths, expected and actual types, or fixed rules for rejected
+structured replies; successful repair retains the original attempt's details,
+and exhausted repair retains both attempts' details. The tuple is empty when
+there are no findings. It contains no raw response values or unknown property
+names and grants no action authority.
+
 For Antigravity, runtime installs the selected definition at
 `.agents/agents/<agent-id>/agent.md` beneath the isolated
 session/agent/fingerprint working directory and always supplies `--agent`.

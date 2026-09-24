@@ -174,6 +174,16 @@ SYNTHESIS case is a valid continuation source; REPAIR and FINALIZATION direct
 the caller to failure inspection. The returned provider result retains the
 content-free `ReplyTrace` with `origin=runtime_fallback` and `action=none`.
 
+Direct `ConsensusProviderResult.validation_details` contains the ordered safe
+chunks for that provider invocation. When any provider result has findings, the
+terminal `ConsensusPhaseResult.validation_details_by_provider` persists one
+tuple per returned provider result in invocation order; a provider without
+findings has an empty tuple at its position. Running checkpoints carry none.
+Read the terminal event through `load_workflow()` when inspecting these details
+after restart. Older result events without the optional field decode as an
+empty tuple. The details contain schema paths and fixed type or rule findings,
+not raw provider values or publication authority.
+
 `interrupt_consensus()` acts only on a running request. `resume_consensus()` is
 an inspection operation: it never resumes/replays a provider call or recreates
 confirmation authority after restart. `outcome_unknown` and
@@ -335,6 +345,7 @@ LeadTurnResult(
     story_commit_request: StoryCommitRequestPayload | None = None,
     recommendation_request: LeadRecommendationRequestPayload | None = None,
     trace: ReplyTrace | None = None,
+    validation_details: tuple[str, ...] = (),
 )
 ```
 
@@ -345,9 +356,29 @@ has `recommendation_request` and `submit_recommendation_decision`. Its
 `state`, `proposal`, `confirmation_request_id`, `artifact_proposal`,
 `artifact_application_request`, and `story_commit_request` are all `None`;
 `evidence` equals the request's basis evidence. These decision controls are
-mutually exclusive. The trailing field defaults to `None`, preserving callers
-that omit it. Historical judgments and runtime recovery notices can still have
+mutually exclusive. `trace` defaults to `None`, preserving callers that omit it.
+Historical judgments and runtime recovery notices can still have
 kind `recommendation` without a new action; follow their state-specific action.
+
+`validation_details` is an ordered tuple of bounded, content-safe diagnostic
+chunks from rejected structured provider attempts. A successful repair can
+retain `Original response` findings; an exhausted repair can retain both
+`Original response` and `Repair response` findings. Empty means no validation
+findings. These details describe schema paths, expected versus actual JSON
+types, and fixed rules without provider values or unknown member names; they
+grant no confirmation or replay authority.
+
+Ordinary reports include every independently detectable schema finding. A
+report that exceeds the diagnostic cap keeps up to 2,048 findings in order and
+ends with the fixed `$: additional validation issues omitted` notice. Display
+chunks remain below 32,000 UTF-8 bytes each.
+
+Durable validation messages may carry optional
+`CollaborationMessagePayload.validation_invocation_id` and
+`validation_call_id` alongside their detail chunk. Runtime correlates those
+IDs with submitted provider-call facts to restore execution diagnostics in
+physical-call order after restart, including concurrent specialist work. Older
+messages without the optional IDs remain readable.
 
 A proposal result contains the complete runtime-built
 `CollaborationProposal`, state `awaiting_confirmation`, a fresh confirmation

@@ -81,6 +81,7 @@ from ._driver import (
 )
 from ._external_view import (
     _BorrowedLineViewerHost,
+    ExternalViewUnavailableError,
     ExternalViewOperation,
 )
 from ._live_composer import (
@@ -1881,16 +1882,23 @@ class InteractiveExternalViewer:
 
         if not isinstance(terminal, InteractiveTerminal):
             raise TypeError("terminal must be an InteractiveTerminal")
-        self._open: Callable[[ExternalViewOperation], None] = (
+        self._open: Callable[..., None] = (
             terminal._external_view_open
         )
 
-    def open(self, operation: ExternalViewOperation) -> None:
+    def open(
+        self,
+        operation: ExternalViewOperation,
+        *,
+        transient_only: bool = False,
+    ) -> None:
         """Run one injected view while its host owns no terminal resource."""
 
+        if type(transient_only) is not bool:
+            raise TypeError("transient_only must be a bool")
         if not callable(operation):
             raise TypeError("operation must be callable")
-        self._open(operation)
+        self._open(operation, transient_only=transient_only)
 
 
 class InteractiveAdvisoryProgress:
@@ -2528,12 +2536,22 @@ def _plain_external_view_opener(
     read_line: Callable[[str], str],
     write_text: Callable[[str], None],
     width: int,
-) -> Callable[[ExternalViewOperation], None]:
-    """Adapt borrowed callbacks for a line-only transient external view."""
+) -> Callable[..., None]:
+    """Adapt borrowed callbacks for an optional line-only external view."""
 
-    def open_view(operation: ExternalViewOperation) -> None:
+    def open_view(
+        operation: ExternalViewOperation,
+        *,
+        transient_only: bool = False,
+    ) -> None:
+        if type(transient_only) is not bool:
+            raise TypeError("transient_only must be a bool")
         if not callable(operation):
             raise TypeError("operation must be callable")
+        if transient_only:
+            raise ExternalViewUnavailableError(
+                "external viewer requires an alternate screen"
+            )
         host = _BorrowedLineViewerHost(read_line, write_text, width)
         active_failure: BaseException | None = None
         try:

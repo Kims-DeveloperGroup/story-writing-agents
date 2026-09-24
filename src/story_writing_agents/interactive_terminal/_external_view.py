@@ -46,6 +46,10 @@ class ExternalViewerHost(Protocol):
 ExternalViewOperation: TypeAlias = Callable[[ExternalViewerHost], None]
 
 
+class ExternalViewUnavailableError(RuntimeError):
+    """A transient view cannot open without an alternate screen."""
+
+
 def _require_external_view_frame(frame: object, *, color_enabled: bool) -> str:
     """Accept printable text, newlines, and optionally ANSI SGR only."""
 
