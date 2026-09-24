@@ -30,7 +30,7 @@ ignored lead_input list_agents search transcript inspect exchanges history statu
 settings set_language set_persona reset session_list session_create
 session_open session_pause conversation_new conversation_list
 conversation_list_all conversation_use conversation_subject
-conversation_archive help quit parse_error
+conversation_archive help quit progress parse_error
 ```
 
 `lead_input` carries one literal ordinary line. There is no agent selector,
@@ -45,9 +45,10 @@ output path, direct RAG query, or legacy direct-run payload.
 | Sessions | `/session list \| create NAME \| resume [NAME] \| pause` |
 | Conversations | `/conversation new [SUBJECT] \| list [--all] [QUERY] \| resume [ID] \| subject SUBJECT \| archive [ID]` |
 | Inspection | `/search QUERY`; `/transcript [ID [COUNT] [--from SEQUENCE]]`; `/inspect [DEBATE\|last]`; `/exchanges`; `/history [COUNT]`; `/status`; `/help [COMMAND]` |
+| Display | `/progress [on\|off\|toggle]` |
 | Exit | `/quit` |
 
-`/?` aliases `/help`. Parsing performs no scope check or I/O; the controller
+`/?` aliases `/help`; `/toggle` aliases `/progress toggle`. Parsing performs no scope check or I/O; the controller
 owns attachment, focus, storage, provider-authentication, settings, picker, and
 viewer behavior.
 

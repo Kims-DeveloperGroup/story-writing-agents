@@ -812,7 +812,7 @@ class RawTerminalDriver:
             raise
 
         inspector_failure: BaseException | None = None
-        should_keep = False
+        should_keep = (keep_frame is None) if failed else False
         if callable(keep_frame):
             try:
                 should_keep = bool(keep_frame())
@@ -877,7 +877,8 @@ class RawTerminalDriver:
                     clear_failure = exc
         else:
             if (
-                scroll_state_provider is not None
+                should_keep
+                and scroll_state_provider is not None
                 and nested_scroll_renderer is not None
                 and nested_scroll_transition is not None
             ):

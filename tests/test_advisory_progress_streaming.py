@@ -3076,6 +3076,55 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             self.assertEqual(len(inspector_called), 0)
             self.assertTrue(mock_clear.called)
 
+    def test_failure_clears_frame_and_bypasses_inspector_when_keep_frame_is_false(self) -> None:
+        """Verify failure path bypasses the nested inspector and clears the frame when keep_frame=False."""
+        capabilities = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+        out = io.StringIO()
+        driver = RawTerminalDriver(
+            lambda _p: "",
+            io.StringIO(),
+            out,
+            lambda s, e: (s, None),
+            lambda s, e, h: (s, None),
+            lambda h, t: h,
+        )
+
+        async def failing_op():
+            raise RuntimeError("provider operation failed")
+
+        inspector_called = []
+
+        def fake_inspector(*args, **kwargs):
+            inspector_called.append(True)
+
+        with (
+            mock.patch.object(RawTerminalDriver, "capabilities", return_value=capabilities),
+            mock.patch.object(RawTerminalDriver, "run_nested_scroll_inspector", side_effect=fake_inspector),
+            mock.patch.object(RawTerminalDriver, "_clear_progress_frame") as mock_clear,
+        ):
+            with self.assertRaises(RuntimeError):
+                asyncio.run(
+                    driver.run_advisory_progress(
+                        failing_op(),
+                        lambda _f: "Running...",
+                        scroll_state_provider=lambda _r: mock.MagicMock(views=(mock.MagicMock(),)),
+                        nested_scroll_transition=mock.MagicMock(),
+                        nested_scroll_renderer=mock.MagicMock(),
+                        keep_frame=False,
+                    )
+                )
+
+            self.assertEqual(len(inspector_called), 0)
+            self.assertTrue(mock_clear.called)
+
     def test_distinct_page_up_page_down_key_kinds_and_transitions(self) -> None:
         """Verify PageUp/PageDown decode to distinct KeyKind without affecting text viewer selection."""
         from story_writing_agents.interactive_terminal._viewer_controls import transition_text_viewer
