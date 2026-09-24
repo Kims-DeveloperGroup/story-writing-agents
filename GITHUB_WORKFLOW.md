@@ -76,7 +76,7 @@ unresolved Copilot **High**, Codex **P0/P1**, branch-protection approvals, and r
 Lower-severity feedback is nonblocking and may become follow-up work. Review/check evidence
 must match the current base and head SHAs; retargeting the base restarts validation
 and review milestones.
-After an ordinary target-branch advance, update the PR branch from the new base before
+After an ordinary accepted-base advance, update the PR branch from the new base before
 merge and repeat the final validation/review milestone. A base push invalidates managed
 PR gate status; it does not silently reuse old-base evidence.
 

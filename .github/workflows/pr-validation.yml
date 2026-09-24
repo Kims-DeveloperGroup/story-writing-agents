@@ -332,6 +332,7 @@ jobs:
           for source in markdown:
               text = source.read_text(encoding="utf-8")
               text = re.sub(r"```.*?```|~~~.*?~~~", "", text, flags=re.DOTALL)
+              text = re.sub(r"(`+)(.*?)\1", "", text, flags=re.DOTALL)
               for raw in re.findall(r"\[[^\]]+\]\(([^)]+)\)", text):
                   target = raw.strip().strip("<>").split()[0]
                   parsed = urlsplit(target)

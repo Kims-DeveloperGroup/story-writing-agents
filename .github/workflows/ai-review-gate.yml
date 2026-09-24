@@ -15,7 +15,7 @@ on:
   schedule:
     - cron: '17,47 * * * *'
   push:
-    branches: [main]
+    branches: ['**']
   workflow_dispatch:
     inputs:
       pr_number:
@@ -56,8 +56,10 @@ jobs:
             const {owner, repo} = context.repo;
             let numbers = [];
             if (context.eventName === "schedule" || context.eventName === "push") {
+              const base = context.eventName === "push"
+                ? context.ref.replace(/^refs\/heads\//, "") : undefined;
               const pulls = await github.paginate(github.rest.pulls.list, {
-                owner, repo, state: "open", per_page: 100,
+                owner, repo, state: "open", ...(base ? {base} : {}), per_page: 100,
               });
               numbers = pulls
                 .filter(pr => pr.labels.some(label => label.name === "workflow:managed"))
@@ -305,7 +307,7 @@ jobs:
                   .map(comment => comment.body || ""),
               ];
             };
-            const copilotHigh = /\bseverity\s*[:=-]\s*(?:\*\*)?high\b|\[(?:severity\s*:\s*)?high\]|(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*\*)?high(?:\*\*)?\s*(?:severity)?\s*[:—-]/im;
+            const copilotHigh = /\bseverity\s*[:=-]\s*(?:\*\*)?high\b|\[(?:severity\s*:\s*)?high\]|(?:^|\n)[ \t]*(?:#{1,6}[ \t]*)?(?:\*\*)?high(?:\*\*)?[ \t]*(?:(?:severity)?[ \t]*[:—-]|$)/im;
             const codexBlocking = /\[(?:P0|P1)(?:\s+Badge)?\]/i;
             const blockers = [];
             if (textsFor(botReviews.filter(review => review.user?.login === copilotLogin))
