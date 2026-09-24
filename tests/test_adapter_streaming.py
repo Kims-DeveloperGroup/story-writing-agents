@@ -2294,6 +2294,54 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_antigravity_stream_extracts_validated_string_message_and_avoids_dict_leak(self) -> None:
+        """Verify dictionary-shaped error objects only extract message and do not stringify dict details."""
+        from story_writing_agents.agent_context.progress import ProviderStreamEventKind
+
+        adapter, binding = self._make_agy_binding("session_err_dict_leak")
+        schema = {
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"],
+            "additionalProperties": False,
+        }
+        events = []
+        invocation = ProviderInvocation(
+            session_id="session_err_dict_leak",
+            schema=schema,
+            payload={},
+            thread_id=None,
+            stream_sink=events.append,
+        )
+        stream_lines = [
+            b'{"type":"status","status":"running","message":{"message":"step failed","secret_token":"leak"}}\n',
+            b'{"type":"step_update","step_update":{"step_type":"error_message","error":{"message":"error detail","auth_key":"secret"}}}\n',
+            b'{"type":"result","result":{"status":"ERROR","conversation_id":"c1","error":{"message":"terminal failure","private_data":"hidden"}}}\n',
+        ]
+
+        async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
+            for line in stream_lines:
+                if request.on_stdout_line:
+                    request.on_stdout_line(line)
+            return ProcessResult(
+                stdout=b"".join(stream_lines),
+                stderr=b"",
+                returncode=1,
+            )
+
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
+            with self.assertRaises(Exception):
+                await adapter.invoke(binding, invocation)
+
+        status_events = [e.text for e in events if e.kind == ProviderStreamEventKind.STATUS]
+        for text in status_events:
+            self.assertNotIn("secret_token", text)
+            self.assertNotIn("auth_key", text)
+            self.assertNotIn("private_data", text)
+        self.assertIn("step failed", status_events)
+        self.assertIn("Error: error detail", status_events)
+        self.assertIn("Error: terminal failure", status_events)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3315,6 +3315,19 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         self.assertIn("Completed.", scroll_idle.focused_view.visible_lines[0])
 
 
-
-
-
+    def test_observe_stream_caps_error_status_at_120_chars(self) -> None:
+        """Verify error status in observe_stream is capped at 120 chars and single-line."""
+        state = AdvisoryProgressState()
+        long_error = "Error: " + "x" * 200 + "\nSecond line details"
+        event = ProviderStreamEvent(
+            ProviderStreamEventKind.STATUS,
+            agent_id="planner",
+            text=long_error,
+            operation_id="step_1",
+        )
+        state.observe_stream(event)
+        expected = ("Error: " + "x" * 200)[:120]
+        self.assertEqual(len(state.agent_errors[("planner", "step_1")]), 120)
+        self.assertEqual(state.agent_errors[("planner", "step_1")], expected)
+        self.assertNotIn("\n", state.agent_errors[("planner", "step_1")])
+        self.assertEqual(state.last_error_message, expected)

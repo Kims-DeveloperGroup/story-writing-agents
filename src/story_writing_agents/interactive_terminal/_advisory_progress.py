@@ -170,7 +170,7 @@ class AdvisoryProgressState:
                 buf.append(f"Status: {first_line[:120]}")
                 if len(buf) > 2000:
                     del buf[:-2000]
-            lower = sanitized.lower()
+            lower = first_line.lower()
             if (
                 lower.startswith("error:")
                 or lower.startswith("error ")
@@ -178,8 +178,9 @@ class AdvisoryProgressState:
                 or lower.startswith("failed:")
                 or lower.startswith("fatal:")
             ):
-                self.agent_errors[key] = sanitized
-                self.last_error_message = sanitized
+                error_detail = first_line[:120]
+                self.agent_errors[key] = error_detail
+                self.last_error_message = error_detail
                 self.snapshot_failure()
         elif event.kind is ProviderStreamEventKind.THOUGHT_DELTA:
             self.last_buffer_event_was_text[key] = False

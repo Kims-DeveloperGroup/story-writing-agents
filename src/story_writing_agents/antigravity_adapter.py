@@ -1063,6 +1063,18 @@ class AntigravityAdapter:
             if stream_sink is not None:
                 stream_sink(event)
 
+        def _extract_string_message(value: object) -> str | None:
+            """Extract validated string message from string or dict message field."""
+            if isinstance(value, str):
+                cleaned = value.strip()
+                return cleaned if cleaned else None
+            if isinstance(value, dict):
+                msg = value.get("message")
+                if isinstance(msg, str):
+                    cleaned = msg.strip()
+                    return cleaned if cleaned else None
+            return None
+
         def handle_stream_line(raw_line: bytes) -> None:
             nonlocal callback_lines_delivered, invalid_stream_line, has_trailing_data_after_terminal
             callback_lines_delivered += 1
@@ -1133,7 +1145,7 @@ class AntigravityAdapter:
                 elif not has_discriminator:
                     target_dict = event
                 if target_dict is not None and str(target_dict.get("status", "")).upper() == "ERROR":
-                    err_text = str(target_dict.get("error") or "")
+                    err_text = _extract_string_message(target_dict.get("error"))
                     if err_text:
                         emit_stream_event(
                             ProviderStreamEvent(
@@ -1154,12 +1166,14 @@ class AntigravityAdapter:
                 "turn_started",
                 "status",
             } or (not has_discriminator and str(event.get("status", "")).lower() == "running"):
-                msg = str(
-                    event.get("text")
-                    or event.get("message")
-                    or event.get("status")
-                    or "Generating response..."
-                )
+                msg = None
+                for key in ("text", "message", "status"):
+                    extracted = _extract_string_message(event.get(key))
+                    if extracted:
+                        msg = extracted
+                        break
+                if msg is None:
+                    msg = "Generating response..."
                 emit_stream_event(
                     ProviderStreamEvent(
                         ProviderStreamEventKind.STATUS,
@@ -1284,12 +1298,13 @@ class AntigravityAdapter:
                         )
                     )
                 if step_type == "error_message":
-                    error_text = str(
-                        step_update.get("error")
-                        or step_update.get("message")
-                        or step_update.get("text")
-                        or ""
-                    )
+                    error_text = _extract_string_message(step_update.get("error"))
+                    if not error_text:
+                        for key in ("message", "text"):
+                            extracted = _extract_string_message(step_update.get(key))
+                            if extracted:
+                                error_text = extracted
+                                break
                     if error_text:
                         emit_stream_event(
                             ProviderStreamEvent(
