@@ -132,7 +132,7 @@ jobs:
           for path in pathlib.Path(".").glob("**/*.json"):
               if ".git" not in path.parts:
                   json.loads(path.read_text(encoding="utf-8"))
-          for path in (*pathlib.Path("src").rglob("*.py"), *pathlib.Path("tests").glob("*.py")):
+          for path in (*pathlib.Path("src").rglob("*.py"), *pathlib.Path("tests").rglob("*.py")):
               compile(path.read_text(encoding="utf-8"), str(path), "exec", dont_inherit=True)
           PY
           ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}"].each { |path| YAML.parse_file(path) }'
@@ -183,8 +183,8 @@ jobs:
           weights = suite_policy.load_timing_weights()
           classes = {}
           imports = {}
-          for path in Path("tests").glob("*.py"):
-              module = f"tests.{path.stem}"
+          for path in Path("tests").rglob("*.py"):
+              module = ".".join(path.with_suffix("").parts)
               tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
               imports[module] = {
                   alias.asname or alias.name: f"{node.module}.{alias.name}"
@@ -206,16 +206,6 @@ jobs:
                   elif isinstance(base, ast.Attribute) and isinstance(base.value, ast.Name):
                       root = imports[module].get(base.value.id, base.value.id)
                       yield f"{root}.{base.attr}"
-
-          def has_test_method(group, seen):
-              if group in seen or group not in classes:
-                  return False
-              node = classes[group]
-              if any(isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
-                     and method.name.startswith("test") for method in node.body):
-                  return True
-              return any(has_test_method(parent, seen | {group})
-                         for parent in parents(group))
 
           def class_mro(group, active=frozenset()):
               if group in active:
@@ -254,6 +244,16 @@ jobs:
                               return False
               return False
 
+          def has_test_method(group):
+              names = {
+                  member.name
+                  for owner in class_mro(group)
+                  for member in (classes[owner].body if owner in classes else ())
+                  if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
+                  and member.name.startswith("test")
+              }
+              return any(discoverable_method(group, name) for name in names)
+
           def is_test_case(group, seen):
               if group in ("unittest.TestCase", "unittest.case.TestCase",
                            "unittest.IsolatedAsyncioTestCase",
@@ -264,7 +264,7 @@ jobs:
               return any(is_test_case(parent, seen | {group}) for parent in parents(group))
 
           stale_groups = sorted(group for group in weights.group_weights_microseconds
-                                if not has_test_method(group, set())
+                                if not has_test_method(group)
                                 or not is_test_case(group, set()))
           if stale_groups:
               raise SystemExit("timing manifest stale test groups: " + ", ".join(stale_groups))
@@ -370,7 +370,15 @@ jobs:
               text = re.sub(r"```.*?```|~~~.*?~~~", "", text, flags=re.DOTALL)
               text = re.sub(r"(`+)(.*?)\1", "", text, flags=re.DOTALL)
               for raw in re.findall(r"\[[^\]]+\]\(([^)]+)\)", text):
-                  target = raw.strip().strip("<>").split()[0]
+                  destination_text = raw.strip()
+                  if destination_text.startswith("<"):
+                      end = destination_text.find(">")
+                      if end < 0:
+                          raise SystemExit(f"{source}: unclosed link destination {raw}")
+                      target = destination_text[1:end]
+                  else:
+                      parts = destination_text.split()
+                      target = parts[0] if parts else ""
                   parsed = urlsplit(target)
                   if not target or parsed.scheme or parsed.netloc:
                       continue
