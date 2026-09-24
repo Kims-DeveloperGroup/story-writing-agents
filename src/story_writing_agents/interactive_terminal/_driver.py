@@ -962,12 +962,18 @@ class RawTerminalDriver:
             capabilities, configuration = self._prepare_input(observed_capabilities)
             if configuration is None:
                 self._redraw_nested_scroll_frame(initial_state, capabilities, renderer)
-                if self._progress_rows > 0:
+                if keep_frame:
+                    if self._progress_rows > 0:
+                        try:
+                            self._write_raw_text("\r\n")
+                        except Exception:
+                            pass
+                        self._progress_rows = 0
+                else:
                     try:
-                        self._write_raw_text("\r\n")
+                        self._clear_progress_frame()
                     except Exception:
-                        pass
-                    self._progress_rows = 0
+                        self._progress_rows = 0
                 return initial_state
             return self._run_live_nested_scroll_inspector(
                 initial_state,

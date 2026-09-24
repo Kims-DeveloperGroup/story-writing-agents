@@ -3431,3 +3431,108 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             self.assertEqual(res, "debate result")
             self.assertEqual(len(inspector_called), 0)
             mock_clear.assert_called()
+
+    def test_non_live_nested_scroll_inspector_respects_keep_frame_false(self) -> None:
+        """Verify non-live fallback inspector clears frame and does not retain when keep_frame=False."""
+        from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
+        from story_writing_agents.interactive_terminal._model import (
+            CapabilityProfile,
+            MultiAgentScrollState,
+            NestedScrollViewport,
+            RenderedFrame,
+            TerminalCapabilities,
+        )
+
+        caps = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+        out = io.StringIO()
+        driver = RawTerminalDriver(
+            lambda _p: "",
+            io.StringIO(),
+            out,
+            lambda s, e: (s, None),
+            lambda s, e, h: (s, None),
+            lambda h, t: h,
+        )
+        view = NestedScrollViewport(
+            view_id="a:1",
+            title="Agent",
+            total_lines=5,
+            start_line=1,
+            visible_lines=("line 1",),
+            visible_height=1,
+            is_focused=True,
+        )
+        scroll_state = MultiAgentScrollState((view,), 0)
+        renderer = lambda _s, _c: RenderedFrame("line 1", 80, 1)
+
+        with mock.patch.object(RawTerminalDriver, "_prepare_input", return_value=(caps, None)), \
+             mock.patch.object(RawTerminalDriver, "_clear_progress_frame") as mock_clear:
+            driver.run_nested_scroll_inspector(
+                scroll_state,
+                mock.MagicMock(),
+                renderer,
+                keep_frame=False,
+            )
+            mock_clear.assert_called()
+            self.assertFalse(out.getvalue().endswith("\r\n"))
+
+    def test_non_live_nested_scroll_inspector_respects_keep_frame_true(self) -> None:
+        """Verify non-live fallback inspector writes newline and retains frame when keep_frame=True."""
+        from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
+        from story_writing_agents.interactive_terminal._model import (
+            CapabilityProfile,
+            MultiAgentScrollState,
+            NestedScrollViewport,
+            RenderedFrame,
+            TerminalCapabilities,
+        )
+
+        caps = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+        out = io.StringIO()
+        driver = RawTerminalDriver(
+            lambda _p: "",
+            io.StringIO(),
+            out,
+            lambda s, e: (s, None),
+            lambda s, e, h: (s, None),
+            lambda h, t: h,
+        )
+        view = NestedScrollViewport(
+            view_id="a:1",
+            title="Agent",
+            total_lines=5,
+            start_line=1,
+            visible_lines=("line 1",),
+            visible_height=1,
+            is_focused=True,
+        )
+        scroll_state = MultiAgentScrollState((view,), 0)
+        renderer = lambda _s, _c: RenderedFrame("line 1", 80, 1)
+
+        with mock.patch.object(RawTerminalDriver, "_prepare_input", return_value=(caps, None)), \
+             mock.patch.object(RawTerminalDriver, "_clear_progress_frame") as mock_clear:
+            driver.run_nested_scroll_inspector(
+                scroll_state,
+                mock.MagicMock(),
+                renderer,
+                keep_frame=True,
+            )
+            mock_clear.assert_not_called()
+            self.assertTrue(out.getvalue().endswith("\r\n"))
+            self.assertEqual(driver._progress_rows, 0)
