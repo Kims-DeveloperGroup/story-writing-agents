@@ -344,8 +344,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 143)
-        self.assertEqual(len(edges), 576)
+        self.assertEqual(len(modules), 144)
+        self.assertEqual(len(edges), 585)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
@@ -360,6 +360,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.conversations.events": {
                 "story_writing_agents.reply_trace",
                 "story_writing_agents.specialist_routing",
+                "story_writing_agents.structured_output_validation",
                 "story_writing_agents.agents",
                 "story_writing_agents.artifact_proposals",
                 "story_writing_agents.errors",
@@ -369,6 +370,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.conversations.context": {
                 "story_writing_agents.reply_trace",
                 "story_writing_agents.specialist_routing",
+                "story_writing_agents.structured_output_validation",
                 "story_writing_agents.conversations.events",
                 "story_writing_agents.errors",
                 "story_writing_agents.git.story_commit_contracts",
@@ -704,6 +706,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.conversations.session_context",
                 "story_writing_agents.errors",
                 "story_writing_agents.provider_auth_recovery",
+                "story_writing_agents.structured_output_validation",
                 "story_writing_agents.workspace",
             },
         )
@@ -800,6 +803,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.errors",
                 "story_writing_agents.models",
                 "story_writing_agents.reply_trace",
+                "story_writing_agents.structured_output_validation",
             },
         )
 
