@@ -112,10 +112,8 @@ jobs:
             const issues = [...issuesByNumber.values()];
 
             // PR-to-Issue relations survive deletion of the head branch after merge.
-            const linkedIssues = new Set([
-              ...pr.allClosingIssues.nodes,
-              ...pr.manuallyLinkedIssues.nodes,
-            ].map(issue => issue.id));
+            const linkedIssues = new Set(
+              pr.manuallyLinkedIssues.nodes.map(issue => issue.id));
             const recordedFailures = failures;
             const sameRepository = pr.headRepository?.nameWithOwner === `${owner}/${repo}`;
             const protectedHead = pr.headRefName === repository.defaultBranchRef.name;
