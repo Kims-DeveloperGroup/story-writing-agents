@@ -69,12 +69,16 @@ jobs:
               path === ".gitmodules" ||
               path === "vendor/generic-rag" ||
               path === "vendor/jsonl-viewer";
-            const runtime = truncated || paths.some(isRuntime);
+            const runtimePaths = truncated || paths.some(isRuntime);
+            // An explicit full-suite request also runs the fast tier, even when
+            // the diff contains only tests, policy, or documentation.
+            const fullRequested = labels.includes("test:full");
+            const runtime = runtimePaths || fullRequested;
             // Merge-group payloads do not reliably identify constituent PR labels.
             const full = runtime && (
-              truncated || context.eventName === "merge_group" || labels.includes("test:full"));
+              truncated || context.eventName === "merge_group" || fullRequested);
             core.setOutput("runtime", String(runtime));
-            core.setOutput("policy_only", String(!runtime));
+            core.setOutput("policy_only", String(!runtimePaths));
             core.setOutput("full", String(full));
             core.setOutput("base_sha", baseSha);
             core.setOutput("head_sha", headSha);
@@ -83,8 +87,9 @@ jobs:
             core.summary
               .addHeading("Validation selection")
               .addTable([
-                [{data: "Runtime paths", header: true}, String(runtime)],
-                [{data: "Policy/config only", header: true}, String(!runtime)],
+                [{data: "Runtime paths", header: true}, String(runtimePaths)],
+                [{data: "Policy/config only", header: true}, String(!runtimePaths)],
+                [{data: "Run runtime lanes", header: true}, String(runtime)],
                 [{data: "Full suite", header: true}, String(full)],
               ])
               .write();
@@ -230,7 +235,7 @@ jobs:
               if not module.startswith("tests.") or not path.is_file():
                   raise SystemExit(f"fast-tier module missing: {identifier}")
               tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-              if not any(
+              if not is_test_case(f"{module}.{class_name}", set()) or not any(
                   isinstance(node, ast.ClassDef) and node.name == class_name and
                   any(isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) and
                       method.name == method_name for method in node.body)
@@ -260,7 +265,7 @@ jobs:
           import functools
           import pathlib
           import re
-          from urllib.parse import unquote
+          from urllib.parse import unquote, urlsplit
 
           root = pathlib.Path.cwd()
           templates = {
@@ -326,9 +331,10 @@ jobs:
               text = re.sub(r"```.*?```|~~~.*?~~~", "", text, flags=re.DOTALL)
               for raw in re.findall(r"\[[^\]]+\]\(([^)]+)\)", text):
                   target = raw.strip().strip("<>").split()[0]
-                  if not target or target.startswith(("http://", "https://", "mailto:")):
+                  parsed = urlsplit(target)
+                  if not target or parsed.scheme or parsed.netloc:
                       continue
-                  path, _, fragment = target.partition("#")
+                  path, fragment = parsed.path, parsed.fragment
                   decoded = unquote(path)
                   destination = ((root / decoded.lstrip("/")) if decoded.startswith("/")
                                  else (source.parent / decoded)).resolve() if path else source

@@ -328,6 +328,14 @@ jobs:
               description = "Current-head Copilot and Codex gates passed";
             }
 
+            const {data: latestPr} = await github.rest.pulls.get({
+              owner, repo, pull_number: pullNumber,
+            });
+            if (latestPr.head.sha !== pr.head.sha ||
+                latestPr.base.sha !== pr.base.sha) {
+              state = "failure";
+              description = "PR base or head changed during review evaluation";
+            }
             await github.rest.repos.createCommitStatus({
               owner,
               repo,
@@ -337,13 +345,11 @@ jobs:
               description: description.slice(0, 140),
               target_url: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
             });
-            const {data: latestPr} = await github.rest.pulls.get({
-              owner, repo, pull_number: pullNumber,
-            });
             const stillManaged = latestPr.labels.some(
               label => label.name === "workflow:managed");
             const mergeGatesReady = state === "success" &&
               stillManaged && latestPr.head.sha === pr.head.sha &&
+              latestPr.base.sha === pr.base.sha &&
               latestPr.mergeable_state === "clean";
             if (!mergeGatesReady) {
               await disableAutoMerge(
