@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 
 from story_writing_agents import (
     CHARACTER_CUSTODIAN,
@@ -217,6 +218,128 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     appended, [receipt.running_event, receipt.terminal_event]
                 )
+
+    async def test_provider_validation_details_survive_phase_receipt_without_authority(
+        self,
+    ) -> None:
+        details = ("Original response\n$.message: expected string, got integer",)
+        appended = []
+
+        async def invoke(invocation):
+            return replace(await self.valid_result(invocation),
+                           validation_details=details)
+
+        _, _, _, _, receipt = await self.execute(
+            ConsensusPhase.DRAFT, appended.append, invoke,
+        )
+        self.assertIs(receipt.state, ConsensusPhaseState.COMPLETED)
+        self.assertEqual(receipt.provider_results[0].validation_details, details)
+        self.assertEqual(
+            receipt.terminal_event.payload.validation_details_by_provider,
+            (details,),
+        )
+        self.assertEqual(receipt.terminal_event.payload.next_phase,
+                         ConsensusPhase.AUDIT)
+
+    async def test_audit_validation_details_keep_provider_ordinal_order(self) -> None:
+        appended = []
+
+        async def invoke(invocation):
+            return replace(
+                await self.valid_result(invocation),
+                validation_details=(
+                    f"Original response\n$.auditor_{invocation.ordinal}: expected string",
+                ),
+            )
+
+        _, _, _, _, receipt = await self.execute(
+            ConsensusPhase.AUDIT, appended.append, invoke,
+        )
+        expected = tuple(output.validation_details for output in receipt.provider_results)
+        self.assertEqual(len(expected), 3)
+        self.assertEqual(
+            receipt.terminal_event.payload.validation_details_by_provider,
+            expected,
+        )
+        self.assertEqual(
+            tuple(item.ordinal for item in receipt.provider_invocations),
+            (1, 2, 3),
+        )
+
+    async def test_partial_audit_failure_keeps_completed_provider_diagnostics(self) -> None:
+        first_details = ("Original response\n$.verdict: expected enum",)
+
+        async def invoke(invocation):
+            if invocation.ordinal == 2:
+                raise RuntimeError("provider failed")
+            return replace(
+                await self.valid_result(invocation),
+                validation_details=first_details,
+            )
+
+        _, _, _, _, receipt = await self.execute(
+            ConsensusPhase.AUDIT, lambda _event: None, invoke,
+        )
+        self.assertIs(receipt.state, ConsensusPhaseState.FAILED)
+        self.assertEqual(len(receipt.provider_results), 1)
+        self.assertEqual(
+            receipt.terminal_event.payload.validation_details_by_provider,
+            (first_details,),
+        )
+
+    async def test_returned_provider_failure_persists_safe_validation_details(self) -> None:
+        details = ("Original response\n$.message: expected string, got integer",)
+
+        async def invoke(_invocation):
+            return ConsensusProviderResult(
+                ConsensusPhaseOutputKind.FAILURE,
+                "8" * 64,
+                None,
+                validation_details=details,
+            )
+
+        appended = []
+        _, _, _, _, receipt = await self.execute(
+            ConsensusPhase.DRAFT, appended.append, invoke,
+        )
+        self.assertIs(receipt.state, ConsensusPhaseState.FAILED)
+        self.assertEqual(receipt.provider_results[0].validation_details, details)
+        self.assertEqual(
+            receipt.terminal_event.payload.validation_details_by_provider,
+            (details,),
+        )
+        self.assertEqual(appended[-1], receipt.terminal_event)
+
+    async def test_invalid_typed_provider_result_keeps_report_without_accepting_result(
+        self,
+    ) -> None:
+        details = ("Original response\n$.candidate: expected a new candidate",)
+        cases = (
+            (ConsensusPhase.DRAFT, _INPUT_MATERIAL),
+            (ConsensusPhase.AUDIT, _CANDIDATE_MATERIAL),
+        )
+        for phase, material in cases:
+            with self.subTest(phase=phase):
+                appended = []
+
+                async def invoke(_invocation):
+                    return ConsensusProviderResult(
+                        ConsensusPhaseOutputKind.CANDIDATE,
+                        "8" * 64,
+                        material,
+                        validation_details=details,
+                    )
+
+                _, _, _, _, receipt = await self.execute(
+                    phase, appended.append, invoke,
+                )
+                self.assertIs(receipt.state, ConsensusPhaseState.FAILED)
+                self.assertEqual(receipt.provider_results, ())
+                self.assertEqual(
+                    receipt.terminal_event.payload.validation_details_by_provider,
+                    (details,),
+                )
+                self.assertEqual(appended[-1], receipt.terminal_event)
 
     async def test_tail_request_decision_binding_and_capability_replay_fail_before_callbacks(
         self,

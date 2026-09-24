@@ -153,6 +153,10 @@ def project_lead_turn_result(result: LeadTurnResult) -> Panel:
         _message("Lead", result.message, role=SemanticRole.AGENT),
         *_reply_trace_items(result.trace),
     ]
+    items.extend(
+        Notice(detail, label="validation", role=SemanticRole.ERROR)
+        for detail in result.validation_details
+    )
     if result.proposal is not None:
         items.extend(_proposal_items(result.proposal))
     if result.evidence is not None:
@@ -476,6 +480,17 @@ def _payload_items(
     if type(payload) is LeadRecommendationResultPayload:
         return (Field("Preparation", payload.state.value), _message("Result", payload.message))
     if type(payload) is CollaborationMessagePayload:
+        if payload.validation_details:
+            return (
+                *((_message("Message", payload.content),)
+                  if (len(payload.validation_details) != 1
+                      or payload.content != payload.validation_details[0]) else ()),
+                *(
+                    Notice(detail, label="validation", role=SemanticRole.ERROR)
+                    for detail in payload.validation_details
+                ),
+                *_reply_trace_items(payload.trace),
+            )
         return (
             _message("Message", payload.content),
             *_reply_trace_items(payload.trace),
@@ -604,6 +619,10 @@ def _payload_items(
             Field("Invocation kind", payload.invocation_kind.value),
             Field("Call kind", payload.call_kind.value),
             Field("State", payload.state.value),
+            *(
+                Notice(detail, label="validation", role=SemanticRole.ERROR)
+                for detail in payload.validation_details
+            ),
         )
     if type(payload) is CollaborationLeadOutcomeFailurePayload:
         return (

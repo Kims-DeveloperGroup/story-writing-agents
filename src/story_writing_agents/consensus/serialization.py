@@ -264,6 +264,10 @@ def _event_to_json(event: ConsensusEvent) -> dict[str, Any]:
             "prior_result_event_id": payload.prior_result_event_id,
             "publication_allowed": payload.publication_allowed,
         }
+        if payload.validation_details_by_provider:
+            body["validation_details_by_provider"] = [
+                list(report) for report in payload.validation_details_by_provider
+            ]
     else:
         raise TypeError("consensus event payload cannot be serialized")
     return {
@@ -375,13 +379,22 @@ def _result_from_json(value: object) -> ConsensusPhaseResult:
             "next_phase",
             "prior_result_event_id",
             "publication_allowed",
-        },
+        } | ({"validation_details_by_provider"} if type(value) is dict and
+             "validation_details_by_provider" in value else set()),
         "result",
     )
     raw_audits = raw["audits"]
     if type(raw_audits) is not list or len(raw_audits) > 3:
         raise ValueError("serialized consensus audits are invalid")
     next_phase = raw["next_phase"]
+    raw_reports = raw.get("validation_details_by_provider", [])
+    if type(raw_reports) is not list or len(raw_reports) > 3:
+        raise ValueError("serialized consensus provider reports are invalid")
+    reports: list[tuple[str, ...]] = []
+    for report in raw_reports:
+        if type(report) is not list or any(type(item) is not str for item in report):
+            raise ValueError("serialized consensus provider report is invalid")
+        reports.append(tuple(report))
     return ConsensusPhaseResult(
         result_id=raw["result_id"],
         phase_request_id=raw["phase_request_id"],
@@ -398,6 +411,7 @@ def _result_from_json(value: object) -> ConsensusPhaseResult:
         next_phase=None if next_phase is None else ConsensusPhase(next_phase),
         prior_result_event_id=raw["prior_result_event_id"],
         publication_allowed=raw["publication_allowed"],
+        validation_details_by_provider=tuple(reports),
     )
 
 

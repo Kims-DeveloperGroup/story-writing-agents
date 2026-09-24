@@ -17,6 +17,7 @@ from .conversations import (
 )
 from .errors import SessionIdError, WorkspaceFormatError
 from .reply_trace import ReplyTrace
+from .structured_output_validation import validate_details
 
 
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
@@ -288,10 +289,12 @@ class DebateMessage:
     content: str
     timestamp: str
     trace: ReplyTrace | None = None
+    validation_details: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.trace is not None and type(self.trace) is not ReplyTrace:
             raise TypeError("debate message trace must be ReplyTrace or None")
+        validate_details(self.validation_details)
 
     def to_dict(self) -> dict[str, Any]:
         value = asdict(self)
@@ -299,6 +302,10 @@ class DebateMessage:
             value.pop("trace")
         else:
             value["trace"] = self.trace.to_dict()
+        if not self.validation_details:
+            value.pop("validation_details")
+        else:
+            value["validation_details"] = list(self.validation_details)
         return value
 
     @classmethod
@@ -311,6 +318,11 @@ class DebateMessage:
         raw_trace = item.get("trace")
         if raw_trace is not None:
             item["trace"] = ReplyTrace.from_dict(raw_trace)
+        if "validation_details" in item:
+            raw_details = item["validation_details"]
+            if type(raw_details) is not list:
+                raise TypeError("debate validation details must be a list")
+            item["validation_details"] = tuple(raw_details)
         return cls(**item)
 
 
@@ -840,6 +852,7 @@ class ConversationReply:
     turn_id: str
     content: str
     trace: ReplyTrace | None = None
+    validation_details: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_conversation_identifier(self.session_id, label="session ID")
@@ -854,6 +867,7 @@ class ConversationReply:
         )
         if self.trace is not None and type(self.trace) is not ReplyTrace:
             raise TypeError("conversation reply trace must be ReplyTrace or None")
+        validate_details(self.validation_details)
 
 
 @dataclass(frozen=True, slots=True)
@@ -868,6 +882,7 @@ class ConversationResult:
     context: ConversationContextWindow
     reference_operation_id: str | None = None
     trace: ReplyTrace | None = None
+    validation_details: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate IDs/content and install a canonical pre-turn context.
@@ -906,6 +921,7 @@ class ConversationResult:
         _validate_reference_operation_identifier(self.reference_operation_id)
         if self.trace is not None and type(self.trace) is not ReplyTrace:
             raise TypeError("conversation result trace must be ReplyTrace or None")
+        validate_details(self.validation_details)
 
 
 @dataclass(frozen=True, slots=True)
@@ -926,12 +942,14 @@ class AgentReply:
     reviewed_proposal_id: str | None = None
     reviewed_proposal_digest: str | None = None
     trace: ReplyTrace | None = None
+    validation_details: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.kind) is not AgentReplyKind:
             raise TypeError("agent reply kind is invalid")
         if self.trace is not None and type(self.trace) is not ReplyTrace:
             raise TypeError("agent reply trace must be ReplyTrace or None")
+        validate_details(self.validation_details)
         if type(self.deadlocked) is not bool:
             raise TypeError("agent reply deadlock marker is invalid")
         review_identity_absent = (

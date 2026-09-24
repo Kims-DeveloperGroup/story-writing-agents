@@ -84,8 +84,14 @@ class ReplyTraceContractTests(unittest.TestCase):
             "Visible answer.",
             "2026-09-13T00:00:00Z",
             trace,
+            ("Original response\n$: malformed JSON",),
         )
         self.assertEqual(DebateMessage.from_dict(message.to_dict()), message)
+        self.assertEqual(message.to_dict()["validation_details"],
+                         ["Original response\n$: malformed JSON"])
+        old_record = message.to_dict()
+        old_record.pop("validation_details")
+        self.assertEqual(DebateMessage.from_dict(old_record).validation_details, ())
 
 
 if __name__ == "__main__":

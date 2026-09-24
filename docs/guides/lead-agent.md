@@ -266,6 +266,26 @@ open but supplies no collaboration or mutation authority. The trace lists
 context classes, not the prompt, retrieved text, hidden reasoning, or reply
 content.
 
+When structured validation rejects a provider reply, the live Lead result and
+`/history` show ordered `validation` notices. Each chunk identifies the
+`Original response` or `Repair response`; together the chunks list every
+independently detectable issue in ordinary reports using trusted JSON property
+paths, expected and actual JSON types, or a fixed rule. Reports that exceed the
+diagnostic cap list up to 2,048 findings, then say additional issues were omitted.
+For example, a missing
+`$.action.result.authoring_scope` is described as a missing required property;
+unexpected property names and provider values are never printed. Python
+callers can read the same ordered chunks from `LeadTurnResult.validation_details`;
+direct `AgentReply` and `ConversationReply` values also expose
+`validation_details`. A successful repair retains the original rejection
+details. If repair fails, the safe no-action reply retains both attempts. The
+optional field is empty for replies without validation findings and absent
+from older serialized history.
+
+Durable notices can be matched to their submitted provider calls, so
+diagnostics from concurrent specialists keep their physical-call order when a
+result is finalized after restart.
+
 The same front channel is available as ordinary input in the interactive
 shell. Exact prose is provider-generated, while the typed outcome and next
 action are runtime-owned:
@@ -747,7 +767,7 @@ Do not treat every provider-related failure as the same recovery case:
 | --- | --- | --- |
 | An exchange closes with `provider_failure` / `provider_authentication_required`, but no valid `ProviderResult`. | The completed native result requires authentication. Authentication and timeout are independent facts; interactive Lead work still offers provider-native sign-in. | Complete native sign-in. Story may replay only the exact Antigravity pre-execution rejection when no timeout fact exists; a timeout defeats replay and continuation reuse and closes an eligible read-only Lead attempt as `provider_timed_out` with `retry_lead_turn`. |
 | An exchange has a request and `provider_failure` / `provider_invocation_failed`, but no valid `ProviderResult`. | The adapter did not return Story's provider-result contract. Configuration, output-schema rejection, transport, or another provider-side failure may be responsible. The fixed code does not prove whether the provider performed external work. | Diagnose the provider/configuration boundary. Do not infer that replay is safe from this diagnostic alone. |
-| A completed result is rejected. | Story received malformed or semantically invalid structured output. | Story requests one bounded repair. If repair fails, it returns a visible safe no-action Lead answer and keeps the conversation open. |
+| A completed result is rejected. | Story received malformed or semantically invalid structured output; safe validation details can identify the rejected properties and rules. | Story requests one bounded repair. If repair fails, it returns a visible safe no-action Lead answer and keeps the conversation open. |
 | Collaboration state is `outcome_unknown`. | Submission is durable, but no authoritative accepted or rejected result closes it. | Follow `inspect_and_resolve_outcome`; never replay the submitted call. |
 
 For example, the former Codex failure was caused by a response schema whose
@@ -758,8 +778,9 @@ before returning a valid `ProviderResult`, so the exchange could show only
 correlation from the active call.
 Conversely, an Antigravity result that adds undeclared bookkeeping fields or
 omits a semantic field required by its selected variant is a returned-result
-rejection, not `outcome_unknown`. These examples contain no provider-native diagnostic or
-story content; durable user history also keeps only the fixed classifications.
+rejection, not `outcome_unknown`. These examples contain no provider-native
+diagnostic or story content. Durable user history can retain the safe validation
+details alongside the fixed classifications, never the raw rejected response.
 
 The replay exception is deliberately narrow. Antigravity must exit 1 with its
 exact zero-turn, zero-duration, empty conversation/response authentication-

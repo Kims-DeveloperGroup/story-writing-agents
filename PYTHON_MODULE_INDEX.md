@@ -13,7 +13,7 @@ Paths below are import paths relative to `story_writing_agents`; each maps to th
 below `src/story_writing_agents/` with `.py` or `/__init__.py`. A package name in an
 inventory includes its `__init__.py`.
 
-Importable production units indexed: 143. Direct internal dependency edges indexed: 574.
+Importable production units indexed: 144. Direct internal dependency edges indexed: 583.
 Directed internal dependency cycles indexed: 0.
 
 ## Supported public surfaces
@@ -77,6 +77,7 @@ depend on terminal presentation or concrete persistence.
 
 Primary public access is through the root facade for stable library types. `config` owns
 runtime configuration loading; `prompts` owns prompt assembly, not provider execution.
+`models` carries additive, optional validation diagnostics without granting next-action authority.
 
 ### Runtime orchestration and providers
 
@@ -85,12 +86,15 @@ authentication, recovery, and diagnostic behavior behind provider-neutral contra
 
 - `orchestrator`, `backend`, `provider_adapter`, `antigravity_adapter`, `codex_adapter`
 - `provider_auth`, `provider_auth_recovery`, `provider_catalog`, `provider_process`
-- `provider_error_artifacts`, `debug_log`
+- `provider_error_artifacts`, `debug_log`, `structured_output_validation`
 
 `orchestrator` composes domain contracts, storage, consensus, Git story commits, references,
 and provider-neutral backends. `provider_process` owns provider subprocess execution;
 `provider_auth` owns authentication probes; `provider_error_artifacts` and `debug_log` own
 their filesystem outputs. Concrete adapters depend inward on `provider_adapter` contracts.
+`structured_output_validation` is a pure, package-internal helper for bounded,
+content-free diagnostics from completed structured replies and trusted schema; it owns no
+provider state, persistence, or authority and is not a public facade.
 
 ### Agent context and source budgeting
 
@@ -103,7 +107,8 @@ source reads. `service` is the composition boundary; `ledger` owns durable accou
 - `agent_context.sources`
 
 Dependencies flow from `service`, `sources`, and `progress` toward manifest/action/planning
-contracts. Filesystem source access is delegated to writing-artifact and workspace owners.
+contracts. Filesystem source access is delegated to writing-artifact and workspace owners. Optional
+validation diagnostics preserve rejection, repair, checkpoint, and authority decisions.
 
 ### Agent exchange capture
 
@@ -125,7 +130,9 @@ search/storage contracts without owning persistence.
 
 `catalog` owns catalog behavior, `events` owns schema-v2 event contracts, and
 `session_context` derives session-scoped context. Search implementations must return public
-search/retrieval contracts rather than expose storage internals.
+search/retrieval contracts rather than expose storage internals. Conversation events and
+retrieval may carry bounded validation details associated with the physical provider call;
+older records without them remain valid.
 
 ### Conversation storage
 
@@ -168,6 +175,8 @@ facade; contracts and projections remain infrastructure-neutral.
 
 Execution depends on contracts/projection; serialization depends on contracts/projection;
 stores own durable workspace records. Contracts must not import execution or stores.
+Consensus results may carry ordered provider validation details; historical serialized
+results without this optional field remain valid.
 
 ### Writing artifacts and references
 
@@ -218,6 +227,7 @@ state paths, manage session lifecycle, and assess/reconcile recovery transitions
 `workspace.core` owns workspace path validation and access; `initialization` owns creation;
 `schema` owns schema-v2 validation. `_policy_baselines` is private immutable policy data.
 Session recovery contracts point inward and must not depend on interactive presentation.
+Workspace readers accept optional bounded validation details and legacy entries without them.
 
 ### Interactive controller
 
@@ -248,6 +258,8 @@ live composition, reference activation, collaboration presentation, and the term
 - `interactive_terminal._viewer_controls`, `interactive_terminal._viewer_render`
 
 Presentation modules may consume public runtime/domain contracts but never own runtime state.
+Collaboration notices render ordered, bounded validation details without provider values or
+control authority.
 The external viewer integration is lazy. `transient_only` refuses line fallback before content is rendered; `ExternalViewUnavailableError` identifies that refusal. Borrowed plain-line hosts remain for views that allow fallback. Private model/render/control modules are not APIs.
 
 ### Interactive support

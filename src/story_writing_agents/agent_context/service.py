@@ -18,6 +18,9 @@ from types import MappingProxyType
 from typing import AsyncContextManager, Protocol, cast, runtime_checkable
 
 from ..errors import ProviderAuthenticationRequiredError
+from ..structured_output_validation import (
+    DomainValidationRule, bounded_chunks, diagnose_json_text, domain_rule_chunks,
+)
 from ..provider_auth_recovery import authentication_replay, request_authentication
 from ..workspace import Workspace
 from ..conversations.session_context import (
@@ -3038,6 +3041,51 @@ def _decode_context_action(
         raise _execution_error(ContextExecutionErrorCode.MALFORMED_ACTION) from None
 
 
+def _context_validation_details(
+    response_text: str,
+    schema_issues: tuple[str, ...],
+    failure: ContextExecutionError,
+) -> tuple[str, ...]:
+    """Describe schema issues and selected known semantic rules without response text."""
+
+    issues = list(schema_issues)
+    if not issues:
+        try:
+            parsed = json.loads(
+                response_text, object_pairs_hook=_unique_json_object,
+                parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
+            )
+        except (_DuplicateJsonKey, json.JSONDecodeError, TypeError, ValueError):
+            parsed = None
+        action = parsed.get("action") if type(parsed) is dict else None
+        if type(action) is dict:
+            kind = action.get("kind")
+            if kind == "search":
+                queries = action.get("queries")
+                if type(queries) is list:
+                    for index, query in enumerate(queries):
+                        kinds = query.get("source_kinds") if type(query) is dict else None
+                        if type(kinds) is list and len(set(map(repr, kinds))) != len(kinds):
+                            issues.append(
+                                f"$.action.queries[{index}].source_kinds: duplicate source kind"
+                            )
+            elif kind == "read" and not _execution_error_has_detail(
+                failure, _ContextExecutionErrorDetail.RESPONSE_CORRELATION_MISMATCH,
+            ):
+                issues.append("$.action.handles: expected handles from the preceding search")
+        if _execution_error_has_detail(
+            failure, _ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED,
+        ) and not issues:
+            issues.append("$.action.handles: expected handles from the preceding search")
+        if _execution_error_has_detail(
+            failure, _ContextExecutionErrorDetail.RESPONSE_CORRELATION_MISMATCH,
+        ):
+            issues.append("$.action: response correlation did not match this request")
+        if not issues:
+            issues.append("$.action: rejected by a context action rule")
+    return bounded_chunks(issues)
+
+
 def _closed_provider_object_schema(
     properties: dict[str, object],
     *,
@@ -4163,6 +4211,8 @@ class AgentContextService:
         own_agent_state: OwnAgentStateSourceAdapter,
         answer_validator: Callable[[str, ContextAnswerAuthorization], object]
         | None = None,
+        answer_diagnostic: Callable[[str], tuple[DomainValidationRule, ...]] | None = None,
+        validation_sink: Callable[[str, tuple[str, ...]], object] | None = None,
         event_sink: ContextExecutionEventSink | None = None,
         progress_sink: ContextActionProgressSink | None = None,
         phase: str | None = None,
@@ -4198,6 +4248,8 @@ class AgentContextService:
         ):
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         _validate_sync_callback(answer_validator)
+        _validate_sync_callback(answer_diagnostic)
+        _validate_sync_callback(validation_sink)
         _validate_sync_callback(event_sink)
         _validate_sync_callback(progress_sink)
         if request.subject_kind is ContextSubjectKind.DEBATE:
@@ -4272,6 +4324,8 @@ class AgentContextService:
                     own_agent_state=own_agent_state,
                     physical_call_limit=physical_call_limit,
                     answer_validator=answer_validator,
+                    answer_diagnostic=answer_diagnostic,
+                    validation_sink=validation_sink,
                     event_sink=event_sink,
                     progress_sink=progress_sink,
                     phase=phase,
@@ -4295,6 +4349,8 @@ class AgentContextService:
         own_agent_state: OwnAgentStateSourceAdapter,
         physical_call_limit: int,
         answer_validator: Callable[[str, ContextAnswerAuthorization], object] | None,
+        answer_diagnostic: Callable[[str], tuple[DomainValidationRule, ...]] | None,
+        validation_sink: Callable[[str, tuple[str, ...]], object] | None,
         event_sink: ContextExecutionEventSink | None,
         progress_sink: ContextActionProgressSink | None,
         phase: str | None,
@@ -4863,6 +4919,9 @@ class AgentContextService:
                     pending_read = None
                 stage = "decode"
                 try:
+                    schema_issues = diagnose_json_text(result.response_text, schema)
+                    if schema_issues:
+                        raise _execution_error(ContextExecutionErrorCode.MALFORMED_ACTION)
                     action = _decode_context_action(
                         result.response_text,
                         correlation=correlation,
@@ -4875,6 +4934,13 @@ class AgentContextService:
                         completed_handles=action_session.completed_handles,
                     )
                 except ContextExecutionError as decode_failure:
+                    if validation_sink is not None:
+                        _require_sync_none(validation_sink(
+                            call_id,
+                            _context_validation_details(
+                                result.response_text, schema_issues, decode_failure,
+                            ),
+                        ))
                     if (
                         decode_failure.code
                         is ContextExecutionErrorCode.MALFORMED_ACTION
@@ -5082,7 +5148,22 @@ class AgentContextService:
                     raise ContextSourceError(ContextSourceErrorCode.SOURCE_DRIFT)
                 stage = "answer_validation"
                 if answer_validator is not None:
-                    _require_sync_none(answer_validator(action.answer, authorization))
+                    try:
+                        _require_sync_none(answer_validator(action.answer, authorization))
+                    except Exception:
+                        if validation_sink is not None:
+                            try:
+                                rules = (
+                                    None if answer_diagnostic is None
+                                    else answer_diagnostic(action.answer)
+                                )
+                            except Exception:
+                                rules = None
+                            details = domain_rule_chunks(rules)
+                            _require_sync_none(validation_sink(
+                                call_id, details,
+                            ))
+                        raise
                 stage = "answer_observer"
                 _emit_context_event(
                     event_sink,

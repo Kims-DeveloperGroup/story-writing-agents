@@ -80,6 +80,7 @@ from story_writing_agents.conversations import (
 )
 from story_writing_agents.cli import _parse_backend_overrides, build_parser, main
 from story_writing_agents.backend import backend_configuration_snapshot
+from story_writing_agents.structured_output_validation import diagnose_json_text
 from story_writing_agents.agent_context import (
     ContextComponentKind,
     ProviderCallAccounting,
@@ -5170,6 +5171,80 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     )
                 )
 
+    async def test_completed_rejections_report_each_attempt_and_repaired_success(
+        self,
+    ) -> None:
+        session_id = "validation_attempts"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        private = "PRIVATE_VALIDATION_SENTINEL_한🙂"
+        responses = [
+            json.dumps({"message": 0, private: private}, ensure_ascii=False),
+            json.dumps({"message": "", "other": private}, ensure_ascii=False),
+        ]
+        with mock.patch.dict(os.environ, {"STORY_FAKE_CODEX_PHYSICAL_OUTPUTS": json.dumps(responses)}):
+            rejected = await bound.converse(self.conversation_request(session_id=session_id))
+        self.assertIs(rejected.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
+        self.assertEqual(len(rejected.validation_details), 2)
+        original, repair = rejected.validation_details
+        self.assertTrue(original.startswith("Original response"))
+        self.assertIn("$.message: expected string", original)
+        self.assertIn("unexpected properties", original)
+        self.assertTrue(repair.startswith("Repair response"))
+        self.assertIn("$.message: expected at least 1", repair)
+        self.assertNotIn(private, repr(rejected.validation_details))
+
+        responses = ["unused", "unused", json.dumps({"message": 0}),
+                     json.dumps({"message": "Repaired."})]
+        with mock.patch.dict(os.environ, {"STORY_FAKE_CODEX_PHYSICAL_OUTPUTS": json.dumps(responses)}):
+            repaired = await bound.converse(
+                self.conversation_request(session_id=session_id, turn_id="repaired_turn")
+            )
+        self.assertEqual(repaired.content, "Repaired.")
+        self.assertIs(repaired.trace.origin, ReplyTraceOrigin.RECOVERED)
+        self.assertEqual(len(repaired.validation_details), 1)
+        self.assertTrue(repaired.validation_details[0].startswith("Original response"))
+        normal = await bound.converse(
+            self.conversation_request(session_id=session_id, turn_id="normal_turn")
+        )
+        self.assertIs(normal.trace.origin, ReplyTraceOrigin.PROVIDER)
+        self.assertEqual(normal.validation_details, ())
+
+    async def test_malformed_direct_json_keeps_terminal_code_and_safe_detail(self) -> None:
+        session_id = "malformed_terminal_code"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        private = "PRIVATE_MALFORMED_PROVIDER_VALUE_한🙂"
+        responses = [f'{{"message":"{private}",', '{"message":']
+        with mock.patch.dict(
+            os.environ,
+            {"STORY_FAKE_CODEX_PHYSICAL_OUTPUTS": json.dumps(responses)},
+        ):
+            reply = await bound.converse(
+                self.conversation_request(session_id=session_id)
+            )
+        self.assertIs(reply.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
+        self.assertEqual(len(reply.validation_details), 2)
+        self.assertTrue(reply.validation_details[0].startswith("Original response"))
+        self.assertTrue(reply.validation_details[1].startswith("Repair response"))
+        self.assertTrue(all("$: malformed JSON" in item
+                            for item in reply.validation_details))
+        self.assertNotIn(private, repr(reply.validation_details))
+        outcomes = [
+            json.loads(record["content"])
+            for record in _agent_exchange_records(self.workspace)
+            if record["session_id"] == session_id
+            and record["request_type"] == "outcome"
+        ]
+        self.assertEqual(outcomes, [
+            {"code": "malformed_structured_response", "outcome": "rejected"},
+            {"code": "malformed_structured_response", "outcome": "rejected"},
+        ])
+
     async def test_structured_decode_failures_taint_existing_thread_once(
         self,
     ) -> None:
@@ -6540,6 +6615,69 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     self.assertIn("after one repair attempt", reply.content)
                     self.assertNotIn("forbidden sixth call", reply.content)
 
+    async def test_repaired_search_and_read_diagnostics_reach_clean_final_answer(
+        self,
+    ) -> None:
+        session_id = "retrieval_repaired_actions"
+        request = self.retrieval_request(session_id=session_id)
+        private = "PRIVATE_RETRIEVAL_ACTION_VALUE_한🙂"
+        outputs = (
+            f'{{"private":"{private}",',
+            _retrieval_action_json(
+                request,
+                kind=ConversationRetrievalActionKind.SEARCH_CONVERSATIONS,
+                action_index=1,
+                query="Needle source",
+            ),
+            f'{{"private":"{private}",',
+            _retrieval_action_json(
+                request,
+                kind=ConversationRetrievalActionKind.READ_HISTORY,
+                action_index=2,
+                citation_id="s1h1",
+                start_sequence=1,
+                end_sequence=None,
+            ),
+            _retrieval_action_json(
+                request,
+                kind=ConversationRetrievalActionKind.ANSWER,
+                action_index=3,
+                content="Clean final answer.",
+                citation_ids=["s1h1"],
+            ),
+        )
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        handler = _RecordingRetrievalHandler()
+        with mock.patch.dict(
+            os.environ,
+            {"STORY_FAKE_CODEX_PHYSICAL_OUTPUTS": json.dumps(outputs, ensure_ascii=False)},
+        ):
+            reply = await bound.converse_with_retrieval(request, handler)
+
+        self.assertEqual(reply.content, "Clean final answer.")
+        self.assertEqual(len(self.provider_invocations()), 5)
+        self.assertEqual(
+            tuple(type(action) for action in handler.actions),
+            (ConversationRetrievalSearchAction, ConversationRetrievalReadAction,
+             ConversationRetrievalAnswerAction),
+        )
+        self.assertTrue(all(
+            len(action.validation_details) == 1
+            and action.validation_details[0].startswith("Original response")
+            and "$: malformed JSON" in action.validation_details[0]
+            for action in handler.actions[:2]
+        ))
+        self.assertEqual(handler.actions[2].validation_details, ())
+        self.assertEqual(
+            reply.validation_details,
+            (*handler.actions[0].validation_details,
+             *handler.actions[1].validation_details),
+        )
+        self.assertNotIn(private, repr(reply.validation_details))
+
     def test_retrieval_schema_uses_supported_strict_object_subset(self) -> None:
         schema = AgentBackend._conversation_retrieval_action_schema()
         self.assertEqual(schema.get("type"), "object")
@@ -6690,6 +6828,56 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 request=request,
                 action_index=1,
             )
+
+    def test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence(self) -> None:
+        request = _retrieval_request()
+        omitted = json.dumps({"action": {
+            "kind": ConversationRetrievalActionKind.READ_HISTORY.value,
+            "citation_id": "s1h1", "start_sequence": 1,
+        }})
+        decoded = AgentBackend._decode_conversation_retrieval_action(
+            omitted, request=request, action_index=2,
+        )
+        self.assertIs(type(decoded), ConversationRetrievalReadAction)
+        self.assertIsNone(decoded.end_sequence)
+        explicit_null = json.dumps({"action": {
+            "kind": ConversationRetrievalActionKind.READ_HISTORY.value,
+            "citation_id": "s1h1", "start_sequence": 1, "end_sequence": None,
+        }})
+        self.assertEqual(
+            diagnose_json_text(
+                explicit_null,
+                AgentBackend._conversation_retrieval_action_schema(
+                    allowed_actions=(ConversationRetrievalActionKind.READ_HISTORY,),
+                ),
+            ),
+            ("$.action.end_sequence: expected integer, got null",),
+        )
+        with self.assertRaises(BackendProtocolError):
+            AgentBackend._decode_conversation_retrieval_action(
+                explicit_null, request=request, action_index=2,
+            )
+
+    def test_retrieval_non_string_kind_reports_exact_type_and_common_issues(self) -> None:
+        secret = "PRIVATE_NON_STRING_RETRIEVAL_KIND_한🙂"
+        schema = AgentBackend._conversation_retrieval_action_schema(
+            allowed_actions=(ConversationRetrievalActionKind.READ_HISTORY,),
+        )
+        issues = diagnose_json_text(
+            json.dumps({"action": {
+                "kind": {"private": secret},
+                "citation_id": 5,
+                "start_sequence": "invalid",
+            }}),
+            schema,
+        )
+        self.assertEqual(issues, (
+            "$.action.kind: expected an allowed string value, got object",
+            "$.action.citation_id: expected string, got integer",
+            "$.action.start_sequence: expected integer, got string",
+        ))
+        self.assertNotIn(secret, repr(issues))
+        self.assertNotIn("private", repr(issues))
 
     async def test_retrieval_handler_declaration_and_exact_outcome_protocol(
         self,
@@ -8316,6 +8504,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn("after one repair attempt", debate_reply.content)
         self.assertIs(debate_reply.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
         self.assertEqual(debate_reply.trace.action, "none")
+        self.assertEqual(len(debate_reply.validation_details), 2)
+        self.assertTrue(debate_reply.validation_details[0].startswith("Original response"))
+        self.assertTrue(debate_reply.validation_details[1].startswith("Repair response"))
+        self.assertNotIn("PRIVATE_REJECTED_RESPONSE", repr(debate_reply.validation_details))
         self.assertIs(self.thread(debate_session)["tainted"], True)
         self.assertEqual(self.thread(debate_session)["thread_id"], seeded_thread)
 
@@ -8350,6 +8542,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             conversation_reply.trace.origin,
             ReplyTraceOrigin.RUNTIME_FALLBACK,
         )
+        self.assertEqual(len(conversation_reply.validation_details), 2)
+        self.assertIn("malformed JSON", "\n".join(conversation_reply.validation_details))
+        self.assertNotIn(conversation_body, repr(conversation_reply.validation_details))
 
         records = _provider_error_records(self.workspace)
         self.assertEqual(len(records), 4)
@@ -8416,6 +8611,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         retrieval_id = "capture_retrieval_conversation"
         retrieval_body = "PRIVATE_RETRIEVAL_MALFORMED"
         backend.create_session_with_access(retrieval_session)
+        retrieval_handler = _RecordingRetrievalHandler()
         with mock.patch.dict(
             os.environ,
             {
@@ -8429,7 +8625,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     session_id=retrieval_session,
                     conversation_id=retrieval_id,
                 ),
-                _RecordingRetrievalHandler(),
+                retrieval_handler,
             )
         self.assertIn("after one repair attempt", retrieval_reply.content)
         self.assertIs(
@@ -8437,6 +8633,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             ReplyTraceOrigin.RUNTIME_FALLBACK,
         )
         self.assertEqual(retrieval_reply.trace.action, "none")
+        self.assertEqual(len(retrieval_handler.actions[0].validation_details), 2)
+        self.assertEqual(retrieval_reply.validation_details,
+                         retrieval_handler.actions[0].validation_details)
+        self.assertNotIn(retrieval_body, repr(retrieval_handler.actions[0].validation_details))
 
         prelude_session = "capture_reference_prelude_session"
         prelude_debate = "capture_reference_prelude_debate"
@@ -8483,6 +8683,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 reference_read=substantive,
             )
         self.assertIn("after one repair attempt", substantive_reply.content)
+        self.assertEqual(len(substantive_reply.validation_details), 2)
+        self.assertNotIn(substantive_body, repr(substantive_reply.validation_details))
 
         records = {
             record["body"]: record for record in _provider_error_records(self.workspace)
