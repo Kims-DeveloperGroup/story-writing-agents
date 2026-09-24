@@ -3073,11 +3073,13 @@ def build_stream_terminal(
         keep_frame=None,
     ):
         def _resolve_keep_frame() -> bool:
+            if scroll_state_provider is None:
+                return False
             if keep_frame is not None:
                 if callable(keep_frame):
                     return bool(keep_frame())
                 return bool(keep_frame)
-            return not terminal.progress_frame_collapsed
+            return False
 
         return await driver.run_advisory_progress(
             operation,

@@ -914,7 +914,11 @@ class RawTerminalDriver:
                 except BaseException as exc:
                     clear_failure = exc
 
-        if inspector_failure is not None:
+        if (
+            operation_failure is None
+            and progress_failure is None
+            and inspector_failure is not None
+        ):
             raise inspector_failure
 
         if (

@@ -1746,6 +1746,68 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                         nested_scroll_renderer=mock.MagicMock(),
                     )
                 )
+            self.assertEqual(str(exc_info.exception), "provider failed")
+
+    def test_nested_inspector_failure_propagates_when_operation_succeeds(self) -> None:
+        """Verify inspector failure is propagated when operation succeeded without failure."""
+        from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
+        from story_writing_agents.interactive_terminal._model import (
+            CapabilityProfile,
+            MultiAgentScrollState,
+            NestedScrollViewport,
+            TerminalCapabilities,
+        )
+
+        driver = RawTerminalDriver(
+            lambda _prompt: "",
+            io.StringIO(),
+            io.StringIO(),
+            lambda s, e: (s, None),
+            lambda s, e, h: (s, None),
+            lambda h, t: h,
+        )
+
+        async def successful_op():
+            return "done"
+
+        viewport = NestedScrollViewport(
+            view_id="a:1",
+            title="Agent",
+            total_lines=5,
+            start_line=1,
+            visible_lines=("line 1",),
+            visible_height=1,
+            is_focused=True,
+            buffer_lines=("line 1",),
+        )
+        scroll_state = MultiAgentScrollState((viewport,), 0)
+        caps = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+
+        with mock.patch.object(RawTerminalDriver, "capabilities", return_value=caps), \
+             mock.patch.object(
+                RawTerminalDriver,
+                "run_nested_scroll_inspector",
+                side_effect=RuntimeError("viewer terminal restoration failed"),
+            ):
+            with self.assertRaises(RuntimeError) as exc_info:
+                asyncio.run(
+                    driver.run_advisory_progress(
+                        successful_op(),
+                        lambda _f: "frame",
+                        scroll_state_provider=lambda _f: scroll_state,
+                        nested_scroll_transition=mock.MagicMock(),
+                        nested_scroll_renderer=mock.MagicMock(),
+                        keep_frame=True,
+                    )
+                )
             self.assertEqual(str(exc_info.exception), "viewer terminal restoration failed")
 
     def test_render_nested_scroll_view_empty_state_returns_valid_frame(self) -> None:
@@ -3331,3 +3393,41 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         self.assertEqual(state.agent_errors[("planner", "step_1")], expected)
         self.assertNotIn("\n", state.agent_errors[("planner", "step_1")])
         self.assertEqual(state.last_error_message, expected)
+
+    def test_run_debate_progress_keeps_frames_transient(self) -> None:
+        """Verify run_debate_progress keeps frames transient and leaves no static frame without scroll_state_provider."""
+        from story_writing_agents.interactive_terminal._core import build_stream_terminal
+        from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
+        from story_writing_agents.interactive_terminal._model import (
+            CapabilityProfile,
+            TerminalCapabilities,
+        )
+
+        caps = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+
+        terminal = build_stream_terminal(lambda _p: "", io.StringIO(), io.StringIO())
+        self.assertFalse(terminal.progress_frame_collapsed)
+
+        inspector_called = []
+
+        def fake_inspector(*args, **kwargs):
+            inspector_called.append(True)
+
+        async def fake_op():
+            return "debate result"
+
+        with mock.patch.object(RawTerminalDriver, "capabilities", return_value=caps), \
+             mock.patch.object(RawTerminalDriver, "run_nested_scroll_inspector", side_effect=fake_inspector), \
+             mock.patch.object(RawTerminalDriver, "_clear_progress_frame") as mock_clear:
+            res = asyncio.run(terminal._debate_progress(fake_op()))
+            self.assertEqual(res, "debate result")
+            self.assertEqual(len(inspector_called), 0)
+            mock_clear.assert_called()
