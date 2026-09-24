@@ -2,7 +2,7 @@ name: AI review milestone
 
 on:
   pull_request_target:
-    types: [ready_for_review, reopened, labeled, edited]
+    types: [opened, ready_for_review, reopened, labeled, edited]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -53,6 +53,7 @@ jobs:
             });
             const labels = pr.labels.map(label => label.name);
             const triggerIsManaged = dispatched ||
+              context.payload.action === "opened" ||
               context.payload.action === "ready_for_review" ||
               context.payload.action === "reopened" ||
               (context.payload.action === "edited" &&

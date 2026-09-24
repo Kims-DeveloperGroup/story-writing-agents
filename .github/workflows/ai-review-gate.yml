@@ -14,6 +14,8 @@ on:
     types: [completed]
   schedule:
     - cron: '17,47 * * * *'
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -33,6 +35,7 @@ jobs:
     name: Resolve managed pull requests
     if: >-
       github.event_name == 'schedule' ||
+      github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'workflow_run' ||
       (github.event_name == 'pull_request_target' &&
@@ -52,7 +55,7 @@ jobs:
           script: |
             const {owner, repo} = context.repo;
             let numbers = [];
-            if (context.eventName === "schedule") {
+            if (context.eventName === "schedule" || context.eventName === "push") {
               const pulls = await github.paginate(github.rest.pulls.list, {
                 owner, repo, state: "open", per_page: 100,
               });
