@@ -418,6 +418,16 @@ opened event store decodes the same trace, allowing terminal history to show
 how the reply was constructed. `runtime_fallback` always reports
 `action=none`.
 
+A `message` event uses wire `payload_type="message"`. Its optional
+`validation_details` is an array of nonempty, bounded UTF-8 chunks describing
+trusted JSON property paths, expected and actual types, or fixed validation
+rules. Runtime validation messages can also carry the paired optional
+`validation_invocation_id` and `validation_call_id` fields when details are
+present. These IDs correlate a notice with its submitted physical call for
+restart recovery, including concurrent specialist calls. The details contain
+no raw provider values, unknown property names, or parser error text. Older
+message payloads omit these fields and still decode.
+
 `provider_call_accounting` contains no request or response content. It records
 one invocation/call identity, contiguous ordinal, canonical agent role,
 invocation kind (`lead`, `specialist_assignment`, `lead_synthesis`, or
@@ -426,6 +436,11 @@ invocation kind (`lead`, `specialist_assignment`, `lead_synthesis`, or
 `submitted`). PREPARED records intent before a provider boundary; only the
 matching unique SUBMITTED record spends one of the twelve lineage calls.
 Submitted failures, timeouts, and cancellations still count.
+
+The event's wire `payload_type` is `provider_call`; only a `state="submitted"`
+payload may include optional `validation_details` with the same bounded safe
+chunks. Omission decodes as an empty tuple, so existing stored calls remain
+compatible.
 
 A running attempt dispatches assignments in proposal order. Every reply binds
 the exact proposal ID/revision/digest, execution attempt, assignment, and

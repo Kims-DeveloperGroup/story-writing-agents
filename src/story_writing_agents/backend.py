@@ -42,6 +42,7 @@ else:
     _msvcrt = None
 
 from .agents import ROSTER
+from .structured_output_validation import bounded_chunks, diagnose_json_text
 from .agent_context import (
     ContextComponentKind,
     JsonPath,
@@ -241,6 +242,10 @@ _SAFE_STRUCTURED_FALLBACK_MESSAGE = (
 
 class _StructuredOutputRejected(BackendProtocolError):
     """Identify a returned provider value rejected by structured decoding."""
+
+    def __init__(self, message: str, details: tuple[str, ...] = ()) -> None:
+        super().__init__(message)
+        self.validation_details = details
 
 
 @dataclass(slots=True)
@@ -3386,6 +3391,7 @@ class AgentBackend:
         pending_observation = False
         reference_provider_failure = False
         trace_sources: list[str] = []
+        diagnostic_chunks: list[str] = []
         recovered = False
         physical_provider_calls = 0
         used_local_fallback = False
@@ -3499,6 +3505,7 @@ class AgentBackend:
                     on_provider_attempt=count_provider_call,
                     on_fallback=reject_fallback_references,
                 )
+                diagnostic_chunks.extend(action.validation_details)
                 if action.trace is not None:
                     trace_sources.extend(action.trace.context_sources)
                     recovered = recovered or (
@@ -3560,6 +3567,7 @@ class AgentBackend:
                                 for source in outcome.sources
                             ),
                             trace=action.trace,
+                            validation_details=tuple(diagnostic_chunks),
                         )
                     except Exception as exc:
                         raise BackendProtocolError(
@@ -4116,12 +4124,17 @@ class AgentBackend:
                 payload=payload,
                 origin=ReplyTraceOrigin.PROVIDER,
             )
-        except _StructuredOutputRejected:
+        except _StructuredOutputRejected as original_failure:
+            original_details = original_failure.validation_details
             if not allow_repair:
                 if on_fallback is not None:
                     on_fallback()
                 return self._attach_reply_trace(
-                    fallback(),
+                    self._attach_validation_details(
+                        fallback(), self._stage_validation_details(
+                            original_details, "Original response",
+                        ),
+                    ),
                     role=trace_role,
                     payload=payload,
                     origin=ReplyTraceOrigin.RUNTIME_FALLBACK,
@@ -4149,20 +4162,55 @@ class AgentBackend:
                 **repair_arguments,
             )
             return self._attach_reply_trace(
-                value,
+                self._attach_validation_details(
+                    value, self._stage_validation_details(
+                        original_details, "Original response",
+                    ),
+                ),
                 role=trace_role,
                 payload=repaired_payload,
                 origin=ReplyTraceOrigin.RECOVERED,
             )
-        except _StructuredOutputRejected:
+        except _StructuredOutputRejected as repair_failure:
             if on_fallback is not None:
                 on_fallback()
             return self._attach_reply_trace(
-                fallback(),
+                self._attach_validation_details(
+                    fallback(), (
+                        *self._stage_validation_details(
+                            original_details, "Original response",
+                        ),
+                        *self._stage_validation_details(
+                            repair_failure.validation_details, "Repair response",
+                        ),
+                    ),
+                ),
                 role=trace_role,
                 payload=repaired_payload,
                 origin=ReplyTraceOrigin.RUNTIME_FALLBACK,
             )
+
+    @staticmethod
+    def _stage_validation_details(
+        details: tuple[str, ...], stage: str,
+    ) -> tuple[str, ...]:
+        return tuple(
+            item.replace("Structured response", stage, 1)
+            for item in details
+        )
+
+    @staticmethod
+    def _attach_validation_details(
+        value: _StructuredReply, details: tuple[str, ...],
+    ) -> _StructuredReply:
+        if type(value) in {
+            AgentReply, ConversationReply,
+            ConversationRetrievalSearchAction,
+            ConversationRetrievalReadAction,
+            ConversationRetrievalAnswerAction,
+        }:
+            return replace(value, validation_details=details)
+        return value
 
     @staticmethod
     def _attach_reply_trace(
@@ -4367,6 +4415,9 @@ class AgentBackend:
             raise translated from provider_cause
         try:
             try:
+                schema_issues = diagnose_json_text(result.response_text, schema)
+                if schema_issues:
+                    raise BackendProtocolError("provider structured response has an invalid schema")
                 reply = decode(result.response_text)
             except BackendProtocolError as failure:
                 try:
@@ -4380,11 +4431,23 @@ class AgentBackend:
                     if stored is not None:
                         taint_thread()
                 finally:
+                    malformed_precheck = schema_issues in {
+                        ("$: malformed JSON",),
+                        ("$: duplicate object key",),
+                    }
                     self._capture_rejected_without_replacing(
                         exchange,
-                        self._structured_rejection_code(failure),
+                        (
+                            AgentExchangeTerminalCode.MALFORMED_STRUCTURED_RESPONSE
+                            if malformed_precheck
+                            else self._structured_rejection_code(failure)
+                        ),
                     )
-                raise _StructuredOutputRejected(str(failure)) from failure
+                details = bounded_chunks(
+                    schema_issues or ("$: rejected by a domain result rule",),
+                    prefix="Structured response",
+                )
+                raise _StructuredOutputRejected(str(failure), details) from failure
             except (json.JSONDecodeError, UnicodeError):
                 self._record_rejected_provider_response_without_replacing_failure(
                     bound_agent,
@@ -4441,7 +4504,11 @@ class AgentBackend:
                 if bound_agent.vendor == "codex"
                 else "Antigravity CLI returned malformed structured output"
             )
-            raise _StructuredOutputRejected(diagnostic) from exc
+            details = bounded_chunks(
+                schema_issues or ("$: malformed JSON",),
+                prefix="Structured response",
+            )
+            raise _StructuredOutputRejected(diagnostic, details) from exc
 
     @staticmethod
     def _context_failure_accounting(
@@ -5448,11 +5515,9 @@ class AgentBackend:
                 )
             if kind is ConversationRetrievalActionKind.READ_HISTORY:
                 start_sequence = positive_integer("start_sequence")
-                raw_end_sequence = value.get("end_sequence")
                 end_sequence = (
-                    None
-                    if raw_end_sequence is None
-                    else positive_integer("end_sequence")
+                    positive_integer("end_sequence")
+                    if "end_sequence" in value else None
                 )
                 if end_sequence is not None and end_sequence < start_sequence:
                     raise ConversationRetrievalSemanticError()

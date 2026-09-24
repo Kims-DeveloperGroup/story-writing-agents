@@ -38,6 +38,13 @@ below. All remain plaintext. The runtime log is content-safe; the other two
 deliberately admit provider-call content within different schemas and lifecycle
 boundaries.
 
+Consensus workflow terminal result events can retain bounded safe
+`validation_details_by_provider` in provider invocation order when structured
+reply validation finds issues. These plaintext details contain trusted schema
+paths and type or rule findings, not raw provider values or unknown property
+names. The field is optional in stored results, so older events still load.
+Consensus workflow history is separate from schema-v2 collaboration archives.
+
 Blackboards can contain input, drafts, reviews, and errors. Provider output is
 not generally scrubbed; catalog archive status neither deletes nor conceals
 conversations; transcripts retain messages, replies, and runtime errors.
@@ -162,13 +169,32 @@ not make its included collaboration content safe to disclose. Import copies the
 included plaintext and neither deletes excluded state nor securely erases a
 source or caller-owned archive copy.
 
-Provider-private state, hidden reasoning, raw provider responses and
-diagnostics, credentials, capabilities, full referenced-file bytes, artifact
-contents, and derived FTS/RAG data are not archive payloads. Therefore an
+Provider-private state, hidden reasoning, raw provider responses and private
+provider diagnostics, credentials, capabilities, full referenced-file bytes,
+artifact contents, and derived FTS/RAG data are not archive payloads. Therefore an
 archive or backend transfer is not a workspace, provider-session, or recovery
 backup. Only canonical archive schema 2 is accepted; legacy transcript files,
 database event rows, and schema-1 archive bytes are rejected rather than
 redacted or converted.
+
+Canonical collaboration events can include bounded `validation_details` from
+rejected structured replies. These are safe schema paths, type or rule
+descriptions, and attempt labels; they omit provider values, unknown property
+names, parser messages, and raw rejected responses. They remain plaintext in
+history and any archive or transfer copy. Older events without this optional
+field remain readable.
+
+Reports that exceed the diagnostic cap retain up to 2,048 schema findings and a
+fixed content-free notice that additional issues were omitted; ordinary
+reports list every detectable finding. Each generated display chunk remains
+below 32,000 UTF-8 bytes.
+
+Validation message events may also retain optional invocation and call IDs.
+These identify the submitted provider call for safe diagnostic recovery across
+restart, including when specialists ran concurrently. The IDs expose call
+correlation metadata in local history and its archive or transfer copies; they
+do not contain provider response values. Older messages without the IDs still
+decode.
 
 The runtime owns no archive file or retention policy. A caller that stores,
 transmits, logs, or otherwise retains the returned bytes owns protection and
