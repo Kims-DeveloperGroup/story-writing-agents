@@ -3076,6 +3076,166 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             self.assertEqual(len(inspector_called), 0)
             self.assertTrue(mock_clear.called)
 
+    def test_distinct_page_up_page_down_key_kinds_and_transitions(self) -> None:
+        """Verify PageUp/PageDown decode to distinct KeyKind without affecting text viewer selection."""
+        from story_writing_agents.interactive_terminal._viewer_controls import transition_text_viewer
+        from story_writing_agents.interactive_terminal._viewer_model import (
+            TextViewerDocument,
+            TextViewerState,
+        )
+
+        # Escape sequence decoding
+        ev_pgup = _driver._escape_event("\x1b[5~")
+        ev_pgdn = _driver._escape_event("\x1b[6~")
+        self.assertIsNotNone(ev_pgup)
+        self.assertIsNotNone(ev_pgdn)
+        self.assertIs(ev_pgup.kind, KeyKind.PAGE_UP)
+        self.assertIs(ev_pgdn.kind, KeyKind.PAGE_DOWN)
+
+        # In nested scroll, PAGE_UP and PAGE_DOWN scroll pages
+        lines = tuple(f"Line {i}" for i in range(1, 21))
+        view = NestedScrollViewport(
+            view_id="v1",
+            title="Agent",
+            total_lines=20,
+            start_line=1,
+            visible_lines=lines[:5],
+            visible_height=5,
+            is_focused=True,
+            buffer_lines=lines,
+        )
+        state = MultiAgentScrollState((view,), 0)
+        state_dn = transition_nested_scroll(state, KeyEvent(KeyKind.PAGE_DOWN))
+        self.assertEqual(state_dn.focused_view.start_line, 5)
+
+        state_up = transition_nested_scroll(state_dn, KeyEvent(KeyKind.PAGE_UP))
+        self.assertEqual(state_up.focused_view.start_line, 1)
+
+        # In text viewer, PAGE_UP/PAGE_DOWN do not modify selection (unlike SHIFT_UP/SHIFT_DOWN)
+        doc = TextViewerDocument("\n".join(lines), "doc.txt")
+        viewer_state = TextViewerState(
+            document=doc,
+            active_line=5,
+            anchor_line=5,
+        )
+        self.assertEqual(viewer_state.selection, (5, 5))
+
+        # Shift down expands selection
+        shift_dn_state, _ = transition_text_viewer(viewer_state, KeyEvent(KeyKind.SHIFT_DOWN))
+        self.assertEqual(shift_dn_state.selection, (5, 6))
+
+        # Page down does NOT alter selection
+        pgdn_state, _ = transition_text_viewer(viewer_state, KeyEvent(KeyKind.PAGE_DOWN))
+        self.assertEqual(pgdn_state.selection, (5, 5))
+
+        # Page up does NOT alter selection
+        pgup_state, _ = transition_text_viewer(viewer_state, KeyEvent(KeyKind.PAGE_UP))
+        self.assertEqual(pgup_state.selection, (5, 5))
+
+    def test_render_nested_scroll_view_reserves_terminal_width(self) -> None:
+        """Verify render_nested_scroll_view reserves 1 column to avoid auto-wrap artifacts."""
+        from story_writing_agents.interactive_terminal._model import display_character_width
+
+        lines = tuple(f"Content line {i} with plenty of text to fill up the whole width" for i in range(1, 15))
+        view = NestedScrollViewport(
+            view_id="a:1",
+            title="Agent",
+            total_lines=len(lines),
+            start_line=1,
+            visible_lines=lines[:6],
+            visible_height=6,
+            is_focused=True,
+            buffer_lines=lines,
+        )
+        for w in (20, 50, 80, 120):
+            caps = TerminalCapabilities(
+                CapabilityProfile.ANSI,
+                w,
+                input_tty=True,
+                output_tty=True,
+                raw_mode=True,
+                cursor_controls=True,
+                decorative_sgr=True,
+            )
+            # Expanded mode
+            state_exp = MultiAgentScrollState((view,), 0, collapsed=False)
+            frame_exp = render_nested_scroll_view(state_exp, caps)
+            self.assertEqual(frame_exp.width, w)
+            for row in frame_exp.text.split("\n"):
+                row_width = sum(display_character_width(c) for c in row)
+                self.assertLessEqual(row_width, w - 1)
+
+            # Collapsed mode
+            state_col = MultiAgentScrollState((view,), 0, collapsed=True)
+            frame_col = render_nested_scroll_view(state_col, caps)
+            self.assertEqual(frame_col.width, w)
+            for row in frame_col.text.split("\n"):
+                row_width = sum(display_character_width(c) for c in row)
+                self.assertLessEqual(row_width, w - 1)
+
+    def test_collapsed_rendering_multi_agent_indicators(self) -> None:
+        """Verify multi-agent collapsed indicators (current/total) in live and nested scroll rendering."""
+        # 1. Live AdvisoryProgressState collapsed rendering
+        state = AdvisoryProgressState()
+        state.collapsed = True
+        state.begin(
+            (
+                AdvisoryProgressRequest("agent_alpha", "op1", "Working on chapter 1"),
+                AdvisoryProgressRequest("agent_beta", "op2", "Working on chapter 2"),
+                AdvisoryProgressRequest("agent_gamma", "op3", "Working on chapter 3"),
+            )
+        )
+        state.observe_stream(
+            ProviderStreamEvent(
+                ProviderStreamEventKind.STATUS,
+                "agent_alpha",
+                "Analyzing character arcs",
+                operation_id="op1",
+            )
+        )
+        state.observe_stream(
+            ProviderStreamEvent(
+                ProviderStreamEventKind.STATUS,
+                "agent_beta",
+                "Drafting dialogue",
+                operation_id="op2",
+            )
+        )
+
+        # Focused on agent 0
+        state.focused_agent_index = 0
+        rendered_0 = state.render(0)
+        self.assertIn("agent_alpha (1/3)", rendered_0)
+        self.assertIn("Analyzing character arcs", rendered_0)
+        self.assertIn("(press 't' to expand)", rendered_0)
+
+        # Focused on agent 1
+        state.focused_agent_index = 1
+        rendered_1 = state.render(0)
+        self.assertIn("agent_beta (2/3)", rendered_1)
+        self.assertIn("Drafting dialogue", rendered_1)
+        self.assertIn("(press 't' to expand)", rendered_1)
+
+        # 2. Nested scroll view collapsed rendering
+        v1 = NestedScrollViewport("a1", "Agent Alpha", 5, 1, ("line 1",), 1, True)
+        v2 = NestedScrollViewport("a2", "Agent Beta", 5, 1, ("line 2",), 1, False)
+        caps = TerminalCapabilities(
+            CapabilityProfile.ANSI,
+            80,
+            input_tty=True,
+            output_tty=True,
+            raw_mode=True,
+            cursor_controls=True,
+            decorative_sgr=True,
+        )
+        scroll_state_0 = MultiAgentScrollState((v1, v2), 0, collapsed=True)
+        frame_0 = render_nested_scroll_view(scroll_state_0, caps)
+        self.assertIn("[► Agent Alpha] (1/2)", frame_0.text)
+
+        scroll_state_1 = MultiAgentScrollState((v1, v2), 1, collapsed=True)
+        frame_1 = render_nested_scroll_view(scroll_state_1, caps)
+        self.assertIn("[► Agent Beta] (2/2)", frame_1.text)
+
 
 
 

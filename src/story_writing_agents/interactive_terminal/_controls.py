@@ -1478,10 +1478,10 @@ def transition_nested_scroll(
     elif event.kind is KeyKind.DOWN or (event.kind is KeyKind.TEXT and event.text == "j"):
         new_start = min(max_start, focused.start_line + 1)
         auto_scroll = (new_start >= max_start)
-    elif event.kind is KeyKind.SHIFT_UP:
+    elif event.kind in {KeyKind.SHIFT_UP, KeyKind.PAGE_UP}:
         new_start = max(1, focused.start_line - max(1, focused.visible_height - 1))
         auto_scroll = False
-    elif event.kind is KeyKind.SHIFT_DOWN:
+    elif event.kind in {KeyKind.SHIFT_DOWN, KeyKind.PAGE_DOWN}:
         new_start = min(max_start, focused.start_line + max(1, focused.visible_height - 1))
         auto_scroll = (new_start >= max_start)
     elif event.kind is KeyKind.HOME or (event.kind is KeyKind.TEXT and event.text == "g"):

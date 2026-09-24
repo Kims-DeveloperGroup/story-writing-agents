@@ -1081,6 +1081,8 @@ class PureControlFoundationTests(unittest.TestCase):
         for kind in (
             KeyKind.UP,
             KeyKind.DOWN,
+            KeyKind.PAGE_UP,
+            KeyKind.PAGE_DOWN,
             KeyKind.SHIFT_UP,
             KeyKind.SHIFT_DOWN,
             KeyKind.TAB,

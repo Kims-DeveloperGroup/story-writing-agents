@@ -274,15 +274,19 @@ class AdvisoryProgressState:
         elapsed = format_elapsed(self.elapsed_seconds())
         ordered = self._ordered_requests()
         if self.collapsed:
-            active_label = ordered[0].agent_id if ordered else "Working"
+            if not ordered:
+                return f"[{_FRAMES[frame % len(_FRAMES)]}] {elapsed} · Working (press 't' to expand)"
+            focused_idx = self.focused_agent_index % len(ordered)
+            focused_req = ordered[focused_idx]
+            multi_indicator = f" ({focused_idx + 1}/{len(ordered)})" if len(ordered) > 1 else ""
+            active_label = f"{focused_req.agent_id}{multi_indicator}"
             status_summary = ""
-            if ordered:
-                key = (ordered[0].agent_id, ordered[0].operation_id)
-                status_text = self.stream_status.get(key)
-                if status_text:
-                    status_summary = f" · {status_text[:40]}"
-                elif ordered[0].request:
-                    status_summary = f" · {ordered[0].request[:40]}"
+            key = (focused_req.agent_id, focused_req.operation_id)
+            status_text = self.stream_status.get(key)
+            if status_text:
+                status_summary = f" · {status_text[:40]}"
+            elif focused_req.request:
+                status_summary = f" · {focused_req.request[:40]}"
             return f"[{_FRAMES[frame % len(_FRAMES)]}] {elapsed} · {active_label}{status_summary} (press 't' to expand)"
         lines = [f"[{_FRAMES[frame % len(_FRAMES)]}] {elapsed} · Working"]
         for request in ordered:

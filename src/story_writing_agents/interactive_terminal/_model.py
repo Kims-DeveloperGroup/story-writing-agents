@@ -92,6 +92,8 @@ class KeyKind(StrEnum):
     END = "end"
     UP = "up"
     DOWN = "down"
+    PAGE_UP = "page_up"
+    PAGE_DOWN = "page_down"
     SHIFT_UP = "shift_up"
     SHIFT_DOWN = "shift_down"
     TAB = "tab"

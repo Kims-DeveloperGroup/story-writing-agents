@@ -360,6 +360,9 @@ def render_nested_scroll_view(
     if focused is None or not state.views:
         return RenderedFrame("", width, 1)
 
+    # Reserve the rightmost cell on every logical row to avoid terminal auto-wrap artifacts
+    render_width = max(1, width - 1)
+
     # If collapsed, render a minimal single-line status indicator
     if state.collapsed:
         prefix = "!" if focused.state == ViewState.ERROR else "►"
@@ -371,9 +374,14 @@ def render_nested_scroll_view(
         counter_str = f"({focused.start_line}–{end_line} of {focused.total_lines})"
         first_line = focused.visible_lines[0] if focused.visible_lines else ""
         content = f": {first_line}" if first_line else ""
+        multi_indicator = (
+            f" ({state.focused_index % len(state.views) + 1}/{len(state.views)})"
+            if len(state.views) > 1
+            else ""
+        )
         compact_line = _clip_cells(
-            f"[{prefix} {focused.title}] {counter_str}{content} • press 't' to expand",
-            width,
+            f"[{prefix} {focused.title}]{multi_indicator} {counter_str}{content} • press 't' to expand",
+            render_width,
         )
         return RenderedFrame(compact_line, width, 1, h_offset=focused.h_offset)
 
@@ -393,8 +401,8 @@ def render_nested_scroll_view(
     counter_str = f"({focused.start_line}–{end_line} of {focused.total_lines})"
     header_left = f"┌─ {tabs_str} "
     header_right = f" {counter_str} ─┐"
-    fill_len = max(0, width - len(header_left) - len(header_right))
-    header_line = _clip_cells(f"{header_left}{'─' * fill_len}{header_right}", width)
+    fill_len = max(0, render_width - len(header_left) - len(header_right))
+    header_line = _clip_cells(f"{header_left}{'─' * fill_len}{header_right}", render_width)
 
     # 2. Body Lines with Scrollbar
     h = focused.visible_height
@@ -407,7 +415,7 @@ def render_nested_scroll_view(
     )
 
     body_lines: list[str] = []
-    inner_width = max(1, width - 5)  # "│ " + content + " █│"
+    inner_width = max(1, render_width - 5)  # "│ " + content + " █│"
     for y in range(h):
         line_content = (
             focused.visible_lines[y] if y < len(focused.visible_lines) else ""
@@ -418,13 +426,13 @@ def render_nested_scroll_view(
         )
         padded = safe_content + (" " * pad_needed)
         bar = "█" if thumb_pos <= y < thumb_pos + thumb_size else "│"
-        body_lines.append(_clip_cells(f"│ {padded} {bar}│", width))
+        body_lines.append(_clip_cells(f"│ {padded} {bar}│", render_width))
 
     # 3. Footer Line
     hints = "↑/↓: scroll • ←/→: pan • Tab: switch agent • t: toggle view • Enter/Esc: dismiss"
     footer_left = f"└─ {hints} "
-    footer_fill = max(0, width - len(footer_left) - 1)
-    footer_line = _clip_cells(f"{footer_left}{'─' * footer_fill}┘", width)
+    footer_fill = max(0, render_width - len(footer_left) - 1)
+    footer_line = _clip_cells(f"{footer_left}{'─' * footer_fill}┘", render_width)
 
     all_rows = [header_line, *body_lines, footer_line]
     return RenderedFrame("\n".join(all_rows), width, len(all_rows), h_offset=focused.h_offset)
