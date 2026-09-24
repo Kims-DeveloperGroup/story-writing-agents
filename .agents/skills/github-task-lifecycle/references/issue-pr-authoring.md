@@ -36,7 +36,7 @@ necessary siblings under the workflow policy.
 
 A PR describes final delivered behavior, the same action before and after, actual mechanisms,
 verification, limits, and the correct Issue reference. Use `Refs #N` for partial/child work and
-`Closes #N` only for a completing `main` PR. Record ready and final review milestone head SHAs
+`Closes #N` only for a completing `main` PR. Record ready and final review-round head SHAs
 in Verification when applicable.
 
 A status comment states what works, what remains, the practical blocker or decision, and one
@@ -55,7 +55,7 @@ Policy, docs, templates, skills, development-agent configuration, module-index-o
 test-only changes use static validation. Name the checked headings, links, paths, references,
 frontmatter/format, policy invariants, source/head SHA, and diff review.
 
-For review evidence, identify the current head SHA, ready/final milestone, Copilot and Codex
+For review evidence, identify the current head SHA, initial/final review round, Copilot and Codex
 state, affected CI, required human approvals, and unresolved blocking findings. Only Copilot
 High and Codex P0/P1 findings are AI blockers under repository policy; lower-severity findings
 may be documented as nonblocking follow-ups.

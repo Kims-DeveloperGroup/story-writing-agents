@@ -62,22 +62,23 @@ Every PR uses GitHub **Squash and merge** and the squash commit identifies the o
 
 ## Asynchronous Review and CI
 
-Review is milestone-based:
+Project milestones schedule sprint work. A review round is a separate PR checkpoint tied to
+one base/head pair; it is never a Project milestone. Review uses initial and final rounds:
 
 1. When the PR becomes ready, record its head SHA and concurrently request Copilot and Codex
    review while affected CI starts.
-2. Continue independent work while Actions run. Concurrency cancels stale runs.
+2. Continue independent work while Actions run. Current-head checks reject stale evidence.
 3. Batch unresolved blocking feedback into one fix set. Do not re-request on every push.
 4. After material fixes, record the new head SHA and request one final concurrent review and
-   affected CI milestone.
+   affected CI run.
 
 Copilot uses Lite by default and Balanced only for high-risk changes. Merge blocks only on
 unresolved Copilot **High**, Codex **P0/P1**, branch-protection approvals, and required checks.
 Lower-severity feedback is nonblocking and may become follow-up work. Review/check evidence
 must match the current base and head SHAs; retargeting the base restarts validation
-and review milestones.
+and review rounds.
 After an ordinary accepted-base advance, update the PR branch from the new base before
-merge and repeat the final validation/review milestone; do not reuse old-base evidence.
+merge and repeat the final validation/review round; do not reuse old-base evidence.
 
 Automation that mutates Issues, Projects, PRs, merge state, or cleanup state runs only for the
 `workflow:managed` label. `pr-validation` and the managed review requester run asynchronously.

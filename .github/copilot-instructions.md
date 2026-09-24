@@ -19,7 +19,7 @@ status-comment templates.
   and diff review instead.
 - Treat `PYTHONPATH=src python -m tests.runner run` as the canonical runtime runner. Preserve exact
   relevant module/ID selections and JSON evidence; retain shards and reconciliation for full runs.
-- Review is milestone-based: one request when ready and one final request after material fixes.
+- Review uses PR-specific rounds: one request when ready and one final request after material fixes. Project milestones remain for sprint planning.
   Do not request or expect re-review after every push.
 - Mutating workflow automation is allowed only with the `workflow:managed` label. The root
   manually squash-merges only after checking current-base/head reviews, threads, protections,

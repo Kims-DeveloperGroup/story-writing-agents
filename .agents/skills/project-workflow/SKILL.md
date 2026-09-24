@@ -13,7 +13,7 @@ language request to implement, open a PR, or continue does not invoke this skill
 
 Invocation authorizes the root to complete the full in-scope lifecycle without pausing for
 step-by-step approval: Issue/Project planning, native relationships, Development-linked branch
-and worktree, staging, commit, push, PR, milestone reviews, gated squash merge, closure,
+and worktree, staging, commit, push, PR, review rounds, gated squash merge, closure,
 Project completion, and safe cleanup. The authority ends at the accepted scope and never
 covers force operations, bypassed protections, unrelated work, Project-schema changes,
 dependency-policy exceptions, or destructive cleanup that lacks verified recoverability.
@@ -56,7 +56,7 @@ template. Preserve all visible Issue, PR, evidence, and status-comment headings 
 3. Continue nondependent work while event-driven checks run. Batch unresolved Copilot High
    and Codex P0/P1 findings with required human feedback into one fix set.
 4. After material fixes, push once, record the new head SHA, and request one final concurrent
-   review/CI milestone. Do not re-request after each push.
+   review round and CI run. Do not re-request after each push.
 5. Verify required approvals/checks and that review evidence matches the current head SHA.
    Lower-severity AI feedback is nonblocking and may become linked follow-up work.
 
