@@ -108,12 +108,19 @@ jobs:
                 "PR base or head moved; restart the milestone on the current diff.");
               return;
             }
+            const marker = `<!-- ai-review-milestone-open:${process.env.MILESTONE}:${process.env.BASE_SHA}:${process.env.HEAD_SHA} -->`;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: pullNumber, per_page: 100,
+            });
+            if (comments.some(comment =>
+                comment.user?.login === "github-actions[bot]" &&
+                comment.body?.includes(marker))) return;
             const short = process.env.HEAD_SHA.slice(0, 12);
             await github.rest.issues.createComment({
               owner,
               repo,
               issue_number: pullNumber,
-              body: `AI review milestone **${process.env.MILESTONE}** opened for \`${short}\`.\n\n<!-- ai-review-milestone-open:${process.env.MILESTONE}:${process.env.BASE_SHA}:${process.env.HEAD_SHA} -->`,
+              body: `AI review milestone **${process.env.MILESTONE}** opened for \`${short}\`.\n\n${marker}`,
             });
 
   request-copilot:
@@ -127,6 +134,7 @@ jobs:
           PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
           HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
           BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
+          MILESTONE: ${{ needs.resolve.outputs.milestone }}
         with:
           script: |
             const {owner, repo} = context.repo;
@@ -145,11 +153,29 @@ jobs:
                 "PR base or head moved; restart the milestone on the current diff.");
               return;
             }
-            await github.rest.pulls.requestReviewers({
-              owner,
-              repo,
-              pull_number: pullNumber,
-              reviewers: ["copilot-pull-request-reviewer[bot]"],
+            const marker = `<!-- ai-review-copilot-requested:${process.env.MILESTONE}:${process.env.BASE_SHA}:${process.env.HEAD_SHA} -->`;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: pullNumber, per_page: 100,
+            });
+            if (comments.some(comment =>
+                comment.user?.login === "github-actions[bot]" &&
+                comment.body?.includes(marker))) return;
+            const {data: bot} = await github.rest.users.getByUsername({
+              username: "copilot-pull-request-reviewer[bot]",
+            });
+            if (bot.type !== "Bot" || !bot.node_id) {
+              core.setFailed("Copilot bot identity is unavailable");
+              return;
+            }
+            await github.graphql(`
+              mutation($pr: ID!, $bot: ID!) {
+                requestReviews(input: {pullRequestId: $pr, botIds: [$bot]}) {
+                  pullRequest { id }
+                }
+              }
+            `, {pr: pr.node_id, bot: bot.node_id});
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: pullNumber, body: marker,
             });
 
   request-codex:
@@ -182,11 +208,18 @@ jobs:
                 "PR base or head moved; restart the milestone on the current diff.");
               return;
             }
+            const marker = `<!-- ai-review-codex-requested:${process.env.MILESTONE}:${process.env.BASE_SHA}:${process.env.HEAD_SHA} -->`;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: pullNumber, per_page: 100,
+            });
+            if (comments.some(comment =>
+                comment.user?.login === "github-actions[bot]" &&
+                comment.body?.includes(marker))) return;
             await github.rest.issues.createComment({
               owner,
               repo,
               issue_number: pullNumber,
-              body: `@codex review\n\nMilestone: ${process.env.MILESTONE}.`,
+              body: `@codex review\n\nMilestone: ${process.env.MILESTONE}.\n\n${marker}`,
             });
 
   complete:

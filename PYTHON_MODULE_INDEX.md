@@ -48,8 +48,9 @@ CLI / interactive shell
   not require optional packages.
 - Runtime import cycles are prohibited. `TYPE_CHECKING`, local imports, or dynamic imports
   must not hide a cycle; dynamic loading is reserved for documented extension boundaries.
-- Cross-subsystem access to underscored modules or mutable internals is prohibited. Add a
-  narrow owner-facing contract or facade instead of reaching across a private boundary.
+- Cross-subsystem access to underscored modules or mutable internals is prohibited except
+  for the two documented controller-to-terminal presentation bridges below. Add a narrow
+  owner-facing contract or facade instead of expanding a private boundary.
 - `tests/` is not a production package. Contract tests should prefer supported facades;
   focused tests may import private owners to verify internal invariants, but those imports
   neither create a public API nor justify production dependencies on test helpers.
@@ -241,6 +242,9 @@ exchange, lead, session, and runtime concerns in focused private policy modules.
 
 Only `_core` composes the private policies. Other subsystems must not import those policies;
 the controller may depend on runtime/storage/terminal facades, never the reverse.
+The existing `_lead_policy` to `interactive_terminal._collaboration_view` and
+`_exchange_viewer` to `interactive_terminal._external_view` imports are narrow internal
+presentation bridges, not general private-access permission.
 
 ### Interactive terminal and presentation
 

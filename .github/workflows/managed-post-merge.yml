@@ -46,6 +46,7 @@ jobs:
                   defaultBranchRef { name }
                   pullRequest(number: $number) {
                     body
+                    baseRefName
                     headRefName
                     headRepository { nameWithOwner }
                     allClosingIssues: closingIssuesReferences(first: 50) {
@@ -80,7 +81,8 @@ jobs:
               core.setFailed("Issue link connection exceeds 50; verify all relations before completion");
               return;
             }
-            const completingIssues = pr.allClosingIssues.nodes;
+            const completingIssues = pr.baseRefName === repository.defaultBranchRef.name
+              ? pr.allClosingIssues.nodes : [];
             const completingIssueIds = new Set(completingIssues.map(issue => issue.id));
             const issuesByNumber = new Map([
               ...pr.allClosingIssues.nodes,

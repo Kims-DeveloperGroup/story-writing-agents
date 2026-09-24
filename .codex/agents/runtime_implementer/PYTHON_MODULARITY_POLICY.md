@@ -64,7 +64,10 @@ policy violation. Mere omission of a private file name is not.
 - Lower-level code does not import higher-level code. Put inversion contracts at the stable
   lower-level boundary.
 - Cross-boundary callers MUST NOT use another module's underscored names or mutate its private
-  state.
+  state. The existing controller-to-terminal presentation bridges
+  (`interactive_controller._lead_policy` to `interactive_terminal._collaboration_view` and
+  `interactive_controller._exchange_viewer` to `interactive_terminal._external_view`) are
+  narrow internal exceptions, not precedent for additional private imports.
 - Optional integrations stay behind adapters so importing core behavior does not require the
   optional infrastructure.
 - Wildcard imports and production `sys.path` mutation are prohibited. Dynamic imports are
@@ -96,8 +99,10 @@ synchronization, reset, and shutdown behavior appropriate to the resource. Keep 
 side-effect-light and inject filesystem, provider, process, clock, and environment adapters
 through narrow interfaces.
 
-Production modules reside under packaging-declared source roots, are directly importable in a
-clean installation, and do not depend on checkout layout or test-only path manipulation.
+Production modules reside under packaging-declared source roots and do not depend on checkout
+layout or test-only path manipulation. Core modules are directly importable in a clean base
+installation; optional integration adapters are importable when their declared extras are
+installed.
 Package data, entry points, and discovery follow active packaging configuration.
 
 ## Modularity review
