@@ -421,4 +421,3 @@ def active_advisory_stream_sink() -> ProviderStreamSink | None:
 
 def active_advisory_progress_state() -> AdvisoryProgressState | None:
     return _ACTIVE_STATE.get()
-

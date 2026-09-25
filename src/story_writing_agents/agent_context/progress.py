@@ -165,4 +165,3 @@ def reset_provider_stream_sink(token: Token[ProviderStreamSink | None]) -> None:
 
 def active_provider_stream_sink() -> ProviderStreamSink | None:
     return _ACTIVE_STREAM_SINK.get()
-
