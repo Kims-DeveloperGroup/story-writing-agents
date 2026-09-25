@@ -1,146 +1,73 @@
 # Authoring Issues, PRs, evidence, and status comments
 
-Explain what the work enables, how it achieves that result, and what evidence supports it.
-These templates govern reader-facing records; internal task and result packets,
-development role boundaries, and runtime story roles stay unchanged.
-[AGENTS.md](../../../../AGENTS.md) remains canonical for adaptive verification and
-ownership. [GitHub workflow policy](../../../../GITHUB_WORKFLOW.md) governs planning,
-authorization, native relationships, and completion.
+Explain the outcome, how the work produces it, and what evidence supports it.
+[AGENTS.md](../../../../AGENTS.md) governs ownership and verification;
+[GITHUB_WORKFLOW.md](../../../../GITHUB_WORKFLOW.md) governs planning, authority, native
+relationships, review, and completion.
 
-## Read the source before authoring
+## Read the source first
 
-Before creating or updating records through a browser, CLI, API, or connector, agents
-must read this guide and the relevant template's entire raw source. Open GitHub's
-**Code/source view** or read locally; a rendered preview is insufficient. The source
-contains a hidden authoring comment and separate hidden worked examples; rendering shows
-only the reusable body.
+Before creating or substantially updating a record, read this guide and the complete raw
+template. A rendered preview hides required authoring comments and examples.
 
-| Record | Read this source | Use it for |
-| --- | --- | --- |
-| Issue | [Work item template](../../../../.github/ISSUE_TEMPLATE/work_item.md) | Objective, cases, plan, and acceptance criteria. |
-| PR | [Pull request template](../../../../.github/pull_request_template.md) | Delivered behavior, changes, and verification. |
-| Evidence | [Evidence template](../../../../.github/templates/evidence.md) | Results, reproduction, provenance, and gaps. |
-| Status | [Working-status comment template](../../../../.github/templates/working-status-comment.md) | Progress, blockers, decisions, and next action. |
+| Record | Source |
+| --- | --- |
+| Issue | [Work item template](../../../../.github/ISSUE_TEMPLATE/work_item.md) |
+| PR | [Pull request template](../../../../.github/pull_request_template.md) |
+| Evidence | [Evidence template](../../../../.github/templates/evidence.md) |
+| Status comment | [Working-status template](../../../../.github/templates/working-status-comment.md) |
 
-GitHub discovers the Issue template through frontmatter and the PR through its standard
-path. Copy Evidence and status into authorized records or comments; no new integration
-is needed.
+Preserve every visible heading and its meaning. Replace all placeholders, remove comments and
+example material before publication, and omit a section only when it is genuinely optional and
+empty. Never omit a material limitation, blocker, dependency, or evidence gap. Templates do not
+authorize mutations or replace native Development, Project, sub-Issue, or dependency links.
 
-## Prepare a finished body
+## Write for the reader
 
-1. Read current scope and sources, plus the existing record for substantial updates.
-   Examples demonstrate writing; they supply no task facts or authority.
-2. Fill every `{{double-brace placeholder}}` with task content. Keep sections in order:
-   seven for Issues, six for the others. Omit only genuinely optional empty sections,
-   preserving material limitations, dependencies, and verification gaps.
-3. Remove HTML comments, frontmatter, worked examples, and unused placeholders. The native
-   Issue selector can supply the body; CLI and API authors must perform cleanup themselves.
-4. Link detailed Evidence when technical records would interrupt an Issue, PR, or status
-   explanation. Use descriptive labels such as “Focused adapter checks and conversation
-   results.”
-5. Re-read the finished draft. Trace scenarios through criteria, planned mechanisms or
-   actual changes, and evidence. Check scenario coverage, step relevance, visible gaps,
-   links, lists, tables, and fenced examples in source and rendered views when available.
-6. Publish only as authorized under workflow policy. Read back the result and separately
-   verify required native relationships or status.
+Open with the useful behavior or repository outcome. Use short paragraphs, familiar words,
+realistic inputs/actions and results, and descriptive links. Label constructed examples as
+illustrative. Do not invent commands, checks, IDs, provider replies, timestamps, model identity,
+review state, or private artifacts.
 
-Preserve valid historical records, scope, decisions, and evidence. When revising stale
-descriptions, label superseded evidence or replaced scope. These templates do not
-authorize bulk rewriting of old GitHub records.
+An Issue connects objective, named use cases, acceptance criteria, boundaries, related work,
+and an implementation plan. Each plan step names the affected component and the criterion it
+enables. Keep one delivery unit on one Issue; children require at least two independent,
+necessary siblings under the workflow policy.
 
-## Make the work easy to read
+A PR describes final delivered behavior, the same action before and after, actual mechanisms,
+verification, limits, and the correct Issue reference. Use `Refs #N` for partial/child work and
+`Closes #N` only for a completing `main` PR. Record ready and final review-round head SHAs
+in Verification when applicable.
 
-Open with a functional objective in one or two sentences about what someone can do or
-what becomes reliable. Put hashes, process terms, field inventories, and implementation
-identifiers where they explain a decision.
+A status comment states what works, what remains, the practical blocker or decision, and one
+owned next action. A comment does not update Project state. Evidence records exact observations
+and limitations; it does not authorize checks or risk acceptance.
 
-Use familiar words, short paragraphs, and blank lines. Wrap ordinary source prose at
-roughly 80–100 columns; keep URLs, tables, and literal commands intact. Avoid crowded
-punctuation and abbreviated metadata chains.
+## Verification records
 
-Show realistic inputs and outputs: a prompt, expected visible reply, and relevant
-follow-up, or a contributor action and resulting Issue, branch, or policy state.
-Internal work needs no invented screen.
+Runtime tests are required only for runtime-code changes. Use the canonical runner and retain
+exact IDs, JSON results, and outcomes; for an explicitly required full run also retain shard
+reports and reconciliation. Map results to scenarios or criteria. Distinguish failures,
+accepted skips, interruption, and unexecuted work.
+A timeout, missing CI, stale head SHA, or aggregate count is not a pass.
 
-Label constructed interactions as illustrative or expected, and cite historical results
-as reported. Never present examples as observed provider replies or invent commands,
-timestamps, model identities, test IDs, result sets, or private artifacts.
+Policy, docs, templates, skills, development-agent configuration, module-index-only, and
+test-only changes use static validation. Name the checked headings, links, paths, references,
+frontmatter/format, policy invariants, source/head SHA, and diff review.
 
-Use narrow tables when comparisons help: scenario, expected and observed result, outcome.
-Put long commands, provenance, and artifacts in labeled paragraphs or linked records.
-Link labels should identify the evidence or decision readers will find.
+For review evidence, identify the current head SHA, initial/final review round, Copilot and Codex
+state, affected CI, required human approvals, and unresolved blocking findings. Only Copilot
+High and Codex P0/P1 findings are AI blockers under repository policy; lower-severity findings
+may be documented as nonblocking follow-ups.
 
-## Describe scope and delivery
+Evidence names its repository/worktree, base and head, relevant environment, literal commands
+or static checks, outcome, failures/gaps, and assessment. Include detailed manifests, hashes,
+budgets, and logs only when they improve reproduction or explain reuse; link large artifacts.
+Never claim historical evidence applies to the current head without checking relevant inputs.
 
-After use cases, give an Implementation summary: one short paragraph or a few bullets
-about planned mechanisms and changes, without workflow, test, or log detail. Keep the
-detailed Implementation plan last, after scope and verification context.
+## Publish and verify
 
-Each ordered step names affected logic or components, necessary details, and the scenario
-and criterion it enables. Include needed tests and documentation. Each acceptance
-checkbox names its scenario and an observable success or failure condition. Cover every
-use case in both criteria and plan. Scenario names suffice; IDs are optional. Define IDs
-once, reference only defined IDs, and match each step's use cases to its cited criteria.
-Update the plan for approved scope changes; the planning gate still applies.
-
-Initiatives and parents require the objective, non-goals, integration criteria, ordered
-children, risks, evidence plan, and approved base. Leaves identify their parent or
-standalone status and canonical Project, then describe context, included and excluded
-work, testable completion, verification, documentation, affected components,
-dependencies, constraints, and risks. Place facts in relevant sections and link existing
-records; do not copy every Project field into the opening.
-
-Keep one implementation or delivery unit on its Issue. Child sets require at least two
-independently complete, necessary siblings created and verified together. Follow the
-[planning and topology rules](../../../../GITHUB_WORKFLOW.md#issues); templates neither
-create native relationships nor authorize subdivision.
-
-For the same input or action, PRs use explicit Before and After results and explain the
-mechanism behind the change. Map verification to scenarios or criteria and flag
-unestablished cases. Update titles and descriptions to final scope, retaining only
-review-relevant history and tradeoffs.
-
-Use `Refs #N` for partial or child work; `Closes #N` only for completing PRs targeting
-`main`. Neither replaces native Development or Project links. Child PRs must not close
-parents, and status comments do not update Projects. After failed closure, reopen the
-Issue, return its Project status to `Backlog`, and replan.
-
-## Keep the evidence honest and useful
-
-Follow the [adaptive-verification skill](../../adaptive-verification/SKILL.md) for
-selection, execution ownership, budgets, deduplication, reuse, and sufficiency. Evidence
-records decisions and results; it authorizes neither checks nor risk acceptance.
-
-Summaries name the scenario or criterion, expected and observed results, and material
-gaps. Status states what works, how remaining work and blockers affect the scenario, and
-the next action that resolves them. Evidence retains applicable commands, case manifests,
-source and environment identity, digests, outcome sets, timing, budgets, artifacts, and
-reuse decisions. Link lengthy details.
-
-Name missing provenance and its effect on reproduction or reuse. Aggregate counts supply
-neither exact IDs nor separate passes for every criterion or variant. An adapter hash
-does not automatically cover tests, fixtures, runner, transitive inputs, and environment.
-
-Distinguish assertion failures, accepted skips, interruptions, and unexecuted work.
-Timeouts and absent CI are not passes. Partial or historical evidence cannot silently
-complete current criteria. Keep material limitations in PR and status summaries even
-when details are linked.
-
-## What the examples demonstrate
-
-[PR #622](https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/622) and the
-[Issue #621 verification report](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/621#issuecomment-5578471359)
-ground the Antigravity examples. A valid final reply rejected after intermediate errors
-is distinct from the later JSON-mode probes that ignored standard-input text. Marker
-interactions and Issue UC and AC labels are illustrative, not retrieved transcripts or
-original identifiers; related examples use scenario names. Counts and durations are
-reported. Missing commands, manifest contents, and distinct intermediate-error and
-rejection-case results remain unestablished.
-
-[PR #604](https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/604)
-illustrates one delivery unit on one Issue. Its reported policy-test command supports
-the wording without proving live GitHub behavior.
-
-Status examples cover progress, blocked, and completion updates. Their sequence and
-blocker are hypothetical. Completion separates implemented work and reported checks from
-unresolved acceptance evidence and publication gates.
+Check the finished body in source and rendered form when available. Confirm section order,
+scenario-to-criterion coverage, links, lists, tables, and fences. Publish only under the active
+workflow authority, read the resulting record back, and separately verify native links,
+Project state, and current-head review/check status.

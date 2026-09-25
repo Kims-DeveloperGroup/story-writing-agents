@@ -1,0 +1,346 @@
+name: PR validation
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, edited]
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.merge_group.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  classify:
+    name: Classify changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      runtime: ${{ steps.paths.outputs.runtime }}
+      policy_only: ${{ steps.paths.outputs.policy_only }}
+      full: ${{ steps.paths.outputs.full }}
+      base_sha: ${{ steps.paths.outputs.base_sha }}
+      head_sha: ${{ steps.paths.outputs.head_sha }}
+      checkout_sha: ${{ steps.paths.outputs.checkout_sha }}
+    steps:
+      - name: Classify paths and select runtime evidence
+        id: paths
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            let files = [];
+            let labels = [];
+            let baseSha;
+            let headSha;
+            let truncated = false;
+
+            if (context.eventName === "pull_request") {
+              const pr = context.payload.pull_request;
+              baseSha = pr.base.sha;
+              headSha = pr.head.sha;
+              labels = pr.labels.map(label => label.name);
+              files = await github.paginate(github.rest.pulls.listFiles, {
+                owner, repo, pull_number: pr.number, per_page: 100,
+              });
+              truncated = files.length >= 3000;
+            } else {
+              const group = context.payload.merge_group;
+              baseSha = group.base_sha;
+              headSha = group.head_sha;
+              const comparison = await github.rest.repos.compareCommitsWithBasehead({
+                owner, repo, basehead: `${baseSha}...${headSha}`, per_page: 100,
+              });
+              files = comparison.data.files || [];
+              // A full page may hide later files. Fail closed rather than infer a partial diff.
+              truncated = !Array.isArray(comparison.data.files) || files.length >= 100;
+            }
+
+            const paths = files.flatMap(file =>
+              [file.filename, file.previous_filename].filter(Boolean));
+            const isRuntime = path =>
+              path.startsWith("src/") ||
+              path.startsWith("config/") ||
+              path === "pyproject.toml" ||
+              path === "uv.lock" ||
+              path === "MANIFEST.in" ||
+              path === ".gitmodules" ||
+              path === "vendor/generic-rag" ||
+              path === "vendor/jsonl-viewer";
+            const runtimePaths = truncated || paths.some(isRuntime);
+            // An explicit full-suite request also runs the fast tier, even when
+            // the diff contains only tests, policy, or documentation.
+            const fullRequested = labels.includes("test:full");
+            const runtime = runtimePaths || fullRequested;
+            // Merge-group payloads do not reliably identify constituent PR labels.
+            const full = runtime && (
+              truncated || context.eventName === "merge_group" || fullRequested);
+            core.setOutput("runtime", String(runtime));
+            core.setOutput("policy_only", String(!runtimePaths));
+            core.setOutput("full", String(full));
+            core.setOutput("base_sha", baseSha);
+            core.setOutput("head_sha", headSha);
+            // Event SHA is the PR test merge or merge-group commit, pinned across jobs.
+            core.setOutput("checkout_sha", context.sha);
+            core.summary
+              .addHeading("Validation selection")
+              .addTable([
+                [{data: "Runtime paths", header: true}, String(runtimePaths)],
+                [{data: "Policy/config only", header: true}, String(!runtimePaths)],
+                [{data: "Run runtime lanes", header: true}, String(runtime)],
+                [{data: "Full suite", header: true}, String(full)],
+              ])
+              .write();
+
+  static:
+    name: Static validation
+    needs: classify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.classify.outputs.checkout_sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check patch whitespace
+        env:
+          BASE_SHA: ${{ needs.classify.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.classify.outputs.head_sha }}
+        run: git diff --check "$BASE_SHA...$HEAD_SHA"
+      - name: Parse repository configuration
+        run: |
+          python - <<'PY'
+          import json
+          import pathlib
+          import tomllib
+
+          for path in pathlib.Path(".").glob("**/*.toml"):
+              if ".git" not in path.parts:
+                  data = tomllib.loads(path.read_text(encoding="utf-8"))
+                  if path.parent == pathlib.Path(".codex/agents"):
+                      if data.get("name") != path.stem:
+                          raise SystemExit(f"{path}: agent name must match filename")
+                      for field in ("description", "developer_instructions"):
+                          value = data.get(field)
+                          if not isinstance(value, str) or not value.strip():
+                              raise SystemExit(f"{path}: missing {field}")
+          for path in pathlib.Path(".").glob("**/*.json"):
+              if ".git" not in path.parts:
+                  json.loads(path.read_text(encoding="utf-8"))
+          for path in (*pathlib.Path("src").rglob("*.py"), *pathlib.Path("tests").rglob("*.py")):
+              compile(path.read_text(encoding="utf-8"), str(path), "exec", dont_inherit=True)
+          PY
+          ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}"].each { |path| YAML.parse_file(path) }'
+          ruby -ryaml -ropen3 <<'RB'
+          Dir[".agents/skills/*/SKILL.md"].each do |path|
+            source = File.read(path)
+            match = source.match(/\A---\r?\n(.*?)\r?\n---(?:\r?\n|\z)/m)
+            abort "#{path}: missing YAML frontmatter" unless match
+            data = YAML.safe_load(match[1], aliases: false)
+            abort "#{path}: name must match directory and description must be nonempty" unless
+              data.is_a?(Hash) && data["name"] == File.basename(File.dirname(path)) &&
+              data["description"].is_a?(String) && !data["description"].strip.empty?
+          end
+          issue_path = ".github/ISSUE_TEMPLATE/work_item.md"
+          issue_source = File.read(issue_path)
+          issue_match = issue_source.match(/\A---\r?\n(.*?)\r?\n---(?:\r?\n|\z)/m)
+          abort "#{issue_path}: missing YAML frontmatter" unless issue_match
+          issue = YAML.safe_load(issue_match[1], aliases: false)
+          abort "#{issue_path}: invalid frontmatter mapping" unless issue.is_a?(Hash)
+          %w[name about title labels assignees].each do |field|
+            value = issue[field]
+            abort "#{issue_path}: missing or non-string #{field}" unless value.is_a?(String)
+          end
+          %w[name about].each do |field|
+            abort "#{issue_path}: empty #{field}" if issue[field].strip.empty?
+          end
+          Dir[".github/workflows/*.{yml,yaml}"].each do |path|
+            document = YAML.safe_load(File.read(path), aliases: false)
+            document.fetch("jobs").each do |job_name, job|
+              job.fetch("steps", []).each do |step|
+                script = step["with"]&.fetch("script", nil)
+                next unless script
+                _, error, status = Open3.capture3(
+                  "node", "--input-type=module", "--check",
+                  stdin_data: "async function main() {\n#{script}\n}")
+                abort "#{path} #{job_name}: #{error}" unless status.success?
+              end
+            end
+          end
+          RB
+      - name: Validate runner metadata
+        run: |
+          python -B - <<'PY'
+          from tests import suite_policy
+
+          suite_policy.load_timing_weights()
+          ids = suite_policy.FAST_TEST_IDS
+          if not ids or len(ids) != len(set(ids)):
+              raise SystemExit("fast tier must contain unique test IDs")
+          if any(not identifier.rsplit(".", 1)[-1].startswith("test") for identifier in ids):
+              raise SystemExit("fast tier contains a non-test method ID")
+          PY
+      - name: Validate locked vendor pins
+        run: |
+          python - <<'PY'
+          import subprocess
+          import tomllib
+          from pathlib import Path
+
+          if Path("MANIFEST.in").read_text(encoding="utf-8") != "prune vendor/jsonl-viewer\n":
+              raise SystemExit("MANIFEST.in must exclude vendored jsonl-viewer source")
+
+          with open("uv.lock", "rb") as source:
+              packages = {package["name"]: package for package in tomllib.load(source)["package"]}
+          for name in ("generic-rag", "jsonl-viewer"):
+              pinned = packages[name]["source"]["git"].rsplit("#", 1)[-1]
+              gitlink = subprocess.check_output(
+                  ["git", "rev-parse", f"HEAD:vendor/{name}"], text=True
+              ).strip()
+              if pinned != gitlink:
+                  raise SystemExit(f"{name}: uv.lock pin {pinned} differs from gitlink {gitlink}")
+          PY
+      - name: Validate policy artifacts
+        run: |
+          python - <<'PY'
+          import pathlib
+
+          root = pathlib.Path.cwd()
+          templates = {
+              ".github/ISSUE_TEMPLATE/work_item.md": [
+                  "## Objective", "## Use cases and expected results",
+                  "## Implementation summary", "## Acceptance criteria",
+                  "## Boundaries and dependencies",
+                  "## Related work and verification plan", "## Implementation plan",
+              ],
+              ".github/pull_request_template.md": [
+                  "## What changed", "## Before and after", "## Implementation",
+                  "## Verification", "## Limitations and follow-ups",
+                  "## Related Issue",
+              ],
+              ".github/templates/evidence.md": [
+                  "## What this demonstrates", "## Scenario results",
+                  "## Reproduction and environment", "## Failures and coverage gaps",
+                  "## Technical provenance and artifacts", "## Assessment",
+              ],
+              ".github/templates/working-status-comment.md": [
+                  "## Current status", "## What works now", "## What remains",
+                  "## Blocker or decision", "## Next step", "## Evidence links",
+              ],
+          }
+          for relative, expected in templates.items():
+              text = (root / relative).read_text(encoding="utf-8")
+              actual = [line for line in text.splitlines() if line.startswith("## ")]
+              if actual != expected:
+                  raise SystemExit(f"{relative}: template headings changed: {actual!r}")
+
+          agents = {path.name for path in (root / ".codex/agents").glob("*.toml")}
+          if agents != {"runtime_implementer.toml", "test_engineer.toml"}:
+              raise SystemExit(f"unexpected development agents: {sorted(agents)!r}")
+          required = [
+              root / ".agents/skills/project-workflow/SKILL.md",
+              root / ".codex/agents/runtime_implementer/PYTHON_MODULARITY_POLICY.md",
+          ]
+          if any(not path.is_file() for path in required):
+              raise SystemExit("required simplified workflow artifact is missing")
+          forbidden = [
+              root / ".agents/skills/adaptive-verification/SKILL.md",
+              root / ".agents/skills/subagent-model-selection/SKILL.md",
+              root / "tests/test_repository_agent_policy.py",
+          ]
+          if any(path.exists() for path in forbidden):
+              raise SystemExit("retired policy artifact still exists")
+          if len((root / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8").splitlines()) > 300:
+              raise SystemExit("PYTHON_MODULE_INDEX.md exceeds 300 lines")
+          PY
+
+  fast:
+    name: Runtime fast tier
+    needs: classify
+    if: needs.classify.outputs.runtime == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ needs.classify.outputs.checkout_sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: '0.12.17'
+      - name: Install runtime test dependencies
+        run: uv sync --locked --all-extras --python 3.11 --no-progress
+      - name: Run fast runtime tests
+        run: PYTHONPATH=src .venv/bin/python -m tests.runner run --tier fast --json "$RUNNER_TEMP/fast.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: runtime-fast
+          path: ${{ runner.temp }}/fast.json
+          if-no-files-found: warn
+
+  full:
+    name: Full runtime shard ${{ matrix.shard }}/2
+    needs: classify
+    if: needs.classify.outputs.runtime == 'true' && needs.classify.outputs.full == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ needs.classify.outputs.checkout_sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: '0.12.17'
+      - name: Install runtime test dependencies
+        run: uv sync --locked --all-extras --python 3.11 --no-progress
+      - name: Run full runtime shard
+        run: PYTHONPATH=src .venv/bin/python -m tests.runner run --shard "${{ matrix.shard }}/2" --json "$RUNNER_TEMP/full-${{ matrix.shard }}.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: full-${{ matrix.shard }}
+          path: ${{ runner.temp }}/full-${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  reconcile-full:
+    name: Reconcile full runtime suite
+    needs: [classify, full]
+    if: >-
+      always() && needs.classify.outputs.full == 'true' &&
+      (needs.full.result == 'success' || needs.full.result == 'failure')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.classify.outputs.checkout_sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: full-*
+          path: full-reports
+      - name: Reconcile shard evidence
+        run: >-
+          PYTHONPATH=src python -m tests.runner reconcile
+          full-reports/full-1/full-1.json
+          full-reports/full-2/full-2.json
+          --json "$RUNNER_TEMP/full-reconciled.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: runtime-full-reconciled
+          path: ${{ runner.temp }}/full-reconciled.json
+          if-no-files-found: warn

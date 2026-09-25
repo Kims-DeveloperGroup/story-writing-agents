@@ -137,7 +137,6 @@ def _policy_select(
     ids: Sequence[str] = (),
     modules: Sequence[str] = (),
     tiers: Sequence[str] = (),
-    groups: Sequence[str] = (),
     shard: str | None = None,
     weight_path: Path = suite_policy.WEIGHT_MANIFEST_PATH,
 ) -> PolicySelection:
@@ -147,8 +146,7 @@ def _policy_select(
     unknown_tiers = tuple(sorted(set(requested_tiers) - {"fast"}))
     if unknown_tiers:
         raise RunnerError("unknown test tiers: " + ", ".join(unknown_tiers))
-    requested_groups = _validated_values(groups, "--group")
-    if shard is not None and (ids or modules or requested_tiers or requested_groups):
+    if shard is not None and (ids or modules or requested_tiers):
         raise RunnerError("--shard cannot be combined with other selectors")
     try:
         weights = suite_policy.load_timing_weights(weight_path)
@@ -166,18 +164,12 @@ def _policy_select(
         selected_ids = set(plan.shard_ids[shard_index])
     else:
         selected_ids: set[str] = set()
-        has_selector = bool(ids or modules or requested_tiers or requested_groups)
+        has_selector = bool(ids or modules or requested_tiers)
         if ids or modules:
             selected_ids.update(_select(collection, ids=ids, modules=modules).ids)
         try:
             if requested_tiers:
                 selected_ids.update(suite_policy.select_fast(collection.ids))
-            if requested_groups:
-                selected_ids.update(
-                    suite_policy.select_affected_groups(
-                        collection.ids, requested_groups
-                    )
-                )
         except suite_policy.SuitePolicyError as error:
             raise RunnerError(str(error)) from error
         if not has_selector:
@@ -208,7 +200,6 @@ def _policy_select(
     metadata: dict[str, object] = {
         "selection": {
             "tiers": list(requested_tiers),
-            "groups": list(requested_groups),
             "shard": shard,
         },
         "suite_policy": {
@@ -451,10 +442,9 @@ def _write_policy_human(report: dict[str, object], stream: TextIO) -> None:
     policy = report.get("suite_policy")
     if isinstance(selection, dict) and isinstance(policy, dict):
         tiers = ",".join(str(value) for value in selection.get("tiers", ())) or "-"
-        groups = ",".join(str(value) for value in selection.get("groups", ())) or "-"
         print(
             "selection: "
-            f"tier={tiers} groups={groups} shard={selection.get('shard') or '-'}",
+            f"tier={tiers} shard={selection.get('shard') or '-'}",
             file=stream,
         )
         weights = policy.get("weight_manifest")
@@ -728,7 +718,6 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--id", action="append", default=[])
         command.add_argument("--module", action="append", default=[])
         command.add_argument("--tier", action="append", default=[])
-        command.add_argument("--group", action="append", default=[])
         command.add_argument("--shard")
         command.add_argument("--json")
         if name == "run":
@@ -757,7 +746,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             ids=args.id,
             modules=args.module,
             tiers=args.tier,
-            groups=args.group,
             shard=args.shard,
         )
         selection = selected.selection
