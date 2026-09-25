@@ -36,8 +36,8 @@ necessary siblings under the workflow policy.
 
 A PR describes final delivered behavior, the same action before and after, actual mechanisms,
 verification, limits, and the correct Issue reference. Use `Refs #N` for partial/child work and
-`Closes #N` only for a completing `main` PR. Record ready and final review-round head SHAs
-in Verification when applicable.
+`Closes #N` only for a completing `main` PR. Record numbered rounds, selected provider/actual effort, reviewed base/head, and verified
+closure in Verification when applicable.
 
 A status comment states what works, what remains, the practical blocker or decision, and one
 owned next action. A comment does not update Project state. Evidence records exact observations
@@ -56,10 +56,11 @@ Policy, docs, templates, skills, development-agent configuration, and module-ind
 changes use static validation. Name the checked headings, links, paths, references,
 frontmatter/format, policy invariants, source/head SHA, and diff review.
 
-For review evidence, identify the current head SHA, initial/final review round, Copilot and Codex
-state, affected CI, required human approvals, and unresolved blocking findings. Only Copilot
-High and Codex P0/P1 findings are AI blockers under repository policy; lower-severity findings
-may be documented as nonblocking follow-ups.
+For review evidence, follow GITHUB_WORKFLOW.md: identify each round, its selected provider
+and actual effort, reviewed base/head, finding dispositions, remaining High/Critical defects,
+later diff inspection, current checks/approvals, and closure. Medium feedback is nonblocking;
+from round 3 it cannot justify more repair work. Keep historical review evidence separate
+from current verification. Never imply both providers or a clean extra review are required.
 
 Evidence names its repository/worktree, base and head, relevant environment, literal commands
 or static checks, outcome, failures/gaps, and assessment. Include detailed manifests, hashes,
@@ -71,4 +72,4 @@ Never claim historical evidence applies to the current head without checking rel
 Check the finished body in source and rendered form when available. Confirm section order,
 scenario-to-criterion coverage, links, lists, tables, and fences. Publish only under the active
 workflow authority, read the resulting record back, and separately verify native links,
-Project state, and current-head review/check status.
+Project state, review closure, and current-head check status.
