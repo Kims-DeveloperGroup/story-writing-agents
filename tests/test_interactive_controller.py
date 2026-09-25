@@ -1614,8 +1614,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 143)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 574)
+        self.assertEqual(len(modules), 144)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 585)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -2679,6 +2679,23 @@ class ControllerCommandTests(ControllerTestCase):
         self.assertNotIn("PRIVATE_SEARCH_TEXT", rendered)
         self.assertIn("[error session_not_attached]", rendered)
         self.assertIn("Writing artifact references", rendered)
+
+    def test_progress_toggle_command_toggles_and_sets_mode(self) -> None:
+        workspace = self.make_workspace()
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            "/progress",
+            "/progress off",
+            "/progress on",
+            "/toggle",
+            "/quit",
+        )
+        self.assertFalse(controller._terminal.progress_frame_collapsed)
+        self.assertEqual(controller.run_session_lobby(), 0)
+        rendered = "".join(callbacks.records)
+        self.assertIn("Progress frame collapsed", rendered)
+        self.assertIn("Progress frame expanded", rendered)
+        self.assertTrue(controller._terminal.progress_frame_collapsed)
 
     def test_session_list_preserves_order_and_hides_access_owner_facts(self) -> None:
         workspace = self.make_workspace()
@@ -13257,6 +13274,64 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         self.assertIsInstance(output.components[-1], terminal_module.Notice)
         self.assertEqual(output.components[-1].text, "Elapsed: 00:00:00")
 
+    def test_provider_invocation_failure_writes_error_notice_without_crashing(self) -> None:
+        session = RuntimeSession.__new__(RuntimeSession)
+        runner = asyncio.Runner()
+        self.addCleanup(runner.close)
+        progress, output = self._Progress(), self._Output()
+
+        async def failing_turn(_session, _cid, _text, *, action_progress_sink=None):
+            raise BackendProtocolError("Antigravity CLI failed (status 1): 503 Overloaded")
+
+        with mock.patch.object(RuntimeSession, "lead_turn", failing_turn):
+            adapter = lead_policy_module.InteractiveLeadAdapter(
+                session, runner, progress,
+                self._Picker(), self._Prompt(), output,
+            )
+            result = adapter.submit(_UNIQUE_C, "test prompt")
+
+        self.assertFalse(result)
+        self.assertEqual(len(output.components), 3)
+        panel = output.components[0]
+        self.assertIsInstance(panel, terminal_module.Panel)
+        self.assertEqual(panel.title, "Lead")
+        self.assertEqual(panel.state, terminal_module.ViewState.ERROR)
+        self.assertEqual(panel.items[0].label, "Outcome")
+        self.assertEqual(panel.items[0].value, "failed")
+        self.assertEqual(panel.items[1].sender, "Lead")
+        self.assertIn("Antigravity CLI failed (status 1): 503 Overloaded", panel.items[1].content)
+        notice = output.components[1]
+        self.assertIsInstance(notice, terminal_module.Notice)
+        self.assertEqual(notice.label, "provider failure")
+        self.assertIn("Antigravity CLI failed (status 1): 503 Overloaded", notice.text)
+        self.assertEqual(output.components[2].text, "Elapsed: 00:00:00")
+
+    def test_provider_invocation_failure_surfaces_transient_stream_error_in_final_output(self) -> None:
+        session = RuntimeSession.__new__(RuntimeSession)
+        runner = asyncio.Runner()
+        self.addCleanup(runner.close)
+        progress, output = self._Progress(), self._Output()
+        progress.last_error_message = "Error: No capacity available for model gpt-oss-120b-medium on the server"
+
+        async def failing_turn(_session, _cid, _text, *, action_progress_sink=None):
+            raise BackendProtocolError("Antigravity CLI exited with status 1")
+
+        with mock.patch.object(RuntimeSession, "lead_turn", failing_turn):
+            adapter = lead_policy_module.InteractiveLeadAdapter(
+                session, runner, progress,
+                self._Picker(), self._Prompt(), output,
+            )
+            result = adapter.submit(_UNIQUE_C, "test prompt")
+
+        self.assertFalse(result)
+        self.assertEqual(len(output.components), 3)
+        panel = output.components[0]
+        self.assertIsInstance(panel, terminal_module.Panel)
+        self.assertEqual(panel.state, terminal_module.ViewState.ERROR)
+        self.assertIn("No capacity available for model gpt-oss-120b-medium on the server", panel.items[1].content)
+        notice = output.components[1]
+        self.assertIn("No capacity available for model gpt-oss-120b-medium on the server", notice.text)
+
     def test_confirmed_execution_writes_specialists_then_lead_then_elapsed(self) -> None:
         runner = asyncio.Runner(); self.addCleanup(runner.close); output = self._Output()
         adapter = lead_policy_module.InteractiveLeadAdapter(RuntimeSession.__new__(RuntimeSession),
@@ -13442,6 +13517,42 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
 
                     self.assertEqual(calls, [(_UNIQUE_C, label)])
                     self.assertEqual(len(output.components), 2)
+
+    def test_retry_lead_turn_keeps_fixed_diagnostic_copy_and_renders_error_role(self) -> None:
+        session = RuntimeSession.__new__(RuntimeSession)
+        runner = asyncio.Runner()
+        self.addCleanup(runner.close)
+        turn = LeadTurnResult(
+            "session",
+            _UNIQUE_C,
+            "turn-err",
+            "step-err",
+            LeadOutcomeKind.RECOMMENDATION,
+            "The Lead provider attempt failed without a usable result.",
+            None,
+            None,
+            None,
+            CollaborationNextAction.RETRY_LEAD_TURN,
+        )
+
+        async def lead_turn(*_args: object, **_kwargs: object) -> LeadTurnResult:
+            return turn
+
+        progress = self._Progress()
+        progress.last_error_message = "Antigravity CLI exited with status 1: No capacity available"
+        output = self._Output()
+        with mock.patch.object(RuntimeSession, "lead_turn", lead_turn):
+            adapter = lead_policy_module.InteractiveLeadAdapter(
+                session, runner, progress, self._Picker(), self._Prompt(), output,
+            )
+            self.assertFalse(adapter.submit(_UNIQUE_C, "test prompt"))
+            panel = output.components[0]
+            self.assertIsInstance(panel, terminal_module.Panel)
+            self.assertIs(panel.state, terminal_module.ViewState.ERROR)
+            message_item = next(item for item in panel.items if isinstance(item, terminal_module.Message))
+            self.assertIs(message_item.role, terminal_module.SemanticRole.ERROR)
+            self.assertIn("Inspect /history and /exchanges before continuing.", message_item.content)
+            self.assertNotIn("No capacity available", message_item.content)
 
     def test_pending_commit_redisclosure_reuses_exact_picker_without_apply(self):
         digest = "sha256:" + "a" * 64
@@ -13651,6 +13762,64 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 self._Output(),  # type: ignore[arg-type]
             ).submit(_UNIQUE_C, "cancel commit")
             self.assertEqual(tuple(label for label, _value in calls), ("application",))
+
+    def test_run_operation_returns_task_result_when_task_completes_after_auth_ready(self) -> None:
+        """Verify _run_operation reads authoritative task result if task completes during progress cleanup."""
+        import asyncio
+        from story_writing_agents.interactive_controller._lead_policy import InteractiveLeadAdapter
+
+        expected_result = object()
+
+        async def fake_op():
+            return expected_result
+
+        runner = asyncio.Runner()
+        self.addCleanup(runner.close)
+
+        class FakeProgress:
+            def run(self, coro, **kwargs):
+                async def wrapper():
+                    await coro
+                    # Simulate progress returning None (e.g. from wait_for_operation_or_auth when auth was ready)
+                    return None
+                return wrapper()
+
+        session = RuntimeSession.__new__(RuntimeSession)
+        adapter = InteractiveLeadAdapter(
+            session,
+            runner,
+            FakeProgress(),  # type: ignore[arg-type]
+            mock.MagicMock(),
+            mock.MagicMock(),
+            mock.MagicMock(),
+            recover_authentication=lambda _provider: True,
+        )
+
+        res = adapter._run_operation(fake_op())
+        self.assertIs(res, expected_result)
+
+    def test_unexpected_exception_in_submit_propagates_to_fatal_boundary(self) -> None:
+        """Verify unexpected/fatal errors in submit() propagate rather than being swallowed."""
+        from story_writing_agents.interactive_controller._lead_policy import InteractiveLeadAdapter
+
+        session = mock.MagicMock(spec=RuntimeSession)
+        session.lead_turn = mock.Mock()
+        runner = asyncio.Runner()
+        self.addCleanup(runner.close)
+
+        adapter = InteractiveLeadAdapter(
+            session,
+            runner,
+            mock.MagicMock(),
+            mock.MagicMock(),
+            mock.MagicMock(),
+            mock.MagicMock(),
+        )
+
+        with mock.patch.object(InteractiveLeadAdapter, "_run_turn", side_effect=RuntimeError("terminal restoration crashed")):
+            with self.assertRaises(RuntimeError) as ctx:
+                adapter.submit("conv_1", "test request")
+            self.assertIn("terminal restoration crashed", str(ctx.exception))
 
 
 if __name__ == "__main__":

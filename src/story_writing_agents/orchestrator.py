@@ -7337,6 +7337,8 @@ class StoryRuntime:
                 except Exception as correction_setup_failure:
                     reference_operation.failure(correction_setup_failure)
                     assert rejected_call_id is not None
+                    if provider is not None:
+                        provider.publish_validation_messages()
                     assert correction_failure_code is not None
                     self._lead_outcome_failure_result(
                         session_id=session_id,
@@ -7347,7 +7349,6 @@ class StoryRuntime:
                         call_id=rejected_call_id,
                         failure_code=correction_failure_code,
                     )
-                    provider.publish_validation_messages()
                     return self._structured_fallback_lead_result(
                         session_id=session_id,
                         conversation_id=conversation_id,
@@ -7389,6 +7390,8 @@ class StoryRuntime:
                         and not correction_facts.submission_uncertain
                     ):
                         reference_operation.failure(correction_failure)
+                        if provider is not None:
+                            provider.publish_validation_messages()
                         assert correction_failure_code is not None
                         self._lead_outcome_failure_result(
                             session_id=session_id,
@@ -7399,7 +7402,6 @@ class StoryRuntime:
                             call_id=provider.last_submitted_call_id,
                             failure_code=correction_failure_code,
                         )
-                        provider.publish_validation_messages()
                         return self._structured_fallback_lead_result(
                             session_id=session_id,
                             conversation_id=conversation_id,
@@ -7420,6 +7422,8 @@ class StoryRuntime:
                         raise
                     reference_operation.failure(correction_failure)
                     assert rejected_call_id is not None
+                    if provider is not None:
+                        provider.publish_validation_messages()
                     assert correction_failure_code is not None
                     self._lead_outcome_failure_result(
                         session_id=session_id,
@@ -7430,7 +7434,6 @@ class StoryRuntime:
                         call_id=rejected_call_id,
                         failure_code=correction_failure_code,
                     )
-                    provider.publish_validation_messages()
                     return self._structured_fallback_lead_result(
                         session_id=session_id,
                         conversation_id=conversation_id,
@@ -7472,6 +7475,8 @@ class StoryRuntime:
         except _LeadOutcomeValidationError as failure:
             reference_operation.failure(failure)
             if corrective_rejection_code is not None:
+                if provider is not None:
+                    provider.publish_validation_messages()
                 assert correction_failure_code is not None
                 self._lead_outcome_failure_result(
                     session_id=session_id,
@@ -7482,8 +7487,6 @@ class StoryRuntime:
                     call_id=None if provider is None else provider.last_submitted_call_id,
                     failure_code=correction_failure_code,
                 )
-                if provider is not None:
-                    provider.publish_validation_messages()
                 return self._structured_fallback_lead_result(
                     session_id=session_id,
                     conversation_id=conversation_id,
@@ -7545,6 +7548,7 @@ class StoryRuntime:
                         failure_code=(
                             CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED
                         ),
+                        failure=failure,
                     )
                 raise
             if (
@@ -7554,6 +7558,7 @@ class StoryRuntime:
                 and provider is not None
                 and provider.last_submitted_call_id is not None
             ):
+                provider.publish_validation_messages()
                 failed = self._lead_outcome_failure_result(
                     session_id=session_id,
                     conversation_id=conversation_id,
@@ -7564,8 +7569,8 @@ class StoryRuntime:
                     failure_code=(
                         CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED
                     ),
+                    failure=failure,
                 )
-                provider.publish_validation_messages()
                 return replace(failed, validation_details=provider.validation_details)
             recovered = self._close_failed_lead_attempt(
                 session_id, conversation_id, failure=failure,
@@ -8638,6 +8643,7 @@ class StoryRuntime:
             invocation_id=calls[-1].invocation_id if calls else None,
             call_id=calls[-1].call_id if calls else None,
             failure_code=code,
+            failure=failure,
         )
 
     def _lead_outcome_failure_result(
@@ -8650,6 +8656,7 @@ class StoryRuntime:
         invocation_id: str | None,
         call_id: str | None,
         failure_code: CollaborationLeadOutcomeFailureCode,
+        failure: BaseException | None = None,
     ) -> LeadTurnResult:
         """Durably close a failed read-only Lead attempt without replaying it."""
 
@@ -8657,25 +8664,48 @@ class StoryRuntime:
             failure_code
             is CollaborationLeadOutcomeFailureCode.ARTIFACT_INTENT_REJECTED
         )
-        message = (
-            "The Lead provider returned a result that the runtime rejected. Retry "
-            "the lead turn; the rejected provider call will not be replayed."
-            if failure_code
-            is CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED
-            else "The lead result failed runtime evidence validation. Retry the "
-            "lead turn; the rejected provider call will not be replayed."
+        failure_detail = (
+            str(failure).strip()
+            if failure is not None and isinstance(failure, BackendProtocolError)
+            else ""
         )
+        if failure_code is CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED:
+            message = (
+                f"The Lead provider returned a result that the runtime rejected ({failure_detail}). Retry "
+                "the lead turn; the rejected provider call will not be replayed."
+                if failure_detail
+                else (
+                    "The Lead provider returned a result that the runtime rejected. Retry "
+                    "the lead turn; the rejected provider call will not be replayed."
+                )
+            )
+        else:
+            message = (
+                f"The lead result failed runtime evidence validation ({failure_detail}). Retry the "
+                "lead turn; the rejected provider call will not be replayed."
+                if failure_detail
+                else (
+                    "The lead result failed runtime evidence validation. Retry the "
+                    "lead turn; the rejected provider call will not be replayed."
+                )
+            )
         attempt_messages = {
             CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED:
                 "The Lead request stopped before a provider call was recorded.",
             CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED:
-                "The Lead provider attempt failed without a usable result.",
+                f"The Lead provider attempt failed without a usable result ({failure_detail})."
+                if failure_detail
+                else "The Lead provider attempt failed without a usable result.",
             CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT:
-                "The Lead provider attempt exceeded its response timeout.",
+                f"The Lead provider attempt exceeded its response timeout ({failure_detail})."
+                if failure_detail
+                else "The Lead provider attempt exceeded its response timeout.",
             CollaborationLeadOutcomeFailureCode.CANCELLED:
                 "The Lead provider attempt was cancelled.",
             CollaborationLeadOutcomeFailureCode.INTERRUPTED:
-                "The prior Lead provider attempt ended without a recorded result.",
+                f"The prior Lead provider attempt ended without a recorded result ({failure_detail})."
+                if failure_detail
+                else "The prior Lead provider attempt ended without a recorded result.",
         }
         if failure_code in attempt_messages:
             message = (

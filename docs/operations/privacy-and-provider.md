@@ -628,6 +628,19 @@ consumer. Python callers can nevertheless supply this callback and retain its
 events; the caller then owns access control, retention, and cleanup for that
 copy.
 
+Provider execution additionally supports an additive, process-local
+`provider_stream_sink` context variable emitting `ProviderStreamEvent`
+instances (`STATUS`, `THOUGHT_DELTA`, `TEXT_DELTA`). While SEARCH and READ cards
+never display provider responses or excerpts, active capable raw terminals may
+render transient status notices and a bounded rolling preview of streamed
+output. Frame retention upon turn completion is mode-dependent: under `/progress on`
+(expanded mode), the completed frame remains visible as an interactive nested scroll
+view for inspection, whereas under `/progress off` (collapsed mode) it is cleared
+cleanly before persistent output. Like
+`action_progress_sink`, stream events are not durable ledger records or public
+lifecycle events; callers binding or retaining a custom stream sink receive
+raw deltas and own access control, retention, and cleanup for that stream.
+
 Observer delivery adds no provider call, result field, story content,
 conversation event, debate record, or second context ledger. The component has
 no supported post-hoc observer inspection. A consumer may render public compact
@@ -635,8 +648,8 @@ facts into terminal output, where an emulator, multiplexer, or remote terminal
 may retain them in scrollback. The installed shell's detailed frame is actively
 redrawn and cleared, but that is presentation cleanup rather than secure
 erasure: terminal capture, scrollback, multiplexers, remote terminals, or
-accessibility tooling may retain its exact queries and relative locators/ranges.
-A Python caller may deliberately retain
+accessibility tooling may retain its exact queries, relative locators/ranges,
+and transient preview output. A Python caller may deliberately retain
 callback values, in which case that caller owns access control, retention, and
 cleanup for the new copy.
 
@@ -1140,13 +1153,14 @@ still apply, and the vendor may retain remote conversations.
 
 Antigravity also runs without shell evaluation. The backend passes the exact
 confidential story request JSON as one `--print` argument, uses
-`--input-format text --output-format json`, and sends empty stdin. The full
-request can therefore appear in local process listings and inspection tools,
-including any story text, drafts, references, and retrieval observations it
-contains. CLI 1.1.27 ignored raw text stdin in transport probes, so this adapter
-uses the prompt argument. OS argument-size limits may reject large requests
-before process creation with a typed start failure and no submitted transport
-count.
+`--input-format text --output-format json` (or `--output-format stream-json` when
+an active capable terminal or caller binds a stream sink), and sends empty stdin.
+The full request can therefore appear in local process listings and inspection
+tools, including any story text, drafts, references, and retrieval observations
+it contains. CLI 1.1.27 ignored raw text stdin in transport probes, so this
+adapter uses the prompt argument. OS argument-size limits may reject large
+requests before process creation with a typed start failure and no submitted
+transport count.
 
 It stages and selects a custom main agent beneath an isolated provider
 workspace, uses `--new-project` for fresh history or the exact retained

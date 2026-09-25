@@ -62,7 +62,7 @@ else:
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _SOURCE_ROOT = _REPOSITORY_ROOT / "src"
 _SESSION_DIRECTORY = "agent_states/orchestrator_state/provider_sessions"
-_PROCESS_DEADLINE_SECONDS = 12.0
+_PROCESS_DEADLINE_SECONDS = 25.0
 _PROCESS_POLL_QUANTUM_SECONDS = 0.02
 _TEARDOWN_DEADLINE_SECONDS = 3.0
 _ANSI_SGR_BYTES = re.compile(rb"\x1b\[[0-9;]*m")

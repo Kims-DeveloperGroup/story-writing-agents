@@ -389,8 +389,9 @@ class ViewerModelContractTests(unittest.TestCase):
             tuple(item.value for item in KeyKind),
             (
                 "text", "enter", "backspace", "delete", "left", "right",
-                "home", "end", "up", "down", "shift_up", "shift_down",
-                "tab", "shift_tab", "escape", "interrupt", "eof",
+                "home", "end", "up", "down", "page_up", "page_down",
+                "shift_up", "shift_down", "tab", "shift_tab", "escape",
+                "interrupt", "eof",
             ),
         )
         for name in ("InteractiveTextViewer", "TextViewerExitKind", "TextViewerResult"):

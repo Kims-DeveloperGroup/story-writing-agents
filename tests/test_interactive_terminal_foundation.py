@@ -1081,6 +1081,8 @@ class PureControlFoundationTests(unittest.TestCase):
         for kind in (
             KeyKind.UP,
             KeyKind.DOWN,
+            KeyKind.PAGE_UP,
+            KeyKind.PAGE_DOWN,
             KeyKind.SHIFT_UP,
             KeyKind.SHIFT_DOWN,
             KeyKind.TAB,
@@ -3440,7 +3442,10 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
         terminal_root = package_root / "interactive_terminal"
         expected_dependencies = {
             "__init__.py": {"._advisory_progress", "._core"},
-            "_advisory_progress.py": {"..agent_context.actions", "..agent_context.progress"},
+            "_advisory_progress.py": {
+                "..agent_context.actions",
+                "..agent_context.progress",
+            },
             "_collaboration_view.py": {
                 "..conversations",
                 "..reply_trace",
@@ -3473,6 +3478,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
                 "..agent_context.progress",
                 "..agents",
                 "..conversations",
+                "..errors",
                 "..interactive_commands",
                 "._collaboration_view",
                 "._advisory_progress",

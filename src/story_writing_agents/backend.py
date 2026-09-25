@@ -4413,13 +4413,25 @@ class AgentBackend:
             if provider_cause is None:
                 raise translated from None
             raise translated from provider_cause
+        schema_issues: tuple[str, ...] = ()
         try:
             try:
-                schema_issues = diagnose_json_text(result.response_text, schema)
-                if schema_issues:
-                    raise BackendProtocolError("provider structured response has an invalid schema")
                 reply = decode(result.response_text)
+                schema_issues = (
+                    diagnose_json_text(result.response_text, schema)
+                    if schema
+                    else ()
+                )
+                if schema_issues:
+                    raise BackendProtocolError(
+                        "provider structured response has an invalid schema"
+                    )
             except BackendProtocolError as failure:
+                schema_issues = (
+                    diagnose_json_text(result.response_text, schema)
+                    if schema
+                    else ()
+                )
                 try:
                     self._record_rejected_provider_response_without_replacing_failure(
                         bound_agent,
@@ -4504,8 +4516,13 @@ class AgentBackend:
                 if bound_agent.vendor == "codex"
                 else "Antigravity CLI returned malformed structured output"
             )
+            issues = (
+                schema_issues
+                or (diagnose_json_text(result.response_text, schema) if schema else ())
+                or ("$: malformed JSON",)
+            )
             details = bounded_chunks(
-                schema_issues or ("$: malformed JSON",),
+                issues,
                 prefix="Structured response",
             )
             raise _StructuredOutputRejected(diagnostic, details) from exc

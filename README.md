@@ -94,10 +94,13 @@ While a Lead or confirmed specialist request is active, capable terminals show
 a transient shared `HH:MM:SS` working bar and per-agent context cards. SEARCH
 cards may display exact query text, requested resource kinds and scope, and safe
 workspace-relative locators/ranges; READ cards show selected locators and exact
-boundaries. They never display source excerpts, provider answers, absolute
-paths, or hidden reasoning. Final specialist request/answer/status panels
+boundaries. SEARCH and READ cards never display source excerpts, provider answers, absolute
+paths, or hidden reasoning. During provider generation, active terminals may
+display transient status indicators and a bounded rolling preview of streamed output
+whose retention is mode-dependent (/progress on retains the frame for interactive inspection,
+while /progress off clears it before final output). Final specialist request/answer/status panels
 precede the Lead result and elapsed time. Terminal capture or scrollback may
-retain the transient query and locator text.
+retain the transient query, locator, or preview text.
 
 See [Collaborate with the Lead Agent](docs/guides/lead-agent-collaboration.md)
 for responsibilities, authority limits, concrete story workflows,

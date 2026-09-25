@@ -78,6 +78,7 @@ EXPECTED_ACTION_KINDS = (
     "conversation_archive",
     "help",
     "quit",
+    "progress",
     "parse_error",
 )
 
@@ -146,6 +147,14 @@ EXPECTED_COMMANDS = (
         False,
         False,
         "/help status",
+    ),
+    CommandSpec(
+        "Display",
+        "/progress [on|off|toggle]",
+        ("/toggle",),
+        False,
+        False,
+        "/progress toggle",
     ),
     CommandSpec("Exit", "/quit", (), False, False, "/quit"),
 )
@@ -354,6 +363,10 @@ class InteractiveParserRetirementTests(unittest.TestCase):
             "/status": InteractiveAction(ActionKind.STATUS),
             "/help status": InteractiveAction(ActionKind.HELP, argument="/status"),
             "/?": InteractiveAction(ActionKind.HELP),
+            "/progress": InteractiveAction(ActionKind.PROGRESS, argument="toggle"),
+            "/progress on": InteractiveAction(ActionKind.PROGRESS, argument="on"),
+            "/progress off": InteractiveAction(ActionKind.PROGRESS, argument="off"),
+            "/toggle": InteractiveAction(ActionKind.PROGRESS, argument="toggle"),
             "/quit": InteractiveAction(ActionKind.QUIT),
         }
         for line, expected in cases.items():

@@ -105,7 +105,7 @@ Fresh history uses `--new-project`; compatible history resumes the exact
 `--conversation` ID and its associated project. Runtime never passes
 `--project` or makes the canonical story root the Antigravity project. The exact
 request is one `--print` argument with empty stdin and
-`--input-format text --output-format json`. Its single JSON result must report
+`--input-format text --output-format json` (or `--output-format stream-json` when an active stream sink is bound for capable advisory progress). Its single JSON result (or terminal result extracted from stream-json events) must report
 `SUCCESS` and a safe `conversation_id` matching the retained ID on resume.
 Duplicate fields, non-finite numbers, trailing data, missing or non-object
 structured output, and a different schema echo fail transport validation;

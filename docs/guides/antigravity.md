@@ -368,10 +368,10 @@ For each turn, the runtime launches `agy` directly without shell evaluation. It:
   retained ID with `--conversation <id>`; it never registers the canonical
   story workspace root as an Antigravity project;
 - passes the exact confidential story request JSON as one `--print` argument,
-  selects `--input-format text --output-format json`, and sends empty stdin;
+  selects `--input-format text --output-format json` (or `--output-format stream-json` when an active stream sink is bound for capable advisory progress), and sends empty stdin;
 - enables the CLI sandbox, selects plan mode, and disables slash commands;
 - does not pass an approval-bypass or unrestricted-execution option; and
-- drains stdout and stderr, validates one JSON envelope with a safe conversation
+- drains stdout and stderr, validates one JSON envelope (extracting the terminal result from stream-json events when streaming) with a safe conversation
   ID, root-object structured output, and an exact rendered-schema echo, then
   applies the shared runtime correlation and semantic checks. Native `SUCCESS`
   is the normal path; only the [bounded recovery](#recover-a-completed-native-error)
@@ -438,9 +438,10 @@ adapter-owned structure (the root and fingerprint are sanitized):
   sessions/novel/lead_orchestrator/<definition-sha256>/workspace
 ```
 
-The provider-state directory is its sibling `provider`. A fresh Lead call is
-equivalent to this shell-free argument vector; wrapping is only for
-readability:
+The provider-state directory is its sibling `provider`. A fresh non-streaming
+or fallback Lead call is equivalent to this shell-free argument vector (interactive
+turns on capable raw terminals select `--output-format stream-json`); wrapping is
+only for readability:
 
 ```text
 cwd=/workspace/agent_states/orchestrator_state/provider_sessions/.antigravity/sessions/novel/lead_orchestrator/<definition-sha256>/workspace
@@ -465,7 +466,8 @@ CLI 1.1.27: raw text stdin was ignored in probes with an empty `--print` argumen
 `-`, or a constant print value. The response schema still requires the descriptive
 typed result even though the input uses compact runtime field names.
 
-A successful native response is exactly one UTF-8 JSON object. This sanitized
+A successful native response is exactly one UTF-8 JSON object (or in streaming mode,
+line-delimited stream-json events ending in one terminal `result` object). This sanitized
 shape is deliberately non-executable: `json_schema` stands for the complete
 object supplied on argv, whose canonical bytes must match exactly.
 

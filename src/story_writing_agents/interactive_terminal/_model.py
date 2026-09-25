@@ -92,6 +92,8 @@ class KeyKind(StrEnum):
     END = "end"
     UP = "up"
     DOWN = "down"
+    PAGE_UP = "page_up"
+    PAGE_DOWN = "page_down"
     SHIFT_UP = "shift_up"
     SHIFT_DOWN = "shift_down"
     TAB = "tab"
@@ -874,6 +876,81 @@ class PickerViewport:
             if not self.start <= highlighted_index < self.stop:
                 raise ValueError("viewport must contain the highlighted choice")
 
+
+@dataclass(frozen=True, slots=True)
+class NestedScrollViewport:
+    """Bounded, immutable projection of a single scrollable agent buffer."""
+
+    view_id: str
+    title: str
+    total_lines: int
+    start_line: int
+    visible_lines: tuple[str, ...]
+    visible_height: int
+    is_focused: bool
+    state: ViewState = ViewState.IDLE
+    auto_scroll: bool = True
+    buffer_lines: tuple[str, ...] = ()
+    h_offset: int = 0
+
+    def __post_init__(self) -> None:
+        """Validate bounded scroll viewport geometry."""
+        if type(self.view_id) is not str or not self.view_id:
+            raise ValueError("view_id must be nonempty text")
+        if type(self.title) is not str or not self.title:
+            raise ValueError("title must be nonempty text")
+        if type(self.total_lines) is not int or self.total_lines < 0:
+            raise ValueError("total_lines must be a non-negative integer")
+        if type(self.start_line) is not int or (self.start_line < 1 and self.total_lines > 0):
+            raise ValueError("start_line must be at least 1")
+        if type(self.visible_height) is not int or self.visible_height <= 0:
+            raise ValueError("visible_height must be a positive integer")
+        if type(self.visible_lines) is not tuple or any(
+            type(line) is not str for line in self.visible_lines
+        ):
+            raise TypeError("visible_lines must be a tuple of strings")
+        if len(self.visible_lines) > self.visible_height:
+            raise ValueError("visible_lines cannot exceed visible_height")
+        if not isinstance(self.state, ViewState):
+            raise TypeError("state must be a ViewState")
+        if type(self.is_focused) is not bool:
+            raise TypeError("is_focused must be a boolean")
+        if type(self.auto_scroll) is not bool:
+            raise TypeError("auto_scroll must be a boolean")
+        if type(self.buffer_lines) is not tuple or any(
+            type(line) is not str for line in self.buffer_lines
+        ):
+            raise TypeError("buffer_lines must be a tuple of strings")
+        if type(self.h_offset) is not int or self.h_offset < 0:
+            raise ValueError("h_offset must be a non-negative integer")
+
+
+@dataclass(frozen=True, slots=True)
+class MultiAgentScrollState:
+    """State managing multiple nested agent viewports and active focus."""
+
+    views: tuple[NestedScrollViewport, ...]
+    focused_index: int = 0
+    collapsed: bool = False
+
+    def __post_init__(self) -> None:
+        """Validate multi-agent viewports collection."""
+        if type(self.views) is not tuple or any(
+            type(v) is not NestedScrollViewport for v in self.views
+        ):
+            raise TypeError("views must be a tuple of NestedScrollViewport")
+        if type(self.focused_index) is not int or self.focused_index < 0:
+            raise ValueError("focused_index must be a non-negative integer")
+        if type(self.collapsed) is not bool:
+            raise TypeError("collapsed must be a boolean")
+
+    @property
+    def focused_view(self) -> NestedScrollViewport | None:
+        if not self.views:
+            return None
+        return self.views[self.focused_index % len(self.views)]
+
+
 @dataclass(frozen=True, slots=True)
 class InputPromptView:
     """Order semantic input context before one focused active prompt."""
@@ -942,11 +1019,12 @@ Component: TypeAlias = (
 
 @dataclass(frozen=True, slots=True)
 class RenderedFrame:
-    """Pure rendered text plus width and visible-line accounting."""
+    """Pure rendered text plus width and visible-line accounting, with optional horizontal offset for scrolling."""
 
     text: str
     width: int
     line_count: int
+    h_offset: int = 0
 
     def __post_init__(self) -> None:
         if type(self.text) is not str:

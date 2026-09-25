@@ -35,6 +35,8 @@ from ._core import (  # noqa: F401
     MainInputHistoryState,
     Message,
     MessagePresentation,
+    MultiAgentScrollState,
+    NestedScrollViewport,
     Notice,
     Panel,
     Picker,
@@ -66,12 +68,17 @@ from ._core import (  # noqa: F401
     project_composition_suggestions,
     project_slash_suggestions,
     read_main_command_line,
+    render_nested_scroll_view,
     sanitize_terminal_text,
     transition_line_input,
     transition_main_input,
     transition_main_command_input,
+    transition_nested_scroll,
 )
-from ._advisory_progress import AdvisoryProgressRequest  # noqa: F401
+from ._advisory_progress import (  # noqa: F401
+    AdvisoryProgressRequest,
+    active_advisory_stream_sink,
+)
 
 
 _PUBLIC_TYPES = (

@@ -39,6 +39,7 @@ from ..conversations import (
     CollaborationStepState,
     CollaborationStepStatePayload,
     CollaborationTerminalOutcomePayload,
+    CollaborationNextAction,
     LeadTurnResult,
     StoryCommitDecisionPayload,
     StoryCommitDecisionResult,
@@ -148,9 +149,14 @@ def project_lead_turn_result(result: LeadTurnResult) -> Panel:
 
     if type(result) is not LeadTurnResult:
         raise TypeError("result must be a LeadTurnResult")
+    role = (
+        SemanticRole.ERROR
+        if result.next_action is CollaborationNextAction.RETRY_LEAD_TURN
+        else SemanticRole.AGENT
+    )
     items: list[Section | Field | Notice | Message | Record | ListView] = [
         Field("Outcome", result.kind.value),
-        _message("Lead", result.message, role=SemanticRole.AGENT),
+        _message("Lead", result.message, role=role),
         *_reply_trace_items(result.trace),
     ]
     items.extend(
@@ -194,6 +200,23 @@ def project_lead_turn_result(result: LeadTurnResult) -> Panel:
     if result.recommendation_request is not None:
         items.extend(_payload_items(result.recommendation_request, {}, {}, {}))
     return Panel("Lead", tuple(items), state=_event_state(result))
+
+
+def project_lead_error_result(
+    error_message: str,
+    *,
+    advice: str = "Inspect /history and /exchanges before continuing.",
+) -> Panel:
+    """Project one visible error result when a lead turn fails before validation."""
+
+    if type(error_message) is not str or not error_message.strip():
+        raise ValueError("error_message must be nonempty text")
+    items = (
+        Field("Outcome", "failed"),
+        _message("Lead", error_message.strip(), role=SemanticRole.ERROR),
+        Field("Next action", advice),
+    )
+    return Panel("Lead", items, state=ViewState.ERROR)
 
 
 def project_specialist_results(
@@ -946,6 +969,8 @@ def _event_state(payload: object) -> ViewState:
     state = getattr(payload, "state", None)
     if state in {CollaborationStepState.FAILED, CollaborationStepState.OUTCOME_UNKNOWN, CollaborationStepState.RECOVERY_REQUIRED}:
         return ViewState.ERROR
+    if getattr(payload, "next_action", None) is CollaborationNextAction.RETRY_LEAD_TURN:
+        return ViewState.ERROR
     if state is CollaborationStepState.INTERRUPTED or isinstance(payload, CollaborationInterruptionPayload):
         return ViewState.CANCELLED
     if state in {CollaborationStepState.COMPLETED, CollaborationStepState.CONFIRMED}:
@@ -1012,6 +1037,7 @@ __all__ = (
     "collaboration_view_context",
     "project_artifact_application_decision_result",
     "project_collaboration_event",
+    "project_lead_error_result",
     "project_lead_turn_result",
     "project_specialist_results",
     "project_story_commit_decision_result",

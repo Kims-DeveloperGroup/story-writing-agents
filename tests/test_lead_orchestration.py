@@ -2795,9 +2795,20 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                     with self.assertRaisesRegex(RuntimeError, "bind failed"):
                         await runtime.lead_turn(self.session_id, conversation, "Retain the original request.")
                 else:
-                    backend.enqueue(RuntimeError("failed before submission"))
+                    backend.enqueue(BackendProtocolError("failed before submission"))
                     result = await runtime.lead_turn(self.session_id, conversation, "Retain the original request.")
                     self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
+                    self.assertIn("failed before submission", result.message)
+
+                    # Non-protocol unexpected errors must NOT leak raw exception text into result.message
+                    unredacted_backend = _LeadBackend()
+                    unredacted_backend.enqueue(RuntimeError("/sensitive/file/path.db"))
+                    unredacted_runtime = StoryRuntime(self.workspace, unredacted_backend)
+                    unredacted_conv = self.conversation("unredacted_check")
+                    unredacted_result = await unredacted_runtime.lead_turn(self.session_id, unredacted_conv, "Request with unredacted failure.")
+                    self.assertIs(unredacted_result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
+                    self.assertNotIn("/sensitive/file/path.db", unredacted_result.message)
+                    self.assertIn("The Lead provider attempt failed without a usable result.", unredacted_result.message)
                 prefix = self.history(conversation)
                 closure = [event.payload for event in prefix if type(event.payload) is CollaborationLeadOutcomeFailurePayload]
                 self.assertEqual(len(closure), 1)

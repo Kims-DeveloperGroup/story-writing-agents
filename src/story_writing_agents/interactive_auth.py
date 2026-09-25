@@ -175,7 +175,7 @@ class InteractiveAuthCoordinator:
         async def probe() -> object:
             """Keep terminal animation responsive while the probe blocks."""
 
-            return await self._progress.run(asyncio.to_thread(operation))
+            return await self._progress.run(asyncio.to_thread(operation), keep_frame=False)
 
         with asyncio.Runner() as runner:
             return cast(_AuthProbeT, runner.run(probe()))
