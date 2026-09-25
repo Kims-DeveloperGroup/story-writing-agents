@@ -305,13 +305,18 @@ _CONTEXT_RUNTIME_FAILURE_CODES = {
 class _ContextExchangeFinalizer:
     """Adapt one capture lifecycle to the provider-neutral context protocol."""
 
-    __slots__ = ("_lifecycle",)
+    __slots__ = ("_lifecycle", "_validation_details")
 
     def __init__(
         self,
         lifecycle: AgentExchangeCaptureLifecycle | None,
     ) -> None:
         self._lifecycle = lifecycle
+        self._validation_details: tuple[str, ...] = ()
+
+    def set_validation_details(self, details: tuple[str, ...]) -> None:
+        """Retain trusted findings for this rejected response."""
+        self._validation_details = details
 
     def accepted(self) -> None:
         """Best-effort record one accepted contextual response."""
@@ -328,7 +333,9 @@ class _ContextExchangeFinalizer:
         try:
             mapped = _CONTEXT_REJECTION_CODES.get(code)
             if self._lifecycle is not None and mapped is not None:
-                self._lifecycle.rejected(mapped)
+                self._lifecycle.rejected(
+                    mapped, validation_details=self._validation_details,
+                )
         except BaseException:
             pass
 

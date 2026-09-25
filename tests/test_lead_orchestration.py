@@ -1778,7 +1778,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
         self.assertEqual(len(self.backend.calls), 1)
         self.assertTrue(result.validation_details)
-        self.assertIn("rejected by a lead outcome rule", result.validation_details[0])
+        self.assertIn("$.action.result.message: expected nonempty text", result.validation_details[0])
         reopened = compose_filesystem_conversation_storage(self.workspace).event_store
         history = reopened.read(self.session_id, conversation_id)
         submitted = tuple(

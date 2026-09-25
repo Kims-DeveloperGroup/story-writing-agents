@@ -113,7 +113,8 @@ validation diagnostics preserve rejection, repair, checkpoint, and authority dec
 ### Agent exchange capture
 
 Responsibility: model, capture, locate, and persist provider exchange records. The package
-facade is public; capture adapts provider output and storage owns workspace persistence.
+facade is public; capture adapts provider output and safe validation findings into
+terminal records, while storage owns workspace persistence.
 
 - `agent_exchanges`, `agent_exchanges.contracts`, `agent_exchanges.capture`
 - `agent_exchanges.storage`, `agent_exchange_paths`

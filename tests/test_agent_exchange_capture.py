@@ -26,6 +26,8 @@ from story_writing_agents.agent_exchanges.capture import (
     AgentExchangeTerminalCode,
     WorkspaceAgentExchangeCapture,
 )
+from story_writing_agents.backend import _ContextExchangeFinalizer
+from story_writing_agents.agent_context.service import ContextProviderTerminalCode
 from story_writing_agents.agents import ROSTER
 from story_writing_agents.provider_adapter import ProviderInvocation, ProviderResult, ProviderResponseDiagnostic, ProviderInvocationError
 from story_writing_agents.workspace import Workspace
@@ -274,14 +276,11 @@ class AgentExchangeCaptureContractTests(unittest.TestCase):
 
 class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
     def test_all_response_terminal_outcomes_are_exact_and_share_identity(self) -> None:
+        validation_detail = "$.action.result.message: expected nonempty text"
         cases = (
             ("accepted", None, "accepted", "accepted"),
-            (
-                "rejected",
-                AgentExchangeTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
-                "rejected",
-                "malformed_structured_response",
-            ),
+            ("rejected", AgentExchangeTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+             "rejected", "malformed_structured_response"),
             (
                 "rejected",
                 AgentExchangeTerminalCode.RESPONSE_CORRELATION_MISMATCH,
@@ -294,18 +293,10 @@ class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
                 "rejected",
                 "response_semantic_rejected",
             ),
-            (
-                "rejected",
-                AgentExchangeTerminalCode.ACTION_EXHAUSTED,
-                "rejected",
-                "action_exhausted",
-            ),
-            (
-                "rejected",
-                AgentExchangeTerminalCode.ANSWER_VALIDATION_FAILED,
-                "rejected",
-                "answer_validation_failed",
-            ),
+            ("rejected", AgentExchangeTerminalCode.ACTION_EXHAUSTED,
+             "rejected", "action_exhausted"),
+            ("rejected", AgentExchangeTerminalCode.ANSWER_VALIDATION_FAILED,
+             "rejected", "answer_validation_failed"),
             (
                 "post_response_runtime_failure",
                 AgentExchangeTerminalCode.THREAD_PERSISTENCE_FAILED,
@@ -331,7 +322,12 @@ class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
                 lifecycle = _begin(store)
                 lifecycle.record_response(_result())
                 method = getattr(lifecycle, method_name)
-                method() if code is None else method(code)
+                if code is AgentExchangeTerminalCode.ANSWER_VALIDATION_FAILED:
+                    finalizer = _ContextExchangeFinalizer(lifecycle)
+                    finalizer.set_validation_details((validation_detail,))
+                    finalizer.rejected(ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED)
+                else:
+                    method() if code is None else method(code)
                 self.assertEqual(
                     [record.request_type for record in store.records],
                     [
@@ -346,7 +342,10 @@ class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     _decoded(store.records)[2],
-                    {"code": expected_code, "outcome": outcome},
+                    {"code": expected_code, "outcome": outcome} | (
+                        {"validation_details": [validation_detail]}
+                        if code is AgentExchangeTerminalCode.ANSWER_VALIDATION_FAILED else {}
+                    ),
                 )
 
     def test_no_response_failures_and_cancellation_matrix_are_exact(self) -> None:

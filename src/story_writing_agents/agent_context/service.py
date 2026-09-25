@@ -5151,15 +5151,24 @@ class AgentContextService:
                     try:
                         _require_sync_none(answer_validator(action.answer, authorization))
                     except Exception:
-                        if validation_sink is not None:
+                        try:
+                            rules = (
+                                None if answer_diagnostic is None
+                                else answer_diagnostic(action.answer)
+                            )
+                        except Exception:
+                            rules = None
+                        details = domain_rule_chunks(rules)
+                        if call_finalizer is not None:
                             try:
-                                rules = (
-                                    None if answer_diagnostic is None
-                                    else answer_diagnostic(action.answer)
+                                retain_details = getattr(
+                                    call_finalizer, "set_validation_details", None,
                                 )
-                            except Exception:
-                                rules = None
-                            details = domain_rule_chunks(rules)
+                                if callable(retain_details):
+                                    retain_details(details)
+                            except BaseException:
+                                pass
+                        if validation_sink is not None:
                             _require_sync_none(validation_sink(
                                 call_id, details,
                             ))

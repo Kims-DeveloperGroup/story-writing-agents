@@ -8893,6 +8893,8 @@ class StoryRuntime:
         if type(value) is not dict:
             return (DomainValidationRule.RESULT_OBJECT_REQUIRED,)
         issues: list[DomainValidationRule] = []
+        if type(value.get("message")) is str and not value["message"].strip():
+            issues.append(DomainValidationRule.MESSAGE_REQUIRED)
         kind = value.get("kind", LeadOutcomeKind.ANSWER.value)
         has_recommendation = "recommended_action" in value
         if kind == LeadOutcomeKind.RECOMMENDATION.value and not has_recommendation:

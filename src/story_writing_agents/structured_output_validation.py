@@ -29,6 +29,7 @@ class DomainValidationRule(StrEnum):
     RECOMMENDATION_ONLY = "recommendation_only"
     OBJECTIVE_RECOMMENDATION_CONFLICT = "objective_recommendation_conflict"
     PROPOSAL_KIND_REQUIRED = "proposal_kind_required"
+    MESSAGE_REQUIRED = "message_required"
     LEAD_OUTCOME_REJECTED = "lead_outcome_rejected"
 
 
@@ -46,6 +47,9 @@ _DOMAIN_RULE_ISSUES = {
     ),
     DomainValidationRule.PROPOSAL_KIND_REQUIRED: (
         "$.action.result.proposal: proposal intent requires proposal kind"
+    ),
+    DomainValidationRule.MESSAGE_REQUIRED: (
+        "$.action.result.message: expected nonempty text"
     ),
     DomainValidationRule.LEAD_OUTCOME_REJECTED: (
         "$.action.result: rejected by a lead outcome rule"
