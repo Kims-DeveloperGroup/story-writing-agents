@@ -157,10 +157,9 @@ jobs:
             }
             const last = ledger.at(-1);
             if (last && !explicit) return note(`Round ${last.round} is ${last.status}; automatic events never start another round.`);
-            if (last?.status === 'closed') return note('Review is closed; routine events cannot reopen it.');
-            // A rerun of a successful dispatch must not advance another round or repeat a send.
-            if (last?.run_id === String(context.runId) && last.operation === operation) {
-              return note(`This operation already recorded ${last.status}; use explicit reconciliation if needed.`);
+            // Reconciliation may append newer records; a rerun must remain inert across the entire ledger.
+            if (ledger.some(row => row.run_id === String(context.runId) && row.operation === operation)) {
+              return note('This workflow run already recorded this operation; use a fresh dispatch if another operation is justified.');
             }
             const nativeHistory = reviews.some(review => isAI(review.user)) || comments.some(comment =>
               isAI(comment.user) || /@codex\s+review\b/.test(comment.body || '') ||
@@ -256,12 +255,12 @@ jobs:
               if (!last || expected !== last.round) fail('expected_round must match the existing current round.');
               if (profile !== last.profile) fail('Reconcile/close the original provider before changing selection.');
               if (operation === 'close') {
-                if (last.status !== 'completed' || pending) fail('Closure requires a completed review, no outstanding native request, and root verification.');
+                if (!['completed', 'closed'].includes(last.status) || pending) fail('Closure requires a completed review, no outstanding native request, and root verification.');
                 await assertSnapshot();
                 await write({...last, status: 'closed', closure_base_sha: pr.base.sha, closure_head_sha: pr.head.sha});
                 return;
               }
-              if (last.status === 'completed') return note('Response already reconciled; request another round only if justified, or close.');
+              if (['completed', 'closed'].includes(last.status)) return note('Response already reconciled; request another round only if justified, or close.');
               if (!['completed', 'failed', 'not_sent'].includes(input.outcome)) fail('Invalid reconciliation outcome.');
               if (pending && input.outcome !== 'completed') fail('A native review request is still outstanding; reconcile its terminal outcome first.');
               if (input.outcome === 'not_sent' && comments.some(comment => isWorkflow(comment.user) &&
@@ -273,7 +272,7 @@ jobs:
               await write({...last, ...response, status: input.outcome === 'completed' ? 'completed' : 'failed', outcome: input.outcome});
               return;
             }
-            if (last && !['completed', 'failed'].includes(last.status)) {
+            if (last && !['completed', 'failed', 'closed'].includes(last.status)) {
               fail('An outstanding/uncertain request must be reconciled before either provider is requested.');
             }
             if (pending) fail('A native AI review is already pending; do not issue another request.');

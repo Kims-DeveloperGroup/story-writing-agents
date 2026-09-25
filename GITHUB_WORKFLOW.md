@@ -118,6 +118,11 @@ update or new commit requires current verification and inspection of the changed
 not an automatic new AI round. Material uncertainty may justify an explicitly recorded next
 round. Closure does not waive any branch protection or required verification.
 
+After closure, a fresh explicit `request` resumes at the next numbered round under the
+same evidence and severity rules. A fresh `close` records updated verification of the
+current base/head without another provider request; it preserves the reviewed revision.
+Automatic events never reopen a closed review.
+
 ### Managed requester
 
 `.github/workflows/ai-review-request.yml` owns requests. It never checks out or executes PR
@@ -136,8 +141,8 @@ The workflow records reservation, UI wait, requested, uncertain, completed, fail
 closed states in bot-authored PR comments. It distinguishes request submission from actual
 review completion. One PR has at most one outstanding managed request. Rerunning a workflow
 or receiving another automatic event does not send another request. Failed/non-delivered
-attempts can be retried explicitly within the same logical round; their attempt history
-remains visible. Imported legacy history always advances into round 3 or later, including
+attempts can be retried within the same logical round only through a fresh dispatch; their
+attempt history remains visible. Imported legacy history always advances into round 3 or later, including
 failed imports. Unknown outcomes remain outstanding, not failed or passed.
 
 The `review_id` input is the numeric GitHub review ID, not an inline comment ID. For Copilot,
