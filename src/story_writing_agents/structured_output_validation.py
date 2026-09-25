@@ -1,7 +1,8 @@
-"""Content-free diagnostics for the closed provider JSON schema subset.
+"""Content-free diagnostics from trusted schemas and source-authored rules.
 
-Only paths and constraints from the trusted schema enter a diagnostic. Provider
-values, unknown member names, and parser exception messages never do.
+Only paths and constraints owned by the schema or rejecting validator enter a
+diagnostic. Provider values, unknown member names, and parser exception messages
+never do.
 """
 
 from __future__ import annotations
@@ -10,14 +11,169 @@ import json
 import math
 import re
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from enum import StrEnum
 from itertools import islice
+from typing import Callable, NoReturn, TypeVar
 
 
 _PATH_MEMBER = re.compile(r"^[A-Za-z_][A-Za-z_0-9]*$")
 _MAX_CHUNK_BYTES = 32_000
 _MAX_ISSUES = 2_048
 _OMITTED_ISSUES_NOTICE = "$: additional validation issues omitted"
+
+_Result = TypeVar("_Result")
+_Failure = TypeVar("_Failure", bound=BaseException)
+_ABSENT = object()
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationFinding:
+    """A source-authored rule and path, never an exception's arbitrary text."""
+
+    path: str
+    requirement: str
+
+
+def validation_failure(
+    failure: _Failure, path: str, requirement: str, *, value: object = _ABSENT,
+) -> _Failure:
+    """Attach a trusted rule at its rejecting validator; preserve exception type."""
+    if value is not _ABSENT:
+        requirement += f"; got {json_type(value)}"
+    failure.provider_validation_findings = (ValidationFinding(path, requirement),)
+    return failure
+
+
+def failure_findings(failure: BaseException) -> tuple[ValidationFinding, ...]:
+    """Read only typed findings, without inspecting arbitrary exception messages."""
+    try:
+        findings = getattr(failure, "provider_validation_findings", ())
+    except BaseException:
+        return ()
+    if type(findings) is tuple and all(type(item) is ValidationFinding for item in findings):
+        return findings
+    return ()
+
+
+def raise_validation(failure: BaseException) -> NoReturn:
+    """Preserve existing content-free exception-graph boundaries."""
+    try:
+        raise failure from None
+    except BaseException as rejected:
+        rejected.__cause__ = None
+        rejected.__context__ = None
+        raise
+
+
+def carry_validation(failure: _Failure, cause: BaseException) -> _Failure:
+    """Preserve source findings when an owner translates its exception."""
+    findings = failure_findings(cause)
+    if findings:
+        failure.provider_validation_findings = findings
+    return failure
+
+
+def prefix_validation(failure: _Failure, path: str) -> _Failure:
+    """Add a provider envelope to a source-owned property finding."""
+    findings = failure_findings(failure)
+    if findings:
+        failure.provider_validation_findings = tuple(
+            ValidationFinding(path + item.path[1:], item.requirement)
+            for item in findings
+        )
+    return failure
+
+
+def encoding_failure(
+    failure: _Failure, value: object, schema: Mapping[str, object],
+) -> _Failure:
+    """Locate an existing encoder rejection using only trusted property names."""
+    def rejected_text(item: object, contract: Mapping[str, object], path: str) -> Iterator[ValidationFinding]:
+        if type(item) is str:
+            try:
+                item.encode("utf-8", errors="strict")
+            except UnicodeEncodeError:
+                yield ValidationFinding(path, "expected strict UTF-8 text without unpaired surrogates")
+        elif type(item) is list:
+            child = contract.get("items")
+            if isinstance(child, Mapping):
+                for index, element in enumerate(item):
+                    yield from rejected_text(element, child, f"{path}[{index}]")
+        elif type(item) is dict:
+            properties = contract.get("properties")
+            if isinstance(properties, Mapping):
+                for name, child in properties.items():
+                    if name in item and isinstance(name, str) and isinstance(child, Mapping):
+                        yield from rejected_text(item[name], child, _path(path, name))
+        variants = contract.get("anyOf")
+        if type(variants) is list:
+            for child in variants:
+                if isinstance(child, Mapping):
+                    yield from rejected_text(item, child, path)
+
+    def unique_findings() -> Iterator[ValidationFinding]:
+        seen: set[ValidationFinding] = set()
+        for finding in rejected_text(value, schema, "$"):
+            if finding not in seen:
+                seen.add(finding)
+                yield finding
+
+    findings = tuple(islice(unique_findings(), _MAX_ISSUES + 1))
+    if findings:
+        failure.provider_validation_findings = findings
+    return failure
+
+
+def remap_validation(failure: _Failure, aliases: Mapping[str, str]) -> _Failure:
+    """Translate runtime-owned constructor names back to provider wire fields."""
+    def wire_path(path: str) -> str:
+        for source in sorted(aliases, key=len, reverse=True):
+            if path == source or path.startswith((source + ".", source + "[")):
+                return aliases[source] + path[len(source):]
+        return path
+
+    findings = failure_findings(failure)
+    if findings:
+        failure.provider_validation_findings = tuple(
+            ValidationFinding(wire_path(item.path), item.requirement)
+            for item in findings
+        )
+    return failure
+
+
+def validation_call(path: str, call: Callable[..., _Result], /, *args: object, **kwargs: object) -> _Result:
+    """Give a nested validator's findings their actual enclosing property path."""
+    try:
+        return call(*args, **kwargs)
+    except Exception as failure:
+        findings = failure_findings(failure)
+        if not findings and isinstance(failure, UnicodeError):
+            validation_failure(failure, "$", "expected strict UTF-8 text")
+            findings = failure_findings(failure)
+        if not findings and call is int:
+            validation_failure(failure, "$", "expected a decimal integer")
+            findings = failure_findings(failure)
+        if not findings and isinstance(call, type) and issubclass(call, StrEnum):
+            validation_failure(
+                failure, "$", "expected one of [" + allowed_values(tuple(item.value for item in call)) + "]",
+                value=args[0] if args else None,
+            )
+            findings = failure_findings(failure)
+        if findings:
+            failure.provider_validation_findings = tuple(
+                ValidationFinding(path + item.path[1:], item.requirement)
+                for item in findings
+            )
+        raise
+
+
+def failure_issues(failure: BaseException, *, path: str = "$") -> tuple[str, ...]:
+    """Render findings under the physical provider envelope, without payloads."""
+    return tuple(
+        f"{path}{item.path[1:]}: {item.requirement}"
+        for item in failure_findings(failure)
+    )
 
 
 class DomainValidationRule(StrEnum):
@@ -119,6 +275,15 @@ def _issue(path: str, problem: str) -> str:
     return f"{path}: {problem}"
 
 
+def allowed_values(values: Sequence[object]) -> str:
+    """Render bounded choices from the trusted contract, never supplied values."""
+    rendered = [json.dumps(item, ensure_ascii=True) for item in values[:32]]
+    choices = ", ".join(item if len(item) <= 160 else item[:157] + "..." for item in rendered)
+    if len(values) > 32:
+        choices += f", ... ({len(values) - 32} additional allowed values)"
+    return choices
+
+
 def _discriminator_schema(
     variant: object, discriminator: str,
 ) -> Mapping[str, object] | None:
@@ -169,7 +334,9 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str) -> Iterato
                 if candidates and not matches:
                     yield _issue(
                         _path(path, discriminator),
-                        f"expected an allowed string value, got {json_type(supplied)}",
+                        "expected one of [" + allowed_values(tuple(dict.fromkeys(
+                            item for candidate in candidates for item in candidate["enum"]
+                        ))) + f"], got {json_type(supplied)}",
                     )
                     properties = [
                         variant.get("properties")
@@ -247,7 +414,15 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str) -> Iterato
                     and _OMITTED_ISSUES_NOTICE not in shared):
                     yield _OMITTED_ISSUES_NOTICE
                 return
-            yield _issue(path, "does not match any allowed schema variant")
+            if not any(findings for findings, _overflow in closest):
+                yield _issue(path, "expected one unambiguous schema alternative")
+            for index, (findings, _overflow) in enumerate(closest, 1):
+                for finding in findings:
+                    finding_path, separator, requirement = finding.partition(": ")
+                    yield _issue(
+                        finding_path if separator else path,
+                        f"allowed alternative {index} requires {requirement if separator else finding}",
+                    )
             if any(overflow for _findings, overflow in closest):
                 yield _OMITTED_ISSUES_NOTICE
             return
@@ -274,7 +449,7 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str) -> Iterato
         enum_types = tuple(dict.fromkeys(json_type(item) for item in allowed))
         expected_type = " or ".join(enum_types) if enum_types else "JSON"
         yield _issue(
-            path, f"expected an allowed {expected_type} value, got {json_type(value)}",
+            path, f"expected one of [{allowed_values(allowed)}] ({expected_type}), got {json_type(value)}",
         )
     if type(value) is dict:
         properties = schema.get("properties")

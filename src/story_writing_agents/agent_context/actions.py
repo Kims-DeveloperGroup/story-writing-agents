@@ -6,6 +6,10 @@ import hashlib
 import json
 import re
 import unicodedata
+from ..structured_output_validation import (
+    validation_failure,
+    validation_call,
+)
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -229,7 +233,11 @@ def _strict_text(value: object, *, allow_empty: bool = False) -> str:
     """Return strict UTF-8 text without leaking an encoding failure."""
 
     if type(value) is not str or (not value and not allow_empty):
-        raise _invalid()
+        raise validation_failure(
+            _invalid(),
+            '$',
+            'expected text' if allow_empty else 'expected nonempty text',
+        )
     assert isinstance(value, str)
     valid = True
     try:
@@ -237,7 +245,7 @@ def _strict_text(value: object, *, allow_empty: bool = False) -> str:
     except UnicodeEncodeError:
         valid = False
     if not valid or "\x00" in value:
-        raise _invalid()
+        raise validation_failure(_invalid(), '$', 'expected strict UTF-8 text without NUL')
     return value
 
 
@@ -245,13 +253,13 @@ def _artifact_directory_prefix(value: object) -> str:
     """Validate one canonical writing-artifact directory prefix."""
 
     if type(value) is not str or not value:
-        raise _invalid()
+        raise validation_failure(_invalid(), '$', 'expected nonempty directory-prefix text')
     assert isinstance(value, str)
     prefix = value
     try:
         encoded = prefix.encode("utf-8", errors="strict")
     except UnicodeEncodeError:
-        raise _invalid() from None
+        raise validation_failure(_invalid(), '$', 'expected strict UTF-8 text') from None
     if (
         len(encoded) > _MAX_ARTIFACT_PREFIX_UTF8_BYTES
         or not prefix.endswith("/")
@@ -259,7 +267,11 @@ def _artifact_directory_prefix(value: object) -> str:
         or "\\" in prefix
         or "//" in prefix
     ):
-        raise _invalid()
+        raise validation_failure(
+            _invalid(),
+            '$',
+            f'expected at most {_MAX_ARTIFACT_PREFIX_UTF8_BYTES} UTF-8 bytes, a relative POSIX prefix ending in /, and no backslashes or doubled /',
+        )
     body = prefix[:-1]
     parts = body.split("/")
     if (
@@ -273,7 +285,14 @@ def _artifact_directory_prefix(value: object) -> str:
         or parts[0] not in {"core_documents", "manuscript"}
         or (parts[0] == "core_documents" and len(parts) != 1)
     ):
-        raise _invalid()
+        raise validation_failure(
+            _invalid(),
+            '$',
+            (
+                'expected core_documents/ or a manuscript/ directory prefix without dot segments, '
+                'control characters, or }'
+            ),
+        )
     return prefix
 
 
@@ -389,32 +408,69 @@ class ContextSearchQuery:
     artifact_path_prefix: str | None = None
 
     def __post_init__(self) -> None:
-        text = _strict_text(self.text)
+        text = validation_call('$.text', _strict_text, self.text)
         if len(text) > CONTEXT_ACTION_POLICY.max_query_characters:
-            raise _invalid()
+            raise validation_failure(
+                _invalid(),
+                '$.text',
+                f'expected at most {CONTEXT_ACTION_POLICY.max_query_characters} characters',
+            )
         if any(unicodedata.category(character).startswith("C") for character in text):
-            raise _invalid()
+            raise validation_failure(
+                _invalid(),
+                '$.text',
+                (
+                    'expected text without Unicode control, format, surrogate, private-use, or '
+                    'unassigned characters'
+                ),
+            )
         normalized = unicodedata.normalize("NFKC", text).casefold()
         normalized = " ".join(normalized.split())
         if not normalized or len(normalized) > (
             CONTEXT_ACTION_POLICY.max_query_characters
         ):
-            raise _invalid()
+            raise validation_failure(
+                _invalid(),
+                '$.text',
+                f'expected nonempty text after NFKC normalization and whitespace folding, at most {CONTEXT_ACTION_POLICY.max_query_characters} characters',
+            )
         if type(self.source_kinds) is not tuple or not self.source_kinds:
-            raise _invalid()
+            raise validation_failure(
+                _invalid(),
+                '$.source_kinds',
+                'expected a nonempty array of source kinds',
+            )
         if any(type(kind) is not ContextSourceKind for kind in self.source_kinds):
-            raise _invalid()
+            raise validation_failure(
+                _invalid(),
+                '$.source_kinds',
+                (
+                    'expected source kinds writing_artifact, conversation, active_debate, or '
+                    'own_agent_state'
+                ),
+            )
         canonical = tuple(
             kind for kind in _SEARCHABLE_SOURCE_KIND_ORDER if kind in self.source_kinds
         )
         if canonical != self.source_kinds or len(set(self.source_kinds)) != len(
             self.source_kinds
         ):
-            raise _invalid()
+            raise validation_failure(
+                _invalid(),
+                '$.source_kinds',
+                (
+                    'source_kinds must be unique and in writing_artifact, conversation, '
+                    'active_debate, own_agent_state order'
+                ),
+            )
         if self.artifact_path_prefix is not None:
             if self.source_kinds != (ContextSourceKind.WRITING_ARTIFACT,):
-                raise _invalid()
-            _artifact_directory_prefix(self.artifact_path_prefix)
+                raise validation_failure(
+                    _invalid(),
+                    '$.path_prefix',
+                    'path_prefix requires source_kinds to contain only writing_artifact',
+                )
+            validation_call('$.path_prefix', _artifact_directory_prefix, self.artifact_path_prefix)
 
     @property
     def normalized_text(self) -> str:
@@ -477,7 +533,11 @@ class ContextSourceHandle:
 
     def __post_init__(self) -> None:
         if type(self.value) is not str or _HANDLE_PATTERN.fullmatch(self.value) is None:
-            raise _invalid()
+            raise validation_failure(
+                _invalid(),
+                '$',
+                'expected a source handle issued by the current context search',
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -489,17 +549,25 @@ class ContextSearchAction:
 
     def __post_init__(self) -> None:
         if type(self.correlation) is not ContextActionCorrelation:
-            raise _invalid()
+            raise validation_failure(_invalid(), '$', 'action correlation must match the current request')
         if (
             type(self.queries) is not tuple
             or not self.queries
             or len(self.queries) > CONTEXT_ACTION_POLICY.max_queries_per_search
             or any(type(query) is not ContextSearchQuery for query in self.queries)
         ):
-            raise _invalid()
+            raise validation_failure(
+                _invalid(),
+                '$.queries',
+                f'expected 1 to {CONTEXT_ACTION_POLICY.max_queries_per_search} query objects',
+            )
         prefixes = {query.artifact_path_prefix for query in self.queries}
         if len(prefixes) != 1:
-            raise _invalid()
+            raise validation_failure(
+                _invalid(),
+                '$.queries',
+                'all queries in one search must use the same path_prefix',
+            )
         normalized = tuple(
             (
                 query.normalized_text,
@@ -509,7 +577,14 @@ class ContextSearchAction:
             for query in self.queries
         )
         if len(set(normalized)) != len(normalized):
-            raise _invalid()
+            raise validation_failure(
+                _invalid(),
+                '$.queries',
+                (
+                    'queries must be unique after text normalization, source_kinds, and path_prefix '
+                    'are considered together'
+                ),
+            )
 
     @property
     def kind(self) -> ContextActionKind:
@@ -525,7 +600,7 @@ class ContextReadAction:
 
     def __post_init__(self) -> None:
         if type(self.correlation) is not ContextActionCorrelation:
-            raise _invalid()
+            raise validation_failure(_invalid(), '$', 'action correlation must match the current request')
         if (
             type(self.handles) is not tuple
             or not self.handles
@@ -533,7 +608,11 @@ class ContextReadAction:
             or any(type(handle) is not ContextSourceHandle for handle in self.handles)
             or len({handle.value for handle in self.handles}) != len(self.handles)
         ):
-            raise _invalid()
+            raise validation_failure(
+                _invalid(),
+                '$.handles',
+                f'expected 1 to {CONTEXT_ACTION_POLICY.max_handles_per_read} unique source handles',
+            )
 
     @property
     def kind(self) -> ContextActionKind:
@@ -550,8 +629,8 @@ class ContextAnswerAction:
 
     def __post_init__(self) -> None:
         if type(self.correlation) is not ContextActionCorrelation:
-            raise _invalid()
-        _strict_text(self.answer)
+            raise validation_failure(_invalid(), '$', 'action correlation must match the current request')
+        validation_call('$.result', _strict_text, self.answer)
         if (
             type(self.used_handles) is not tuple
             or any(
@@ -561,7 +640,11 @@ class ContextAnswerAction:
             != len(self.used_handles)
             or len(self.used_handles) > CONTEXT_ACTION_POLICY.max_cumulative_handles
         ):
-            raise _invalid()
+            raise validation_failure(
+                _invalid(),
+                '$',
+                f'answer evidence must use at most {CONTEXT_ACTION_POLICY.max_cumulative_handles} unique completed read handles',
+            )
 
     @property
     def kind(self) -> ContextActionKind:

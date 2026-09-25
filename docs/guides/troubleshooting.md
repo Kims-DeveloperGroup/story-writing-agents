@@ -284,7 +284,7 @@ prose or an assumed cause:
 | --- | --- | --- |
 | Agent exchange ends with `provider_failure` / `provider_authentication_required`. | A completed native provider response met the authentication classifier. Its private response diagnostic and the sign-in result do not grant replay. | In interactive Lead work, complete the native handoff. Trust an automatic retry only when Story's stricter pre-execution gate accepts it; otherwise follow the preserved failure state. |
 | Agent exchange ends with `provider_failure` / `provider_invocation_failed` and has no valid provider result. | No exact valid `ProviderResult` crossed the adapter boundary. The fixed code covers such causes as provider rejection of a request/output schema, configuration, transport, and nonzero provider exit; it does not expose the underlying diagnostic or prove whether external work occurred. | Check `/auth`, the selected backend/model/effort, executable and timeout, then inspect the correlated content-safe runtime record and provider-native diagnostics under their own policy. Do not infer that replay is safe from this code alone. |
-| Agent exchange has a completed response and a deterministic `rejected` outcome. | The provider returned malformed or semantically invalid structure. A Lead answer validation failure also records safe `validation_details` on the outcome. | Read the outcome details in `/exchanges` and the ordered `validation` notices in the Lead result or `/history`. Runtime requests one bounded repair. If that also fails, it emits a visible safe no-action reply and leaves the conversation open; authority-sensitive operations remain unavailable. |
+| Agent exchange has a completed response and a deterministic `rejected` outcome. | The provider returned malformed or semantically invalid structure. Schema, context-action, and domain validation failures record safe `validation_details` on the outcome when exchange capture succeeds. | Read the outcome details in `/exchanges` and the ordered `validation` notices in the Lead result or `/history`. Runtime requests one bounded repair. If that also fails, it emits a visible safe no-action reply and leaves the conversation open; authority-sensitive operations remain unavailable. |
 | Read-only Lead history exposes `retry_lead_turn` after failure, timeout, cancellation/interruption, or an exact legacy request without closure. | The attempt is eligible for durable failure closure without treating provider work as successful. | Send a new message, revise the wording, or explicitly resubmit in the same conversation, including after restart. Runtime preserves the original request and failure and closes any prior pending attempt before the fresh turn. Reading/reopening alone does not retry. |
 | History projects `outcome_unknown` and `inspect_and_resolve_outcome`, or reports `recovery_required`. | Specialist/synthesis or authoritative write outcomes may be uncertain, history may be corrupt, or failure closure could not be persisted safely. | Follow the displayed recovery action. Do not treat a diagnostic code or a new provider thread as authority to replay successful work or revive Apply/Commit. |
 
@@ -312,10 +312,11 @@ required by the selected variant is a deterministic rejection, not proof of an
 unknown outcome. Lead validation notices can identify trusted JSON property
 paths such as `$.action.result.message`, expected versus actual JSON types,
 missing fields, and applicable rules. They collect independently detectable
-issues across a response; `Original response` and `Repair response` identify
-the attempts in order. Unknown property names, raw provider values, parser
-error text, and rejected story prose are withheld. Findings can span several
-bounded notices. Older history without these optional details still reads
+schema issues across a response. Domain failures identify the first rejected
+property or relationship and its expected rule; `Original response` and
+`Repair response` identify the attempts in order. Unknown property names, raw
+provider values, parser error text, and rejected story prose are withheld.
+Findings can span several bounded notices. Older history without these optional details still reads
 normally. The notices explain rejection; they do not authorize replay.
 
 Runtime may make one bounded same-turn correction call for a deterministic

@@ -368,6 +368,11 @@ findings. These details describe schema paths, expected versus actual JSON
 types, and fixed rules without provider values or unknown member names; they
 grant no confirmation or replay authority.
 
+Domain findings name the rejected property and the required constraint or
+relationship at the first violated invariant. They come from the validator that
+rejects the reply and retain their nested property paths through decoder wrappers.
+The same findings accompany that physical call in captured exchange outcomes.
+
 Ordinary reports include every independently detectable schema finding. A
 report that exceeds the diagnostic cap keeps up to 2,048 findings in order and
 ends with the fixed `$: additional validation issues omitted` notice. Display

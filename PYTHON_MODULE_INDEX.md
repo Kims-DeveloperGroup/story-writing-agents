@@ -92,9 +92,11 @@ authentication, recovery, and diagnostic behavior behind provider-neutral contra
 and provider-neutral backends. `provider_process` owns provider subprocess execution;
 `provider_auth` owns authentication probes; `provider_error_artifacts` and `debug_log` own
 their filesystem outputs. Concrete adapters depend inward on `provider_adapter` contracts.
-`structured_output_validation` is a pure, package-internal helper for bounded,
-content-free diagnostics from completed structured replies and trusted schema; it owns no
-provider state, persistence, or authority and is not a public facade.
+`structured_output_validation` owns pure, bounded diagnostics from trusted schemas and
+source-authored domain findings. Domain validators identify the rejected property and rule;
+orchestration and adapters retain findings through exception translation and map domain
+fields to provider wire paths. This package-internal boundary owns no provider state,
+persistence, or authority and is not a public facade.
 
 ### Agent context and source budgeting
 
@@ -114,7 +116,8 @@ validation diagnostics preserve rejection, repair, checkpoint, and authority dec
 
 Responsibility: model, capture, locate, and persist provider exchange records. The package
 facade is public; capture adapts provider output and safe validation findings into
-terminal records, while storage owns workspace persistence.
+terminal records for each physical original or repair call, while storage owns workspace
+persistence. Context and direct backend finalizers attach the actual rejection findings.
 
 - `agent_exchanges`, `agent_exchanges.contracts`, `agent_exchanges.capture`
 - `agent_exchanges.storage`, `agent_exchange_paths`
@@ -262,7 +265,7 @@ live composition, reference activation, collaboration presentation, and the term
 - `interactive_terminal._viewer_controls`, `interactive_terminal._viewer_render`
 
 Presentation modules may consume public runtime/domain contracts but never own runtime state.
-Collaboration notices render ordered, bounded validation details without provider values or
+Collaboration notices render ordered, bounded validation details on readable lines without provider values or
 control authority.
 The external viewer integration is lazy. `transient_only` refuses line fallback before content is rendered; `ExternalViewUnavailableError` identifies that refusal. Borrowed plain-line hosts remain for views that allow fallback. Private model/render/control modules are not APIs.
 

@@ -67,6 +67,7 @@ from story_writing_agents.agent_context.sources import (
 from story_writing_agents.structured_output_validation import (
     bounded_chunks,
     diagnose_json_text,
+    carry_validation, diagnose_value, encoding_failure, failure_issues, validation_call, validation_failure,
 )
 
 
@@ -89,6 +90,11 @@ class StructuredOutputValidationTests(unittest.TestCase):
             "properties": {
                 "message": {"type": "string", "minLength": 1},
                 "count": {"type": "integer", "minimum": 1},
+                "maximum": {"type": "number", "maximum": 2},
+                "short": {"type": "string", "maxLength": 2},
+                "few": {"type": "array", "minItems": 1},
+                "many": {"type": "array", "maxItems": 1},
+                "mode": {"type": "string", "enum": ["draft", "review"]},
                 "items": {
                     "type": "array", "items": {"type": "string", "minLength": 1},
                 },
@@ -99,7 +105,9 @@ class StructuredOutputValidationTests(unittest.TestCase):
         }
         secret = "PRIVATE_PROVIDER_VALUE_한🙂"
         body = json.dumps({
-            "message": "", "count": 0, "items": ["", 3], secret: secret,
+            "message": "", "count": 0, "maximum": 3, "short": secret,
+            "few": [], "many": [1, 2], "mode": secret,
+            "items": ["", 3], secret: secret,
         }, ensure_ascii=False)
         issues = diagnose_json_text(body, schema)
         self.assertEqual(issues, (
@@ -107,6 +115,11 @@ class StructuredOutputValidationTests(unittest.TestCase):
             "$: contains 1 unexpected properties (names withheld)",
             "$.message: expected at least 1 characters, got 0",
             "$.count: expected at least 1, got integer",
+            "$.maximum: expected at most 2, got integer",
+            f"$.short: expected at most 2 characters, got {len(secret)}",
+            "$.few: expected at least 1 items, got 0",
+            "$.many: expected at most 1 items, got 2",
+            '$.mode: expected one of ["draft", "review"] (string), got string',
             "$.items[0]: expected at least 1 characters, got 0",
             "$.items[1]: expected string, got integer",
         ))
@@ -138,15 +151,29 @@ class StructuredOutputValidationTests(unittest.TestCase):
 
     def test_malformed_and_duplicate_json_have_value_free_diagnostics(self) -> None:
         schema = {"type": "object", "properties": {}, "additionalProperties": False}
-        self.assertEqual(
-            diagnose_json_text('{"private":"secret",', schema),
-            ("$: malformed JSON",),
-        )
-        self.assertEqual(
-            diagnose_json_text('{"private":"first","private":"second"}', schema),
-            ("$: duplicate object key",),
-        )
-        self.assertEqual(diagnose_json_text("{}", schema), ())
+        for text, expected in (("{", ("$: malformed JSON",)),
+                               ('{"private":1,"private":2}', ("$: duplicate object key",)),
+                               ("NaN", ("$: malformed JSON",)), ("{}", ())):
+            self.assertEqual(diagnose_json_text(text, schema), expected)
+        private = "PRIVATE_EXCEPTION_AND_VALUE_한🙂"
+        failure = validation_failure(ValueError(private), "$.message",
+                                     "expected nonempty text", value=private)
+        with self.assertRaises(ValueError) as caught:
+            validation_call("$.result", lambda: (_ for _ in ()).throw(failure))
+        self.assertIs(caught.exception, failure)
+        wrapper = carry_validation(TypeError(private), failure)
+        self.assertEqual(failure_issues(wrapper, path="$.action"),
+                         ("$.action.result.message: expected nonempty text; got string",))
+        self.assertNotIn(private, repr(failure_issues(wrapper)))
+        with self.assertRaises(FrozenInstanceError):
+            failure.provider_validation_findings[0].requirement = private
+        self.assertEqual(failure_issues(ValueError(private)), ())
+        failure.provider_validation_findings = (private,)
+        self.assertEqual(failure_issues(failure), ())
+        self.assertEqual(diagnose_value(float("inf"), {"type": "number"}),
+                         ("$: expected a finite number, got number",))
+        self.assertEqual(diagnose_value(True, {"type": "integer"}),
+                         ("$: expected integer, got boolean",))
 
     def test_properties_omitted_from_required_remain_optional(self) -> None:
         schema = {
@@ -177,10 +204,21 @@ class StructuredOutputValidationTests(unittest.TestCase):
         self.assertGreater(sum(len(chunk.encode()) for chunk in chunks), 32_768)
         self.assertGreater(len(chunks), 1)
         self.assertTrue(all(len(chunk.encode()) < 32_768 for chunk in chunks))
-        self.assertEqual(
-            tuple(line for chunk in chunks for line in chunk.splitlines()[1:]),
-            issues,
-        )
+        self.assertEqual(tuple(line for chunk in chunks for line in chunk.splitlines()[1:]), issues)
+        properties = {f"field_{index:04d}": {"anyOf": [{"type": "string"}] * 2}
+                      for index in range(2050)}
+        failure = encoding_failure(ValueError("PRIVATE_ERROR"),
+            {**dict.fromkeys(properties, "PRIVATE_VALUE\ud800"), "PRIVATE_KEY": "\ud800"},
+            {"type": "object", "properties": properties})
+        chunks = bounded_chunks(failure_issues(failure))
+        lines = tuple(line for chunk in chunks for line in chunk.splitlines()[1:])
+        self.assertEqual(len(lines), 2049)
+        self.assertEqual(len(set(lines)), len(lines))
+        self.assertEqual(lines[-1], "$: additional validation issues omitted")
+        self.assertEqual(lines[-2],
+            "$.field_2047: expected strict UTF-8 text without unpaired surrogates")
+        self.assertTrue(all(len(chunk.encode()) < 32_768 for chunk in chunks))
+        self.assertNotIn("PRIVATE", "\n".join(chunks))
 
 
 def _digest(body: bytes) -> str:
@@ -789,7 +827,7 @@ class CompactWireDecoderTests(unittest.TestCase):
         source_kinds: tuple[ContextSourceKind, ...] = (
             service_module._SEARCH_SOURCE_KIND_ORDER
         ),
-    ) -> None:
+    ) -> service_module.ContextExecutionError:
         with self.assertRaises(service_module.ContextExecutionError) as caught:
             self.decode(
                 action,
@@ -802,6 +840,7 @@ class CompactWireDecoderTests(unittest.TestCase):
             service_module.ContextExecutionErrorCode.MALFORMED_ACTION,
         )
         self.assertIsNone(caught.exception.__cause__)
+        return caught.exception
 
     def test_schema_is_action_only_and_runtime_correlation_is_exact(self) -> None:
         limits = [4, 2, 2, 4, 8, 8, 16, 200]
@@ -1133,72 +1172,25 @@ class CompactWireDecoderTests(unittest.TestCase):
                 ],
             )
         )
-        for action in (
-            {"kind": "search", "path_prefix": None, "queries": []},
-            {"kind": "search", "path_prefix": None, "queries": True},
-            {
-                "kind": "search",
-                "path_prefix": None,
-                "queries": [{"text": "x"}],
-            },
-            {
-                "kind": "search",
-                "path_prefix": None,
-                "queries": [{"text": "x", "source_kinds": []}],
-            },
-            {
-                "kind": "search",
-                "path_prefix": None,
-                "queries": [
-                    {
-                        "text": "x",
-                        "source_kinds": ["conversation", "conversation"],
-                    }
-                ],
-            },
-            {
-                "kind": "search",
-                "path_prefix": None,
-                "queries": [{"text": "x", "source_kinds": ["unknown"]}],
-            },
-            {
-                "kind": "search",
-                "path_prefix": None,
-                "queries": [
-                    {
-                        "text": "x",
-                        "source_kinds": ["writing_artifact"],
-                        "extra": True,
-                    }
-                ],
-            },
-            {
-                "kind": "search",
-                "path_prefix": "manuscript/part-01/chapter.md",
-                "queries": [
-                    {"text": "x", "source_kinds": ["writing_artifact"]}
-                ],
-            },
-            {
-                "kind": "search",
-                "path_prefix": "manuscript/",
-                "queries": [{"text": "x", "source_kinds": ["conversation"]}],
-            },
-            {
-                "kind": "search",
-                "path_prefix": "manuscript/",
-                "queries": [
-                    {
-                        "text": "x",
-                        "source_kinds": ["conversation", "writing_artifact"],
-                    }
-                ],
-            },
+        for path_prefix, queries, path, rule in (
+            (None, [], "queries", "expected a nonempty array; got array"),
+            (None, True, "queries", "expected a nonempty array; got boolean"),
+            (None, [{"text": "x"}], "queries[0]", "expected an object containing exactly source_kinds, text"),
+            (None, [{"text": "x", "source_kinds": []}], "queries[0].source_kinds", "expected at least one source kind"),
+            (None, [{"text": "x", "source_kinds": ["conversation", "conversation"]}], "queries[0].source_kinds", "source kinds must be unique"),
+            (None, [{"text": "x", "source_kinds": ["unknown"]}], "queries[0].source_kinds[0]", "expected one of ["),
+            (None, [{"text": "x", "source_kinds": ["writing_artifact"], "extra": True}], "queries[0]", "expected an object containing exactly source_kinds, text"),
+            ("manuscript/part-01/chapter.md", [{"text": "x", "source_kinds": ["writing_artifact"]}], "path_prefix", "relative POSIX prefix ending in /"),
+            ("manuscript/", [{"text": "x", "source_kinds": ["conversation"]}], "path_prefix", "path_prefix requires source_kinds to contain only writing_artifact"),
+            ("manuscript/", [{"text": "x", "source_kinds": ["conversation", "writing_artifact"]}], "path_prefix", "path_prefix requires source_kinds to contain only writing_artifact"),
         ):
+            action = {"kind": "search", "path_prefix": path_prefix, "queries": queries}
             with self.subTest(search_action=action):
-                self.assert_malformed(
-                    {"correlation": self.token, "action": action}
-                )
+                failure = self.assert_malformed({"action": action})
+                issues = failure_issues(failure, path="$.action")
+                self.assertEqual(len(issues), 1)
+                self.assertTrue(issues[0].startswith(f"$.action.{path}: "), issues)
+                self.assertIn(rule, issues[0])
         self.assert_malformed(
             _search_wire(self.token, [("x", ["writing_artifact"])]),
             source_kinds=(ContextSourceKind.CONVERSATION,),
@@ -1325,26 +1317,16 @@ class CompactWireDecoderTests(unittest.TestCase):
             self.assertIsNone(caught.exception.__cause__)
 
     def test_double_encoded_or_invalid_structured_results_reject(self) -> None:
-        valid = {
-            "kind": "answer",
-            "message": "Visible.",
-            "proposal": None,
-        }
-        cases = (
-            json.dumps(valid, separators=(",", ":")),
-            {"kind": "answer", "message": "Visible."},
-            {**valid, "extra": True},
-            {**valid, "kind": "unknown"},
-            [],
-            "text",
-            None,
-        )
+        valid = {"kind": "answer", "message": "Visible.", "proposal": None}
+        cases = (json.dumps(valid, separators=(",", ":")), {"kind": "answer", "message": "Visible."},
+                 {**valid, "extra": True}, {**valid, "kind": "unknown"}, [],
+                 {**valid, "message": "\ud800"}, None)
         for result in cases:
             with self.subTest(result=result):
-                self.assert_malformed(
-                    _answer_wire(self.token, result),
-                    allowed=("answer",),
-                )
+                failure = self.assert_malformed(json.dumps(_answer_wire(self.token, result)), allowed=("answer",))
+                if type(result) is dict and result.get("message") == "\ud800":
+                    self.assertEqual(failure_issues(failure, path="$.action"),
+                                     ("$.action.result.message: expected strict UTF-8 text without unpaired surrogates",))
 
 
 class HandleAndReadLifecycleTests(unittest.TestCase):

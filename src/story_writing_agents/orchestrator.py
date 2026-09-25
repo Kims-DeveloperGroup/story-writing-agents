@@ -7,6 +7,12 @@ import hashlib
 import inspect
 import json
 import uuid
+from .structured_output_validation import (
+    validation_failure,
+    validation_call,
+    carry_validation,
+    remap_validation,
+)
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, replace
@@ -39,7 +45,8 @@ from .agent_context.manifest import (
 from .agent_context.planning import ContextMaterial, MandatoryReferenceReservation
 from .agent_context.continuation import ContextContinuationTransaction
 from .structured_output_validation import (
-    DomainValidationRule, bounded_chunks, diagnose_json_text,
+    bounded_chunks,
+    diagnose_json_text,
 )
 from .conversations.session_context import SessionContextCapacityError
 from .agent_context.service import (
@@ -704,6 +711,17 @@ def _lead_synthesis_result_contract(
 
 class _DuplicateJsonKey(ValueError):
     pass
+
+
+def _provider_review_basis(input_ids: tuple[str, ...], instruction: str) -> ReviewBasis:
+    """Preserve review validation under its provider assignment field names."""
+    try:
+        return ReviewBasis(input_ids, instruction)
+    except (TypeError, ValueError) as failure:
+        raise remap_validation(failure, {
+            "$.candidate_input_ids": "$.input_ids",
+            "$.criteria": "$.instruction",
+        })
 
 
 class _LeadOutcomeValidationError(BackendProtocolError):
@@ -2243,7 +2261,13 @@ class StoryRuntime:
             or (action.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT
                 and objective.facts.target_paths != action.target_paths)
         ):
-            raise _LeadOutcomeValidationError("recommended objective scope is not an offered OPEN owner objective")
+            raise validation_failure(
+                _LeadOutcomeValidationError(
+                    'recommended objective scope is not an offered OPEN owner objective',
+                ),
+                '$.recommended_action.objective_id',
+                'recommended objective scope is not an offered OPEN owner objective',
+            )
         offered = {item.event_id: item for item in projection.offered_draft_sources}
         current = ArtifactDraftSource(source.conversation_id, source.event_id, self._recommendation_event_digest(source))
         aliases = {item.input_id: item for item in self._materialize_lead_evidence_inputs(inputs, evidence)}
@@ -2261,11 +2285,19 @@ class StoryRuntime:
             elif alias in aliases:
                 selected.append(aliases[alias])
             else:
-                raise _LeadOutcomeValidationError("recommended source alias is not runtime offered")
+                raise validation_failure(
+                    _LeadOutcomeValidationError('recommended source alias is not runtime offered'),
+                    '$.recommended_action.source_ids',
+                    'recommended source alias is not runtime offered',
+                )
         if objective is not None and not drafts:
             for draft in objective.draft_sources:
                 if offered.get(draft.event_id) != draft:
-                    raise _LeadOutcomeValidationError("objective draft lineage is no longer offered")
+                    raise validation_failure(
+                        _LeadOutcomeValidationError('objective draft lineage is no longer offered'),
+                        '$.recommended_action.source_ids',
+                        'objective draft lineage is no longer offered',
+                    )
                 drafts.append(draft)
                 selected.append(CollaborationInputRevision(
                     input_id=draft.event_id, kind=CollaborationInputKind.CONVERSATION_EVENT,
@@ -2281,32 +2313,65 @@ class StoryRuntime:
         selected_inputs = tuple(selected)
         scope = source.payload.authoring_scope
         if scope is None or scope.activity is AuthoringActivity.WORKFLOW:
-            raise _LeadOutcomeValidationError("recommended preparation requires substantive authoring scope")
+            raise validation_failure(
+                _LeadOutcomeValidationError(
+                    'recommended preparation requires substantive authoring scope',
+                ),
+                '$.authoring_scope.activity',
+                'recommended preparation requires substantive authoring scope',
+            )
         if previous is not None and previous.authoring_scope is None:
-            raise _LeadOutcomeValidationError("legacy recommendation requires fresh scoped planning")
+            raise validation_failure(
+                _LeadOutcomeValidationError('legacy recommendation requires fresh scoped planning'),
+                '$.authoring_scope',
+                'legacy recommendation requires fresh scoped planning',
+            )
         scope = replace(scope, target_paths=tuple(dict.fromkeys((*scope.target_paths, *action.target_paths))))
         scope = self._resolve_authoring_scope(
             scope, selected_inputs, evidence,
             None if previous is None else previous.authoring_scope,
         )
         if previous is not None and scope.task_id != previous.authoring_scope.task_id:
-            raise _LeadOutcomeValidationError("recommendation revision cannot replace its authoring task")
+            raise validation_failure(
+                _LeadOutcomeValidationError('recommendation revision cannot replace its authoring task'),
+                '$.authoring_scope.task',
+                'recommendation revision cannot replace its authoring task',
+            )
         by_id = {event.event_id: event for event in events}
         for draft in drafts:
             selected_event = source if draft.event_id == source.event_id else by_id.get(draft.event_id)
             selected_scope = None if selected_event is None else getattr(selected_event.payload, "authoring_scope", None)
             if (selected_scope is not None and selected_scope.activity is not AuthoringActivity.WORKFLOW
                 and selected_scope.task_id != scope.task_id):
-                raise _LeadOutcomeValidationError("recommendation draft sources require their existing authoring task")
+                raise validation_failure(
+                    _LeadOutcomeValidationError(
+                        'recommendation draft sources require their existing authoring task',
+                    ),
+                    '$.recommended_action',
+                    'recommendation draft sources require their existing authoring task',
+                )
         if action.kind is LeadRecommendationActionKind.PREPARE_CONSULTATION:
             try:
                 validate_specialist_routing(scope, action.specialist_ids)
-            except (TypeError, ValueError):
-                raise _LeadOutcomeValidationError("recommended route omits required specialists") from None
+            except (TypeError, ValueError) as validation_cause:
+                raise carry_validation(
+                    validation_failure(
+                        _LeadOutcomeValidationError('recommended route omits required specialists'),
+                        '$.recommended_action.specialist_ids',
+                        'recommended route omits required specialists',
+                    ),
+                    validation_cause,
+                ) from None
         remaining = COLLABORATION_PHYSICAL_CALL_LIMIT - projection.physical_calls_spent
         mandatory = 1
         if remaining < mandatory:
-            raise _LeadOutcomeValidationError("recommended preparation cannot fit its source-lineage budget")
+            raise validation_failure(
+                _LeadOutcomeValidationError(
+                    'recommended preparation cannot fit its source-lineage budget',
+                ),
+                '$.recommended_action.source_ids',
+                'recommended preparation cannot fit its source-lineage budget',
+            )
         request_event_id = self._new_id("e")
         source_proposal = None
         source_attempt = None
@@ -4480,7 +4545,11 @@ class StoryRuntime:
             message = value["message"]
             evidence = proposal.basis.evidence
             if type(message) is not str or type(evidence) is not CollaborationLeadEvidence:
-                raise ValueError
+                raise validation_failure(
+                    ValueError(),
+                    '$.message',
+                    'expected text and current collaboration evidence',
+                )
             unresolved = cls._required_unresolved_input_ids(replies)
             collaboration = CollaborationLeadSynthesisPayload(
                 proposal_id=proposal.proposal_id,
@@ -4502,7 +4571,7 @@ class StoryRuntime:
                 consultation_proposal_revision=proposal.proposal_revision,
                 consultation_proposal_digest=proposal.proposal_digest,
                 execution_attempt_id=attempt_id,
-                decision=ArtifactReviewDecision(value["decision"]),
+                decision=validation_call('$.decision', ArtifactReviewDecision, value['decision']),
                 message=message,
                 rationale=message,
                 user_impact=_LEAD_PROPOSAL_USER_IMPACT,
@@ -4518,8 +4587,9 @@ class StoryRuntime:
             )
             return _ArtifactSynthesisResult(collaboration, artifact)
         except (KeyError, TypeError, UnicodeError, ValueError) as exc:
-            raise BackendProtocolError(
-                "lead returned a noncanonical artifact review synthesis"
+            raise carry_validation(
+                BackendProtocolError('lead returned a noncanonical artifact review synthesis'),
+                exc,
             ) from exc
 
     @staticmethod
@@ -6202,7 +6272,11 @@ class StoryRuntime:
                 type(assessment) is not str
                 or type(message) is not str
             ):
-                raise ValueError
+                raise validation_failure(
+                    ValueError(),
+                    '$.assessment',
+                    'assessment and message must both be text',
+                )
             return CollaborationSpecialistReplyPayload(
                 proposal_id=proposal.proposal_id,
                 proposal_revision=proposal.proposal_revision,
@@ -6210,14 +6284,15 @@ class StoryRuntime:
                 execution_attempt_id=attempt_id,
                 assignment_id=assignment.assignment_id,
                 dispatch_event_id=dispatch_event_id,
-                assessment=CollaborationSpecialistAssessment(assessment),
+                assessment=validation_call('$.assessment', CollaborationSpecialistAssessment, assessment),
                 message=message,
                 input_ids=assignment.input_ids,
                 mode=assignment.mode,
             )
         except (KeyError, TypeError, UnicodeError, ValueError) as exc:
-            raise BackendProtocolError(
-                "specialist returned a noncanonical assignment reply"
+            raise carry_validation(
+                BackendProtocolError('specialist returned a noncanonical assignment reply'),
+                exc,
             ) from exc
 
     @classmethod
@@ -6246,7 +6321,11 @@ class StoryRuntime:
                 or evidence.scope is not LeadOutcomeScope.STORY_SPECIFIC
                 or type(message) is not str
             ):
-                raise ValueError
+                raise validation_failure(
+                    ValueError(),
+                    '$.message',
+                    'expected text and current story-specific collaboration evidence',
+                )
             known_input_order = tuple(item.input_id for item in proposal.basis.inputs)
             unresolved = cls._required_unresolved_input_ids(replies)
             raw_intent = value.get("next_intent")
@@ -6254,23 +6333,22 @@ class StoryRuntime:
                 intent = None
             else:
                 if proposal.budget.rounds_spent != 0:
-                    raise ValueError
-                intent = cls._decode_continuation_intent(
+                    raise validation_failure(
+                        ValueError(),
+                        '$.next_intent',
+                        'allowed only before a continuation round has been spent',
+                    )
+                intent = validation_call(
+                    '$.next_intent',
+                    cls._decode_continuation_intent,
                     raw_intent,
                     authoring_scope=proposal.authoring_scope,
-                    review_candidate_ids=frozenset({
-                        *known_input_order,
-                        *(
-                            reply_event_id
-                            for reply_event_id, reply in zip(
-                                reply_event_ids,
-                                replies,
-                                strict=True,
-                            )
-                            if reply.assessment
-                            is CollaborationSpecialistAssessment.DRAFTED
-                        ),
-                    }),
+                    review_candidate_ids=frozenset(
+                                             {
+                                                 *known_input_order,
+                                                 *(reply_event_id for reply_event_id, reply in zip(reply_event_ids, replies, strict=True) if reply.assessment is CollaborationSpecialistAssessment.DRAFTED),
+                                             },
+                                         ),
                 )
                 actual_ids = {
                     input_id
@@ -6278,13 +6356,23 @@ class StoryRuntime:
                     for input_id in assignment.input_ids
                 }
                 if actual_ids != set(known_input_order) | set(reply_event_ids):
-                    raise ValueError
-            action = cls._decode_recommended_action(
-                value.get("recommended_action"),
+                    raise validation_failure(
+                        ValueError(),
+                        '$.next_intent.assignments',
+                        'input_ids must include every disclosed input and every specialist reply',
+                    )
+            action = validation_call(
+                '$.recommended_action',
+                cls._decode_recommended_action,
+                value.get('recommended_action'),
                 message=cast(str, message),
             )
             if action is not None and intent is not None:
-                raise ValueError("synthesis cannot recommend and extend a consultation together")
+                raise validation_failure(
+                    ValueError('synthesis cannot recommend and extend a consultation together'),
+                    '$.recommended_action',
+                    'cannot accompany next_intent in one synthesis',
+                )
             return _LeadSynthesisResult(CollaborationLeadSynthesisPayload(
                 proposal_id=proposal.proposal_id,
                 proposal_revision=proposal.proposal_revision,
@@ -6298,8 +6386,15 @@ class StoryRuntime:
                 authoring_scope=proposal.authoring_scope,
             ), action)
         except (KeyError, TypeError, UnicodeError, ValueError) as exc:
-            raise BackendProtocolError(
-                "lead returned a noncanonical synthesis"
+            raise carry_validation(
+                BackendProtocolError('lead returned a noncanonical synthesis'),
+                remap_validation(
+                    exc,
+                    {
+                        '$.recommended_action.purpose': '$.recommended_action.instruction',
+                        '$.recommended_action.expected_result': '$.message',
+                    },
+                ),
             ) from exc
 
     @staticmethod
@@ -6330,43 +6425,65 @@ class StoryRuntime:
         review_candidate_ids: frozenset[str],
     ) -> LeadProposalIntent:
         if type(value) is not dict or set(value) != {"assignments", "purpose"}:
-            raise ValueError
+            raise validation_failure(
+                ValueError(),
+                '$',
+                'expected an object containing exactly assignments and purpose',
+            )
         raw_assignments = value["assignments"]
         if type(raw_assignments) is not list or not raw_assignments:
-            raise ValueError
+            raise validation_failure(
+                ValueError(),
+                '$.assignments',
+                'expected a nonempty array of specialist assignments',
+            )
         assignments: list[LeadAssignmentIntent] = []
-        for item in raw_assignments:
+        for assignment_index, item in enumerate(raw_assignments):
             if (
                 type(item) is not dict
                 or set(item) != {"agent_id", "input_ids", "instruction", "mode"}
                 or type(item["input_ids"]) is not list
             ):
-                raise ValueError
+                raise validation_failure(
+                    ValueError(),
+                    f'$.assignments[{assignment_index}]',
+                    'each assignment must contain agent_id, input_ids (array), instruction, and mode',
+                )
             assignments.append(
-                LeadAssignmentIntent(
-                    agent_id=item["agent_id"],
-                    instruction=item["instruction"],
-                    input_ids=tuple(item["input_ids"]),
-                    mode=SpecialistAssignmentMode(item["mode"]),
+                validation_call(
+                    f'$.assignments[{assignment_index}]',
+                    LeadAssignmentIntent,
+                    agent_id=item['agent_id'],
+                    instruction=item['instruction'],
+                    input_ids=tuple(item['input_ids']),
+                    mode=validation_call(
+                             f'$.assignments[{assignment_index}].mode',
+                             SpecialistAssignmentMode,
+                             item['mode'],
+                         ),
                     review_basis=(
-                        ReviewBasis(
-                            tuple(
-                                input_id
-                                for input_id in item["input_ids"]
-                                if input_id in review_candidate_ids
-                            ),
-                            item["instruction"],
-                        )
-                        if item["mode"] == SpecialistAssignmentMode.REVIEW.value
-                        else None
-                    ),
+                                     validation_call(
+                                         f'$.assignments[{assignment_index}]',
+                                         _provider_review_basis,
+                                         tuple(
+                                             (input_id for input_id in item['input_ids'] if input_id in review_candidate_ids),
+                                         ),
+                                         item['instruction'],
+                                     )
+                                     if item['mode'] == SpecialistAssignmentMode.REVIEW.value
+                                     else None
+                                 ),
                 )
             )
         specialist_ids = tuple(item.agent_id for item in assignments)
         if specialist_ids != tuple(
             agent_id for agent_id in SPECIALIST_IDS if agent_id in specialist_ids
         ):
-            raise ValueError
+            raise validation_failure(
+                ValueError(),
+                '$.assignments',
+                'agent_id values must be unique and follow this order: ' + ', '.join(SPECIALIST_IDS),
+            )
         return LeadProposalIntent(
             relation=LeadProposalRelation.CONTINUE_LINEAGE,
             purpose=value["purpose"],
@@ -6380,13 +6497,13 @@ class StoryRuntime:
         keys: set[str] | tuple[frozenset[str], ...],
     ) -> dict[str, object]:
         if type(answer) is not str:
-            raise TypeError
+            raise validation_failure(TypeError(), '$', 'expected strict JSON text')
 
         def unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
             result: dict[str, object] = {}
             for key, value in pairs:
                 if key in result:
-                    raise _DuplicateJsonKey
+                    raise validation_failure(_DuplicateJsonKey(), '$', 'duplicate object key')
                 result[key] = value
             return result
 
@@ -6397,10 +6514,14 @@ class StoryRuntime:
                 parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
             )
         except (_DuplicateJsonKey, json.JSONDecodeError, ValueError) as exc:
-            raise ValueError from exc
+            raise validation_failure(ValueError(), '$', 'malformed JSON or duplicate object key') from exc
         allowed = (frozenset(keys),) if type(keys) is set else keys
         if type(value) is not dict or frozenset(value) not in allowed:
-            raise ValueError
+            raise validation_failure(
+                ValueError(),
+                '$',
+                'expected an object containing exactly one of these property sets: ' + ' or '.join(('[' + ', '.join(sorted(fields)) + ']' for fields in sorted(allowed, key=lambda fields: tuple(sorted(fields))))),
+            )
         return value
 
     def _read_lead_history(
@@ -7096,7 +7217,13 @@ class StoryRuntime:
                     decoded.objective_intent is None
                     or decoded.objective_intent.next_step is not ArtifactObjectiveNextStep.PREPARE
                 ):
-                    raise _LeadOutcomeValidationError("selected objective preparation cannot be downgraded")
+                    raise validation_failure(
+                        _LeadOutcomeValidationError(
+                            'selected objective preparation cannot be downgraded',
+                        ),
+                        '$.objective_intent.next_step',
+                        'selected objective preparation cannot be downgraded',
+                    )
                 decoded_evidence = self._durable_lead_evidence(
                     decoded,
                     authorization,
@@ -7112,18 +7239,30 @@ class StoryRuntime:
                 )
                 authoring_scope = decoded.authoring_scope
                 if authoring_scope is None:
-                    raise _LeadOutcomeValidationError(
-                        "provider Lead outcomes require explicit authoring scope"
+                    raise validation_failure(
+                        _LeadOutcomeValidationError(
+                            'provider Lead outcomes require explicit authoring scope',
+                        ),
+                        '$.authoring_scope',
+                        'provider Lead outcomes require explicit authoring scope',
                     )
                 if (authoring_scope.task_id, authoring_scope.task_revision) not in offered_tasks:
-                    raise _LeadOutcomeValidationError("authoring scope uses an unoffered task revision")
+                    raise validation_failure(
+                        _LeadOutcomeValidationError('authoring scope uses an unoffered task revision'),
+                        '$.authoring_scope.task',
+                        'authoring scope uses an unoffered task revision',
+                    )
                 selected_prior = offered_tasks[(authoring_scope.task_id, authoring_scope.task_revision)]
                 current_task_events = self._session_authoring_events(session_id)
                 if selected_prior is not None and self._authoring_tasks(current_task_events).get(
                     selected_prior.task_id
                 ) != selected_prior:
-                    raise _LeadOutcomeValidationError(
-                        "selected authoring task changed while the Lead was interpreting the request"
+                    raise validation_failure(
+                        _LeadOutcomeValidationError(
+                            'selected authoring task changed while the Lead was interpreting the request',
+                        ),
+                        '$.authoring_scope',
+                        'selected authoring task changed while the Lead was interpreting the request',
                     )
                 if selected_prior is not None:
                     authoring_scope = replace(
@@ -7143,10 +7282,22 @@ class StoryRuntime:
                 if resolved_scope.activity is not AuthoringActivity.WORKFLOW and decoded.kind not in {
                     LeadOutcomeKind.PROPOSAL, LeadOutcomeKind.QUESTION, LeadOutcomeKind.RECOMMENDATION,
                 }:
-                    raise _LeadOutcomeValidationError("substantive story work requires specialist involvement")
+                    raise validation_failure(
+                        _LeadOutcomeValidationError(
+                            'substantive story work requires specialist involvement',
+                        ),
+                        '$.kind',
+                        'substantive story work requires specialist involvement',
+                    )
                 if decoded.proposal is not None:
                     if decoded.proposal.authoring_scope != decoded.authoring_scope:
-                        raise _LeadOutcomeValidationError("proposal must disclose the same authoring scope")
+                        raise validation_failure(
+                            _LeadOutcomeValidationError(
+                                'proposal must disclose the same authoring scope',
+                            ),
+                            '$.authoring_scope',
+                            'proposal must disclose the same authoring scope',
+                        )
                     resolved_intent = replace(decoded.proposal, authoring_scope=resolved_scope)
                 else:
                     resolved_intent = None
@@ -7157,8 +7308,12 @@ class StoryRuntime:
                 if decoded.kind is LeadOutcomeKind.PROPOSAL:
                     if decoded.proposal is not None:
                         if decoded.proposal.relation is not expected_relation:
-                            raise _LeadOutcomeValidationError(
-                                "lead proposal relation does not match the runtime request"
+                            raise validation_failure(
+                                _LeadOutcomeValidationError(
+                                    'lead proposal relation does not match the runtime request',
+                                ),
+                                '$.proposal',
+                                'lead proposal relation does not match the runtime request',
                             )
                         self._validate_review_material(
                             decoded.proposal.assignments,
@@ -7176,16 +7331,24 @@ class StoryRuntime:
                         LeadProposalRelation.NEW_STEP,
                         LeadProposalRelation.REVISE_PENDING,
                     }:
-                        raise _LeadOutcomeValidationError(
-                            "artifact proposals require a fresh lead turn"
+                        raise validation_failure(
+                            _LeadOutcomeValidationError('artifact proposals require a fresh lead turn'),
+                            '$.artifact_intent.operations',
+                            'artifact proposals require a fresh lead turn',
                         )
                     else:
                         if type(decoded.artifact_intent) is not ArtifactProposalIntent:
-                            raise _LeadOutcomeValidationError(
-                                "artifact proposal intent is missing"
+                            raise validation_failure(
+                                _LeadOutcomeValidationError('artifact proposal intent is missing'),
+                                '$.artifact_intent.operations',
+                                'artifact proposal intent is missing',
                             )
                         if resolved_scope.activity is AuthoringActivity.WORKFLOW:
-                            raise _LeadOutcomeValidationError("artifact work requires substantive scope")
+                            raise validation_failure(
+                                _LeadOutcomeValidationError('artifact work requires substantive scope'),
+                                '$.authoring_scope.activity',
+                                'artifact work requires substantive scope',
+                            )
                         if resolved_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE} or (
                             selected_prior is not None and selected_prior.activity in {
                                 AuthoringActivity.DRAFT, AuthoringActivity.REVISE,
@@ -7204,10 +7367,16 @@ class StoryRuntime:
                                     authoring_scope=resolved_scope,
                                 )
                             )
-                        except (ArtifactProposalError, ValueError):
-                            raise _LeadOutcomeValidationError(
-                                "artifact intent could not form an exact review "
-                                "candidate"
+                        except (ArtifactProposalError, ValueError) as validation_cause:
+                            raise carry_validation(
+                                validation_failure(
+                                    _LeadOutcomeValidationError(
+                                        'artifact intent could not form an exact review candidate',
+                                    ),
+                                    '$.artifact_intent.operations',
+                                    'artifact intent could not form an exact review candidate',
+                                ),
+                                validation_cause,
                             ) from None
                         candidate_scope = replace(resolved_scope, domains=decoded_artifact_candidate.disclosed_review_domains)
                         if resolved_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE} or (
@@ -7258,7 +7427,6 @@ class StoryRuntime:
                     active_debate=authorities[2],
                     own_agent_state=authorities[3],
                     answer_validator=validate,
-                    answer_diagnostic=self._lead_outcome_validation_details,
                     validation_sink=provider.record_validation_details,
                     event_sink=context_event_sink,
                     progress_sink=action_progress_sink,
@@ -7372,7 +7540,6 @@ class StoryRuntime:
                         active_debate=authorities[2],
                         own_agent_state=authorities[3],
                         answer_validator=validate,
-                        answer_diagnostic=self._lead_outcome_validation_details,
                         validation_sink=provider.record_validation_details,
                         event_sink=context_event_sink,
                         progress_sink=action_progress_sink,
@@ -7813,16 +7980,29 @@ class StoryRuntime:
 
         intent = outcome.artifact_intent
         if type(intent) is not ArtifactProposalIntent:
-            raise _LeadOutcomeValidationError("artifact proposal intent is missing")
+            raise validation_failure(
+                _LeadOutcomeValidationError('artifact proposal intent is missing'),
+                '$.artifact_intent.operations',
+                'artifact proposal intent is missing',
+            )
         if type(candidate) is not ArtifactReviewCandidate:
-            raise _LeadOutcomeValidationError("artifact review candidate is missing")
+            raise validation_failure(
+                _LeadOutcomeValidationError('artifact review candidate is missing'),
+                '$.artifact_intent.operations',
+                'artifact review candidate is missing',
+            )
         snapshots = self.artifacts.capture_complete_state()
         base_state = {item.path: item.content for item in snapshots}
         try:
             project_artifact_change_set(base_state, candidate.change_set)
-        except ArtifactChangeSetError:
-            raise _LeadOutcomeValidationError(
-                "artifact review candidate base is no longer current"
+        except ArtifactChangeSetError as validation_cause:
+            raise carry_validation(
+                validation_failure(
+                    _LeadOutcomeValidationError('artifact review candidate base is no longer current'),
+                    '$.artifact_intent.operations',
+                    'artifact review candidate base is no longer current',
+                ),
+                validation_cause,
             ) from None
         candidate_input = CollaborationInputRevision(
             input_id="artifact_candidate",
@@ -8019,8 +8199,12 @@ class StoryRuntime:
             return
         if any(item.activity is not AuthoringActivity.WORKFLOW and item.task_id != scope.task_id
                for item in related_scopes):
-            raise _LeadOutcomeValidationError(
-                "objective continuation and selected drafts require their existing authoring task"
+            raise validation_failure(
+                _LeadOutcomeValidationError(
+                    'objective continuation and selected drafts require their existing authoring task',
+                ),
+                '$.objective_intent',
+                'objective continuation and selected drafts require their existing authoring task',
             )
         current_task = cls._authoring_tasks(task_events).get(scope.task_id)
         requires_drafting = any(
@@ -8051,53 +8235,109 @@ class StoryRuntime:
             or scope.task_revision != expected_revision
             or not set(expected_scope.domains).issubset(scope.domains)
             or not set(expected_scope.target_paths).issubset(scope.target_paths)):
-            raise _LeadOutcomeValidationError("preparation must retain its disclosed authoring task and scope")
+            raise validation_failure(
+                _LeadOutcomeValidationError(
+                    'preparation must retain its disclosed authoring task and scope',
+                ),
+                '$.authoring_scope',
+                'preparation must retain its disclosed authoring task and scope',
+            )
         if decision.kind is CollaborationConfirmationDecision.CONFIRM and (
             scope.target_paths != expected_scope.target_paths
             or scope.domains != expected_scope.domains
         ):
-            raise _LeadOutcomeValidationError("preparation must preserve its exact confirmed authoring scope")
+            raise validation_failure(
+                _LeadOutcomeValidationError(
+                    'preparation must preserve its exact confirmed authoring scope',
+                ),
+                '$.authoring_scope',
+                'preparation must preserve its exact confirmed authoring scope',
+            )
         if decision.kind is CollaborationConfirmationDecision.REVISE:
             if (outcome.kind is not LeadOutcomeKind.RECOMMENDATION
                 or outcome.recommended_action is None or outcome.objective_intent is not None
                 or outcome.proposal is not None or outcome.artifact_intent is not None):
-                raise _LeadOutcomeValidationError("Revise permits only fresh recommendation planning")
+                raise validation_failure(
+                    _LeadOutcomeValidationError('Revise permits only fresh recommendation planning'),
+                    '$.recommended_action',
+                    'Revise permits only fresh recommendation planning',
+                )
             return
         if outcome.kind is LeadOutcomeKind.QUESTION:
             if outcome.objective_intent is not None:
-                raise _LeadOutcomeValidationError("blocked preparation cannot change its frozen objective")
+                raise validation_failure(
+                    _LeadOutcomeValidationError(
+                        'blocked preparation cannot change its frozen objective',
+                    ),
+                    '$.objective_intent',
+                    'blocked preparation cannot change its frozen objective',
+                )
             return
         if outcome.kind is not LeadOutcomeKind.PROPOSAL or outcome.recommended_action is not None:
-            raise _LeadOutcomeValidationError("confirmed preparation requires its exact proposal or a material question")
+            raise validation_failure(
+                _LeadOutcomeValidationError(
+                    'confirmed preparation requires its exact proposal or a material question',
+                ),
+                '$.proposal.assignments',
+                'confirmed preparation requires its exact proposal or a material question',
+            )
         intent = outcome.objective_intent
         if request.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT:
             if outcome.artifact_intent is None or outcome.proposal is not None or intent is None:
-                raise _LeadOutcomeValidationError("confirmed artifact preparation requires an exact candidate objective")
+                raise validation_failure(
+                    _LeadOutcomeValidationError(
+                        'confirmed artifact preparation requires an exact candidate objective',
+                    ),
+                    '$.objective_intent',
+                    'confirmed artifact preparation requires an exact candidate objective',
+                )
             if (intent.next_step is not ArtifactObjectiveNextStep.PREPARE
                 or (request.objective_id is None and (
                     intent.action is not LeadObjectiveAction.START
                     or intent.target_paths != request.target_paths))
                 or (request.objective_id is not None and (
                     intent.action is not LeadObjectiveAction.CONTINUE or intent.objective_id != request.objective_id))):
-                raise _LeadOutcomeValidationError("confirmed artifact objective or sources changed")
+                raise validation_failure(
+                    _LeadOutcomeValidationError('confirmed artifact objective or sources changed'),
+                    '$.objective_intent',
+                    'confirmed artifact objective or sources changed',
+                )
         else:
             proposal = outcome.proposal
             if (proposal is None or outcome.artifact_intent is not None
                 or proposal.purpose != request.purpose
                 or tuple(item.agent_id for item in proposal.assignments) != request.specialist_ids):
-                raise _LeadOutcomeValidationError("confirmed consultation purpose or specialist set changed")
+                raise validation_failure(
+                    _LeadOutcomeValidationError(
+                        'confirmed consultation purpose or specialist set changed',
+                    ),
+                    '$.proposal.assignments',
+                    'confirmed consultation purpose or specialist set changed',
+                )
             expected_ids = {item.input_id for item in request.basis.inputs} | {
                 "recommendation_request", "recommendation_decision",
             }
             if {item for assignment in proposal.assignments for item in assignment.input_ids} != expected_ids:
-                raise _LeadOutcomeValidationError("confirmed consultation sources changed")
+                raise validation_failure(
+                    _LeadOutcomeValidationError('confirmed consultation sources changed'),
+                    '$.proposal.assignments',
+                    'confirmed consultation sources changed',
+                )
             if request.objective_id is None:
                 if intent is not None:
-                    raise _LeadOutcomeValidationError("consultation cannot start an unrelated objective")
+                    raise validation_failure(
+                        _LeadOutcomeValidationError('consultation cannot start an unrelated objective'),
+                        '$.objective_intent',
+                        'consultation cannot start an unrelated objective',
+                    )
             elif (intent is None or intent.action is not LeadObjectiveAction.CONTINUE
                   or intent.objective_id != request.objective_id
                   or intent.next_step is not ArtifactObjectiveNextStep.CONSULT):
-                raise _LeadOutcomeValidationError("confirmed consultation objective changed")
+                raise validation_failure(
+                    _LeadOutcomeValidationError('confirmed consultation objective changed'),
+                    '$.objective_intent',
+                    'confirmed consultation objective changed',
+                )
 
     @staticmethod
     def _resolved_objective_source_ids(
@@ -8152,13 +8392,27 @@ class StoryRuntime:
             objective is None or objective.state is not ArtifactObjectiveState.OPEN
             or objective.facts.origin_conversation_id != projection.conversation_id
         ):
-            raise _LeadOutcomeValidationError("objective ID is not an offered OPEN owner objective")
+            raise validation_failure(
+                _LeadOutcomeValidationError('objective ID is not an offered OPEN owner objective'),
+                '$.objective_intent.objective_id',
+                'objective ID is not an offered OPEN owner objective',
+            )
         offered = {item.event_id: item for item in projection.offered_draft_sources}
         if any(event_id not in offered for event_id in intent.draft_source_event_ids):
-            raise _LeadOutcomeValidationError("objective draft source is not offered by this conversation")
+            raise validation_failure(
+                _LeadOutcomeValidationError(
+                    'objective draft source is not offered by this conversation',
+                ),
+                '$.objective_intent',
+                'objective draft source is not offered by this conversation',
+            )
         if intent.next_step is ArtifactObjectiveNextStep.PREPARE:
             if candidate is None:
-                raise _LeadOutcomeValidationError("objective preparation requires an exact candidate")
+                raise validation_failure(
+                    _LeadOutcomeValidationError('objective preparation requires an exact candidate'),
+                    '$.artifact_intent.operations',
+                    'objective preparation requires an exact candidate',
+                )
             target_paths = intent.target_paths if objective is None else objective.facts.target_paths
             paths = {
                 path for operation in candidate.change_set.operations
@@ -8168,7 +8422,13 @@ class StoryRuntime:
                 )
             }
             if paths != set(target_paths):
-                raise _LeadOutcomeValidationError("objective candidate must match its complete frozen target scope")
+                raise validation_failure(
+                    _LeadOutcomeValidationError(
+                        'objective candidate must match its complete frozen target scope',
+                    ),
+                    '$.artifact_intent.operations',
+                    'objective candidate must match its complete frozen target scope',
+                )
 
     def _objective_drafts(
         self,
@@ -8207,7 +8467,11 @@ class StoryRuntime:
                     offered_draft_sources=projection.offered_draft_sources,
                 )
             elif origin is None:
-                raise _LeadOutcomeValidationError("new objective lacks its exact origin user event")
+                raise validation_failure(
+                    _LeadOutcomeValidationError('new objective lacks its exact origin user event'),
+                    '$.objective_intent',
+                    'new objective lacks its exact origin user event',
+                )
             else:
                 facts = ArtifactObjectiveFacts(
                     objective_id=self._new_id("obj"),
@@ -8281,14 +8545,14 @@ class StoryRuntime:
             if item.evidence_id.startswith("reference_")
             and item.path.startswith("core_documents/")
         )
-        return build_artifact_review_candidate(
-            candidate_id=self._deterministic_id("ac", turn_id, step_id),
+        return validation_call(
+            '$.artifact_intent',
+            build_artifact_review_candidate,
+            candidate_id=self._deterministic_id('ac', turn_id, step_id),
             candidate_revision=1,
             intent=intent,
             evidence=artifact_evidence,
-            grounding_evidence_ids=tuple(
-                item.evidence_id for item in evidence.receipts
-            ),
+            grounding_evidence_ids=tuple((item.evidence_id for item in evidence.receipts)),
             base_state=base_state,
             attached_core_paths=attached_core_paths,
         )
@@ -8335,8 +8599,12 @@ class StoryRuntime:
                         )
                     }
                 if current_statuses.get(receipt.evidence_id) != receipt:
-                    raise _LeadOutcomeValidationError(
-                        "artifact empty-core status evidence is no longer current"
+                    raise validation_failure(
+                        _LeadOutcomeValidationError(
+                            'artifact empty-core status evidence is no longer current',
+                        ),
+                        '$.artifact_intent.operations',
+                        'artifact empty-core status evidence is no longer current',
                     )
                 assert receipt.locator is not None
                 assert receipt.content_digest is not None
@@ -8361,8 +8629,10 @@ class StoryRuntime:
                 or receipt.revision_digest is None
                 or receipt.content_digest is None
             ):
-                raise _LeadOutcomeValidationError(
-                    "artifact evidence is missing runtime identity"
+                raise validation_failure(
+                    _LeadOutcomeValidationError('artifact evidence is missing runtime identity'),
+                    '$.artifact_intent.operations',
+                    'artifact evidence is missing runtime identity',
                 )
             locator = receipt.locator
             if (
@@ -8371,8 +8641,10 @@ class StoryRuntime:
             ):
                 batch = parse_artifact_references(locator)
                 if len(batch.references) != 1:
-                    raise _LeadOutcomeValidationError(
-                        "artifact reference evidence is ambiguous"
+                    raise validation_failure(
+                        _LeadOutcomeValidationError('artifact reference evidence is ambiguous'),
+                        '$.artifact_intent.operations',
+                        'artifact reference evidence is ambiguous',
                     )
                 path = batch.references[0].path
                 source_digest = receipt.revision_digest
@@ -8880,34 +9152,6 @@ class StoryRuntime:
         prepare = type(objective) is dict and objective.get("next_step") == "prepare"
         return prepare if objective_prepare_only else prepare or artifact is not None
 
-    @staticmethod
-    def _lead_outcome_validation_details(
-        answer: str,
-    ) -> tuple[DomainValidationRule, ...]:
-        """Classify known lead rules without carrying provider text."""
-
-        try:
-            value = json.loads(answer)
-        except (json.JSONDecodeError, TypeError, ValueError):
-            return (DomainValidationRule.MALFORMED_RESULT,)
-        if type(value) is not dict:
-            return (DomainValidationRule.RESULT_OBJECT_REQUIRED,)
-        issues: list[DomainValidationRule] = []
-        if type(value.get("message")) is str and not value["message"].strip():
-            issues.append(DomainValidationRule.MESSAGE_REQUIRED)
-        kind = value.get("kind", LeadOutcomeKind.ANSWER.value)
-        has_recommendation = "recommended_action" in value
-        if kind == LeadOutcomeKind.RECOMMENDATION.value and not has_recommendation:
-            issues.append(DomainValidationRule.RECOMMENDATION_REQUIRED)
-        if kind != LeadOutcomeKind.RECOMMENDATION.value and has_recommendation:
-            issues.append(DomainValidationRule.RECOMMENDATION_ONLY)
-        if has_recommendation and "objective_intent" in value:
-            issues.append(DomainValidationRule.OBJECTIVE_RECOMMENDATION_CONFLICT)
-        if kind != LeadOutcomeKind.PROPOSAL.value and (
-            "proposal" in value or "artifact_intent" in value
-        ):
-            issues.append(DomainValidationRule.PROPOSAL_KIND_REQUIRED)
-        return tuple(issues or (DomainValidationRule.LEAD_OUTCOME_REJECTED,))
 
     @staticmethod
     def _decode_lead_outcome(
@@ -8918,13 +9162,17 @@ class StoryRuntime:
         """Strictly decode the neutral JSON-object result into closed lead intent."""
 
         if type(answer) is not str:
-            raise BackendProtocolError("lead answer must be strict JSON text")
+            raise validation_failure(
+                BackendProtocolError('lead answer must be strict JSON text'),
+                '$',
+                'expected strict JSON text',
+            )
 
         def unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
             result: dict[str, object] = {}
             for key, value in pairs:
                 if key in result:
-                    raise _DuplicateJsonKey
+                    raise validation_failure(_DuplicateJsonKey(), '$', 'duplicate object key')
                 result[key] = value
             return result
 
@@ -8943,29 +9191,46 @@ class StoryRuntime:
                 frozenset({"authoring_scope", "kind", "message", "artifact_intent"}),
             }
             if type(value) is not dict or frozenset(value) not in allowed:
-                raise ValueError
+                raise validation_failure(
+                    ValueError(),
+                    '$',
+                    'expected authoring_scope and message, with only the fields permitted by kind',
+                )
             raw_scope = value.get("authoring_scope")
             if type(raw_scope) is not dict:
-                raise ValueError
-            kind = LeadOutcomeKind(value.get("kind", LeadOutcomeKind.ANSWER.value))
+                raise validation_failure(ValueError(), '$.authoring_scope', 'expected an object')
+            kind = validation_call('$.kind', LeadOutcomeKind, value.get('kind', LeadOutcomeKind.ANSWER.value))
             if (
                 frozenset(value) == frozenset({"authoring_scope", "kind", "message"})
                 and kind not in {LeadOutcomeKind.QUESTION, LeadOutcomeKind.CRITIQUE}
             ):
-                raise ValueError
+                raise validation_failure(
+                    ValueError(),
+                    '$.kind',
+                    (
+                        'an explicit kind without a proposal, objective_intent, or recommended_action'
+                        ' must be question or critique'
+                    ),
+                )
             message = value["message"]
             task_id, separator, raw_revision = cast(str, raw_scope["task"]).rpartition("@")
             if not separator:
-                raise ValueError
-            authoring_scope = authoring_scope_from_dict({
-                "schema_version": 1,
-                **{
-                    key: item for key, item in raw_scope.items() if key != "task"
+                raise validation_failure(
+                    ValueError(),
+                    '$.authoring_scope.task',
+                    'expected a task identifier followed by @ and a decimal revision',
+                )
+            authoring_scope = validation_call(
+                '$.authoring_scope',
+                authoring_scope_from_dict,
+                {
+                    'schema_version': 1,
+                    **{key: item for key, item in raw_scope.items() if key != 'task'},
+                    'task_id': task_id,
+                    'task_revision': validation_call('$.authoring_scope.task', int, raw_revision),
+                    'interpretation': message,
                 },
-                "task_id": task_id,
-                "task_revision": int(raw_revision),
-                "interpretation": message,
-            })
+            )
             scope = (
                 LeadOutcomeScope.WORKFLOW_META
                 if authoring_scope.activity is AuthoringActivity.WORKFLOW
@@ -8985,21 +9250,42 @@ class StoryRuntime:
                 if type(artifact_value) is dict
                 else None
             )
-            objective_intent = StoryRuntime._decode_objective_intent(
-                value.get("objective_intent", nested_intent),
+            objective_path = (
+                "$.objective_intent" if "objective_intent" in value
+                else "$.proposal.objective_intent" if type(proposal_value) is dict
+                else "$.artifact_intent.objective_intent"
+            )
+            objective_intent = validation_call(
+                objective_path,
+                StoryRuntime._decode_objective_intent,
+                value.get('objective_intent', nested_intent),
                 message=cast(str, message),
             )
-            recommended_action = StoryRuntime._decode_recommended_action(
-                value.get("recommended_action"),
+            recommended_action = validation_call(
+                '$.recommended_action',
+                StoryRuntime._decode_recommended_action,
+                value.get('recommended_action'),
                 message=cast(str, message),
             )
             if (kind is LeadOutcomeKind.RECOMMENDATION) is not (recommended_action is not None):
-                raise ValueError("fresh recommendations require exactly one typed action")
+                raise validation_failure(
+                    ValueError('fresh recommendations require exactly one typed action'),
+                    '$.recommended_action',
+                    'required exactly when kind is recommendation',
+                )
             if recommended_action is not None and objective_intent is not None:
-                raise ValueError("recommendation cannot transition an objective before confirmation")
+                raise validation_failure(
+                    ValueError('recommendation cannot transition an objective before confirmation'),
+                    '$.objective_intent',
+                    'cannot accompany recommended_action before its confirmation',
+                )
             if kind is not LeadOutcomeKind.PROPOSAL:
                 if proposal_value is not None or artifact_value is not None:
-                    raise ValueError
+                    raise validation_failure(
+                        ValueError(),
+                        '$.kind',
+                        'must be proposal when proposal or artifact_intent is present',
+                    )
                 return LeadProviderOutcome(
                     kind,
                     message,
@@ -9013,13 +9299,17 @@ class StoryRuntime:
                     authoring_scope=authoring_scope,
                 )
             if (proposal_value is None) is (artifact_value is None):
-                raise ValueError
+                raise validation_failure(
+                    ValueError(),
+                    '$.proposal',
+                    'kind proposal requires exactly one of proposal and artifact_intent',
+                )
             if artifact_value is not None:
-                artifact_intent = StoryRuntime._decode_artifact_intent({
-                    key: item
-                    for key, item in artifact_value.items()
-                    if key != "objective_intent"
-                })
+                artifact_intent = validation_call(
+                    '$.artifact_intent',
+                    StoryRuntime._decode_artifact_intent,
+                    {key: item for key, item in artifact_value.items() if key != 'objective_intent'},
+                )
                 return LeadProviderOutcome(
                     kind,
                     message,
@@ -9035,32 +9325,57 @@ class StoryRuntime:
                 frozenset({"assignments"}),
                 frozenset({"assignments", "objective_intent"}),
             }:
-                raise ValueError
+                raise validation_failure(
+                    ValueError(),
+                    '$.proposal',
+                    'expected an object with assignments and optional objective_intent',
+                )
             raw_assignments = proposal_value["assignments"]
             if type(raw_assignments) is not list or not raw_assignments:
-                raise ValueError
+                raise validation_failure(ValueError(), '$.proposal.assignments', 'expected a nonempty array')
             assignments: list[LeadAssignmentIntent] = []
-            for item in raw_assignments:
+            for assignment_index, item in enumerate(raw_assignments):
                 if type(item) is not dict or set(item) != {
                     "agent_id", "input_ids", "instruction", "mode",
                 }:
-                    raise ValueError
+                    raise validation_failure(
+                        ValueError(),
+                        f'$.proposal.assignments[{assignment_index}]',
+                        'each assignment must contain exactly agent_id, input_ids, instruction, and mode',
+                    )
                 if type(item["input_ids"]) is not list:
-                    raise ValueError
+                    raise validation_failure(
+                        ValueError(),
+                        f'$.proposal.assignments[{assignment_index}].input_ids',
+                        'expected an array',
+                    )
                 assignments.append(
-                    LeadAssignmentIntent(
-                        agent_id=item["agent_id"],
-                        instruction=item["instruction"],
-                        input_ids=tuple(item["input_ids"]),
-                        mode=SpecialistAssignmentMode(item["mode"]),
+                    validation_call(
+                        f'$.proposal.assignments[{assignment_index}]',
+                        LeadAssignmentIntent,
+                        agent_id=item['agent_id'],
+                        instruction=item['instruction'],
+                        input_ids=tuple(item['input_ids']),
+                        mode=validation_call(
+                                 f'$.proposal.assignments[{assignment_index}].mode',
+                                 SpecialistAssignmentMode,
+                                 item['mode'],
+                             ),
                         review_basis=(
-                            ReviewBasis(tuple(item["input_ids"]), item["instruction"])
-                            if item["mode"] == SpecialistAssignmentMode.REVIEW.value
-                            else None
-                        ),
+                                         validation_call(
+                                             f'$.proposal.assignments[{assignment_index}]',
+                                             _provider_review_basis,
+                                             tuple(item['input_ids']),
+                                             item['instruction'],
+                                         )
+                                         if item['mode'] == SpecialistAssignmentMode.REVIEW.value
+                                         else None
+                                     ),
                     )
                 )
-            proposal = LeadProposalIntent(
+            proposal = validation_call(
+                '$.proposal',
+                LeadProposalIntent,
                 relation=expected_relation,
                 purpose=cast(str, message),
                 assignments=tuple(assignments),
@@ -9086,8 +9401,22 @@ class StoryRuntime:
             UnicodeError,
             ValueError,
         ) as exc:
-            raise _LeadOutcomeValidationError(
-                "lead returned a noncanonical evidence outcome"
+            raise carry_validation(
+                _LeadOutcomeValidationError('lead returned a noncanonical evidence outcome'),
+                remap_validation(
+                    exc,
+                    {
+                        '$.authoring_scope.task_id': '$.authoring_scope.task',
+                        '$.authoring_scope.task_revision': '$.authoring_scope.task',
+                        '$.authoring_scope.interpretation': '$.message',
+                        '$.proposal.purpose': '$.message',
+                        '$.recommended_action.purpose': '$.recommended_action.instruction',
+                        '$.objective_intent.request': '$.message',
+                        '$.proposal.objective_intent.request': '$.message',
+                        '$.artifact_intent.objective_intent.request': '$.message',
+                        '$.recommended_action.expected_result': '$.message',
+                    },
+                ),
             ) from exc
 
     @staticmethod
@@ -9099,8 +9428,12 @@ class StoryRuntime:
         if value is None:
             return None
         if type(value) is not dict or type(value.get("kind")) is not str:
-            raise ValueError("recommended action must have exactly its closed fields")
-        kind = LeadRecommendationActionKind(value["kind"])
+            raise validation_failure(
+                ValueError('recommended action must have exactly its closed fields'),
+                '$',
+                'expected an object with a textual kind',
+            )
+        kind = validation_call('$.kind', LeadRecommendationActionKind, value['kind'])
         specific = (
             {"target_paths"}
             if kind is LeadRecommendationActionKind.PREPARE_ARTIFACT
@@ -9108,10 +9441,18 @@ class StoryRuntime:
         )
         fields = {"kind", "instruction", "source_ids", *specific}
         if frozenset(value) not in {frozenset(fields), frozenset((*fields, "objective_id"))}:
-            raise ValueError("recommended action must have exactly its closed fields")
+            raise validation_failure(
+                ValueError('recommended action must have exactly its closed fields'),
+                '$',
+                'expected exactly the properties required by kind and optional objective_id',
+            )
         for key in ("source_ids", *specific):
             if type(value[key]) is not list:
-                raise ValueError("recommended action collections must be arrays")
+                raise validation_failure(
+                    ValueError('recommended action collections must be arrays'),
+                    f'$.{key}',
+                    'expected an array',
+                )
         return LeadRecommendedAction(
             kind=kind,
             purpose=cast(str, value["instruction"]),
@@ -9132,42 +9473,67 @@ class StoryRuntime:
         if value is None:
             return None
         if type(value) is not dict:
-            raise ValueError("objective intent must be an exact object")
-        action = LeadObjectiveAction(value["action"])
+            raise validation_failure(
+                ValueError('objective intent must be an exact object'),
+                '$',
+                'expected an object',
+            )
+        action = validation_call('$.action', LeadObjectiveAction, value['action'])
         fields = {
             LeadObjectiveAction.START: {"action", "target_paths", "next_step"},
             LeadObjectiveAction.CONTINUE: {"action", "objective_id", "next_step"},
             LeadObjectiveAction.CANCEL: {"action", "objective_id"},
         }[action]
         if set(value) != fields:
-            raise ValueError("objective intent fields are noncanonical")
+            raise validation_failure(
+                ValueError('objective intent fields are noncanonical'),
+                '$',
+                (
+                    'fields must match action: start requires action, target_paths, next_step; '
+                    'continue requires action, objective_id, next_step; cancel requires action, '
+                    'objective_id'
+                ),
+            )
         if action is LeadObjectiveAction.CANCEL:
             return LeadObjectiveIntent(action=action, objective_id=value["objective_id"])
         if action is LeadObjectiveAction.START and type(value["target_paths"]) is not list:
-            raise ValueError("objective target paths must be a list")
+            raise validation_failure(
+                ValueError('objective target paths must be a list'),
+                '$.target_paths',
+                'expected an array',
+            )
         return LeadObjectiveIntent(
             action=action, objective_id=value.get("objective_id"),
             request=(message if action is LeadObjectiveAction.START else None),
             target_paths=tuple(value.get("target_paths", ())),
-            next_step=ArtifactObjectiveNextStep(value["next_step"]),
+            next_step=validation_call('$.next_step', ArtifactObjectiveNextStep, value['next_step']),
             draft_source_event_ids=(),
         )
 
     @staticmethod
     def _decode_artifact_intent(value: object) -> ArtifactProposalIntent:
         if type(value) is not dict or set(value) != {"operations"}:
-            raise ValueError
+            raise validation_failure(ValueError(), '$', 'expected an object containing exactly operations')
         raw_operations = value["operations"]
         if type(raw_operations) is not list:
-            raise ValueError
+            raise validation_failure(ValueError(), '$.operations', 'expected an array')
         operations: list[object] = []
-        for item in raw_operations:
+        for operation_index, item in enumerate(raw_operations):
             if type(item) is not dict or type(item.get("kind")) is not str:
-                raise ValueError
+                raise validation_failure(
+                    ValueError(),
+                    f'$.operations[{operation_index}]',
+                    'each operation must be an object with a textual kind',
+                )
             kind = item["kind"]
             if kind == "create" and set(item) == {"kind", "new_text", "suggested_path"}:
                 operations.append(
-                    ArtifactCreateIntent(item["suggested_path"], item["new_text"])
+                    validation_call(
+                        f'$.operations[{operation_index}]',
+                        ArtifactCreateIntent,
+                        item['suggested_path'],
+                        item['new_text'],
+                    )
                 )
             elif kind == "patch" and set(item) == {
                 "evidence_id",
@@ -9175,7 +9541,12 @@ class StoryRuntime:
                 "replacement_text",
             }:
                 operations.append(
-                    ArtifactPatchIntent(item["evidence_id"], item["replacement_text"])
+                    validation_call(
+                        f'$.operations[{operation_index}]',
+                        ArtifactPatchIntent,
+                        item['evidence_id'],
+                        item['replacement_text'],
+                    )
                 )
             elif kind == "replace" and set(item) == {
                 "evidence_id",
@@ -9183,7 +9554,12 @@ class StoryRuntime:
                 "new_text",
             }:
                 operations.append(
-                    ArtifactReplaceIntent(item["evidence_id"], item["new_text"])
+                    validation_call(
+                        f'$.operations[{operation_index}]',
+                        ArtifactReplaceIntent,
+                        item['evidence_id'],
+                        item['new_text'],
+                    )
                 )
             elif kind == "rename" and set(item) == {
                 "evidence_id",
@@ -9191,14 +9567,29 @@ class StoryRuntime:
                 "suggested_destination",
             }:
                 operations.append(
-                    ArtifactRenameIntent(
-                        item["evidence_id"], item["suggested_destination"]
+                    validation_call(
+                        f'$.operations[{operation_index}]',
+                        ArtifactRenameIntent,
+                        item['evidence_id'],
+                        item['suggested_destination'],
                     )
                 )
             elif kind == "delete" and set(item) == {"evidence_id", "kind"}:
-                operations.append(ArtifactDeleteIntent(item["evidence_id"]))
+                operations.append(validation_call(
+                    f'$.operations[{operation_index}]',
+                    ArtifactDeleteIntent,
+                    item['evidence_id'],
+                ))
             else:
-                raise ValueError
+                raise validation_failure(
+                    ValueError(),
+                    f'$.operations[{operation_index}]',
+                    (
+                        'operation fields must match kind: create (suggested_path, new_text), patch '
+                        '(evidence_id, replacement_text), replace (evidence_id, new_text), rename '
+                        '(evidence_id, suggested_destination), delete (evidence_id)'
+                    ),
+                )
         return ArtifactProposalIntent(
             operations=tuple(operations),
             additional_review_domains=(),
@@ -9239,8 +9630,18 @@ class StoryRuntime:
     ) -> AuthoringScope:
         if scope.activity is AuthoringActivity.WORKFLOW:
             if previous is not None and previous.activity is not AuthoringActivity.WORKFLOW:
-                raise _LeadOutcomeValidationError(
-                    "selected story task cannot become workflow-only; use a fresh status/clarification task"
+                raise validation_failure(
+                    _LeadOutcomeValidationError(
+                        (
+                            'selected story task cannot become workflow-only; use a fresh '
+                            'status/clarification task'
+                        ),
+                    ),
+                    '$.authoring_scope.activity',
+                    (
+                        'selected story task cannot become workflow-only; use a fresh '
+                        'status/clarification task'
+                    ),
                 )
             return scope
         paths = tuple(dict.fromkeys((
@@ -9364,8 +9765,12 @@ class StoryRuntime:
             if (prior.task_id, prior.task_revision) == (scope.task_id, scope.task_revision):
                 drafted.add(cast(str, event.sender.agent_id))
         if not set(required_authoring_specialists(scope)).issubset(drafted):
-            raise _LeadOutcomeValidationError(
-                "artifact authoring requires current-task drafts from every affected specialist"
+            raise validation_failure(
+                _LeadOutcomeValidationError(
+                    'artifact authoring requires current-task drafts from every affected specialist',
+                ),
+                '$.artifact_intent.operations',
+                'artifact authoring requires current-task drafts from every affected specialist',
             )
 
     def _validate_exact_candidate_reviews(
@@ -9426,16 +9831,28 @@ class StoryRuntime:
         by_id = {item.input_id: item for item in inputs}
         for assignment in assignments:
             if assignment.mode is None:
-                raise _LeadOutcomeValidationError("live assignment requires an explicit mode")
+                raise validation_failure(
+                    _LeadOutcomeValidationError('live assignment requires an explicit mode'),
+                    '$.proposal.assignments',
+                    'live assignment requires an explicit mode',
+                )
             if assignment.mode is SpecialistAssignmentMode.DRAFT:
                 continue
             basis = assignment.review_basis
             if basis is None:
-                raise _LeadOutcomeValidationError("review requires concrete candidate inputs")
+                raise validation_failure(
+                    _LeadOutcomeValidationError('review requires concrete candidate inputs'),
+                    '$.proposal.assignments',
+                    'review requires concrete candidate inputs',
+                )
             for input_id in basis.candidate_input_ids:
                 item = by_id.get(input_id)
                 if item is None or item.state is not CollaborationInputState.PRESENT:
-                    raise _LeadOutcomeValidationError("review candidate input is unavailable")
+                    raise validation_failure(
+                        _LeadOutcomeValidationError('review candidate input is unavailable'),
+                        '$.proposal.assignments',
+                        'review candidate input is unavailable',
+                    )
                 if item.kind in {CollaborationInputKind.CORE_DOCUMENT,
                                    CollaborationInputKind.MANUSCRIPT,
                                    CollaborationInputKind.WRITING_ARTIFACT}:
@@ -9443,7 +9860,11 @@ class StoryRuntime:
                     # receipt alone never becomes such an alias.
                     path = self._routing_path(item.locator)
                     if path is None:
-                        raise _LeadOutcomeValidationError("review artifact alias is invalid")
+                        raise validation_failure(
+                            _LeadOutcomeValidationError('review artifact alias is invalid'),
+                            '$.proposal.assignments',
+                            'review input_ids must resolve to a disclosed artifact candidate',
+                        )
                     snapshot = self.artifacts.read_current((path,))[0]
                     selected = self._select_current_reference_bytes(
                         snapshot.content, item.start_line, item.end_line,
@@ -9478,8 +9899,18 @@ class StoryRuntime:
                 else:
                     concrete = False
                 if not concrete:
-                    raise _LeadOutcomeValidationError(
-                        "review needs concrete nonempty draft material; brief/status/advice is insufficient"
+                    raise validation_failure(
+                        _LeadOutcomeValidationError(
+                            (
+                                'review needs concrete nonempty draft material; brief/status/advice '
+                                'is insufficient'
+                            ),
+                        ),
+                        '$.proposal.assignments',
+                        (
+                            'review needs concrete nonempty draft material; brief/status/advice is '
+                            'insufficient'
+                        ),
                     )
 
     def _build_lead_proposal(
@@ -10622,8 +11053,10 @@ class StoryRuntime:
         for reference in authorization.mandatory_references:
             input_revision = inputs_by_id.get(reference.reference_id)
             if input_revision is None:
-                raise _LeadOutcomeValidationError(
-                    "lead reference evidence is not an authoritative input"
+                raise validation_failure(
+                    _LeadOutcomeValidationError('lead reference evidence is not an authoritative input'),
+                    '$.authoring_scope',
+                    'lead reference evidence is not an authoritative input',
                 )
             available.append(
                 CollaborationEvidenceReceipt(
@@ -10703,8 +11136,10 @@ class StoryRuntime:
         available.extend(action_receipts)
         available_by_id = {item.evidence_id: item for item in available}
         if len(available_by_id) != len(available):
-            raise _LeadOutcomeValidationError(
-                "runtime evidence IDs are duplicate"
+            raise validation_failure(
+                _LeadOutcomeValidationError('runtime evidence IDs are duplicate'),
+                '$.authoring_scope',
+                'runtime evidence IDs are duplicate',
             )
         if outcome.scope is LeadOutcomeScope.WORKFLOW_META:
             selected_ids: tuple[str, ...] = ()
@@ -10752,8 +11187,10 @@ class StoryRuntime:
             elif available:
                 status = LeadEvidenceStatus.INCOMPLETE
             else:
-                raise _LeadOutcomeValidationError(
-                    "story-specific Lead outcome has no runtime evidence"
+                raise validation_failure(
+                    _LeadOutcomeValidationError('story-specific Lead outcome has no runtime evidence'),
+                    '$.authoring_scope',
+                    'story-specific Lead outcome has no runtime evidence',
                 )
         evidence = CollaborationLeadEvidence(
             scope=outcome.scope,
@@ -10763,8 +11200,13 @@ class StoryRuntime:
         try:
             CollaborationLeadJudgmentPayload(outcome.kind, outcome.message, evidence, outcome.authoring_scope)
         except (TypeError, ValueError) as exc:
-            raise _LeadOutcomeValidationError(
-                "lead outcome violates the closed evidence matrix"
+            raise carry_validation(
+                validation_failure(
+                    _LeadOutcomeValidationError('lead outcome violates the closed evidence matrix'),
+                    '$.authoring_scope',
+                    'lead outcome violates the closed evidence matrix',
+                ),
+                exc,
             ) from exc
         return evidence
 
@@ -10883,8 +11325,12 @@ class StoryRuntime:
                 or receipt.locator is None
                 or receipt.content_digest is None
             ):
-                raise _LeadOutcomeValidationError(
-                    "lead READ evidence cannot become an exact proposal input"
+                raise validation_failure(
+                    _LeadOutcomeValidationError(
+                        'lead READ evidence cannot become an exact proposal input',
+                    ),
+                    '$.proposal.assignments',
+                    'lead READ evidence cannot become an exact proposal input',
                 )
             materialized.append(
                 CollaborationInputRevision(
@@ -10926,7 +11372,11 @@ class StoryRuntime:
         inputs: tuple[CollaborationInputRevision, ...],
     ) -> None:
         if intent.authoring_scope is None:
-            raise _LeadOutcomeValidationError("live intent requires authoring scope")
+            raise validation_failure(
+                _LeadOutcomeValidationError('live intent requires authoring scope'),
+                '$.authoring_scope',
+                'live intent requires authoring scope',
+            )
         validate_specialist_routing(intent.authoring_scope, tuple(item.agent_id for item in intent.assignments),
                                     affected_paths=cls._authoring_affected_paths(inputs, None))
         specialist_ids = tuple(item.agent_id for item in intent.assignments)
@@ -10941,8 +11391,17 @@ class StoryRuntime:
         if specialist_ids != canonical or assigned != {
             item.input_id for item in inputs
         }:
-            raise _LeadOutcomeValidationError(
-                "lead proposal routing is not canonical or input-complete"
+            raise validation_failure(
+                _LeadOutcomeValidationError(
+                    (
+                        'lead proposal routing is not canonical or input-complete'
+                    ),
+                ),
+                '$.proposal.assignments',
+                (
+                    'assignments must include all required specialists in canonical order and refer '
+                    'only to disclosed input_ids'
+                ),
             )
         assignment_inputs = {
             item.agent_id: frozenset(item.input_ids) for item in intent.assignments
@@ -10956,8 +11415,12 @@ class StoryRuntime:
                 reviewer not in assignment_inputs
                 or item.input_id not in assignment_inputs[reviewer]
             ):
-                raise _LeadOutcomeValidationError(
-                    "lead proposal omits a mandatory core-document reviewer"
+                raise validation_failure(
+                    _LeadOutcomeValidationError(
+                        'lead proposal omits a mandatory core-document reviewer',
+                    ),
+                    '$.proposal.assignments',
+                    'lead proposal omits a mandatory core-document reviewer',
                 )
 
     @staticmethod

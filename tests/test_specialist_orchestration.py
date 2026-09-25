@@ -563,19 +563,12 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         invalid_values = (
-            {
-                "assessment": "supports",
-            },
-            {
-                "message": "Missing assessment.",
-            },
-            {
-                "assessment": "supports",
-                "message": "Private state claim.",
-                "private_state": "forbidden",
-            },
+            ({"assessment": "supports"}, "$.action.result.message: required property is missing"),
+            ({"message": "Missing assessment."}, "$.action.result.assessment: required property is missing"),
+            ({"assessment": "supports", "message": "Private state claim.", "private_state": "forbidden"},
+             "$.action.result: contains 1 unexpected properties (names withheld)"),
         )
-        for ordinal, value in enumerate(invalid_values, start=1):
+        for ordinal, (value, issue) in enumerate(invalid_values, start=1):
             with self.subTest(ordinal=ordinal):
                 conversation_id = self.conversation(f"Strict specialist {ordinal}")
                 proposed = await self.proposal(conversation_id)
@@ -617,6 +610,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                     ) if payload.state is CollaborationProviderCallState.SUBMITTED
                     for chunk in payload.validation_details
                 )
+                self.assertTrue(all(issue in chunk for chunk in reports))
                 self.assertTrue(any(chunk.startswith("Original response") for chunk in reports))
                 self.assertTrue(any(chunk.startswith("Repair response") for chunk in reports))
                 self.assertNotIn("private_state", repr(self.history(conversation_id)))
@@ -750,7 +744,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 )
                 self.assertTrue(expected)
                 self.assertTrue(expected[0].startswith("Original response"))
-                self.assertIn("rejected by a domain result rule", expected[0])
+                self.assertIn("$.action.result.message: expected nonempty text", expected[0])
 
                 restarted_backend = _LeadBackend()
                 restarted = StoryRuntime(
@@ -819,7 +813,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertEqual(len(expected), 3)
         domain_details = tuple(
             detail for detail in expected
-            if "rejected by a domain result rule" in detail
+            if "$.action.result.message: expected nonempty text" in detail
         )
         self.assertEqual(len(domain_details), 2)
         self.assertEqual(domain_details[0], domain_details[1])
@@ -897,7 +891,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertEqual(notices[0].validation_call_id, submitted[0].call_id)
         self.assertEqual(notices[0].validation_invocation_id,
                          submitted[0].invocation_id)
-        self.assertIn("rejected by a domain result rule",
+        self.assertIn("$.action.result.message: expected nonempty text",
                       notices[0].validation_details[0])
         self.assertNotIn(private, repr(known))
 

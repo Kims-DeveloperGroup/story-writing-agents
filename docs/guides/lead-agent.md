@@ -269,15 +269,20 @@ content.
 When structured validation rejects a provider reply, the live Lead result and
 `/history` show ordered `validation` notices. Each chunk identifies the
 `Original response` or `Repair response`; together the chunks list every
-independently detectable issue in ordinary reports using trusted JSON property
-paths, expected and actual JSON types, or a fixed rule. Reports that exceed the
-diagnostic cap list up to 2,048 findings, then say additional issues were omitted.
+independently detectable schema issue in ordinary reports using trusted JSON
+property paths, expected and actual JSON types, or a fixed rule. Reports that
+exceed the diagnostic cap list up to 2,048 findings, then say additional issues
+were omitted.
 For example, a missing
 `$.action.result.authoring_scope` is described as a missing required property;
 unexpected property names and provider values are never printed. Python
 callers can read the same ordered chunks from `LeadTurnResult.validation_details`;
 direct `AgentReply` and `ConversationReply` values also expose
-`validation_details`. A successful repair retains the original rejection
+`validation_details`. Domain validation identifies the rejected property and the
+required rule, including relationships between properties, at the first violated
+invariant. Validation notices display each diagnostic line separately. Each
+rejected physical call also records its findings in the `/exchanges` outcome when
+exchange capture succeeds. A successful repair retains the original rejection
 details. If repair fails, the safe no-action reply retains both attempts. The
 optional field is empty for replies without validation findings and absent
 from older serialized history.

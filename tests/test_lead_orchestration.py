@@ -67,8 +67,8 @@ from story_writing_agents.conversations import (
 from story_writing_agents.conversation_storage import (
     compose_filesystem_conversation_storage,
 )
-from story_writing_agents.errors import BackendProtocolError
-from story_writing_agents.structured_output_validation import diagnose_json_text
+from story_writing_agents.errors import BackendProtocolError, SessionIdError
+from story_writing_agents.structured_output_validation import diagnose_json_text, failure_issues
 from story_writing_agents.writing_artifacts.authorization import (
     ReferenceAuthorizationErrorCode,
 )
@@ -997,18 +997,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
 
         invalid_values: tuple[object, ...] = (
             {"kind": "unknown", "message": "Visible."},
-            {
-                "kind": "answer",
-                "message": "Visible.",
-                "private_reasoning": "PRIVATE",
-            },
-            {
-                "kind": "answer",
-                "message": "Visible.",
-                "proposal": {
-                    "assignments": [],
-                },
-            },
+            {"kind": "answer", "message": "Visible.", "private_reasoning": "PRIVATE"},
+            {"kind": "answer", "message": "Visible.", "proposal": {"assignments": []}},
             ["answer", "Visible."],
         )
         def invalid_response(value: object) -> _Response:
@@ -1094,7 +1084,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             json.dumps({"kind": "unknown_kind", "message": 7}), result_schema,
         )
         self.assertEqual(issues, (
-            "$.kind: expected an allowed string value, got string",
+            '$.kind: expected one of ["question", "critique", "answer", "recommendation", "proposal"], got string',
             "$.authoring_scope: required property is missing",
             "$.message: expected string, got integer",
         ))
@@ -1116,7 +1106,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             answer_variant["properties"]["result"],
         )
         self.assertEqual(issues, (
-            "$.kind: expected an allowed string value, got object",
+            '$.kind: expected one of ["question", "critique", "answer", "recommendation", "proposal"], got object',
             "$.authoring_scope: required property is missing",
             "$.message: expected string, got integer",
         ))
@@ -1437,83 +1427,19 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
     async def test_runtime_repairs_then_safely_ignores_invalid_proposals(
         self,
     ) -> None:
+        assignment = {"agent_id": PLOT_ARCHITECT, "instruction": "Review the input.",
+                      "input_ids": ["user_input"]}
         cases = (
-            (
-                "lead-specialist",
-                "Plain request.",
-                [
-                    {
-                        "agent_id": LEAD_ORCHESTRATOR,
-                        "instruction": "Invalid self assignment.",
-                        "input_ids": ["user_input"],
-                    }
-                ],
-            ),
-            (
-                "duplicate-specialist",
-                "Plain request.",
-                [
-                    {
-                        "agent_id": PLOT_ARCHITECT,
-                        "instruction": "First.",
-                        "input_ids": ["user_input"],
-                    },
-                    {
-                        "agent_id": PLOT_ARCHITECT,
-                        "instruction": "Second.",
-                        "input_ids": ["user_input"],
-                    },
-                ],
-            ),
-            (
-                "noncanonical-order",
-                "Plain request.",
-                [
-                    {
-                        "agent_id": CHARACTER_CUSTODIAN,
-                        "instruction": "Character first.",
-                        "input_ids": ["user_input"],
-                    },
-                    {
-                        "agent_id": PLOT_ARCHITECT,
-                        "instruction": "Plot second.",
-                        "input_ids": ["user_input"],
-                    },
-                ],
-            ),
-            (
-                "unknown-alias",
-                "Plain request.",
-                [
-                    {
-                        "agent_id": PLOT_ARCHITECT,
-                        "instruction": "Use an invalid alias.",
-                        "input_ids": ["unknown"],
-                    }
-                ],
-            ),
-            (
-                "omitted-user-input",
-                "Check ${core_documents/global_outline.md}",
-                [
-                    {
-                        "agent_id": PLOT_ARCHITECT,
-                        "instruction": "Review the supplied outline.",
-                        "input_ids": ["reference_1"],
-                    }
-                ],
-            ),
-            (
-                "missing-reviewer",
-                "Check ${core_documents/global_outline.md}",
-                [
-                    {
-                        "agent_id": CHARACTER_CUSTODIAN,
-                        "instruction": "Wrong mandatory reviewer.",
-                        "input_ids": ["user_input", "reference_1"],
-                    }
-                ],
-            ),
+            ("lead-specialist", "Plain request.", [{**assignment, "agent_id": LEAD_ORCHESTRATOR}]),
+            ("duplicate-specialist", "Plain request.", [dict(assignment), dict(assignment)]),
+            ("noncanonical-order", "Plain request.", [
+                {**assignment, "agent_id": CHARACTER_CUSTODIAN}, dict(assignment)]),
+            ("unknown-alias", "Plain request.", [{**assignment, "input_ids": ["unknown"]}]),
+            ("omitted-user-input", "Check ${core_documents/global_outline.md}",
+             [{**assignment, "input_ids": ["reference_1"]}]),
+            ("missing-reviewer", "Check ${core_documents/global_outline.md}",
+             [{**assignment, "agent_id": CHARACTER_CUSTODIAN,
+               "input_ids": ["user_input", "reference_1"]}]),
         )
         for label, text, assignments in cases:
             with self.subTest(label=label):
@@ -1788,13 +1714,72 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         )
         self.assertEqual(len(submitted), 1)
         self.assertEqual(submitted[0].validation_details, ())
-        notices = tuple(
-            detail for event in history
-            if type(event.payload) is CollaborationMessagePayload
-            for detail in event.payload.validation_details
-        )
+        notices = tuple(detail for event in history
+                        if type(event.payload) is CollaborationMessagePayload
+                        for detail in event.payload.validation_details)
         self.assertEqual(notices, result.validation_details)
         self.assertEqual(project_collaboration_history(history).physical_calls_spent, 1)
+        def rejected(value, path, requirement, error=BackendProtocolError):
+            with self.assertRaises(error) as caught:
+                self.runtime._decode_lead_outcome(json.dumps(value))
+            issues = failure_issues(caught.exception, path="$.action.result")
+            self.assertEqual(issues, (f"$.action.result{path}: {requirement}",))
+            self.assertNotIn("PRIVATE", repr(issues))
+        scope = _compact_scope(_live_scope(self.backend.calls[0]))
+        base = {"message": "Visible.", "authoring_scope": scope}
+        identifier = "expected identifier matching [A-Za-z0-9][A-Za-z0-9_-]{0,63}"
+        artifact_path = (
+            "expected one of core_documents/global_outline.md, core_documents/part_outlines.md, "
+            "core_documents/character_sheets.md, core_documents/narrative_rules.md, or manuscript/PART/PATH.md; "
+            "PART must match [A-Za-z0-9][A-Za-z0-9_-]{0,63}; every remaining path component must match "
+            "[A-Za-z0-9][A-Za-z0-9_.-]{0,127}, and the final component must end in lowercase .md; "
+            "paths must be normalized workspace-relative POSIX text without backslash, NUL, . or .. components, "
+            "and fit 1024 strict UTF-8 bytes"
+        )
+        for field, value, path, requirement in (
+            ("task", "PRIVATE/task@1", "task", identifier),
+            ("task", "task@PRIVATE_revision", "task", "expected a decimal integer"),
+            ("target_paths", ["PRIVATE_target.md"], "target_paths[0]", artifact_path),
+            ("domains", ["PRIVATE_domain"], "domains[0]",
+             'expected one of ["plot_structure", "character_world", "tone_execution"]; got string'),
+        ):
+            rejected({**base, "authoring_scope": {**scope, field: value}},
+                     ".authoring_scope." + path, requirement)
+        action = {"kind": "prepare_consultation", "instruction": "Review.",
+                  "source_ids": ["user_input"], "specialist_ids": [PLOT_ARCHITECT]}
+        for field, value, requirement in (
+            ("instruction", "", "expected nonempty text"),
+            ("source_ids", [], "expected at least one runtime-offered source_id"),
+            ("specialist_ids", ["PRIVATE_agent"], "expected at least one unique specialist in this order: "
+             + ", ".join((PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST))),
+        ):
+            rejected({**base, "kind": "recommendation", "recommended_action": {**action, field: value}},
+                     ".recommended_action." + field, requirement)
+        story = {**base, "kind": "proposal", "authoring_scope": {
+            **scope, "activity": "draft", "domains": ["plot_structure"],
+            "target_paths": ["core_documents/global_outline.md"]}}
+        assignment = {"agent_id": PLOT_ARCHITECT, "mode": "draft", "instruction": "Draft.",
+                      "input_ids": ["user_input"]}
+        for field, value, requirement in (
+            ("instruction", "", "expected nonempty text"),
+            ("input_ids", ["user_input", "user_input"], "expected unique array items"),
+            ("mode", "PRIVATE_mode", 'expected one of ["draft", "review"]; got string'),
+        ):
+            rejected({**story, "proposal": {"assignments": [{**assignment, field: value}]}},
+                     ".proposal.assignments[0]." + field, requirement)
+        for operation, field, requirement in (
+            ({"kind": "create", "suggested_path": "manuscript/part/chapter.md", "new_text": "\ud800"},
+             "new_text", "expected strict UTF-8 text"),
+            ({"kind": "patch", "evidence_id": "PRIVATE/id", "replacement_text": "Draft."}, "evidence_id", identifier),
+            ({"kind": "replace", "evidence_id": "reference_1", "new_text": 4}, "new_text", "expected text"),
+            ({"kind": "rename", "evidence_id": "reference_1", "suggested_destination": "PRIVATE.md"},
+             "suggested_destination", artifact_path),
+            ({"kind": "delete", "evidence_id": "PRIVATE/id"}, "evidence_id", identifier),
+        ):
+            rejected({**story, "artifact_intent": {"operations": [operation]}},
+                     ".artifact_intent.operations[0]." + field, requirement)
+        rejected({**base, "kind": "answer", "objective_intent": {"action": "cancel", "objective_id": "PRIVATE/id"}},
+                 ".objective_intent.objective_id", identifier, SessionIdError)
 
     async def test_republishing_domain_notice_is_idempotent(self) -> None:
         conversation_id = self.conversation("Idempotent domain notice")
@@ -2500,28 +2485,15 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertEqual(len(self.backend.calls), 2)
 
     async def test_untrusted_answer_diagnostic_cannot_publish_private_text(self) -> None:
-        conversation_id = self.conversation("Diagnostic callback privacy")
+        conversation_id = self.conversation("Diagnostic metadata privacy")
         private = "PRIVATE_CALLBACK_SECRET_한🙂"
-
-        def invalid(call: ContextProviderCallRequest, _provider: object) -> str:
-            return json.dumps({"action": {"kind": "answer", "result": {
-                "authoring_scope": _compact_scope(_live_scope(
-                    call, activity="review", domains=("plot_structure",),
-                )),
-                "kind": "answer",
-                "message": "A result with inconsistent objective semantics.",
-                "objective_intent": {
-                    "action": "start", "target_paths": [], "next_step": "clarify",
-                },
-            }}}, separators=(",", ":"))
-        self.backend.enqueue(invalid)
-        self.backend.enqueue(invalid)
-        with mock.patch.object(
-            StoryRuntime, "_lead_outcome_validation_details", return_value=(private,),
-        ) as diagnostic:
+        failure = BackendProtocolError(private)
+        failure.provider_validation_findings = (private,)
+        self.backend.enqueue(_visible_outcome("answer", ""))
+        self.backend.enqueue(_visible_outcome("answer", ""))
+        with mock.patch.object(StoryRuntime, "_decode_lead_outcome", side_effect=failure) as diagnostic:
             result = await self.runtime.lead_turn(
-                self.session_id, conversation_id, "Propose a review.",
-            )
+                self.session_id, conversation_id, "Propose review.")
         self.assertGreaterEqual(diagnostic.call_count, 1)
         self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
         self.assertTrue(result.validation_details)

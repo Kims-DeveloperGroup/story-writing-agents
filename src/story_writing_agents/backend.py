@@ -17,6 +17,13 @@ import tempfile
 import threading
 import time
 import uuid
+from .structured_output_validation import (
+    validation_failure,
+    carry_validation,
+    failure_issues,
+    remap_validation,
+    prefix_validation,
+)
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, replace
@@ -3990,12 +3997,13 @@ class AgentBackend:
     def _capture_rejected_without_replacing(
         lifecycle: AgentExchangeCaptureLifecycle | None,
         code: AgentExchangeTerminalCode,
+        *,
+        validation_details: tuple[str, ...] = (),
     ) -> None:
-        """Best-effort record one closed response rejection."""
-
+        """Best-effort record one closed response rejection with its findings."""
         try:
             if lifecycle is not None:
-                lifecycle.rejected(code)
+                lifecycle.rejected(code, validation_details=validation_details)
         except BaseException:
             pass
 
@@ -4423,7 +4431,15 @@ class AgentBackend:
         schema_issues: tuple[str, ...] = ()
         try:
             try:
-                reply = decode(result.response_text)
+                try:
+                    reply = decode(result.response_text)
+                except (TypeError, ValueError, SessionIdError) as model_failure:
+                    if not failure_issues(model_failure):
+                        raise
+                    raise carry_validation(
+                        BackendProtocolError("provider result violates its property contract"),
+                        model_failure,
+                    ) from model_failure
                 schema_issues = (
                     diagnose_json_text(result.response_text, schema)
                     if schema
@@ -4454,18 +4470,8 @@ class AgentBackend:
                         ("$: malformed JSON",),
                         ("$: duplicate object key",),
                     }
-                    self._capture_rejected_without_replacing(
-                        exchange,
-                        (
-                            AgentExchangeTerminalCode.MALFORMED_STRUCTURED_RESPONSE
-                            if malformed_precheck
-                            else self._structured_rejection_code(failure)
-                        ),
-                    )
-                details = bounded_chunks(
-                    schema_issues or ("$: rejected by a domain result rule",),
-                    prefix="Structured response",
-                )
+                    details = bounded_chunks(schema_issues or failure_issues(failure) or ("$: provider result decoder failed without a property diagnostic",), prefix="Structured response")
+                    self._capture_rejected_without_replacing(exchange, AgentExchangeTerminalCode.MALFORMED_STRUCTURED_RESPONSE if malformed_precheck else self._structured_rejection_code(failure), validation_details=details)
                 raise _StructuredOutputRejected(str(failure), details) from failure
             except (json.JSONDecodeError, UnicodeError):
                 self._record_rejected_provider_response_without_replacing_failure(
@@ -4476,11 +4482,8 @@ class AgentBackend:
                     response_text=result.response_text,
                 )
                 raise
-            except (ConversationRetrievalSemanticError, ReferenceAuthorizationError):
-                self._capture_rejected_without_replacing(
-                    exchange,
-                    AgentExchangeTerminalCode.RESPONSE_SEMANTIC_REJECTED,
-                )
+            except (ConversationRetrievalSemanticError, ReferenceAuthorizationError) as semantic_failure:
+                self._capture_rejected_without_replacing(exchange, AgentExchangeTerminalCode.RESPONSE_SEMANTIC_REJECTED, validation_details=bounded_chunks(failure_issues(semantic_failure)))
                 raise
             except asyncio.CancelledError:
                 self._capture_cancelled_without_replacing(exchange)
@@ -4514,10 +4517,7 @@ class AgentBackend:
                 if stored is not None:
                     taint_thread()
             finally:
-                self._capture_rejected_without_replacing(
-                    exchange,
-                    AgentExchangeTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
-                )
+                self._capture_rejected_without_replacing(exchange, AgentExchangeTerminalCode.MALFORMED_STRUCTURED_RESPONSE, validation_details=bounded_chunks((diagnose_json_text(result.response_text, schema) if schema else ()) or ('$: malformed JSON',), prefix='Structured response'))
             diagnostic = (
                 "Codex CLI returned malformed structured output"
                 if bound_agent.vendor == "codex"
@@ -5420,16 +5420,21 @@ class AgentBackend:
             result: dict[str, Any] = {}
             for key, value in pairs:
                 if key in result:
-                    raise BackendProtocolError(
-                        f"{provider_name} conversation retrieval response "
-                        "duplicates a field"
+                    raise validation_failure(
+                        BackendProtocolError(
+                            f'{provider_name} conversation retrieval response duplicates a field',
+                        ),
+                        '$.action',
+                        f'{provider_name} conversation retrieval response duplicates a field',
                     )
                 result[key] = value
             return result
 
         if type(text) is not str:
-            raise BackendProtocolError(
-                f"{provider_name} conversation retrieval response must be text"
+            raise validation_failure(
+                BackendProtocolError(f'{provider_name} conversation retrieval response must be text'),
+                '$.action',
+                f'{provider_name} conversation retrieval response must be text',
             )
         try:
             value = json.loads(text, object_pairs_hook=reject_duplicate_fields)
@@ -5441,36 +5446,62 @@ class AgentBackend:
             TypeError,
             UnicodeError,
         ) as exc:
-            raise BackendProtocolError(
-                f"{provider_name} conversation retrieval response is malformed JSON"
+            raise validation_failure(
+                BackendProtocolError(
+                    f'{provider_name} conversation retrieval response is malformed JSON',
+                ),
+                '$.action',
+                f'{provider_name} conversation retrieval response is malformed JSON',
             ) from exc
         if type(value) is not dict:
-            raise BackendProtocolError(
-                f"{provider_name} conversation retrieval response must be a JSON object"
+            raise validation_failure(
+                BackendProtocolError(
+                    f'{provider_name} conversation retrieval response must be a JSON object',
+                ),
+                '$.action',
+                f'{provider_name} conversation retrieval response must be a JSON object',
             )
         if set(value) != {"action"}:
-            raise BackendProtocolError(
-                f"{provider_name} conversation retrieval response has an invalid schema"
+            raise validation_failure(
+                BackendProtocolError(
+                    f'{provider_name} conversation retrieval response has an invalid schema',
+                ),
+                '$.action',
+                (
+                    'expected action with fields matching kind: search_conversations (query), '
+                    'read_history (citation_id, start_sequence, optional end_sequence), answer '
+                    '(message, citation_ids)'
+                ),
             )
         value = value["action"]
         if type(value) is not dict:
-            raise BackendProtocolError(
-                f"{provider_name} conversation retrieval action must be a JSON object"
+            raise validation_failure(
+                BackendProtocolError(
+                    f'{provider_name} conversation retrieval action must be a JSON object',
+                ),
+                '$.action',
+                f'{provider_name} conversation retrieval action must be a JSON object',
             )
         kind_value = value.get("kind")
         if type(kind_value) is not str:
-            raise BackendProtocolError(
-                f"{provider_name} conversation retrieval action kind must be text"
+            raise validation_failure(
+                BackendProtocolError(f'{provider_name} conversation retrieval action kind must be text'),
+                '$.action.kind',
+                f'{provider_name} conversation retrieval action kind must be text',
             )
         try:
             kind = ConversationRetrievalActionKind(kind_value)
         except ValueError as exc:
-            raise BackendProtocolError(
-                f"{provider_name} conversation retrieval action kind is unknown"
+            raise validation_failure(
+                BackendProtocolError(f'{provider_name} conversation retrieval action kind is unknown'),
+                '$.action.kind',
+                'expected one of ' + ', '.join((item.value for item in ConversationRetrievalActionKind)),
             ) from exc
         if allowed_actions is not None and kind not in allowed_actions:
-            raise BackendProtocolError(
-                f"{provider_name} conversation retrieval action is not allowed"
+            raise validation_failure(
+                BackendProtocolError(f'{provider_name} conversation retrieval action is not allowed'),
+                '$.action.kind',
+                'expected one of ' + ', '.join((item.value for item in allowed_actions)),
             )
 
         common_fields = {"kind"}
@@ -5491,8 +5522,16 @@ class AgentBackend:
         else:
             valid = set(value) == valid_fields
         if not valid:
-            raise BackendProtocolError(
-                f"{provider_name} conversation retrieval response has an invalid schema"
+            raise validation_failure(
+                BackendProtocolError(
+                    f'{provider_name} conversation retrieval response has an invalid schema',
+                ),
+                '$.action',
+                (
+                    'expected action with fields matching kind: search_conversations (query), '
+                    'read_history (citation_id, start_sequence, optional end_sequence), answer '
+                    '(message, citation_ids)'
+                ),
             )
 
         def required_text(field: str) -> str:
@@ -5500,16 +5539,22 @@ class AgentBackend:
 
             result = value[field]
             if type(result) is not str or not result:
-                raise BackendProtocolError(
-                    f"{provider_name} conversation retrieval {field} must be "
-                    "non-empty text"
+                raise validation_failure(
+                    BackendProtocolError(
+                        f'{provider_name} conversation retrieval {field} must be non-empty text',
+                    ),
+                    f'$.action.{field}',
+                    f'{provider_name} conversation retrieval {field} must be non-empty text',
                 )
             try:
                 result.encode("utf-8", errors="strict")
             except UnicodeEncodeError as exc:
-                raise BackendProtocolError(
-                    f"{provider_name} conversation retrieval {field} must be "
-                    "valid UTF-8"
+                raise validation_failure(
+                    BackendProtocolError(
+                        f'{provider_name} conversation retrieval {field} must be valid UTF-8',
+                    ),
+                    f'$.action.{field}',
+                    f'{provider_name} conversation retrieval {field} must be valid UTF-8',
                 ) from exc
             return result
 
@@ -5518,9 +5563,12 @@ class AgentBackend:
 
             result = value[field]
             if type(result) is not int or result < 1:
-                raise BackendProtocolError(
-                    f"{provider_name} conversation retrieval {field} must be "
-                    "positive integer"
+                raise validation_failure(
+                    BackendProtocolError(
+                        f'{provider_name} conversation retrieval {field} must be positive integer',
+                    ),
+                    f'$.action.{field}',
+                    f'{provider_name} conversation retrieval {field} must be positive integer',
                 )
             return result
 
@@ -5544,7 +5592,11 @@ class AgentBackend:
                     if "end_sequence" in value else None
                 )
                 if end_sequence is not None and end_sequence < start_sequence:
-                    raise ConversationRetrievalSemanticError()
+                    raise validation_failure(
+                        ConversationRetrievalSemanticError(),
+                        '$.action.end_sequence',
+                        'end_sequence must be greater than or equal to start_sequence',
+                    )
                 return ConversationRetrievalReadAction(
                     **common,
                     citation_id=required_text("citation_id"),
@@ -5555,20 +5607,30 @@ class AgentBackend:
             if type(raw_citation_ids) is not list or any(
                 type(item) is not str or not item for item in raw_citation_ids
             ):
-                raise BackendProtocolError(
-                    f"{provider_name} conversation retrieval citation_ids must "
-                    "be an array of non-empty text"
+                raise validation_failure(
+                    BackendProtocolError(
+                        f'{provider_name} conversation retrieval citation_ids must be an array of non-empty text',
+                    ),
+                    '$.action.citation_ids',
+                    f'{provider_name} conversation retrieval citation_ids must be an array of non-empty text',
                 )
             for item in raw_citation_ids:
                 try:
                     item.encode("utf-8", errors="strict")
                 except UnicodeEncodeError as exc:
-                    raise BackendProtocolError(
-                        f"{provider_name} conversation retrieval citation_ids "
-                        "must be valid UTF-8"
+                    raise validation_failure(
+                        BackendProtocolError(
+                            f'{provider_name} conversation retrieval citation_ids must be valid UTF-8',
+                        ),
+                        '$.action.citation_ids',
+                        f'{provider_name} conversation retrieval citation_ids must be valid UTF-8',
                     ) from exc
             if len(set(raw_citation_ids)) != len(raw_citation_ids):
-                raise ConversationRetrievalSemanticError()
+                raise validation_failure(
+                    ConversationRetrievalSemanticError(),
+                    '$.action.citation_ids',
+                    'citation_ids must be unique',
+                )
             return ConversationRetrievalAnswerAction(
                 **common,
                 content=required_text("message"),
@@ -5577,8 +5639,18 @@ class AgentBackend:
         except ConversationRetrievalSemanticError:
             raise
         except (SessionIdError, TypeError, ValueError) as exc:
-            raise BackendProtocolError(
-                f"{provider_name} conversation retrieval response has invalid values"
+            raise carry_validation(
+                validation_failure(
+                    BackendProtocolError(
+                        f'{provider_name} conversation retrieval response has invalid values',
+                    ),
+                    '$.action',
+                    (
+                        'retrieval action values must match the current session, conversation, turn, '
+                        'and positive action index'
+                    ),
+                ),
+                prefix_validation(exc, '$.action'),
             ) from exc
 
     @staticmethod
@@ -5610,8 +5682,12 @@ class AgentBackend:
             result: dict[str, Any] = {}
             for key, value in pairs:
                 if key in result:
-                    raise BackendProtocolError(
-                        f"{provider_name} conversation response duplicates a field"
+                    raise validation_failure(
+                        BackendProtocolError(
+                            f'{provider_name} conversation response duplicates a field',
+                        ),
+                        '$',
+                        f'{provider_name} conversation response duplicates a field',
                     )
                 result[key] = value
             return result
@@ -5619,12 +5695,16 @@ class AgentBackend:
         value = json.loads(text, object_pairs_hook=reject_duplicate_fields)
         expected_fields = {"message"}
         if not isinstance(value, dict):
-            raise BackendProtocolError(
-                f"{provider_name} conversation response must be a JSON object"
+            raise validation_failure(
+                BackendProtocolError(f'{provider_name} conversation response must be a JSON object'),
+                '$',
+                f'{provider_name} conversation response must be a JSON object',
             )
         if set(value) != expected_fields:
-            raise BackendProtocolError(
-                f"{provider_name} conversation response has an invalid schema"
+            raise validation_failure(
+                BackendProtocolError(f'{provider_name} conversation response has an invalid schema'),
+                '$',
+                'expected an object containing exactly message',
             )
         content = _strict_required_text(
             value,
@@ -5705,21 +5785,27 @@ class AgentBackend:
             result: dict[str, Any] = {}
             for key, item in pairs:
                 if key in result:
-                    raise BackendProtocolError(
-                        f"{provider_name} agent response duplicates a field"
+                    raise validation_failure(
+                        BackendProtocolError(f'{provider_name} agent response duplicates a field'),
+                        '$',
+                        f'{provider_name} agent response duplicates a field',
                     )
                 result[key] = item
             return result
 
         value = json.loads(text, object_pairs_hook=reject_duplicate_fields)
         if not isinstance(value, dict):
-            raise BackendProtocolError(
-                f"{provider_name} final response must be a JSON object"
+            raise validation_failure(
+                BackendProtocolError(f'{provider_name} final response must be a JSON object'),
+                '$',
+                f'{provider_name} final response must be a JSON object',
             )
         if phase is Phase.AUDIT:
             if set(value) != {"verdict", "message"}:
-                raise BackendProtocolError(
-                    f"{provider_name} audit response has an invalid schema"
+                raise validation_failure(
+                    BackendProtocolError(f'{provider_name} audit response has an invalid schema'),
+                    '$',
+                    'expected an object containing exactly verdict and message',
                 )
             content = _text(
                 value,
@@ -5728,40 +5814,34 @@ class AgentBackend:
             )
             verdict_value = value.get("verdict")
             if verdict_value not in {"approve", "conflict"}:
-                raise BackendProtocolError(f"{provider_name} audit verdict is invalid")
+                raise validation_failure(
+                    BackendProtocolError(f'{provider_name} audit verdict is invalid'),
+                    '$.verdict',
+                    'expected verdict approve or conflict',
+                )
             verdict = Verdict(verdict_value)
-            return AgentReply(
-                kind=AgentReplyKind.AUDIT,
-                revision_id=revision_id,
-                content=content,
-                verdict=verdict,
-            )
+            return _validated_phase_reply(AgentReply, kind=AgentReplyKind.AUDIT, revision_id=revision_id, content=content, verdict=verdict)
         if phase is Phase.FINALIZE:
             if set(value) != {
                 "reviewed_proposal_id",
                 "reviewed_proposal_digest",
             }:
-                raise BackendProtocolError(
-                    f"{provider_name} finalization response has an invalid schema"
+                raise validation_failure(
+                    BackendProtocolError(f'{provider_name} finalization response has an invalid schema'),
+                    '$',
+                    (
+                        'expected an object containing exactly reviewed_proposal_id and '
+                        'reviewed_proposal_digest'
+                    ),
                 )
-            return AgentReply.finalization(
-                revision_id,
-                _required_text(
-                    value,
-                    "reviewed_proposal_id",
-                    provider_name=provider_name,
-                ),
-                _required_text(
-                    value,
-                    "reviewed_proposal_digest",
-                    provider_name=provider_name,
-                ),
-            )
+            return _validated_phase_reply(AgentReply.finalization, revision_id, _required_text(value, 'reviewed_proposal_id', provider_name=provider_name), _required_text(value, 'reviewed_proposal_digest', provider_name=provider_name))
         if phase is Phase.SYNTHESIZE:
             expected_fields = {"next", "message"}
             if set(value) != expected_fields:
-                raise BackendProtocolError(
-                    f"{provider_name} synthesis response has an invalid schema"
+                raise validation_failure(
+                    BackendProtocolError(f'{provider_name} synthesis response has an invalid schema'),
+                    '$',
+                    'expected an object containing exactly next and message',
                 )
             content = _required_text(
                 value,
@@ -5770,31 +5850,24 @@ class AgentBackend:
             )
             next_phase = value.get("next")
             if next_phase == AgentReplyKind.DEADLOCK.value:
-                return AgentReply.deadlock(revision_id, content)
+                return _validated_phase_reply(AgentReply.deadlock, revision_id, content)
             if next_phase not in {
                     AgentReplyNextPhase.REPAIR.value,
                     AgentReplyNextPhase.FINALIZATION.value,
                 }:
-                raise BackendProtocolError(
-                    f"{provider_name} synthesis response is ambiguous"
+                raise validation_failure(
+                    BackendProtocolError(f'{provider_name} synthesis response is ambiguous'),
+                    '$.next',
+                    'expected repair, finalization, or deadlock',
                 )
-            return AgentReply.synthesis(
-                revision_id,
-                content,
-                AgentReplyNextPhase(next_phase),
-            )
+            return _validated_phase_reply(AgentReply.synthesis, revision_id, content, AgentReplyNextPhase(next_phase))
         if set(value) != {"message"}:
-            raise BackendProtocolError(
-                f"{provider_name} candidate response has an invalid schema"
+            raise validation_failure(
+                BackendProtocolError(f'{provider_name} candidate response has an invalid schema'),
+                '$',
+                'expected an object containing exactly message',
             )
-        return AgentReply.candidate(
-            revision_id,
-            _required_text(
-                value,
-                "message",
-                provider_name=provider_name,
-            ),
-        )
+        return _validated_phase_reply(AgentReply.candidate, revision_id, _required_text(value, 'message', provider_name=provider_name))
 
     def _preflight_session(self, session_id: str) -> None:
         """Validate configured provider routes without acquiring access."""
@@ -6977,8 +7050,20 @@ def _required_text(
 ) -> str:
     result = _text(value, field, provider_name=provider_name)
     if not result:
-        raise BackendProtocolError(f"{provider_name} {field} must be non-empty text")
+        raise validation_failure(
+            BackendProtocolError(f'{provider_name} {field} must be non-empty text'),
+            f'$.{field}',
+            'expected nonempty text',
+        )
     return result
+
+
+def _validated_phase_reply(factory: Callable[..., AgentReply], *args: object, **kwargs: object) -> AgentReply:
+    """Keep model findings while restoring the phase response's wire names."""
+    try:
+        return factory(*args, **kwargs)
+    except (TypeError, ValueError) as failure:
+        raise remap_validation(failure, {"$.content": "$.message", "$.next_phase": "$.next"})
 
 
 def _text(
@@ -6989,7 +7074,11 @@ def _text(
 ) -> str:
     result = value.get(field)
     if not isinstance(result, str):
-        raise BackendProtocolError(f"{provider_name} {field} must be text")
+        raise validation_failure(
+            BackendProtocolError(f'{provider_name} {field} must be text'),
+            f'$.{field}',
+            'expected text',
+        )
     return result
 
 
@@ -7007,15 +7096,23 @@ def _strict_required_text(
 
     result = value.get(field)
     if not isinstance(result, str):
-        raise BackendProtocolError(f"{provider_name} conversation {field} must be text")
+        raise validation_failure(
+            BackendProtocolError(f'{provider_name} conversation {field} must be text'),
+            f'$.{field}',
+            'expected text',
+        )
     if not result:
-        raise BackendProtocolError(
-            f"{provider_name} conversation {field} must be non-empty text"
+        raise validation_failure(
+            BackendProtocolError(f'{provider_name} conversation {field} must be non-empty text'),
+            f'$.{field}',
+            'expected nonempty text',
         )
     try:
         result.encode("utf-8", errors="strict")
     except UnicodeEncodeError as exc:
-        raise BackendProtocolError(
-            f"{provider_name} conversation {field} must be valid UTF-8"
+        raise validation_failure(
+            BackendProtocolError(f'{provider_name} conversation {field} must be valid UTF-8'),
+            f'$.{field}',
+            'expected strict UTF-8 text',
         ) from exc
     return result

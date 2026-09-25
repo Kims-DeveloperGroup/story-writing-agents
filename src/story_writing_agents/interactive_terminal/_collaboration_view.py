@@ -160,8 +160,9 @@ def project_lead_turn_result(result: LeadTurnResult) -> Panel:
         *_reply_trace_items(result.trace),
     ]
     items.extend(
-        Notice(detail, label="validation", role=SemanticRole.ERROR)
+        Notice(line, label="validation", role=SemanticRole.ERROR)
         for detail in result.validation_details
+        for line in detail.split("\n")
     )
     if result.proposal is not None:
         items.extend(_proposal_items(result.proposal))
@@ -509,8 +510,9 @@ def _payload_items(
                   if (len(payload.validation_details) != 1
                       or payload.content != payload.validation_details[0]) else ()),
                 *(
-                    Notice(detail, label="validation", role=SemanticRole.ERROR)
+                    Notice(line, label="validation", role=SemanticRole.ERROR)
                     for detail in payload.validation_details
+                for line in detail.split("\n")
                 ),
                 *_reply_trace_items(payload.trace),
             )
@@ -643,8 +645,9 @@ def _payload_items(
             Field("Call kind", payload.call_kind.value),
             Field("State", payload.state.value),
             *(
-                Notice(detail, label="validation", role=SemanticRole.ERROR)
+                Notice(line, label="validation", role=SemanticRole.ERROR)
                 for detail in payload.validation_details
+                for line in detail.split("\n")
             ),
         )
     if type(payload) is CollaborationLeadOutcomeFailurePayload:

@@ -341,8 +341,9 @@ Antigravity result also has `response_diagnostic`. A provider failure response
 has `provider_failure: true` and an optional `response_diagnostic`. That
 diagnostic contains nullable `error` and `status`, integer `exit_code`, and a
 `stderr` object whose exact completed bytes use `utf-8` or `base64` encoding.
-The outcome shape has exactly `code` and `outcome`. These JSON values are stored
-in the outer
+The outcome contains `code` and `outcome`; a rejected provider reply can also
+include optional `validation_details` with trusted property paths and validation
+rules for that physical call. These JSON values are stored in the outer
 schema-v1 record's string `content`, subject to the 262,144-byte complete-code-
 point prefix. Full UTF-8 byte and Python Unicode-code-point counts plus SHA-256
 describe the complete capture input, so a truncated record is not the complete

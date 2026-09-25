@@ -90,6 +90,25 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("paired remote push", rendered)
             self.assertNotIn("Use restrained close-third narration.", rendered)
             self.assertNotIn("provider_private", rendered)
+            details = ("Original response:\n$.action.result.message: expected nonempty text",
+                       "Repair response:\n$.action.result.kind: expected an allowed value")
+            notice = replace(events[0], kind=CollaborationEventKind.MESSAGE,
+                             sender=RUNTIME, recipient=USER,
+                             payload=CollaborationMessagePayload(
+                                 details[0], validation_details=details,
+                                 validation_invocation_id="invocation_1",
+                                 validation_call_id="call_1"))
+            for component in (
+                _collaboration_view.project_collaboration_event(notice),
+                _collaboration_view.project_lead_turn_result(
+                    replace(reviewed, validation_details=details)),
+            ):
+                text = render_component(component, _capability(CapabilityProfile.LINE, width=120)).text
+                self.assertNotIn(r"\x0a", text)
+                for detail in details:
+                    label, issue = detail.splitlines()
+                    self.assertIn(issue, text)
+                    self.assertTrue(any(label in line and issue not in line for line in text.splitlines()))
 
             lead_rendered = render_component(
                 _collaboration_view.project_lead_turn_result(reviewed),
