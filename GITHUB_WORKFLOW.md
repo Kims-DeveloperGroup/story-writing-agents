@@ -114,18 +114,18 @@ disposition after the edit. A code change starts a new-head review cycle.
 
 ## Verification Policy
 
-Runtime-code changes, including runtime agent definitions under `config/agents/`, require the
-current-head fast CI tier and relevant tests selected with
-`PYTHONPATH=src python -m tests.runner run` and exact `--module` or `--id` selectors. Record
-the selected IDs, command, result, and head SHA in the PR. Add a behavioral test when changed
-behavior lacks one. Use the `test:full` label and reconcile both full-suite shards only when
-impact cannot be bounded or a
-full run is explicitly required; it is not the default PR gate.
-
-Policy, docs, templates, skills, development-agent configuration, module-index-only, and
-test-only changes use static validation and diff review; they do not require runtime tests.
-An absent, cancelled, or stale check is not a pass. Evidence names the source/head SHA,
-commands or static checks, failures, skips, gaps, and assessment.
+The canonical suite follows [TEST_POLICY.md](TEST_POLICY.md). Runtime-code
+changes, including runtime agent definitions under `config/agents/`, require
+current-head fast CI and affected tests selected with exact `--module` or `--id`
+selectors. Record selected IDs, command, result, and head SHA in the PR. CI
+runs both complete shards and the frozen inventory/time budget for runtime or
+test changes. Update a retained representative case when changed behavior
+lacks coverage within the frozen limits. Test-only changes also require this
+full CI gate. Documentation,
+templates, skills, development-agent configuration, and module-index-only
+changes need static validation and diff review. An absent, cancelled, stale,
+incomplete, or over-budget check is not a pass. Evidence names source/head
+SHA, commands, failures, skips, gaps, and assessment.
 
 ## Templates and Records
 

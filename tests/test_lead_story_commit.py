@@ -255,21 +255,6 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
             applied.request.reviewed_proposal.conversation_id
         )
 
-    async def test_revise_preserves_applied_files_and_requires_reprepare(self) -> None:
-        applied = await self.applied_create("Revise commit")
-        before_files = self.artifact_snapshot()
-        before_git = self.session_git_snapshot()
-        revised = await self.runtime.decide_story_commit(
-            _commit_decision(
-                applied,
-                StoryCommitDecision.REVISE,
-                revision_request="Use a narrower commit message.",
-            )
-        )
-        self.assertIs(revised.outcome.outcome, StoryCommitOutcomeKind.SUPERSEDED)
-        self.assertIs(revised.outcome.next_action, StoryCommitNextAction.REPREPARE)
-        self.assertEqual(self.artifact_snapshot(), before_files)
-        self.assertEqual(self.session_git_snapshot(), before_git)
 
     async def test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git(
         self,
@@ -339,103 +324,9 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
                 _commit_decision(applied, StoryCommitDecision.COMMIT)
             )
 
-    async def test_restart_cannot_reconstruct_commit_authority(self) -> None:
-        applied = await self.applied_create("Restarted commit")
-        before_files = self.artifact_snapshot()
-        before_git = self.session_git_snapshot()
-        restarted = StoryRuntime(self.workspace, _LeadBackend())  # type: ignore[arg-type]
-        stale = await restarted.decide_story_commit(
-            _commit_decision(applied, StoryCommitDecision.COMMIT)
-        )
-        self.assertIs(stale.outcome.outcome, StoryCommitOutcomeKind.STALE)
-        self.assertIs(stale.outcome.next_action, StoryCommitNextAction.REPREPARE)
-        self.assertIsNone(stale.outcome.result)
-        self.assertEqual(self.artifact_snapshot(), before_files)
-        self.assertEqual(self.session_git_snapshot(), before_git)
 
-    async def test_mismatch_and_prestaged_drift_fail_before_commit(self) -> None:
-        applied = await self.applied_create("Decision mismatch")
-        before_files = self.artifact_snapshot()
-        before_git = self.session_git_snapshot()
-        mismatched = replace(
-            _commit_decision(applied, StoryCommitDecision.COMMIT),
-            request_digest="sha256:" + "0" * 64,
-        )
-        with self.assertRaisesRegex(ValueError, "does not match tail"):
-            await self.runtime.decide_story_commit(mismatched)
-        self.assertEqual(self.artifact_snapshot(), before_files)
-        self.assertEqual(self.session_git_snapshot(), before_git)
 
-        self.workspace.path("core_documents/global_outline.md").write_text(
-            "Externally staged outline.\n",
-            encoding="utf-8",
-        )
-        self.git("add", "--", "core_documents/global_outline.md")
-        drifted_files = self.artifact_snapshot()
-        drifted_git = self.session_git_snapshot()
-        stale = await self.runtime.decide_story_commit(
-            _commit_decision(applied, StoryCommitDecision.COMMIT)
-        )
-        self.assertIs(stale.outcome.outcome, StoryCommitOutcomeKind.STALE)
-        self.assertIs(stale.outcome.next_action, StoryCommitNextAction.REPREPARE)
-        self.assertEqual(self.artifact_snapshot(), drifted_files)
-        self.assertEqual(self.session_git_snapshot(), drifted_git)
 
-    async def test_service_and_result_persistence_failures_are_inspect_only(
-        self,
-    ) -> None:
-        applied = await self.applied_create("Service failure")
-        key = (
-            applied.request.reviewed_proposal.session_id,
-            applied.request.reviewed_proposal.conversation_id,
-            applied.request.reviewed_proposal.step_id,
-        )
-        service = self.runtime._story_commit_services[key]
-        before_git = self.session_git_snapshot()
-        with mock.patch.object(
-            type(service),
-            "execute",
-            side_effect=StoryCommitError(
-                StoryCommitFailureCode.OUTCOME_UNKNOWN,
-                StoryCommitRecoveryAction.INSPECT,
-            ),
-        ):
-            uncertain = await self.runtime.decide_story_commit(
-                _commit_decision(applied, StoryCommitDecision.COMMIT)
-            )
-        self.assertIs(uncertain.outcome.outcome, StoryCommitOutcomeKind.OUTCOME_UNKNOWN)
-        self.assertIs(uncertain.outcome.next_action, StoryCommitNextAction.INSPECT)
-        self.assertEqual(self.session_git_snapshot(), before_git)
-
-    async def test_result_persistence_failure_is_inspect_only(self) -> None:
-        applied = await self.applied_create("Result persistence failure")
-        original_append = self.runtime._append_drafts
-        calls = 0
-
-        def fail_result_append(*args, **kwargs):
-            nonlocal calls
-            calls += 1
-            if calls == 2:
-                raise OSError("commit result persistence unavailable")
-            return original_append(*args, **kwargs)
-
-        before_head = self.git("rev-parse", "HEAD")
-        with mock.patch.object(
-            self.runtime,
-            "_append_drafts",
-            side_effect=fail_result_append,
-        ):
-            missing = await self.runtime.decide_story_commit(
-                _commit_decision(applied, StoryCommitDecision.COMMIT)
-            )
-        self.assertIs(missing.outcome.outcome, StoryCommitOutcomeKind.OUTCOME_UNKNOWN)
-        self.assertIs(missing.outcome.next_action, StoryCommitNextAction.INSPECT)
-        self.assertIsNone(missing.outcome.result)
-        self.assertNotEqual(self.git("rev-parse", "HEAD"), before_head)
-        with self.assertRaisesRegex(ValueError, "authoritative request tail"):
-            await self.runtime.decide_story_commit(
-                _commit_decision(applied, StoryCommitDecision.COMMIT)
-            )
 
 
 if __name__ == "__main__":

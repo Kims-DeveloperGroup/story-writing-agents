@@ -71,15 +71,14 @@ jobs:
               path === "vendor/generic-rag" ||
               path === "vendor/jsonl-viewer";
             const runtimePaths = truncated || paths.some(isRuntime);
-            // An explicit full-suite request also runs the fast tier, even when
-            // the diff contains only tests, policy, or documentation.
+            const isTest = path => path.startsWith("tests/") ||
+              path === ".github/workflows/pr-validation.yml" || path === "TEST_POLICY.md";
+            const testPaths = truncated || paths.some(isTest);
             const fullRequested = labels.includes("test:full");
-            const runtime = runtimePaths || fullRequested;
-            // Merge-group payloads do not reliably identify constituent PR labels.
-            const full = runtime && (
-              truncated || context.eventName === "merge_group" || fullRequested);
+            const runtime = runtimePaths || testPaths || fullRequested;
+            const full = runtime;
             core.setOutput("runtime", String(runtime));
-            core.setOutput("policy_only", String(!runtimePaths));
+            core.setOutput("policy_only", String(!runtimePaths && !testPaths));
             core.setOutput("full", String(full));
             core.setOutput("base_sha", baseSha);
             core.setOutput("head_sha", headSha);
@@ -295,6 +294,7 @@ jobs:
       matrix:
         shard: [1, 2]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -327,6 +327,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           ref: ${{ needs.classify.outputs.checkout_sha }}
       - uses: actions/download-artifact@v4
         with:
@@ -338,6 +339,14 @@ jobs:
           full-reports/full-1/full-1.json
           full-reports/full-2/full-2.json
           --json "$RUNNER_TEMP/full-reconciled.json"
+      - name: Enforce frozen suite inventory and wall-time budget
+        env:
+          BASE_SHA: ${{ needs.classify.outputs.base_sha }}
+        run: >-
+          PYTHONPATH=src python -m tests.suite_budget
+          --base-ref "$BASE_SHA"
+          --report full-reports/full-1/full-1.json
+          --report full-reports/full-2/full-2.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:

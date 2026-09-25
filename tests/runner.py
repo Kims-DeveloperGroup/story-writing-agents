@@ -250,6 +250,7 @@ class TimedTextTestResult(unittest.TextTestResult):
         self._started_at: dict[str, float] = {}
         self._statuses: dict[str, str] = {}
         self._durations: dict[str, float] = {}
+        self._subtests: dict[str, int] = {}
         self.details: list[dict[str, object]] = []
 
     def _identifier(self, test: unittest.TestCase) -> str:
@@ -310,6 +311,8 @@ class TimedTextTestResult(unittest.TextTestResult):
 
     def addSubTest(self, test, subtest, err):  # noqa: N802
         super().addSubTest(test, subtest, err)
+        identifier = self._identifier(test)
+        self._subtests[identifier] = self._subtests.get(identifier, 0) + 1
         if err is not None:
             kind = "failure" if issubclass(err[0], test.failureException) else "error"
             self._set_status(test, "failed" if kind == "failure" else "error")
@@ -333,6 +336,7 @@ class TimedTextTestResult(unittest.TextTestResult):
             "canonical_id": identifier,
             "status": self._statuses[identifier],
             "duration_seconds": self._durations.get(identifier, 0.0),
+            "subtest_count": self._subtests.get(identifier, 0),
         } for identifier in ordered_ids if identifier in self._statuses]
 
 

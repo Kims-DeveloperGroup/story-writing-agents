@@ -45,14 +45,15 @@ and limitations; it does not authorize checks or risk acceptance.
 
 ## Verification records
 
-Runtime tests are required only for runtime-code changes. Use the canonical runner and retain
-exact IDs, JSON results, and outcomes; for an explicitly required full run also retain shard
-reports and reconciliation. Map results to scenarios or criteria. Distinguish failures,
+Runtime and test changes require complete shard CI under [TEST_POLICY.md](../../../../TEST_POLICY.md).
+Runtime-code changes also require affected tests. Use the canonical runner and retain exact
+IDs, JSON results, shard reports, and reconciliation. Map results to scenarios or criteria.
+Distinguish failures,
 accepted skips, interruption, and unexecuted work.
 A timeout, missing CI, stale head SHA, or aggregate count is not a pass.
 
-Policy, docs, templates, skills, development-agent configuration, module-index-only, and
-test-only changes use static validation. Name the checked headings, links, paths, references,
+Policy, docs, templates, skills, development-agent configuration, and module-index-only
+changes use static validation. Name the checked headings, links, paths, references,
 frontmatter/format, policy invariants, source/head SHA, and diff review.
 
 For review evidence, identify the current head SHA, initial/final review round, Copilot and Codex

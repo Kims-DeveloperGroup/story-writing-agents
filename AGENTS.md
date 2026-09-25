@@ -30,6 +30,7 @@ permits read-only work only. Load `$github-task-lifecycle` and follow
 | Project objective and structure | [README.md](README.md) |
 | Runtime subsystem lookup | Start with [PYTHON_MODULE_INDEX.md](PYTHON_MODULE_INDEX.md), then verify the affected source. |
 | GitHub planning, reviews, records, delivery, and cleanup | [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md) through `$github-task-lifecycle`. |
+| Test scope, inventory, and time budget | [TEST_POLICY.md](TEST_POLICY.md). |
 | Explicit end-to-end Project workflow | Root loads `$project-workflow` only when the user invokes it; subagents never use it. |
 | Development delegation | Keep `.codex/agents/` separate from `config/agents/`; load `$subagent-routing` before delegation. Agent profiles define role behavior. |
 | Structural Python work | Route through `$subagent-routing`; use [PYTHON_MODULARITY_POLICY.md](.codex/agents/runtime_implementer/PYTHON_MODULARITY_POLICY.md). |
@@ -37,5 +38,6 @@ permits read-only work only. Load `$github-task-lifecycle` and follow
 
 ## Verification
 
-Runtime tests are required only for runtime-code changes. Follow the verification rule in
-[GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md); other changes need static validation and diff review.
+Runtime-code changes require affected tests. Runtime and test changes require the full CI
+gate in [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md); other changes need static validation and
+diff review.

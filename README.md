@@ -419,9 +419,10 @@ PYTHONPATH=src python -m tests.runner run \
   --json "$report_dir/affected.json"
 ```
 
-For an explicitly required full-suite run, use two complementary shards. Start no
-more than these two test processes concurrently, preserve both reports, and
-then reconcile them:
+For runtime or test changes, CI requires two complementary full-suite shards.
+For a local full-suite run, use the same commands. Start no more than these
+two test processes concurrently, preserve both reports, and then reconcile
+them:
 
 ```bash
 report_dir="$(mktemp -d "${TMPDIR:-/tmp}/story-tests.XXXXXXXXXX")"
@@ -438,6 +439,9 @@ PYTHONPATH=src python -m tests.runner reconcile \
   "$report_dir/shard-1.json" \
   "$report_dir/shard-2.json" \
   --json "$report_dir/reconciliation.json"
+PYTHONPATH=src python -m tests.suite_budget --base-ref main \
+  --report "$report_dir/shard-1.json" \
+  --report "$report_dir/shard-2.json"
 ```
 
 Each example creates a fresh, unpredictable, owner-only report directory. Keep
@@ -462,13 +466,11 @@ provenance. Observed terminal class timings are used where available; unlisted
 classes use the manifest's deterministic fallback, so the weights are a
 partitioning input rather than proof of current performance.
 
-The feedback targets are: fast lane at most 300 seconds; complete-suite
-sequential-equivalent wall time at most 5,102.566 seconds; and two-shard
-concurrent wall time at most 3,300 seconds. The complete-suite target is a 70%
-reduction from the 17,008.554-second
-baseline: remove 70% and leave at most 30%, rather than reduce the runtime to
-70% of baseline. These are acceptance targets, not a claim that the current
-shards have passed them.
+The frozen suite scope and measured limits are in [TEST_POLICY.md](TEST_POLICY.md):
+1,080 seconds sequential equivalent and 540 seconds per shard. The checked-in
+budget contains exact canonical IDs and per-ID subtest caps; the CI gate compares
+it with the base commit and current Python 3.11 reports. Class timing weights
+only balance the two shards; they do not prove the run is under budget.
 
 <a id="contribution-guidelines"></a>
 
