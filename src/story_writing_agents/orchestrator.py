@@ -7337,6 +7337,8 @@ class StoryRuntime:
                 except Exception as correction_setup_failure:
                     reference_operation.failure(correction_setup_failure)
                     assert rejected_call_id is not None
+                    if provider is not None:
+                        provider.publish_validation_messages()
                     assert correction_failure_code is not None
                     self._lead_outcome_failure_result(
                         session_id=session_id,
@@ -7347,7 +7349,6 @@ class StoryRuntime:
                         call_id=rejected_call_id,
                         failure_code=correction_failure_code,
                     )
-                    provider.publish_validation_messages()
                     return self._structured_fallback_lead_result(
                         session_id=session_id,
                         conversation_id=conversation_id,
@@ -7389,6 +7390,8 @@ class StoryRuntime:
                         and not correction_facts.submission_uncertain
                     ):
                         reference_operation.failure(correction_failure)
+                        if provider is not None:
+                            provider.publish_validation_messages()
                         assert correction_failure_code is not None
                         self._lead_outcome_failure_result(
                             session_id=session_id,
@@ -7399,7 +7402,6 @@ class StoryRuntime:
                             call_id=provider.last_submitted_call_id,
                             failure_code=correction_failure_code,
                         )
-                        provider.publish_validation_messages()
                         return self._structured_fallback_lead_result(
                             session_id=session_id,
                             conversation_id=conversation_id,
@@ -7420,6 +7422,8 @@ class StoryRuntime:
                         raise
                     reference_operation.failure(correction_failure)
                     assert rejected_call_id is not None
+                    if provider is not None:
+                        provider.publish_validation_messages()
                     assert correction_failure_code is not None
                     self._lead_outcome_failure_result(
                         session_id=session_id,
@@ -7430,7 +7434,6 @@ class StoryRuntime:
                         call_id=rejected_call_id,
                         failure_code=correction_failure_code,
                     )
-                    provider.publish_validation_messages()
                     return self._structured_fallback_lead_result(
                         session_id=session_id,
                         conversation_id=conversation_id,
@@ -7472,6 +7475,8 @@ class StoryRuntime:
         except _LeadOutcomeValidationError as failure:
             reference_operation.failure(failure)
             if corrective_rejection_code is not None:
+                if provider is not None:
+                    provider.publish_validation_messages()
                 assert correction_failure_code is not None
                 self._lead_outcome_failure_result(
                     session_id=session_id,
@@ -7482,8 +7487,6 @@ class StoryRuntime:
                     call_id=None if provider is None else provider.last_submitted_call_id,
                     failure_code=correction_failure_code,
                 )
-                if provider is not None:
-                    provider.publish_validation_messages()
                 return self._structured_fallback_lead_result(
                     session_id=session_id,
                     conversation_id=conversation_id,
@@ -7555,6 +7558,7 @@ class StoryRuntime:
                 and provider is not None
                 and provider.last_submitted_call_id is not None
             ):
+                provider.publish_validation_messages()
                 failed = self._lead_outcome_failure_result(
                     session_id=session_id,
                     conversation_id=conversation_id,
@@ -7567,7 +7571,6 @@ class StoryRuntime:
                     ),
                     failure=failure,
                 )
-                provider.publish_validation_messages()
                 return replace(failed, validation_details=provider.validation_details)
             recovered = self._close_failed_lead_attempt(
                 session_id, conversation_id, failure=failure,

@@ -817,7 +817,14 @@ class ConversationModelContractTests(unittest.TestCase):
             ),
             (
                 ConversationReply,
-                ("session_id", "conversation_id", "turn_id", "content", "trace"),
+                (
+                    "session_id",
+                    "conversation_id",
+                    "turn_id",
+                    "content",
+                    "trace",
+                    "validation_details",
+                ),
                 reply,
             ),
         )
@@ -825,14 +832,17 @@ class ConversationModelContractTests(unittest.TestCase):
             with self.subTest(model=model.__name__):
                 model_fields = fields(model)
                 self.assertEqual(tuple(field.name for field in model_fields), names)
-                required_fields = model_fields[:-1]
+                required_count = 6 if model is ConversationRequest else 4
+                required_fields = model_fields[:required_count]
                 self.assertTrue(
                     all(
                         field.default is MISSING and field.default_factory is MISSING
                         for field in required_fields
                     )
                 )
-                self.assertIsNone(model_fields[-1].default)
+                self.assertIsNone(model_fields[required_count].default)
+                if model is ConversationReply:
+                    self.assertEqual(model_fields[-1].default, ())
                 self.assertFalse(hasattr(value, "__dict__"))
                 with self.assertRaises(FrozenInstanceError):
                     value.content = "changed"
