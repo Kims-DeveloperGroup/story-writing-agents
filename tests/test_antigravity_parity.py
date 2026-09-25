@@ -2232,23 +2232,13 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             ],
             [
                 {"code": "accepted", "outcome": "accepted"},
-                {
-                    "code": "response_semantic_rejected",
-                    "outcome": "rejected",
-                },
-                {
-                    "code": "response_semantic_rejected",
-                    "outcome": "rejected",
-                },
+                *({"code": "response_semantic_rejected", "outcome": "rejected",
+                   "validation_details": ["Structured response\n" + detail.partition("\n")[2]]}
+                  for detail in rejected_reply.validation_details),
                 {"code": "accepted", "outcome": "accepted"},
-                {
-                    "code": "response_semantic_rejected",
-                    "outcome": "rejected",
-                },
-                {
-                    "code": "response_semantic_rejected",
-                    "outcome": "rejected",
-                },
+                *({"code": "response_semantic_rejected", "outcome": "rejected",
+                   "validation_details": ["Structured response\n" + detail.partition("\n")[2]]}
+                  for detail in conversation_reply.validation_details),
             ],
         )
         serialized_exchanges = json.dumps(exchange_records, ensure_ascii=False)

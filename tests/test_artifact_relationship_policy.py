@@ -1726,7 +1726,7 @@ assert tuple(relationship_policy.__all__) == tuple(sys.argv[2].split(','))
                     if resolved is not None and resolved != module:
                         edges.add((module, resolved))
         self.assertEqual(len(modules), 144)
-        self.assertEqual(len(edges), 585)
+        self.assertEqual(len(edges), 588)
         relationship_name = "story_writing_agents.writing_artifacts.relationship_policy"
         self.assertEqual(
             {target for source, target in edges if source == relationship_name},

@@ -2743,6 +2743,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         events: list[str] = []
+        details: list[str] = []
 
         class Lifecycle:
             def record_response(self, _result: ProviderResult) -> None:
@@ -2751,8 +2752,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             def accepted(self) -> None:
                 events.append("accepted")
 
-            def rejected(self, _code: object) -> None:
+            def rejected(self, _code: object, *, validation_details: tuple[str, ...] = ()) -> None:
                 events.append("rejected")
+                details.extend(validation_details)
 
             def provider_failure(self, _code: object) -> None:
                 events.append("provider_failure")
@@ -2859,6 +2861,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 "rejected",
             ],
         )
+        self.assertEqual(details, ["Structured response\n$: malformed JSON"])
 
     async def test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread(
         self,
