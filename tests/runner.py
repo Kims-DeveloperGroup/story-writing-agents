@@ -299,6 +299,9 @@ class TimedTextTestResult(unittest.TextTestResult):
 
     def addSkip(self, test, reason):  # noqa: N802
         super().addSkip(test, reason); self._set_status(test, "skipped")
+        if _parent_test(test) is not test:
+            identifier = self._identifier(test)
+            self._subtests[identifier] = self._subtests.get(identifier, 0) + 1
         self._detail(test, "skip", reason=reason)
 
     def addExpectedFailure(self, test, err):  # noqa: N802

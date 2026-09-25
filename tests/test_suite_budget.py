@@ -90,6 +90,8 @@ class SuiteBudgetTests(unittest.TestCase):
             def runTest(self) -> None:
                 for value in (1, 2):
                     with self.subTest(value=value):
+                        if value == 2:
+                            self.skipTest("synthetic platform skip")
                         self.assertGreater(value, 0)
 
         case = Synthetic()
@@ -98,7 +100,3 @@ class SuiteBudgetTests(unittest.TestCase):
         )
         unittest.TestSuite([case]).run(result)
         self.assertEqual(result.records([case.id()])[0]["subtest_count"], 2)
-
-
-if __name__ == "__main__":
-    unittest.main()

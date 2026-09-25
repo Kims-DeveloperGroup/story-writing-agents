@@ -45,9 +45,15 @@ when recalibrating weights.
 
 ## Initial calibration
 
-Issue #732 reduced the 2,872-ID snapshot to 2,530 IDs (342 fewer, 11.9%).
-Two complete local macOS/Python 3.11 shards passed in 502.4 and 513.5 seconds:
-1,015.9 seconds (16.9 minutes) sequential equivalent and 8.6 minutes for the
-longer shard. Compared with the prior 3,744-second timing estimate, that is an
-expected reduction of about 73%. The CI ceilings above remain the acceptance
-rule on the current runner, regardless of this local estimate.
+Issue #732 first reduced the 2,872-ID snapshot to 2,530 IDs (342 fewer,
+11.9%). Two complete local macOS/Python 3.11 shards passed in 502.4 and
+513.5 seconds: 1,015.9 seconds (16.9 minutes) sequential equivalent and
+8.6 minutes for the longer shard. Compared with the prior 3,744-second
+timing estimate, the expected reduction was about 73%.
+
+That 2,530-ID count was an intermediate calibration. PR #733's final
+inventory contains 2,527 IDs (345 fewer than the original snapshot,
+12.0%) after three additional CI-driven removals. On Ubuntu/Python 3.11,
+the complete final shards passed in 292.2 and 152.5 seconds: 444.7 seconds
+(7.4 minutes) sequential equivalent and 4.9 minutes for the longer shard.
+The CI ceilings above remain the acceptance rule on the current runner.
