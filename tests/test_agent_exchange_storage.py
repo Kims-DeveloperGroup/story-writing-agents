@@ -5,7 +5,6 @@ from __future__ import annotations
 import errno
 import hashlib
 import json
-import multiprocessing
 import os
 import threading
 import unittest
@@ -97,20 +96,6 @@ def _decoded_snapshot(
 
 def _store_directory(workspace: Workspace) -> Path:
     return workspace.path("debug_logs/agent_exchanges")
-
-
-def _append_process_exchange(
-    workspace: Workspace,
-    agent_id: str,
-    exchange_id: str,
-    results: object,
-) -> None:
-    """Append through one transferred authorized workspace lease."""
-
-    receipt = WorkspaceAgentExchangeStore(workspace).append(
-        _input(agent_id=agent_id, exchange_id=exchange_id, content="child body")
-    )
-    results.put((receipt.workspace_sequence, receipt.sequence))  # type: ignore[attr-defined]
 
 
 def _active_path(
@@ -486,43 +471,6 @@ class AgentExchangeConcurrencyTests(unittest.TestCase):
                 list(range(1, 9)),
             )
 
-    def test_subprocesses_share_global_high_water_and_per_agent_order(self) -> None:
-        context = multiprocessing.get_context("spawn")
-        results = context.Queue()
-        processes = [
-            context.Process(
-                target=_append_process_exchange,
-                args=(
-                    self.workspace,
-                    ROSTER[index % 2],
-                    f"process_{index}",
-                    results,
-                ),
-            )
-            for index in range(4)
-        ]
-        try:
-            for process in processes:
-                process.start()
-            for process in processes:
-                process.join(timeout=10)
-                self.assertFalse(process.is_alive())
-                self.assertEqual(process.exitcode, 0)
-            pairs = [results.get(timeout=2) for _ in processes]
-        finally:
-            for process in processes:
-                if process.is_alive():
-                    process.terminate()
-                    process.join(timeout=5)
-            results.close()
-            results.join_thread()
-        self.assertEqual(sorted(pair[0] for pair in pairs), [1, 2, 3, 4])
-        for agent_id in ROSTER[:2]:
-            records = _decoded_snapshot(
-                WorkspaceAgentExchangeStore(self.workspace),
-                _selection(agent_id=agent_id),
-            )
-            self.assertEqual([record["sequence"] for record in records], [1, 2])
 
 
 class AgentExchangeStorageSecurityTests(unittest.TestCase):

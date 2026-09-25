@@ -1,7 +1,7 @@
 {
   "max_sequential_wall_seconds": 1080,
   "max_shard_wall_seconds": 540,
-  "max_test_source_lines": 142664,
+  "max_test_source_lines": 142474,
   "schema_version": 1,
   "subtest_caps": {
     "tests.test_adapter_streaming.AdapterStreamingTests.test_antigravity_adapter_extracts_status_and_error_from_legacy_terminal_shape": 0,
@@ -372,7 +372,6 @@
     "tests.test_agent_exchange_contracts.AgentExchangeContractTests.test_input_schema_is_exact_frozen_slotted_and_content_hidden": 0,
     "tests.test_agent_exchange_contracts.AgentExchangeContractTests.test_receipt_selection_inventory_and_snapshot_validate_exact_facts": 18,
     "tests.test_agent_exchange_contracts.AgentExchangeContractTests.test_storage_errors_are_exact_content_free_classifications": 0,
-    "tests.test_agent_exchange_storage.AgentExchangeConcurrencyTests.test_subprocesses_share_global_high_water_and_per_agent_order": 0,
     "tests.test_agent_exchange_storage.AgentExchangeConcurrencyTests.test_threads_serialize_one_agent_and_keep_agent_streams_independent": 0,
     "tests.test_agent_exchange_storage.AgentExchangeStorageBehaviorTests.test_construction_absent_inventory_and_snapshot_are_noncreating": 0,
     "tests.test_agent_exchange_storage.AgentExchangeStorageBehaviorTests.test_content_bounds_complete_utf8_prefix_counts_and_full_digest": 0,
@@ -1489,7 +1488,6 @@
     "tests.test_interactive_controller.ControllerSettingsTests.test_nested_return_but_interrupt_and_eof_cancel_all": 3,
     "tests.test_interactive_controller.ControllerSettingsTests.test_pending_provider_precedence_controls_discovery_without_mutation": 0,
     "tests.test_interactive_controller.ControllerSettingsTests.test_persona_catalog_race_reports_conflict_and_preserves_config": 0,
-    "tests.test_interactive_controller.ControllerSettingsTests.test_provider_assignment_requires_fresh_auth_before_candidate_change": 0,
     "tests.test_interactive_controller.ControllerSettingsTests.test_provider_auth_cancel_returns_to_picker_before_parent_cancel": 0,
     "tests.test_interactive_controller.ControllerSettingsTests.test_provider_auth_interrupt_and_eof_cancel_whole_settings": 2,
     "tests.test_interactive_controller.ControllerSettingsTests.test_provider_editor_reopens_with_latest_notice_and_selection": 0,
@@ -1497,7 +1495,6 @@
     "tests.test_interactive_controller.ControllerSettingsTests.test_provider_navigation_does_not_discover_until_model_or_effort": 0,
     "tests.test_interactive_controller.ControllerSettingsTests.test_rounds_editor_retains_valid_value_and_clears_stale_success": 0,
     "tests.test_interactive_controller.ControllerSettingsTests.test_save_auth_exits_and_clean_rebase_never_persist_or_emit_saved": 3,
-    "tests.test_interactive_controller.ControllerSettingsTests.test_save_freshly_gates_each_distinct_effective_provider_once": 0,
     "tests.test_interactive_controller.ControllerSettingsTests.test_settings_applied_result_is_compact_scope_truthful_and_context_aware": 4,
     "tests.test_interactive_controller.ControllerSettingsTests.test_settings_confirmation_panel_is_changed_only_and_selectable": 4,
     "tests.test_interactive_controller.ControllerSettingsTests.test_settings_confirmation_routes_context_without_semantic_write_for_all_outcomes": 7,

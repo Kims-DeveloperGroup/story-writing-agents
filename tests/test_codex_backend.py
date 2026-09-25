@@ -5641,6 +5641,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 os.environ,
                 {"STORY_FAKE_CODEX_MODE": "nonzero_invalid_stderr"},
             ),
+            mock.patch.object(
+                asyncio.get_running_loop(), "slow_callback_duration", float("inf")
+            ),
             contextlib.redirect_stderr(captured_stderr),
             self.assertRaises(BackendProtocolError) as caught,
         ):
