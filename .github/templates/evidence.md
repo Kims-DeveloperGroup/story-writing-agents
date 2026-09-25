@@ -5,8 +5,9 @@ uncertain. Read the authoring guide and this complete source first:
 
 Runtime-code changes retain canonical-runner exact IDs, JSON evidence, outcomes, and optional
 full-shard reconciliation when required. Policy/docs/templates/skills/development-agent config/
-module-index-only/test-only changes report static validation instead. Review evidence matches
-the current head SHA. Never convert missing, stale, cancelled, interrupted, or aggregate
+module-index-only changes report static validation instead. Runtime and test changes require
+full CI. Review evidence identifies its reviewed base/head; later local verification and
+current-head checks are recorded separately. Never convert missing, stale, cancelled, interrupted, or aggregate
 evidence into a pass. Remove this comment and every placeholder before publication. Preserve
 all visible headings and their meaning.
 -->
@@ -37,7 +38,8 @@ all visible headings and their meaning.
 
 **Selection and identity:** {{Relevant runtime modules/exact IDs and JSON; full-suite shards only when required, or static check inventory; input identity and reuse decision.}}
 
-**Review rounds:** {{Initial/final head SHAs; Copilot/Codex findings; affected CI and required-human results.}}
+**Review rounds:** {{Round number, selected provider/actual effort, reviewed base/head, reconciliation links,
+remaining High/Critical findings, later final-diff verification, current checks/approvals, and closure state.}}
 
 **Timing:** {{Actual duration and material budget limit, when relevant.}}
 

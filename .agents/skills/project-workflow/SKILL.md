@@ -41,8 +41,8 @@ template. Preserve all visible Issue, PR, evidence, and status-comment headings 
 3. Implement only accepted scope. Use `runtime_implementer` or `test_engineer` only under
    AGENTS routing; those agents never receive this skill's GitHub authority.
 4. Runtime code and runtime agent definition (`config/agents/`) changes require affected
-   runtime tests through the canonical runner. Policy, test, docs, development-agent
-   configuration (`.codex/agents/`), and index-only changes use static validation.
+   runtime tests through the canonical runner. Runtime and test changes require full CI.
+   Policy, docs, development-agent configuration (`.codex/agents/`), and index-only changes use static validation.
 5. Review the diff, then stage and create coherent commits under COMMIT_POLICY. Push normally;
    never force-push.
 
@@ -50,15 +50,16 @@ template. Preserve all visible Issue, PR, evidence, and status-comment headings 
 
 1. Create or update the PR from the raw template. Verify the base and native Development and
    Project links. Use `Refs #N` unless a completing `main` PR may use `Closes #N`.
-2. When ready, add `workflow:managed`, record the head SHA, move the item to `In review`, and
-   request Copilot and Codex concurrently with affected CI. Copilot uses Lite unless the
-   change is high-risk, when Balanced is appropriate.
-3. Continue nondependent work while event-driven checks run. Batch unresolved Copilot High
-   and Codex P0/P1 findings with required human feedback into one fix set.
-4. After material fixes, push once, record the new head SHA, and request one final concurrent
-   review round and CI run. Do not re-request after each push.
-5. Verify required approvals/checks and that review evidence matches the current head SHA.
-   Lower-severity AI feedback is nonblocking and may become linked follow-up work.
+2. When ready, follow [review routing and closure](../../../GITHUB_WORKFLOW.md#asynchronous-review-and-ci):
+   record the rationale, choose exactly one provider selector, add `workflow:managed`, and
+   move the item to `In review`. Request through the managed workflow while affected CI runs.
+3. Reconcile feedback into one batch. Medium findings and small in-scope improvements are
+   optional through round 2; round 3 onward accepts only confirmed High/Critical defects.
+4. Preserve numbered rounds across pushes/base changes; do not request after each push.
+   Further requests need material uncertainty and evidence. Balanced uses the Reviewers UI.
+5. Stop at verified closure, preserving the reviewed SHA and later local verification
+   separately. An additional clean AI review is unnecessary. Audit current required checks
+   and approvals, final diff, and every blocking finding before integration.
 
 ## 4. Integrate and close
 

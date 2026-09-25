@@ -26,9 +26,14 @@ headings and their meaning.
 
 {{Results mapped to scenarios/criteria, with exact runtime IDs or named static checks.}}
 
-**Initial review-round head:** {{SHA and Copilot, Codex, affected CI, and required-human state.}}
+**Review selection:** {{One of copilot-lite, copilot-balanced, codex; matching selector label.}}
 
-**Final review-round head:** {{SHA and gate results after material fixes, or not required.}}
+**Review rationale:** {{Risk and affected behavior that justify the selected tier.}}
+
+**Review rounds:** {{Number, provider/actual effort, reviewed base/head, reconciliation links, and state.}}
+
+**Verified closure:** {{Blocking finding dispositions, final base/head and diff inspection,
+current checks/approvals, later local verification, and closure record; or remaining work.}}
 
 {{Link detailed Evidence and name failures, skips, unexecuted cases, or stale evidence.}}
 

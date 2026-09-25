@@ -14,13 +14,19 @@ status-comment templates.
   and smallest safe fix.
 - Do not block on style, preference, speculative refactoring, or unrelated cleanup. Mark these
   nonblocking.
-- Runtime tests are required only when runtime code changes. Policy, docs, templates, skills,
-  development-agent configuration, module-index-only, and test-only changes need static checks
-  and diff review instead.
-- Treat `PYTHONPATH=src python -m tests.runner run` as the canonical runtime runner. Preserve exact
-  relevant module/ID selections and JSON evidence; retain shards and reconciliation for full runs.
-- Review uses PR-specific rounds: one request when ready and one final request after material fixes. Project milestones remain for sprint planning.
-  Do not request or expect re-review after every push.
+- Runtime and test changes require full CI under TEST_POLICY.md; runtime-code changes also
+  need affected tests. Policy/docs/templates/skills/development-agent/index-only changes use
+  static validation and diff review.
+- Use `PYTHONPATH=src python -m tests.runner run` for runtime checks; retain exact IDs and JSON.
+- Follow GITHUB_WORKFLOW.md for provider selection, numbered rounds, and verified closure.
+  Read the current round record: Medium findings and small in-scope improvements are optional
+  through round 2. From round 3, report only confirmed High/Critical defects in bugs or agreed
+  requirements; exclude enhancements, preferences, speculative refactors, and minor changes.
+- Give each finding severity, concrete impact, affected requirement, and supporting evidence.
+  Do not relabel a preference High to bypass the threshold. Deduplicate repeated findings.
+- Review the current diff without demanding another review for every push. Evidence-backed
+  closure of blockers plus required verification is sufficient; a clean extra AI review is
+  unnecessary. Do not expect both providers or reset rounds when head/base changes.
 - Mutating workflow automation is allowed only with the `workflow:managed` label. The root
-  manually squash-merges only after checking current-base/head reviews, threads, protections,
+  manually squash-merges only after checking review closure, the current diff, threads, protections,
   and checks; auto-merge and merge queue are not used.
