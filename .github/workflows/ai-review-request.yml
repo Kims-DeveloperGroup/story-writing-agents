@@ -2,19 +2,51 @@ name: AI review round
 
 on:
   pull_request_target:
-    types: [opened, ready_for_review, reopened, labeled, edited]
+    types: [opened, ready_for_review, reopened, labeled]
   workflow_dispatch:
     inputs:
       pr_number:
         description: Pull request number
         required: true
         type: number
-      round:
-        description: PR review round (not a Project milestone)
+      operation:
+        description: Request, reconcile a response/UI request, close, or adopt existing history
         required: true
-        default: final
+        default: request
         type: choice
-        options: [initial, final]
+        options: [request, reconcile, close, adopt]
+      expected_round:
+        description: Next round for request; current round otherwise; prior count for adopt
+        required: true
+        type: number
+      reason:
+        description: Risk rationale or evidence-backed reconciliation/closure assessment
+        required: true
+        type: string
+      evidence:
+        description: GitHub URL of reconciliation, failure, actual effort, or closure evidence
+        type: string
+      finding_severity:
+        description: Verified severity justifying another review (required from round 3)
+        default: none
+        type: choice
+        options: [none, medium, high, critical]
+      finding_url:
+        description: GitHub URL of the remaining finding or material uncertainty
+        type: string
+      outcome:
+        description: Reconcile/adopt outcome; missing responses are never completed
+        default: completed
+        type: choice
+        options: [completed, failed, not_sent]
+      review_id:
+        description: Numeric provider review ID; omit for Codex thumbs-up completion
+        type: string
+      observed_effort:
+        description: Actual Copilot effort observed in the linked overview/timeline evidence
+        default: none
+        type: choice
+        options: [none, lite, balanced]
 
 permissions:
   contents: read
@@ -22,277 +54,268 @@ permissions:
   pull-requests: write
 
 concurrency:
-  # Non-qualifying edits/labels must not replace a queued managed review round.
+  # Irrelevant labels must not displace a queued managed request.
   group: >-
-    ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}-${{
-      github.event.action == 'edited' && !github.event.changes.base && github.run_id ||
-      github.event.action == 'labeled' && github.event.label.name != 'workflow:managed' && github.run_id ||
-      'managed' }}
+    ai-review-${{ github.event.pull_request.number || inputs.pr_number }}-${{
+      github.event.action == 'labeled' && github.event.label.name != 'workflow:managed' &&
+      github.event.label.name != 'review:copilot-lite' &&
+      github.event.label.name != 'review:copilot-balanced' &&
+      github.event.label.name != 'review:codex' && github.run_id || 'managed' }}
   cancel-in-progress: false
 
-# Keep the repository Copilot review default at Lite. Select Balanced in the
-# Reviewers UI only for security-sensitive or cross-subsystem review rounds.
 jobs:
-  resolve:
-    name: Resolve managed review round
-    runs-on: ubuntu-latest
-    outputs:
-      request: ${{ steps.resolve.outputs.request }}
-      pr_number: ${{ steps.resolve.outputs.pr_number }}
-      head_sha: ${{ steps.resolve.outputs.head_sha }}
-      base_sha: ${{ steps.resolve.outputs.base_sha }}
-      round: ${{ steps.resolve.outputs.round }}
-    steps:
-      - id: resolve
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const {owner, repo} = context.repo;
-            const dispatched = context.eventName === "workflow_dispatch";
-            const number = dispatched
-              ? Number(context.payload.inputs.pr_number)
-              : context.payload.pull_request.number;
-            const round = dispatched ? context.payload.inputs.round : "initial";
-            const {data: pr} = await github.rest.pulls.get({
-              owner, repo, pull_number: number,
-            });
-            const labels = pr.labels.map(label => label.name);
-            const triggerIsManaged = dispatched ||
-              context.payload.action === "opened" ||
-              context.payload.action === "ready_for_review" ||
-              context.payload.action === "reopened" ||
-              (context.payload.action === "edited" &&
-                Boolean(context.payload.changes?.base)) ||
-              context.payload.label?.name === "workflow:managed";
-            let request = triggerIsManaged && labels.includes("workflow:managed") &&
-              pr.state === "open" && !pr.draft;
-
-            if (request) {
-              const comments = await github.paginate(github.rest.issues.listComments, {
-                owner, repo, issue_number: number, per_page: 100,
-              });
-              const marker = `<!-- ai-review-round-complete:${round}:${pr.base.sha}:${pr.head.sha} -->`;
-              request = !comments.some(comment =>
-                comment.user?.login === "github-actions[bot]" &&
-                comment.body?.includes(marker));
-            }
-
-            core.setOutput("request", String(request));
-            core.setOutput("pr_number", String(number));
-            core.setOutput("head_sha", pr.head.sha);
-            core.setOutput("base_sha", pr.base.sha);
-            core.setOutput("round", round);
-
-  mark:
-    name: Mark current-head review round
-    needs: resolve
-    if: needs.resolve.outputs.request == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/github-script@v7
-        env:
-          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
-          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
-          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
-          REVIEW_ROUND: ${{ needs.resolve.outputs.round }}
-        with:
-          script: |
-            const {owner, repo} = context.repo;
-            const pullNumber = Number(process.env.PR_NUMBER);
-            const {data: pr} = await github.rest.pulls.get({
-              owner, repo, pull_number: pullNumber,
-            });
-            if (pr.state !== "open" || pr.draft ||
-                !pr.labels.some(label => label.name === "workflow:managed")) {
-              core.setFailed("PR is no longer open, ready, and workflow:managed.");
-              return;
-            }
-            if (pr.head.sha !== process.env.HEAD_SHA ||
-                pr.base.sha !== process.env.BASE_SHA) {
-              core.setFailed(
-                "PR base or head moved; restart the review round on the current diff.");
-              return;
-            }
-            const marker = `<!-- ai-review-round-open:${process.env.REVIEW_ROUND}:${process.env.BASE_SHA}:${process.env.HEAD_SHA} -->`;
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner, repo, issue_number: pullNumber, per_page: 100,
-            });
-            if (comments.some(comment =>
-                comment.user?.login === "github-actions[bot]" &&
-                comment.body?.includes(marker))) return;
-            const short = process.env.HEAD_SHA.slice(0, 12);
-            await github.rest.issues.createComment({
-              owner,
-              repo,
-              issue_number: pullNumber,
-              body: `AI review round **${process.env.REVIEW_ROUND}** opened for \`${short}\`.\n\n${marker}`,
-            });
-
-  request-copilot:
-    name: Request Copilot review
-    needs: [resolve, mark]
-    if: needs.resolve.outputs.request == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/github-script@v7
-        env:
-          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
-          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
-          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
-          REVIEW_ROUND: ${{ needs.resolve.outputs.round }}
-        with:
-          script: |
-            const {owner, repo} = context.repo;
-            const pullNumber = Number(process.env.PR_NUMBER);
-            const {data: pr} = await github.rest.pulls.get({
-              owner, repo, pull_number: pullNumber,
-            });
-            if (pr.state !== "open" || pr.draft ||
-                !pr.labels.some(label => label.name === "workflow:managed")) {
-              core.setFailed("PR is no longer open, ready, and workflow:managed.");
-              return;
-            }
-            if (pr.head.sha !== process.env.HEAD_SHA ||
-                pr.base.sha !== process.env.BASE_SHA) {
-              core.setFailed(
-                "PR base or head moved; restart the review round on the current diff.");
-              return;
-            }
-            const marker = `<!-- ai-review-copilot-requested:${process.env.REVIEW_ROUND}:${process.env.BASE_SHA}:${process.env.HEAD_SHA} -->`;
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner, repo, issue_number: pullNumber, per_page: 100,
-            });
-            if (comments.some(comment =>
-                comment.user?.login === "github-actions[bot]" &&
-                comment.body?.includes(marker))) return;
-            const {data: bot} = await github.rest.users.getByUsername({
-              username: "copilot-pull-request-reviewer[bot]",
-            });
-            if (bot.type !== "Bot" || !bot.node_id) {
-              core.setFailed("Copilot bot identity is unavailable");
-              return;
-            }
-            const opened = comments.find(comment =>
-              comment.user?.login === "github-actions[bot]" &&
-              comment.body?.includes(
-                `<!-- ai-review-round-open:${process.env.REVIEW_ROUND}:${process.env.BASE_SHA}:${process.env.HEAD_SHA} -->`));
-            if (!opened) {
-              core.setFailed("Current review round has no open marker");
-              return;
-            }
-            const {node: reviewState} = await github.graphql(`
-              query($pr: ID!) {
-                node(id: $pr) { ... on PullRequest {
-                  reviewRequests(first: 100) { nodes {
-                    requestedReviewer { ... on Bot { id } }
-                  } }
-                } }
-              }
-            `, {pr: pr.node_id});
-            const pending = reviewState.reviewRequests.nodes.some(request =>
-              request.requestedReviewer?.id === bot.node_id);
-            const reviews = await github.paginate(github.rest.pulls.listReviews, {
-              owner, repo, pull_number: pullNumber, per_page: 100,
-            });
-            const completed = reviews.some(review =>
-              review.user?.login === "copilot-pull-request-reviewer[bot]" &&
-              review.commit_id === process.env.HEAD_SHA &&
-              new Date(review.submitted_at) >= new Date(opened.created_at));
-            if (!pending && !completed) {
-              await github.graphql(`
-                mutation($pr: ID!, $bot: ID!) {
-                  requestReviews(input: {pullRequestId: $pr, botIds: [$bot]}) {
-                    pullRequest { id }
-                  }
-                }
-              `, {pr: pr.node_id, bot: bot.node_id});
-            }
-            await github.rest.issues.createComment({
-              owner, repo, issue_number: pullNumber, body: marker,
-            });
-
-  request-codex:
-    name: Request Codex review
-    needs: [resolve, mark]
-    if: needs.resolve.outputs.request == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/github-script@v7
-        env:
-          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
-          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
-          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
-          REVIEW_ROUND: ${{ needs.resolve.outputs.round }}
-        with:
-          script: |
-            const {owner, repo} = context.repo;
-            const pullNumber = Number(process.env.PR_NUMBER);
-            const {data: pr} = await github.rest.pulls.get({
-              owner, repo, pull_number: pullNumber,
-            });
-            if (pr.state !== "open" || pr.draft ||
-                !pr.labels.some(label => label.name === "workflow:managed")) {
-              core.setFailed("PR is no longer open, ready, and workflow:managed.");
-              return;
-            }
-            if (pr.head.sha !== process.env.HEAD_SHA ||
-                pr.base.sha !== process.env.BASE_SHA) {
-              core.setFailed(
-                "PR base or head moved; restart the review round on the current diff.");
-              return;
-            }
-            const marker = `<!-- ai-review-codex-requested:${process.env.REVIEW_ROUND}:${process.env.BASE_SHA}:${process.env.HEAD_SHA} -->`;
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner, repo, issue_number: pullNumber, per_page: 100,
-            });
-            if (comments.some(comment =>
-                comment.user?.login === "github-actions[bot]" &&
-                comment.body?.includes(marker))) return;
-            await github.rest.issues.createComment({
-              owner,
-              repo,
-              issue_number: pullNumber,
-              body: `@codex review\n\nReview round: ${process.env.REVIEW_ROUND}.\n\n${marker}`,
-            });
-
-  complete:
-    name: Complete review round requests
-    needs: [resolve, mark, request-copilot, request-codex]
+  review:
+    name: Manage one provider and numbered review rounds
     if: >-
-      needs.resolve.outputs.request == 'true' &&
-      needs.mark.result == 'success' &&
-      needs.request-copilot.result == 'success' &&
-      needs.request-codex.result == 'success'
+      (github.event_name != 'workflow_dispatch' ||
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) &&
+      (github.event.action != 'labeled' || github.event.label.name == 'workflow:managed' ||
+       github.event.label.name == 'review:copilot-lite' ||
+       github.event.label.name == 'review:copilot-balanced' ||
+       github.event.label.name == 'review:codex')
     runs-on: ubuntu-latest
     steps:
+      # No checkout: PR code never executes with this job's write token.
       - uses: actions/github-script@v7
         env:
-          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
-          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
-          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
-          REVIEW_ROUND: ${{ needs.resolve.outputs.round }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         with:
           script: |
             const {owner, repo} = context.repo;
-            const pullNumber = Number(process.env.PR_NUMBER);
-            const {data: pr} = await github.rest.pulls.get({
-              owner, repo, pull_number: pullNumber,
+            const explicit = context.eventName === 'workflow_dispatch';
+            const input = explicit ? context.payload.inputs : {};
+            const number = Number(explicit ? input.pr_number : context.payload.pull_request.number);
+            const operation = explicit ? input.operation : 'request';
+            const expected = Number(input.expected_round);
+            const actor = process.env.TRIGGERING_ACTOR || context.actor;
+            const fail = message => { throw new Error(message); };
+            const note = message => core.notice(message);
+            const knownProfiles = ['copilot-lite', 'copilot-balanced', 'codex'];
+            const states = ['reserved', 'awaiting_ui', 'requested', 'uncertain', 'completed', 'failed', 'closed'];
+            const isCodex = user => user?.type === 'Bot' &&
+              user.login === 'chatgpt-codex-connector[bot]';
+            const isCopilot = user => user?.type === 'Bot' &&
+              user.login === 'copilot-pull-request-reviewer[bot]';
+            const isAI = user => isCodex(user) || isCopilot(user);
+            const isWorkflow = user => user?.type === 'Bot' && user.login === 'github-actions[bot]';
+            const safeText = value => String(value || '').replace(/@/g, '@\u200b').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const validURL = value => {
+              try {
+                const url = new URL(value);
+                return url.protocol === 'https:' && url.hostname === 'github.com' &&
+                  !url.username && !url.password &&
+                  url.pathname.startsWith(`/${owner}/${repo}/`);
+              } catch { return false; }
+            };
+            if (!Number.isSafeInteger(number) || number < 1) fail('Invalid PR number.');
+            if (!['request', 'reconcile', 'close', 'adopt'].includes(operation)) fail('Invalid operation.');
+            if (explicit) {
+              if (!Number.isSafeInteger(expected) || expected < 1) fail('expected_round must be positive.');
+              for (const username of new Set([context.actor, actor])) {
+                const {data} = await github.rest.repos.getCollaboratorPermissionLevel({owner, repo, username});
+                if (!['write', 'maintain', 'admin'].includes(data.permission)) fail('A repository writer must dispatch or rerun this operation.');
+              }
+            }
+            const getPR = async () => (await github.rest.pulls.get({owner, repo, pull_number: number})).data;
+            const pr = await getPR();
+            const labels = pr.labels.map(label => label.name);
+            if (pr.state !== 'open' || pr.draft || !labels.includes('workflow:managed')) {
+              if (explicit) fail('PR must be open, ready, and workflow:managed.');
+              return note('No managed ready PR; no review requested.');
+            }
+            const selected = knownProfiles.filter(profile => labels.includes(`review:${profile}`));
+            if (selected.length !== 1) {
+              if (!explicit && selected.length === 0) return note('Select exactly one review provider before requesting.');
+              fail('Exactly one review:copilot-lite, review:copilot-balanced, or review:codex label is required.');
+            }
+            const profile = selected[0];
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: number, per_page: 100,
             });
-            if (pr.state !== "open" || pr.draft ||
-                !pr.labels.some(label => label.name === "workflow:managed")) {
-              core.setFailed("PR is no longer open, ready, and workflow:managed.");
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner, repo, pull_number: number, per_page: 100,
+            });
+            const ledger = [];
+            for (const comment of comments.filter(comment => isWorkflow(comment.user))) {
+              if (!comment.body?.includes('<!-- ai-review-state:v1:')) continue;
+              const match = comment.body.match(/^<!-- ai-review-state:v1:([A-Za-z0-9+/=]+) -->$/m);
+              if (!match) fail('Malformed review state; reconcile the record before requesting.');
+              let state;
+              try { state = JSON.parse(Buffer.from(match[1], 'base64').toString('utf8')); }
+              catch { fail('Unreadable review state; do not reset review history.'); }
+              if (state.version !== 1 || state.pr !== number ||
+                  !Number.isSafeInteger(state.round) || state.round < 1 ||
+                  !Number.isSafeInteger(state.attempt) || state.attempt < 1 ||
+                  !knownProfiles.includes(state.profile) || !states.includes(state.status)) {
+                fail('Invalid review state; do not reset review history.');
+              }
+              ledger.push({...state, comment_id: comment.id});
+            }
+            ledger.sort((a, b) => a.comment_id - b.comment_id);
+            for (let i = 1; i < ledger.length; i++) {
+              if (ledger[i].round < ledger[i - 1].round) fail('Review round history moved backwards.');
+            }
+            const last = ledger.at(-1);
+            if (last && !explicit) return note(`Round ${last.round} is ${last.status}; automatic events never start another round.`);
+            // Reconciliation may append newer records; a rerun must remain inert across the entire ledger.
+            if (ledger.some(row => row.run_id === String(context.runId) && row.operation === operation)) {
+              return note('This workflow run already recorded this operation; use a fresh dispatch if another operation is justified.');
+            }
+            const nativeHistory = reviews.some(review => isAI(review.user)) || comments.some(comment =>
+              isAI(comment.user) || /@codex\s+review\b/.test(comment.body || '') ||
+              /<!-- ai-review-(?:round|copilot|codex)-/.test(comment.body || ''));
+            if (!last && nativeHistory && operation !== 'adopt') {
+              if (!explicit) return note('Existing AI review history requires adoption; no initial review replayed.');
+              fail('Adopt the existing review history before requesting or closing.');
+            }
+            const reason = String(input.reason || pr.body?.match(/^\*\*Review rationale:\*\*\s*(.+)$/m)?.[1] || '').trim();
+            if (reason.length < 20 || /\{\{|\}\}/.test(reason)) fail('Record a concrete review rationale or reconciliation assessment (20+ characters).');
+            const evidence = String(input.evidence || '').trim();
+            if (explicit && (operation !== 'request' || last) && !validURL(evidence)) {
+              fail('Link the reconciliation evidence in this GitHub repository.');
+            }
+            const pending = pr.requested_reviewers?.some(isAI);
+            const write = async state => {
+              const record = {...state, version: 1, pr: number, actor, operation,
+                run_id: String(context.runId), recorded_at: new Date().toISOString(), reason, evidence};
+              delete record.comment_id;
+              const marker = Buffer.from(JSON.stringify(record)).toString('base64');
+              const guidance = record.status === 'awaiting_ui'
+                ? `Request **${record.profile}** once in the Reviewers UI, then reconcile the provider response and actual effort. Do not request another provider.`
+                : record.status === 'uncertain'
+                ? 'Delivery is uncertain. Inspect the request and provider before explicitly reconciling; do not resend.'
+                : record.status === 'closed'
+                ? 'Root recorded verified closure. Required current checks, approvals, and the final merge audit still apply.'
+                : record.round >= 3 ? 'Defect-only phase: only confirmed High/Critical findings justify further work.'
+                : 'Medium findings and small in-scope improvements are optional.';
+              const {data} = await github.rest.issues.createComment({owner, repo, issue_number: number,
+                body: `AI review round **${record.round}**, attempt **${record.attempt}**: **${record.status}** (${record.profile}).\n\n${guidance}\n\nReviewed/requested base: \`${record.base_sha || 'legacy: not established'}\`; head: \`${record.head_sha || 'legacy: not established'}\`.\n\nReason: ${safeText(reason)}\n\nEvidence: ${safeText(evidence || 'initial risk rationale')}\n\n<!-- ai-review-state:v1:${marker} -->`});
+              return {...record, comment_id: data.id};
+            };
+            const assertSnapshot = async () => {
+              const fresh = await getPR();
+              const selectors = fresh.labels.filter(label => knownProfiles.some(p => label.name === `review:${p}`));
+              if (fresh.state !== 'open' || fresh.draft ||
+                  !fresh.labels.some(label => label.name === 'workflow:managed') ||
+                  selectors.length !== 1 || selectors[0].name !== `review:${profile}` ||
+                  fresh.head.sha !== pr.head.sha || fresh.base.sha !== pr.base.sha) {
+                fail('PR state, selection, base, or head changed. Reinspect before another operation.');
+              }
+              return fresh;
+            };
+            const verifyResponse = async (state, adopting = false) => {
+              if (input.review_id) {
+                const id = Number(input.review_id);
+                if (!Number.isSafeInteger(id) || id < 1) fail('Invalid provider review ID.');
+                const review = reviews.find(candidate => candidate.id === id);
+                const providerMatches = profile === 'codex' ? isCodex(review?.user) : isCopilot(review?.user);
+                if (!review || !providerMatches || !review.submitted_at || review.state === 'PENDING' ||
+                    (!adopting && (review.commit_id !== state.head_sha ||
+                      new Date(review.submitted_at) < new Date(state.opened_at)))) {
+                  fail('No completed matching provider response for this round/head.');
+                }
+                if (ledger.some(row => row.review_id === id && row.round !== state.round)) fail('This review already belongs to another round.');
+                if (profile.startsWith('copilot-') && input.observed_effort !== profile.slice('copilot-'.length)) {
+                  fail('Actual Copilot effort must match the selected tier; link its overview/timeline evidence.');
+                }
+                return {review_id: id, head_sha: review.commit_id,
+                  observed_effort: profile === 'codex' ? null : input.observed_effort,
+                  response_url: review.html_url};
+              }
+              if (profile !== 'codex') fail('Copilot completion requires a review_id and observed_effort.');
+              let request = comments.find(comment => isWorkflow(comment.user) &&
+                comment.body?.includes(state.request_marker || '\u0000'));
+              if (adopting) {
+                const id = Number(new URL(evidence).hash.match(/^#issuecomment-(\d+)$/)?.[1]);
+                request = comments.find(comment => comment.id === id && /@codex\s+review\b/.test(comment.body || ''));
+              }
+              if (!request) fail('A matching Codex request is needed to verify its clean thumbs-up.');
+              const reactions = await github.paginate(github.rest.reactions.listForIssueComment, {
+                owner, repo, comment_id: request.id, per_page: 100,
+              });
+              if (!reactions.some(reaction => isCodex(reaction.user) && reaction.content === '+1')) {
+                fail('No Codex clean thumbs-up; missing/eyes reactions are not completion.');
+              }
+              return {response_url: request.html_url, clean_reaction: true};
+            };
+            if (operation === 'adopt') {
+              if (last || !nativeHistory || pending) fail('Adoption needs existing unadopted history and no outstanding native review request.');
+              const minimum = Math.max(2, new Set(reviews.filter(review => isAI(review.user)).map(review => review.commit_id)).size);
+              if (expected < minimum) fail(`Adoption must preserve at least ${minimum} prior rounds; count actual request cycles in the evidence.`);
+              if (!['completed', 'failed', 'not_sent'].includes(input.outcome)) fail('Invalid adoption outcome.');
+              const state = {round: expected, attempt: 1, profile, base_sha: null,
+                head_sha: null, opened_at: new Date().toISOString(), adopted: true};
+              const response = input.outcome === 'completed' ? await verifyResponse(state, true) : {};
+              await assertSnapshot();
+              await write({...state, ...response, status: input.outcome === 'completed' ? 'completed' : 'failed',
+                adoption_base_sha: pr.base.sha, outcome: input.outcome});
               return;
             }
-            if (pr.head.sha !== process.env.HEAD_SHA ||
-                pr.base.sha !== process.env.BASE_SHA) {
-              core.setFailed(
-                "PR base or head moved; restart the review round on the current diff.");
+            if (operation === 'close' || operation === 'reconcile') {
+              if (!last || expected !== last.round) fail('expected_round must match the existing current round.');
+              if (profile !== last.profile) fail('Reconcile/close the original provider before changing selection.');
+              if (operation === 'close') {
+                if (!['completed', 'closed'].includes(last.status) || pending) fail('Closure requires a completed review, no outstanding native request, and root verification.');
+                await assertSnapshot();
+                await write({...last, status: 'closed', closure_base_sha: pr.base.sha, closure_head_sha: pr.head.sha});
+                return;
+              }
+              if (['completed', 'closed'].includes(last.status)) return note('Response already reconciled; request another round only if justified, or close.');
+              if (!['completed', 'failed', 'not_sent'].includes(input.outcome)) fail('Invalid reconciliation outcome.');
+              if (pending && input.outcome !== 'completed') fail('A native review request is still outstanding; reconcile its terminal outcome first.');
+              if (input.outcome === 'not_sent' && comments.some(comment => isWorkflow(comment.user) &&
+                  comment.body?.includes(last.request_marker || '\u0000'))) {
+                fail('A Codex request was posted; reconcile its actual terminal outcome instead of not_sent.');
+              }
+              const response = input.outcome === 'completed' ? await verifyResponse(last) : {};
+              await assertSnapshot();
+              await write({...last, ...response, status: input.outcome === 'completed' ? 'completed' : 'failed', outcome: input.outcome});
               return;
             }
-            const short = process.env.HEAD_SHA.slice(0, 12);
-            await github.rest.issues.createComment({
-              owner,
-              repo,
-              issue_number: pullNumber,
-              body: `AI review requests for round **${process.env.REVIEW_ROUND}** completed for \`${short}\`.\n\n<!-- ai-review-round-complete:${process.env.REVIEW_ROUND}:${process.env.BASE_SHA}:${process.env.HEAD_SHA} -->`,
-            });
+            if (last && !['completed', 'failed', 'closed'].includes(last.status)) {
+              fail('An outstanding/uncertain request must be reconciled before either provider is requested.');
+            }
+            if (pending) fail('A native AI review is already pending; do not issue another request.');
+            const retry = last?.status === 'failed' && !last.adopted;
+            const round = last ? last.round + (retry ? 0 : 1) : 1;
+            if (explicit && expected !== round) fail(`expected_round must be ${round}; another operation may have advanced the PR.`);
+            const severity = input.finding_severity || 'none';
+            const finding = String(input.finding_url || '').trim();
+            if (round >= 3) {
+              if (!['high', 'critical'].includes(severity) || !validURL(finding)) {
+                fail('Round 3 onward requires a confirmed High/Critical finding or material uncertainty, linked with its reconciliation evidence.');
+              }
+              if (!retry && ledger.some(row => row.finding_url === finding && row.evidence === evidence && row.head_sha === pr.head.sha)) {
+                fail('Repeated finding without changed evidence or code requires diagnosis, not another review.');
+              }
+            }
+            const attempt = retry ? last.attempt + 1 : 1;
+            const priorCopilot = [...ledger].reverse().find(row => row.profile.startsWith('copilot-'));
+            const needsUI = profile === 'copilot-balanced' ||
+              (profile === 'copilot-lite' && priorCopilot && priorCopilot.profile !== profile);
+            const marker = `<!-- ai-review-request:v1:${number}:${round}:${attempt} -->`;
+            await assertSnapshot();
+            let state = await write({round, attempt, profile, status: needsUI ? 'awaiting_ui' : 'reserved',
+              base_sha: pr.base.sha, head_sha: pr.head.sha, opened_at: new Date().toISOString(),
+              finding_severity: severity, finding_url: finding, request_marker: marker});
+            if (needsUI) return;
+            try {
+              const fresh = await assertSnapshot();
+              if (fresh.requested_reviewers?.some(isAI)) fail('A native AI request appeared before dispatch.');
+              if (profile === 'codex') {
+                const {data: request} = await github.rest.issues.createComment({owner, repo, issue_number: number,
+                  body: `@codex review\n\nReview round ${round}; base ${pr.base.sha}, head ${pr.head.sha}.\n${round >= 3 ? 'Only confirmed High/Critical bugs, missing or incorrect agreed requirements, and material defects. Exclude enhancements, Medium feedback, and minor improvements.' : 'Prioritize confirmed defects. Medium feedback is optional and never blocks completion.'}\nFollow GITHUB_WORKFLOW.md for severity and verified closure.\n\n${marker}`});
+                state.request_comment_id = request.id;
+              } else {
+                const {data: bot} = await github.rest.users.getByUsername({username: 'copilot-pull-request-reviewer[bot]'});
+                if (!isCopilot(bot) || !bot.node_id) fail('Copilot identity is unavailable.');
+                await github.graphql(`mutation($pr: ID!, $bot: ID!) {
+                  requestReviews(input: {pullRequestId: $pr, botIds: [$bot], union: true}) { pullRequest { id } }
+                }`, {pr: pr.node_id, bot: bot.node_id});
+              }
+              await write({...state, status: 'requested'});
+            } catch (error) {
+              // A network error can occur after a remote send. Never retry it blindly.
+              await write({...state, status: 'uncertain'});
+              throw error;
+            }

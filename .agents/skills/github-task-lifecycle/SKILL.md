@@ -38,23 +38,26 @@ Create a draft PR when useful and mark it ready only after its description, scop
 verification, docs, diff, base, and Development/Project links are current. Use `Refs #N` for
 partial work and `Closes #N` only for a completing PR to `main`.
 
-At ready-for-review, record the head SHA and request Copilot and Codex concurrently with
-affected CI. Batch blocking feedback. After material fixes, record the new SHA and make one
-final concurrent review request; never request again after every push. Only unresolved
-Copilot High, Codex P0/P1, required approvals, and required checks block merge.
-
-Mutating automation requires `workflow:managed`. Do not enable auto-merge or merge queue;
-recheck the current base/head, review threads, approvals, checks, and mergeability before
-manual GitHub squash merge. Include the owning Issue in the squash commit message.
+At ready-for-review, follow [review routing and closure](../../../GITHUB_WORKFLOW.md#asynchronous-review-and-ci):
+record the rationale, choose one provider selector, and request through the managed workflow
+while affected CI starts. Reconcile numbered rounds before requesting another. Medium
+feedback is optional through round 2; round 3 onward accepts only confirmed High/Critical
+defects. Stop at verified closure without requiring another clean AI review. Preserve review
+history across head/base changes and provider switches; never routinely request both providers.
+Mutating automation requires `workflow:managed`. Recheck current base/head, final-diff
+inspection, blocker dispositions, approvals, checks, and mergeability before manual GitHub
+squash merge. Do not enable auto-merge or merge queue. Include the owning Issue in the squash
+commit message.
 
 ## Verify and finish
 
 Runtime code changes use `PYTHONPATH=src python -m tests.runner run` with exact IDs and JSON
-evidence. Policy/docs/templates/skills/development-agent configuration/module-index-only/
-test-only changes use static checks and diff review only.
+evidence. Runtime and test changes require full CI under TEST_POLICY.md.
+Policy/docs/templates/skills/development-agent configuration/module-index-only changes use
+static checks and diff review only.
 
-After merge, verify the merged SHA, current-head review/check evidence, Issue closure, Project
-`Done`, milestone disposition, Development links, and remote branch state. Before cleanup,
+After merge, verify the merged SHA, review closure, current-head checks, Issue closure,
+Project `Done`, milestone disposition, Development links, and remote branch state. Before cleanup,
 record worktree/branch/HEAD/porcelain, integration, recoverability, and authority. Remove only
 clean integrated worktrees without force, delete branches separately, and verify absence.
 

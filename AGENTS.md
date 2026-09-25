@@ -36,6 +36,11 @@ permits read-only work only. Load `$github-task-lifecycle` and follow
 | Structural Python work | Route through `$subagent-routing`; use [PYTHON_MODULARITY_POLICY.md](.codex/agents/runtime_implementer/PYTHON_MODULARITY_POLICY.md). |
 | Commits and dependencies | [COMMIT_POLICY.md](COMMIT_POLICY.md) and [DEPENDENCY_POLICY.md](DEPENDENCY_POLICY.md). |
 
+## Code Review Rules
+
+Follow [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md#asynchronous-review-and-ci) for the current
+numbered round, severity threshold, provider selection, and verified closure.
+
 ## Verification
 
 Runtime-code changes require affected tests. Runtime and test changes require the full CI
