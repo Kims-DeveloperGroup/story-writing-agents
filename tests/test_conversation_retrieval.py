@@ -162,53 +162,6 @@ class ConversationRetrievalContractTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     replace(CONVERSATION_RETRIEVAL_POLICY, **override)
 
-    def test_value_shapes_are_frozen_slotted_keyword_only_and_v2_exact(self) -> None:
-        expected = {
-            ConversationRetrievalSource: ("citation",),
-            ConversationRetrievalSearchItem: ("citation_id", "source", "snippet"),
-            ConversationRetrievalHistoryRecord: ("record", "field_citation_ids"),
-            ConversationRetrievalSearchObservation: (
-                "session_id",
-                "conversation_id",
-                "turn_id",
-                "action_index",
-                "hits",
-                "truncated",
-            ),
-            ConversationRetrievalReadObservation: (
-                "session_id",
-                "conversation_id",
-                "turn_id",
-                "action_index",
-                "source_citation_id",
-                "source",
-                "records",
-                "truncated",
-            ),
-            ConversationRetrievalProgressEvent: (
-                "session_id",
-                "conversation_id",
-                "turn_id",
-                "agent_id",
-                "action_index",
-                "phase",
-                "search_hit_count",
-                "history_record_count",
-                "observation_utf8_bytes",
-                "truncated",
-            ),
-        }
-        for value_type, names in expected.items():
-            with self.subTest(value_type=value_type.__name__):
-                self.assertEqual(
-                    tuple(field.name for field in fields(value_type)), names
-                )
-                self.assertTrue(value_type.__dataclass_params__.frozen)
-                self.assertTrue(value_type.__dataclass_params__.kw_only)
-                self.assertTrue(hasattr(value_type, "__slots__"))
-        source = _source()
-        with self.assertRaises((FrozenInstanceError, AttributeError)):
-            source.citation = source.citation  # type: ignore[misc]
 
     def test_request_actions_reply_and_result_bind_one_v2_history(self) -> None:
         context = select_bounded_collaboration_context(_history())

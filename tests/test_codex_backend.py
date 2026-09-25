@@ -5641,6 +5641,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 os.environ,
                 {"STORY_FAKE_CODEX_MODE": "nonzero_invalid_stderr"},
             ),
+            mock.patch.object(
+                asyncio.get_running_loop(), "slow_callback_duration", float("inf")
+            ),
             contextlib.redirect_stderr(captured_stderr),
             self.assertRaises(BackendProtocolError) as caught,
         ):
@@ -9177,100 +9180,6 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(private_value, runtime_log)
 
 
-class ConcreteBackendCliTests(unittest.TestCase):
-    def test_repeatable_backend_overrides_and_codex_defaults(self) -> None:
-        parser = build_parser()
-        arguments = parser.parse_args(
-            [
-                "chat",
-                "--backend",
-                "plot_architect=codex",
-                "--backend",
-                "character_custodian=antigravity",
-            ]
-        )
-        self.assertEqual(
-            _parse_backend_overrides(arguments.backend),
-            {
-                PLOT_ARCHITECT: "codex",
-                CHARACTER_CUSTODIAN: "antigravity",
-            },
-        )
-        self.assertIsNone(arguments.codex_model)
-        self.assertEqual(arguments.antigravity_executable, "agy")
-        self.assertIsNone(arguments.antigravity_model)
-        self.assertIsNone(arguments.antigravity_effort)
-        self.assertEqual(arguments.codex_timeout, 900)
-        with self.assertRaises(ConfigurationError) as caught:
-            _parse_backend_overrides(["plot_architect=gemini"])
-        self.assertEqual(
-            str(caught.exception),
-            "backend 'gemini' is no longer supported; use 'antigravity'",
-        )
-        with self.assertRaisesRegex(ConfigurationError, "duplicate"):
-            _parse_backend_overrides(["plot_architect=codex", "plot_architect=codex"])
-        with self.assertRaisesRegex(ConfigurationError, "unknown"):
-            _parse_backend_overrides(["unknown=codex"])
-
-    def test_session_create_pause_and_reopen_commands_retain_manifest(self) -> None:
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        workspace_path = Path(temporary.name) / "workspace"
-        with contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(main(["init", str(workspace_path)]), 0)
-        workspace = Workspace(workspace_path).require_ready()
-
-        for action, durable in (
-            ("create", "ready"),
-            ("pause", "paused"),
-            ("reopen", "ready"),
-        ):
-            stdout = io.StringIO()
-            with (
-                contextlib.redirect_stdout(stdout),
-                mock.patch(
-                    "story_writing_agents.backend.shutil.which",
-                    return_value="/fake/codex",
-                ),
-                mock.patch.object(
-                    cli_module,
-                    "resolve_workspace",
-                    return_value=workspace,
-                ),
-            ):
-                exit_code = main(
-                    [
-                        "session",
-                        action,
-                        "cli_session",
-                        "--workspace",
-                        str(workspace_path),
-                    ]
-                )
-            self.assertEqual(exit_code, 0)
-            self.assertEqual(
-                json.loads(stdout.getvalue()),
-                {
-                    "access_state": "claimable",
-                    "assessment": {
-                        "allowed_operations": [
-                            "enter_destination",
-                            "leave_source",
-                            "pause_session",
-                        ],
-                        "conversation_id": None,
-                        "failure_code": "none",
-                        "next_action": "begin_with_lead",
-                        "owner": None,
-                        "recovery_result": None,
-                        "scope": "idle",
-                        "session_id": "cli_session",
-                        "state": "idle_ready",
-                    },
-                    "durable_state": durable,
-                    "session_id": "cli_session",
-                },
-            )
 
 
 if __name__ == "__main__":

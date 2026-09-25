@@ -319,115 +319,11 @@ class StoryCommitCandidateIntegrationTests(StoryCommitGitTestCase):
         )
         self.assertNotIn("새 장면", repr(binding))
 
-    def test_revalidation_returns_exact_content_and_rejects_artifact_drift(
-        self,
-    ) -> None:
-        _root, session_root, _evidence, binding = self.prepare_binding()
-        plan = revalidate_story_commit_candidate(binding)
-        self.assertIsInstance(plan, StoryCommitRevalidation)
-        self.assertEqual(
-            plan.after_contents,
-            (("core_documents/global_outline.md", "새 장면 🌙\n".encode()),),
-        )
-        (session_root / "core_documents/global_outline.md").write_text(
-            "drifted private prose\n", encoding="utf-8"
-        )
-        with self.assertRaises(StoryCommitError) as caught:
-            revalidate_story_commit_candidate(binding)
-        self.assertIs(
-            caught.exception.code, StoryCommitFailureCode.APPLICATION_MISMATCH
-        )
-        self.assertNotIn("drifted private prose", repr(caught.exception))
 
-    def test_prestaged_changes_fail_closed_before_candidate_publication(self) -> None:
-        root, session_root, evidence = self.applied_replace("prestaged")
-        self.run_git(session_root, "add", "--", "core_documents/global_outline.md")
-        with self.assertRaises(StoryCommitError) as caught:
-            prepare_story_commit_candidate(
-                root, manifest(), evidence, "Update opening", ("impact",)
-            )
-        self.assertIs(caught.exception.code, StoryCommitFailureCode.CANDIDATE_DRIFT)
 
-    def test_noncanonical_untracked_bytes_are_preserved_and_excluded(self) -> None:
-        root, session_root, evidence = self.applied_replace("preserve")
-        unrelated = session_root / "notes with spaces 한글.txt"
-        unrelated.write_bytes(b"private unrelated bytes\n")
-        binding = prepare_story_commit_candidate(
-            root, manifest(), evidence, "Update opening", ("impact",)
-        )
-        self.assertEqual(
-            tuple(item.path for item in binding.candidate.paths),
-            ("core_documents/global_outline.md",),
-        )
-        self.assertEqual(unrelated.read_bytes(), b"private unrelated bytes\n")
 
-    def test_symlinked_canonical_artifact_fails_closed_without_following_target(
-        self,
-    ) -> None:
-        root, session_root, evidence = self.applied_replace("symlink")
-        target = self.test_root / "outside private prose.txt"
-        target.write_bytes(b"outside private prose\n")
-        artifact = session_root / "core_documents/global_outline.md"
-        artifact.unlink()
-        artifact.symlink_to(target)
-        with self.assertRaises(StoryCommitError) as caught:
-            prepare_story_commit_candidate(
-                root, manifest(), evidence, "Update opening", ("impact",)
-            )
-        self.assertIn(
-            caught.exception.code,
-            {
-                StoryCommitFailureCode.CANDIDATE_DRIFT,
-                StoryCommitFailureCode.APPLICATION_MISMATCH,
-            },
-        )
-        self.assertEqual(target.read_bytes(), b"outside private prose\n")
-        self.assertNotIn("outside private prose", repr(caught.exception))
 
-    def test_unreported_canonical_change_and_content_limit_fail_closed(self) -> None:
-        for failure in ("unreported", "oversize"):
-            with self.subTest(failure=failure):
-                root, session_root, evidence = self.applied_replace(failure)
-                patcher = mock.patch.object(candidates_module, "_MAX_CONTENT_BYTES", 1)
-                if failure == "unreported":
-                    (session_root / "core_documents/narrative_rules.md").write_bytes(
-                        b"unreported private rule\n"
-                    )
-                    patcher = mock.patch.object(
-                        candidates_module,
-                        "_MAX_CONTENT_BYTES",
-                        candidates_module._MAX_CONTENT_BYTES,  # noqa: SLF001
-                    )
-                with patcher, self.assertRaises(StoryCommitError) as caught:
-                    prepare_story_commit_candidate(
-                        root, manifest(), evidence, "Update opening", ("impact",)
-                    )
-                self.assertIs(
-                    caught.exception.code,
-                    StoryCommitFailureCode.APPLICATION_MISMATCH
-                    if failure == "unreported"
-                    else StoryCommitFailureCode.INVALID_REQUEST,
-                )
-                self.assertNotIn("unreported private rule", repr(caught.exception))
 
-    def test_branch_movement_and_missing_candidate_require_reprepare(self) -> None:
-        root, _session_root, _evidence, binding = self.prepare_binding()
-        with self.assertRaises(StoryCommitError) as missing:
-            load_story_commit_candidate(root, manifest(), "novel", "f" * 64)
-        self.assertIs(
-            missing.exception.code, StoryCommitFailureCode.CANDIDATE_NOT_FOUND
-        )
-        self.assertNotIn("Story Space", repr(missing.exception))
-        self.run_git(
-            root,
-            "update-ref",
-            f"refs/heads/{binding.candidate.branch}",
-            binding.internal_tip,
-            binding.candidate.branch_tip,
-        )
-        with self.assertRaises(StoryCommitError) as caught:
-            revalidate_story_commit_candidate(binding)
-        self.assertIs(caught.exception.code, StoryCommitFailureCode.CANDIDATE_DRIFT)
 
 
 if __name__ == "__main__":

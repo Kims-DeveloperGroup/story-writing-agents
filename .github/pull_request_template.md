@@ -4,8 +4,9 @@ Read the authoring guide and this complete source before writing:
 
 Describe final behavior, the same action before/after, actual mechanisms, evidence and gaps,
 limits, and the correct Issue relationship. Record review rounds and CI runs against exact head
-SHAs. Runtime tests are required only for runtime-code changes; other changes report static
-validation. Remove this comment and every placeholder before publication. Preserve all visible
+SHAs. Runtime and test changes require full-suite CI; runtime-code changes also require
+affected tests. Other changes report static validation. Remove this comment and every
+placeholder before publication. Preserve all visible
 headings and their meaning.
 -->
 
