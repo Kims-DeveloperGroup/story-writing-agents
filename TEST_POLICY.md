@@ -11,7 +11,8 @@ shard job after 15 minutes, including setup.
 - Preserve the existing canonical test IDs or remove them. New IDs are not part
   of routine feature work. A new behavior should be checked in an existing
   representative test when possible, with focused local evidence in the PR.
-- Do not raise any retained test's successful or failed `subTest` count. The
+- Do not raise any retained test's completed `subTest` count, including
+  passed, failed, and skipped subtests. The
   budget file records a maximum for each canonical ID. Reducing a count or
   deleting an ID is allowed.
 - Keep the total nonblank, noncomment lines in `tests/test*.py` at or below
