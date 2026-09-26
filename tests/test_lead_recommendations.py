@@ -85,6 +85,52 @@ class LeadRecommendationTests(RecommendationCase):
         self.assertIs(projection.current_state, c.CollaborationStepState.AWAITING_CONFIRMATION)
         self.assertEqual(self.snapshots(), before)
 
+        for aliases, omit_source in (((), False), (("recommendation_request",), False),
+                                     (("recommendation_decision",), False),
+                                     (("recommendation_request", "recommendation_decision"), True)):
+            cid = self.conversation("Raw confirmed drafting consultation")
+            self.backend.enqueue(recommendation(recommended_action=action(kind="prepare_consultation"),
+                authoring_scope=lambda call: lead._live_scope(call, activity="draft", domains=("plot_structure",))))
+            offered = await self.runtime.lead_turn(self.session_id, cid, "Recommend Plot drafting from this brief.")
+            self.assertIs(offered.kind, c.LeadOutcomeKind.RECOMMENDATION, offered)
+            request = offered.recommendation_request
+            source_ids = [item.input_id for item in request.basis.inputs]
+            self.assertTrue(source_ids)
+            mode = "review" if request.authoring_scope.activity is AuthoringActivity.REVIEW else "draft"
+            raw_observations = []
+            def raw(call, _provider):
+                selected = ([] if omit_source else source_ids) + list(aliases)
+                body = {"kind": "proposal", "message": request.purpose,
+                    "authoring_scope": lead._compact_scope(c.authoring_scope_to_dict(request.authoring_scope)),
+                    "proposal": {"assignments": [{"agent_id": agent, "mode": mode,
+                        "instruction": request.instruction, "input_ids": selected} for agent in request.specialist_ids]}}
+                encoded = json.dumps({"action": {"kind": "answer", "result": body}})
+                raw_observations.append((json.loads(encoded)["action"]["result"]["proposal"]["assignments"][0]["input_ids"],
+                                         lead.diagnose_json_text(encoded, call.schema)))
+                return encoded
+            self.backend.enqueue(raw)
+            if omit_source:
+                self.backend.enqueue(raw)
+            calls = len(self.backend.calls)
+            prepared = await self.runtime.decide_lead_recommendation(decision(offered))
+            self.assertTrue(raw_observations, prepared)
+            for selected, issues in raw_observations:
+                self.assertEqual(selected, ([] if omit_source else source_ids) + list(aliases))
+                self.assertEqual(issues, (), (aliases, issues))
+            self.assertEqual(len(self.backend.calls) - calls, 2 if omit_source else 1, prepared)
+            self.assert_no_downstream(cid)
+            if omit_source:
+                self.assertIsNone(prepared.proposal)
+                self.assertTrue(prepared.validation_details)
+            else:
+                self.assertIs(prepared.next_action, c.CollaborationNextAction.SUBMIT_CONFIRMATION, prepared)
+                self.assertEqual(prepared.proposal.authoring_scope, request.authoring_scope)
+                self.assertEqual(prepared.proposal.purpose, request.purpose)
+                for assignment in prepared.proposal.assignments:
+                    self.assertEqual(set(assignment.input_ids), {*source_ids, "recommendation_request", "recommendation_decision"})
+                    self.assertEqual(len(assignment.input_ids), len(source_ids) + 2)
+            self.assertEqual(self.snapshots(), before)
+
 
 
 
@@ -93,6 +139,7 @@ class LeadRecommendationTests(RecommendationCase):
 
     async def test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority(self):
         conversation_id, turn = await self.recommend()
+        snapshots = self.snapshots()
         choice = decision(turn)
         before, calls = self.history(conversation_id), len(self.backend.calls)
         foreign = self.conversation("Foreign decision")
@@ -132,6 +179,8 @@ class LeadRecommendationTests(RecommendationCase):
         with self.assertRaises(BackendProtocolError):
             await self.runtime.decide_lead_recommendation(choice)
         self.assertEqual(len(self.backend.calls), calls + 1)
+        self.assert_no_downstream(conversation_id)
+        self.assertEqual(self.snapshots(), snapshots)
 
 
 

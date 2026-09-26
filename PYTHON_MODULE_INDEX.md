@@ -77,7 +77,8 @@ depend on terminal presentation or concrete persistence.
 
 Primary public access is through the root facade for stable library types. `config` owns
 runtime configuration loading; `prompts` owns prompt assembly, not provider execution.
-`models` carries additive, optional validation diagnostics without granting next-action authority.
+`models` carries additive, optional validation diagnostics and the optional keyword-only
+`AgentRequest.expected_reviewed_proposal` identity hint without granting next-action authority.
 
 ### Runtime orchestration and providers
 
@@ -86,7 +87,7 @@ authentication, recovery, and diagnostic behavior behind provider-neutral contra
 
 - `orchestrator`, `backend`, `provider_adapter`, `antigravity_adapter`, `codex_adapter`
 - `provider_auth`, `provider_auth_recovery`, `provider_catalog`, `provider_process`
-- `provider_error_artifacts`, `debug_log`, `structured_output_validation`
+- `provider_error_artifacts`, `debug_log`, `structured_output_validation`, `lead_provider_contracts`
 
 `orchestrator` composes domain contracts, storage, consensus, Git story commits, references,
 and provider-neutral backends. `provider_process` owns provider subprocess execution;
@@ -95,6 +96,9 @@ their filesystem outputs. Concrete adapters depend inward on `provider_adapter` 
 `structured_output_validation` is a pure, package-internal helper for bounded,
 content-free diagnostics from completed structured replies and trusted schema; it owns no
 provider state, persistence, or authority and is not a public facade.
+`lead_provider_contracts` owns immutable Lead choice snapshots shared by schema projections,
+prompt facts, and closed validation rules. It depends on domain contracts; orchestration
+retains confirmation, current-source membership, READ receipt, and lifecycle authority.
 
 ### Agent context and source budgeting
 

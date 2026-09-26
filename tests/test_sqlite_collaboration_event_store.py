@@ -245,11 +245,11 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
             for process in processes:
                 process.start()
             start.set()
+            observed = [results.get(timeout=15) for _ in processes]
             for process in processes:
                 process.join(15)
                 self.assertFalse(process.is_alive())
                 self.assertEqual(process.exitcode, 0)
-            observed = [results.get(timeout=2), results.get(timeout=2)]
         finally:
             for process in processes:
                 if process.is_alive():

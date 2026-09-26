@@ -81,6 +81,12 @@ not replace the shared runtime's validation of runtime-owned correlation, issued
 handles, evidence IDs, Lead outcome matrix, input aliases, artifact authority,
 or confirmation.
 
+For FINALIZE, runtime supplies the current reviewed proposal identity through the
+optional keyword-only `AgentRequest.expected_reviewed_proposal` pair. When present,
+the schema requires that exact ID and digest. Existing callers may omit the pair;
+digest-format validation and the runtime's final stale-identity check still apply.
+The pair describes expected output and grants no publication or Apply authority.
+
 Successful `AgentReply`, `ConversationReply`, and retrieval replies carry a
 runtime-derived `ReplyTrace`. It reports only the role, normalized action,
 content-source labels, recovered field labels, and whether the reply came from

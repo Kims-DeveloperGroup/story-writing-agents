@@ -13,6 +13,10 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, AsyncContextManager, AsyncIterator, Mapping, cast
 
+from .lead_provider_contracts import (
+    LeadContractError, LeadProviderConstraints, PREPARATION_INPUT_IDS,
+    alternatives, canonical_assignments, canonical_scope, nonempty_text_schema, visible_text,
+)
 from .agents import (
     CHARACTER_CUSTODIAN,
     EXECUTION_SPECIALIST,
@@ -434,60 +438,37 @@ def _string_array_result_schema(
 def _authoring_scope_result_schema(
     task_revisions: tuple[tuple[str, int], ...] = (),
 ) -> dict[str, object]:
-    return _closed_result_object({
-        "activity": {"enum": [item.value for item in AuthoringActivity], "type": "string"},
-        "target_paths": _string_array_result_schema(),
-        "domains": _string_array_result_schema(
-            allowed_values=tuple(item.value for item in ArtifactReviewDomain),
-        ),
-        "task": (
-            {
-                "enum": list(dict.fromkeys(f"{task_id}@{revision}" for task_id, revision in task_revisions)),
-                "type": "string",
-            }
-            if task_revisions
-            else {"type": "string"}
-        ),
-    })
+    return LeadProviderConstraints(task_revisions=task_revisions).scope_schema()
 
 
 def _assignment_result_schema(
     input_ids: tuple[str, ...],
+    constraints: LeadProviderConstraints | None = None,
 ) -> dict[str, object]:
-    input_schema = _string_array_result_schema(
-        allowed_values=input_ids,
-    )
-    return _closed_result_object({
-        "agent_id": {"enum": list(SPECIALIST_IDS), "type": "string"},
-        "instruction": {"type": "string"},
-        "input_ids": input_schema,
-        "mode": {
-            "enum": [item.value for item in SpecialistAssignmentMode],
-            "type": "string",
-        },
-    })
+    return (constraints or LeadProviderConstraints(input_ids=input_ids)).assignment_schema()
 
 
 def _proposal_result_schema(
     relation: LeadProposalRelation,
     input_ids: tuple[str, ...],
+    constraints: LeadProviderConstraints | None = None,
 ) -> dict[str, object]:
-    assignments = {
-        "assignments": {
-            "items": _assignment_result_schema(input_ids),
-            "type": "array",
-        },
-    }
-    return {"anyOf": [
-        _closed_result_object(assignments),
-        _closed_result_object({
-            **assignments,
-            "objective_intent": {"anyOf": _objective_intent_result_schema()["anyOf"][1:]},
-        }),
-    ]}
+    facts = constraints or LeadProviderConstraints(input_ids=input_ids)
+    assignments = {"assignments": {
+        "items": facts.assignment_schema(), "type": "array",
+        "minItems": len(facts.preparation_specialists) or 1,
+        "maxItems": len(facts.preparation_specialists) or len(SPECIALIST_IDS),
+    }}
+    objective = facts.objective_schema("consult")
+    with_objective = _closed_result_object({**assignments, "objective_intent": objective})
+    if facts.preparation_kind:
+        return with_objective if facts.preparation_objective_id else _closed_result_object(assignments)
+    return {"anyOf": [_closed_result_object(assignments), with_objective]}
 
 
-def _artifact_intent_result_schema() -> dict[str, object]:
+def _artifact_intent_result_schema(
+    constraints: LeadProviderConstraints | None = None,
+) -> dict[str, object]:
     operation_schemas = [
         _closed_result_object(
             {
@@ -527,111 +508,76 @@ def _artifact_intent_result_schema() -> dict[str, object]:
     operations = {
         "operations": {
             "items": {"anyOf": operation_schemas},
+            "minItems": 1,
             "type": "array",
         },
     }
-    return {"anyOf": [
-        _closed_result_object(operations),
-        _closed_result_object({
-            **operations,
-            "objective_intent": {"anyOf": _objective_intent_result_schema()["anyOf"][1:]},
-        }),
-    ]}
+    facts = constraints or LeadProviderConstraints()
+    with_objective = _closed_result_object({
+        **operations, "objective_intent": facts.objective_schema("prepare"),
+    })
+    if facts.preparation_kind:
+        return with_objective
+    return {"anyOf": [_closed_result_object(operations), with_objective]}
 
 
-def _recommended_action_result_schema() -> dict[str, object]:
-    common: dict[str, object] = {
-        "instruction": {"type": "string"},
-        "source_ids": _string_array_result_schema(),
-    }
-    variants: list[dict[str, object]] = []
-    for objective in ({}, {"objective_id": {"type": "string"}}):
-        variants.extend((
-            _closed_result_object({
-            **common,
-            **objective,
-            "kind": {"enum": ["prepare_artifact"], "type": "string"},
-            "target_paths": _string_array_result_schema(),
-            }),
-            _closed_result_object({
-            **common,
-            **objective,
-            "kind": {"enum": ["prepare_consultation"], "type": "string"},
-            "specialist_ids": _string_array_result_schema(
-                allowed_values=tuple(SPECIALIST_IDS),
-            ),
-            }),
-        ))
-    return {"anyOf": variants}
+def _recommended_action_result_schema(
+    constraints: LeadProviderConstraints | None = None,
+) -> dict[str, object]:
+    return (constraints or LeadProviderConstraints()).recommendation_schema()
 
 
 def _objective_intent_result_schema() -> dict[str, object]:
-    steps = {"enum": [item.value for item in ArtifactObjectiveNextStep], "type": "string"}
-    return {"anyOf": [
-        {"type": "null"},
-        _closed_result_object({
-            "action": {"enum": ["start"], "type": "string"},
-            "target_paths": _string_array_result_schema(),
-            "next_step": steps,
-        }),
-        _closed_result_object({
-            "action": {"enum": ["continue"], "type": "string"},
-            "objective_id": {"type": "string"},
-            "next_step": steps,
-        }),
-        _closed_result_object({
-            "action": {"enum": ["cancel"], "type": "string"},
-            "objective_id": {"type": "string"},
-        }),
-    ]}
+    return {"anyOf": [{"type": "null"},
+        LeadProviderConstraints().objective_schema("clarify", cancel=True)]}
 
 
 def _lead_front_result_contract(
     expected_relation: LeadProposalRelation,
     input_ids: tuple[str, ...],
     task_revisions: tuple[tuple[str, int], ...] = (),
+    constraints: LeadProviderConstraints | None = None,
 ) -> ContextJsonObjectResultContract:
-    scope = _authoring_scope_result_schema(task_revisions)
-    message = {"message": {"type": "string"}}
-    scoped = {**message, "authoring_scope": scope}
-    direct_kinds = [
-        item.value
-        for item in LeadOutcomeKind
-        if item in {LeadOutcomeKind.QUESTION, LeadOutcomeKind.CRITIQUE}
-    ]
-    variants = [
-        _closed_result_object(scoped),
-        _closed_result_object({
-            **scoped,
-            "kind": {"enum": direct_kinds, "type": "string"},
-        }),
-        _closed_result_object({
-            **scoped,
-            "kind": {
-                "enum": [item.value for item in LeadOutcomeKind if item not in {
-                    LeadOutcomeKind.PROPOSAL, LeadOutcomeKind.RECOMMENDATION,
-                }],
-                "type": "string",
-            },
-            "objective_intent": {"anyOf": _objective_intent_result_schema()["anyOf"][1:]},
-        }),
-        _closed_result_object({
-            **scoped,
-            "kind": {"enum": [LeadOutcomeKind.RECOMMENDATION.value], "type": "string"},
-            "recommended_action": _recommended_action_result_schema(),
-        }),
-    ]
-    for field, intent_schema in (
-        ("proposal", _proposal_result_schema(expected_relation, input_ids)),
-        ("artifact_intent", _artifact_intent_result_schema()),
-    ):
-        proposal = {
-            **scoped,
-            "kind": {"enum": [LeadOutcomeKind.PROPOSAL.value], "type": "string"},
-            field: intent_schema,
-        }
-        variants.append(_closed_result_object(proposal))
-    return ContextJsonObjectResultContract("lead-outcome-v5", {"anyOf": variants})
+    facts = constraints or LeadProviderConstraints(input_ids=input_ids, task_revisions=task_revisions)
+    scoped = {"message": nonempty_text_schema(), "authoring_scope": facts.scope_schema()}
+    recommendation = _closed_result_object({**scoped,
+        "kind": {"enum": ["recommendation"], "type": "string"},
+        "recommended_action": facts.recommendation_schema()})
+    if facts.recommendation_only:
+        variants = [recommendation]
+    elif facts.preparation_kind:
+        field = "artifact_intent" if facts.preparation_kind == "prepare_artifact" else "proposal"
+        intent = (_artifact_intent_result_schema(facts) if field == "artifact_intent" else
+                  _proposal_result_schema(expected_relation, input_ids, facts))
+        variants = [
+            _closed_result_object({**scoped, "kind": {"enum": ["question"], "type": "string"}}),
+            _closed_result_object({**scoped, "kind": {"enum": ["proposal"], "type": "string"}, field: intent}),
+        ]
+    else:
+        variants = [
+            _closed_result_object(scoped),
+            _closed_result_object({**scoped, "kind": {"enum": ["question", "critique"], "type": "string"}}),
+            _closed_result_object({**scoped,
+                "kind": {"enum": ["question"], "type": "string"},
+                "objective_intent": facts.objective_schema("clarify")}),
+            recommendation,
+        ]
+        if facts.objective_ids is None or facts.objective_ids:
+            identity: dict[str, object] = {"type": "string"}
+            if facts.objective_ids:
+                identity["enum"] = list(facts.objective_ids)
+            variants.append(_closed_result_object({**scoped,
+                "kind": {"enum": [item.value for item in LeadOutcomeKind if item not in {
+                    LeadOutcomeKind.PROPOSAL, LeadOutcomeKind.RECOMMENDATION, LeadOutcomeKind.QUESTION}], "type": "string"},
+                "objective_intent": _closed_result_object({
+                    "action": {"enum": ["cancel"], "type": "string"}, "objective_id": identity,
+                }),
+            }))
+        for field, intent in (("proposal", _proposal_result_schema(expected_relation, input_ids, facts)),
+                              ("artifact_intent", _artifact_intent_result_schema(facts))):
+            variants.append(_closed_result_object({**scoped,
+                "kind": {"enum": ["proposal"], "type": "string"}, field: intent}))
+    return ContextJsonObjectResultContract("lead-outcome-v5", alternatives(variants))
 
 
 def _specialist_result_contract(
@@ -651,7 +597,7 @@ def _specialist_result_contract(
                                  else item is not CollaborationSpecialistAssessment.DRAFTED)],
                     "type": "string",
                 },
-                "message": {"type": "string"},
+                "message": nonempty_text_schema(),
             }
         ),
     )
@@ -665,9 +611,13 @@ def _lead_synthesis_result_contract(
     allow_next_intent: bool,
     artifact_review: bool,
     authoring_scope: AuthoringScope,
+    constraints: LeadProviderConstraints | None = None,
 ) -> ContextJsonObjectResultContract:
-    del evidence, authoring_scope
-    message = {"message": {"type": "string"}}
+    del evidence
+    facts = constraints or LeadProviderConstraints(
+        input_ids=(*input_ids, *reply_event_ids), scope=authoring_scope, continuation=True,
+    )
+    message = {"message": nonempty_text_schema()}
     contract_id = "lead-synthesis-v3"
     if not artifact_review:
         variants = [_closed_result_object(message)]
@@ -675,9 +625,9 @@ def _lead_synthesis_result_contract(
             variants.append(_closed_result_object({
                 **message,
                 "next_intent": _closed_result_object({
-                    "purpose": {"type": "string"},
+                    "purpose": nonempty_text_schema(),
                     "assignments": {
-                        "items": _assignment_result_schema((*input_ids, *reply_event_ids)),
+                        "items": facts.assignment_schema(),
                         "maxItems": len(SPECIALIST_IDS),
                         "minItems": 1,
                         "type": "array",
@@ -686,7 +636,7 @@ def _lead_synthesis_result_contract(
             }))
         variants.append(_closed_result_object({
             **message,
-            "recommended_action": _recommended_action_result_schema(),
+            "recommended_action": facts.recommendation_schema(),
         }))
         return ContextJsonObjectResultContract(contract_id, {"anyOf": variants})
     contract_id = "artifact-review-synthesis-v3"
@@ -1673,6 +1623,19 @@ class StoryRuntime:
                     round_number=int(invocation.revision_id[1:]),
                 )
             )
+            expected_reviewed_proposal = None
+            if phase is Phase.FINALIZE:
+                try:
+                    reviewed_projection = self.conversation_storage_services.event_store.read_context(
+                        invocation.execution_identity.session_id, invocation.execution_identity.conversation_id,
+                    )
+                except ConversationNotFoundError:
+                    # Legacy consensus calls need not have a collaboration conversation.
+                    pass
+                else:
+                    reviewed = reviewed_projection.current_reviewed_artifact_proposal
+                    if reviewed is not None and reviewed_projection.current_artifact_state is ArtifactProposalState.REVIEWED:
+                        expected_reviewed_proposal = (reviewed.proposal_id, reviewed.proposal_digest)
             request = AgentRequest(
                 session_id=invocation.execution_identity.session_id,
                 debate_id=invocation.workflow_id,
@@ -1683,6 +1646,7 @@ class StoryRuntime:
                 task=f"Execute confirmed consensus {invocation.phase.value} phase.",
                 user_payload=input_text,
                 candidate_payload=candidate_text,
+                expected_reviewed_proposal=expected_reviewed_proposal,
             )
             reply = await bound_agent.invoke(request, reference_read=reference_read)
             if reference_operation is not None:
@@ -4304,7 +4268,23 @@ class StoryRuntime:
             self._deterministic_id("e", attempt_id, reply.assignment_id, "reply")
             for reply in replies
         )
+        current_projection = self.conversation_storage_services.event_store.read_context(session_id, conversation_id)
+        constraints = LeadProviderConstraints(
+            input_ids=(*(item.input_id for item in proposal.basis.inputs), *reply_event_ids),
+            reviewer_inputs=tuple((reviewer, item.input_id) for item in proposal.basis.inputs
+                if item.kind in {CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.MANUSCRIPT,
+                                 CollaborationInputKind.WRITING_ARTIFACT}
+                for reviewer in (self._core_reviewer(item.locator),) if reviewer is not None),
+            source_ids=tuple(dict.fromkeys(("current_response",
+                *(item.event_id for item in current_projection.offered_draft_sources),
+                *(item.input_id for item in proposal.basis.inputs), *reply_event_ids))),
+            objective_ids=tuple(item.facts.objective_id for item in current_projection.artifact_objectives
+                if item.state is ArtifactObjectiveState.OPEN
+                and item.facts.origin_conversation_id == conversation_id),
+            scope=proposal.authoring_scope, continuation=True,
+        )
         value = {
+            "provider_constraints": constraints.prompt_facts(),
             "artifact_objectives": artifact_objective_context(project_collaboration_history(events)),
             "objective_instruction": (
                 "This consultation/review synthesis leaves its artifact objective OPEN. "
@@ -4347,7 +4327,7 @@ class StoryRuntime:
             )
         else:
             cast(dict[str, object], value["answer_contract"])["recommended_action"] = (
-                _recommended_action_result_schema()
+                _recommended_action_result_schema(constraints)
             )
             value["recommendation_instruction"] = (
                 "Omit recommended_action for an answer. An actionable synthesis may select exactly "
@@ -4426,7 +4406,9 @@ class StoryRuntime:
                 ),
                 artifact_review=artifact_candidate is not None,
                 authoring_scope=proposal.authoring_scope,
+                constraints=constraints,
             ),
+            constraints=constraints,
             physical_call_limit=proposal.budget.synthesis_max_physical_calls,
             round_number=proposal.budget.rounds_spent + 1,
             decoder=decode,
@@ -4589,6 +4571,7 @@ class StoryRuntime:
         decoder: Callable[[str], object],
         fallback_answer: str,
         action_progress_sink: ContextActionProgressSink | None,
+        constraints: LeadProviderConstraints | None = None,
     ) -> _CollaborationInvocationResult:
         artifact_inputs = tuple(
             item
@@ -4705,8 +4688,23 @@ class StoryRuntime:
             decoded: object | None = None
             trace_origin = ReplyTraceOrigin.PROVIDER
 
+            def diagnose(answer: str) -> tuple[DomainValidationRule, ...]:
+                if constraints is not None:
+                    return constraints.diagnose(answer) or (DomainValidationRule.LEAD_OUTCOME_REJECTED,)
+                try:
+                    value = json.loads(answer)
+                except (TypeError, ValueError):
+                    return (DomainValidationRule.LEAD_OUTCOME_REJECTED,)
+                if type(value) is dict and not visible_text(value.get("message")):
+                    return (DomainValidationRule.MESSAGE_REQUIRED,)
+                return (DomainValidationRule.LEAD_OUTCOME_REJECTED,)
+
             def validate(answer: str, _authorization: object) -> None:
                 nonlocal decoded
+                if constraints is not None:
+                    rules = constraints.diagnose(answer)
+                    if rules:
+                        raise LeadContractError(rules)
                 decoded = decoder(answer)
 
             invocation_arguments = {
@@ -4715,6 +4713,7 @@ class StoryRuntime:
                 "active_debate": authorities[2],
                 "own_agent_state": authorities[3],
                 "answer_validator": validate,
+                "answer_diagnostic": diagnose,
                 "validation_sink": provider.record_validation_details,
                 "progress_sink": action_progress_sink,
                 **self._lead_continuation_arguments(
@@ -6335,7 +6334,7 @@ class StoryRuntime:
         if type(raw_assignments) is not list or not raw_assignments:
             raise ValueError
         assignments: list[LeadAssignmentIntent] = []
-        for item in raw_assignments:
+        for item in canonical_assignments(raw_assignments):
             if (
                 type(item) is not dict
                 or set(item) != {"agent_id", "input_ids", "instruction", "mode"}
@@ -6857,6 +6856,35 @@ class StoryRuntime:
             session_id, conversation_id,
         )
         objective_projection = project_collaboration_history(objective_events)
+        preparation_request = (None if preparation is None else
+            cast(LeadRecommendationRequestPayload, preparation.request_event.payload))
+        is_revision = preparation is not None and (
+            preparation.decision_event.payload.decision.kind is CollaborationConfirmationDecision.REVISE
+        )
+        constraints = LeadProviderConstraints(
+            input_ids=tuple(item.input_id for item in inputs),
+            reviewer_inputs=tuple(
+                (reviewer, item.input_id) for item in inputs
+                if item.kind in {CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.MANUSCRIPT,
+                                 CollaborationInputKind.WRITING_ARTIFACT}
+                for reviewer in (self._core_reviewer(item.locator),) if reviewer is not None
+            ),
+            task_revisions=tuple(offered_tasks),
+            source_ids=tuple(dict.fromkeys(("current_response",
+                *(item.event_id for item in objective_projection.offered_draft_sources),
+                *(item.input_id for item in inputs)))),
+            objective_ids=tuple(item.facts.objective_id for item in objective_projection.artifact_objectives
+                if item.state is ArtifactObjectiveState.OPEN
+                and item.facts.origin_conversation_id == conversation_id),
+            allow_read_sources=preparation is None,
+            scope=(preparation_request.authoring_scope
+                   if preparation_request is not None and not is_revision else None),
+            preparation_kind=None if preparation_request is None else preparation_request.kind.value,
+            preparation_objective_id=None if preparation_request is None else preparation_request.objective_id,
+            preparation_targets=() if preparation_request is None else preparation_request.target_paths,
+            preparation_specialists=() if preparation_request is None else preparation_request.specialist_ids,
+            recommendation_only=is_revision,
+        )
         definition = self.prompts.build_contextual_definition(
             session_id=session_id,
             agent_id=LEAD_ORCHESTRATOR,
@@ -6913,6 +6941,7 @@ class StoryRuntime:
             )
             current_value: dict[str, object] = {
                 "contract_version": "lead-outcome-v5",
+                "provider_constraints": constraints.prompt_facts(),
                 "runtime_contract_overlay": _LEAD_OBJECTIVE_INSTRUCTION,
                 "artifact_objectives": artifact_objective_context(objective_projection),
                 "answer_contract": {
@@ -7030,6 +7059,7 @@ class StoryRuntime:
                     expected_relation,
                     tuple(item.input_id for item in inputs),
                     tuple(offered_tasks),
+                    constraints=constraints,
                 ),
                 physical_call_limit=physical_call_limit,
                 include_core_statuses=True,
@@ -7040,57 +7070,39 @@ class StoryRuntime:
             decoded_artifact_candidate: ArtifactReviewCandidate | None = None
             declared_artifact_intent = False
             prepare_selected = False
+            read_ids: tuple[str, ...] = ()
+            read_reviewers: tuple[tuple[str, str], ...] = ()
+
+            def diagnose(answer: str) -> tuple[DomainValidationRule, ...]:
+                return constraints.diagnose(answer, read_ids=read_ids, read_reviewers=read_reviewers) or self._lead_outcome_validation_details(answer)
 
             def validate(
                 answer: str,
                 authorization: ContextAnswerAuthorization,
             ) -> None:
                 nonlocal decoded, decoded_artifact_candidate, decoded_evidence
-                nonlocal declared_artifact_intent, prepare_selected
+                nonlocal declared_artifact_intent, prepare_selected, read_ids, read_reviewers
                 declared_artifact_intent = self._declares_artifact_intent(answer)
                 prepare_selected = prepare_selected or self._declares_artifact_intent(
                     answer, objective_prepare_only=True,
                 )
+                read_ids = tuple(item.evidence_id for item in authorization.used_evidence)
+                read_reviewers = tuple(
+                    (reviewer, item.evidence_id) for item in authorization.used_evidence
+                    if item.source_kind is ContextSourceKind.WRITING_ARTIFACT
+                    for reviewer in (
+                        self._core_reviewer(f"${{{item.provenance.locator}}}"),
+                    ) if reviewer is not None
+                )
+                rules = constraints.diagnose(answer, read_ids=read_ids, read_reviewers=read_reviewers)
+                if rules:
+                    raise _LeadOutcomeValidationError("lead result violates its offered constraints")
                 decoded = self._decode_lead_outcome(
                     answer,
                     expected_relation=expected_relation,
                 )
                 if preparation is not None:
-                    preparation_request = cast(
-                        LeadRecommendationRequestPayload,
-                        preparation.request_event.payload,
-                    )
-                    if decoded.proposal is not None:
-                        candidate_ids = tuple(
-                            item.input_id
-                            for item in preparation_request.basis.inputs
-                        )
-                        decoded = replace(
-                            decoded,
-                            proposal=replace(
-                                decoded.proposal,
-                                purpose=preparation_request.purpose,
-                                assignments=tuple(
-                                    replace(
-                                        assignment,
-                                        review_basis=(
-                                            ReviewBasis(
-                                                tuple(
-                                                    input_id
-                                                    for input_id in assignment.input_ids
-                                                    if input_id in candidate_ids
-                                                ),
-                                                assignment.instruction,
-                                            )
-                                            if assignment.mode
-                                            is SpecialistAssignmentMode.REVIEW
-                                            else None
-                                        ),
-                                    )
-                                    for assignment in decoded.proposal.assignments
-                                ),
-                            ),
-                        )
+                    decoded = self._bind_recommendation_preparation(decoded, preparation)
                     self._validate_recommendation_preparation(decoded, preparation)
                 if prepare_selected and (
                     decoded.objective_intent is None
@@ -7258,7 +7270,7 @@ class StoryRuntime:
                     active_debate=authorities[2],
                     own_agent_state=authorities[3],
                     answer_validator=validate,
-                    answer_diagnostic=self._lead_outcome_validation_details,
+                    answer_diagnostic=diagnose,
                     validation_sink=provider.record_validation_details,
                     event_sink=context_event_sink,
                     progress_sink=action_progress_sink,
@@ -7372,7 +7384,7 @@ class StoryRuntime:
                         active_debate=authorities[2],
                         own_agent_state=authorities[3],
                         answer_validator=validate,
-                        answer_diagnostic=self._lead_outcome_validation_details,
+                        answer_diagnostic=diagnose,
                         validation_sink=provider.record_validation_details,
                         event_sink=context_event_sink,
                         progress_sink=action_progress_sink,
@@ -8034,6 +8046,32 @@ class StoryRuntime:
             # Fresh user-supplied candidates need exact review, while an
             # existing authoring task cannot shed its drafting obligations.
             cls._validate_draft_provenance(scope, task_events)
+
+    @staticmethod
+    def _bind_recommendation_preparation(
+        outcome: LeadProviderOutcome,
+        preparation: _RecommendationCapability,
+    ) -> LeadProviderOutcome:
+        """Restore only runtime-owned inputs under an already verified Confirm."""
+        decision = preparation.decision_event.payload.decision
+        if decision.kind is not CollaborationConfirmationDecision.CONFIRM or outcome.proposal is None:
+            return outcome
+        request = cast(LeadRecommendationRequestPayload, preparation.request_event.payload)
+        candidate_ids = {item.input_id for item in request.basis.inputs}
+        return replace(outcome, proposal=replace(
+            outcome.proposal,
+            purpose=request.purpose,
+            assignments=tuple(replace(
+                assignment,
+                input_ids=assignment.input_ids + tuple(
+                    alias for alias in PREPARATION_INPUT_IDS if alias not in assignment.input_ids
+                ),
+                review_basis=(ReviewBasis(
+                    tuple(alias for alias in assignment.input_ids if alias in candidate_ids),
+                    assignment.instruction,
+                ) if assignment.mode is SpecialistAssignmentMode.REVIEW else None),
+            ) for assignment in outcome.proposal.assignments),
+        ))
 
     @staticmethod
     def _validate_recommendation_preparation(
@@ -8942,7 +8980,7 @@ class StoryRuntime:
             }
             if type(value) is not dict or frozenset(value) not in allowed:
                 raise ValueError
-            raw_scope = value.get("authoring_scope")
+            raw_scope = canonical_scope(value.get("authoring_scope"))
             if type(raw_scope) is not dict:
                 raise ValueError
             kind = LeadOutcomeKind(value.get("kind", LeadOutcomeKind.ANSWER.value))
@@ -8952,6 +8990,8 @@ class StoryRuntime:
             ):
                 raise ValueError
             message = value["message"]
+            if not visible_text(message):
+                raise LeadContractError((DomainValidationRule.MESSAGE_REQUIRED,))
             task_id, separator, raw_revision = cast(str, raw_scope["task"]).rpartition("@")
             if not separator:
                 raise ValueError
@@ -9038,7 +9078,7 @@ class StoryRuntime:
             if type(raw_assignments) is not list or not raw_assignments:
                 raise ValueError
             assignments: list[LeadAssignmentIntent] = []
-            for item in raw_assignments:
+            for item in canonical_assignments(raw_assignments):
                 if type(item) is not dict or set(item) != {
                     "agent_id", "input_ids", "instruction", "mode",
                 }:
@@ -9110,6 +9150,11 @@ class StoryRuntime:
         for key in ("source_ids", *specific):
             if type(value[key]) is not list:
                 raise ValueError("recommended action collections must be arrays")
+        raw_specialists = value.get("specialist_ids", [])
+        if any(type(item) is not str or item not in SPECIALIST_IDS for item in raw_specialists):
+            raise ValueError("recommended specialists must be offered IDs")
+        if len(set(raw_specialists)) != len(raw_specialists):
+            raise LeadContractError((DomainValidationRule.SPECIALIST_DUPLICATE,))
         return LeadRecommendedAction(
             kind=kind,
             purpose=cast(str, value["instruction"]),
@@ -9117,7 +9162,7 @@ class StoryRuntime:
             expected_result=message,
             source_ids=tuple(value["source_ids"]),
             target_paths=tuple(value.get("target_paths", ())),
-            specialist_ids=tuple(value.get("specialist_ids", ())),
+            specialist_ids=tuple(item for item in SPECIALIST_IDS if item in raw_specialists),
             objective_id=cast(str | None, value.get("objective_id")),
         )
 

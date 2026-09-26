@@ -380,6 +380,11 @@ class ContextActionCorrelation:
         _positive(self.action_index)
 
 
+def normalized_search_text(text: str) -> str:
+    """Return the literal-search key; callers retain query validation ownership."""
+    return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
+
+
 @dataclass(frozen=True, slots=True)
 class ContextSearchQuery:
     """One literal query constrained to a canonical source-kind subset."""
@@ -394,8 +399,7 @@ class ContextSearchQuery:
             raise _invalid()
         if any(unicodedata.category(character).startswith("C") for character in text):
             raise _invalid()
-        normalized = unicodedata.normalize("NFKC", text).casefold()
-        normalized = " ".join(normalized.split())
+        normalized = normalized_search_text(text)
         if not normalized or len(normalized) > (
             CONTEXT_ACTION_POLICY.max_query_characters
         ):
@@ -420,7 +424,7 @@ class ContextSearchQuery:
     def normalized_text(self) -> str:
         """Return the already-validated deterministic literal search key."""
 
-        return " ".join(unicodedata.normalize("NFKC", self.text).casefold().split())
+        return normalized_search_text(self.text)
 
 
 @dataclass(frozen=True, slots=True)

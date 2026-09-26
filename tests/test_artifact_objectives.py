@@ -261,7 +261,11 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         await self.prepare(conversation_id, select=False)
         self.assertEqual(self.objective(conversation_id).draft_sources, selected)
         objective_id = self.objective(conversation_id).facts.objective_id
-        self.backend.enqueue(self.question(intent={"action": "cancel", "objective_id": objective_id}))
+        self.backend.enqueue(lambda call, _provider: lead._provider_envelope(call, {
+            "kind": "answer", "message": "Objective cancelled.",
+            "objective_intent": {"action": "cancel", "objective_id": objective_id},
+            "authoring_scope": lead._live_scope(call),
+        }))
         await self.runtime.lead_turn(self.session_id, conversation_id, "Cancel this writing objective.")
         self.assertIs(self.objective(conversation_id).state, c.ArtifactObjectiveState.CANCELLED)
         before = self.objective(conversation_id)
