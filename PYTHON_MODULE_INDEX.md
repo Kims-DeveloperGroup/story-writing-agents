@@ -77,7 +77,8 @@ depend on terminal presentation or concrete persistence.
 
 Primary public access is through the root facade for stable library types. `config` owns
 runtime configuration loading; `prompts` owns prompt assembly, not provider execution.
-`models` carries additive, optional validation diagnostics without granting next-action authority.
+`models` carries additive, optional validation diagnostics and the optional keyword-only
+`AgentRequest.expected_reviewed_proposal` identity hint without granting next-action authority.
 
 ### Runtime orchestration and providers
 
@@ -86,7 +87,7 @@ authentication, recovery, and diagnostic behavior behind provider-neutral contra
 
 - `orchestrator`, `backend`, `provider_adapter`, `antigravity_adapter`, `codex_adapter`
 - `provider_auth`, `provider_auth_recovery`, `provider_catalog`, `provider_process`
-- `provider_error_artifacts`, `debug_log`, `structured_output_validation`
+- `provider_error_artifacts`, `debug_log`, `structured_output_validation`, `lead_provider_contracts`
 
 `orchestrator` composes domain contracts, storage, consensus, Git story commits, references,
 and provider-neutral backends. `provider_process` owns provider subprocess execution;
@@ -97,6 +98,9 @@ source-authored domain findings. Domain validators identify the rejected propert
 orchestration and adapters retain findings through exception translation and map domain
 fields to provider wire paths. This package-internal boundary owns no provider state,
 persistence, or authority and is not a public facade.
+`lead_provider_contracts` owns immutable Lead choice snapshots shared by schema projections,
+prompt facts, and closed validation rules. It depends on domain contracts; orchestration
+retains confirmation, current-source membership, READ receipt, and lifecycle authority.
 
 ### Agent context and source budgeting
 
@@ -106,11 +110,14 @@ source reads. `service` is the composition boundary; `ledger` owns durable accou
 - `agent_context`, `agent_context.accounting`, `agent_context.actions`
 - `agent_context.continuation`, `agent_context.ledger`, `agent_context.manifest`
 - `agent_context.planning`, `agent_context.progress`, `agent_context.service`
-- `agent_context.sources`
+- `agent_context.request_compaction`, `agent_context.sources`
 
 Dependencies flow from `service`, `sources`, and `progress` toward manifest/action/planning
 contracts. Filesystem source access is delegated to writing-artifact and workspace owners. Optional
 validation diagnostics preserve rejection, repair, checkpoint, and authority decisions.
+
+`service` owns pure, call-local request compaction before provider accounting; the
+projection depends only on accounting contracts and owns no durable state or resources.
 
 ### Agent exchange capture
 

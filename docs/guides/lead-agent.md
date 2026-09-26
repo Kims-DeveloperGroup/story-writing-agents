@@ -205,6 +205,14 @@ uses every returned request identity. Historical recommendations and runtime
 recovery notices are not turned into action requests. An objective is satisfied
 only by a matching successful Apply, regardless of preparation completion.
 
+For confirmed consultation preparation, the provider selects the confirmed story
+sources. After checking the current request and decision, runtime supplies the
+`recommendation_request` and `recommendation_decision` metadata aliases itself.
+Omitting those two aliases does not invalidate an otherwise complete proposal.
+Omitting a real selected source, changing the confirmed scope, or reusing stale
+confirmation still fails before specialist execution. These metadata aliases do
+not become candidate material or grant review, Apply, or Commit authority.
+
 ## Call the lead and confirm a proposal
 
 Assume `runtime` has a configured ready backend and `conversation_id` is an
@@ -778,7 +786,7 @@ Do not treat every provider-related failure as the same recovery case:
 For example, the former Codex failure was caused by a response schema whose
 array `items` node had no explicit supported type. Codex rejected that schema
 before returning a valid `ProviderResult`, so the exchange could show only
-`provider_invocation_failed`. Typed wire v7 uses a closed
+`provider_invocation_failed`. Typed wire v8 uses a closed
 `{action}` root and embeds every action/result object directly. Runtime derives
 correlation from the active call.
 Conversely, an Antigravity result that adds undeclared bookkeeping fields or
@@ -918,7 +926,7 @@ Initial-payload samples below omit the separate required `h` session-context
 object for readability; they are excerpts, not complete on-wire payloads.
 SEARCH/READ continuation frames carry only their new observation.
 
-Codex and Antigravity receive byte-identical provider-neutral wire-v7 schema
+Codex and Antigravity receive byte-identical provider-neutral wire-v8 schema
 and payload semantics; only their native transport differs. The provider root
 requires only `action`; runtime derives correlation and action-index facts from
 the active invocation. This sanitized structural sample shows all three action
@@ -931,7 +939,8 @@ variants:
   "properties": {
     "action": {
       "anyOf": [
-        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["search"]},"queries":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"properties":{"text":{"type":"string"},"source_kinds":{"type":"array","minItems":1,"items":{"type":"string","enum":["writing_artifact","conversation","active_debate","own_agent_state"]}}},"required":["text","source_kinds"]}},"path_prefix":{"type":"string"}},"required":["kind","queries"]},
+        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["search"]},"queries":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"properties":{"text":{"type":"string"},"source_kinds":{"type":"array","minItems":1,"items":{"type":"string","enum":["writing_artifact","conversation","active_debate","own_agent_state"]}}},"required":["text","source_kinds"]}}},"required":["kind","queries"]},
+        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["search"]},"queries":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"properties":{"text":{"type":"string"},"source_kinds":{"type":"array","minItems":1,"items":{"type":"string","enum":["writing_artifact"]},"maxItems":1}},"required":["text","source_kinds"]}},"path_prefix":{"type":"string"}},"required":["kind","queries","path_prefix"]},
         {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["read"]},"handles":{"type":"array","minItems":1,"items":{"type":"string"}}},"required":["kind","handles"]},
         {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["answer"]},"result":{"type":"object","additionalProperties":false,"properties":{"message":{"type":"string"},"authoring_scope":{"type":"object","additionalProperties":false,"properties":{"activity":{"type":"string","enum":["workflow","draft","revise","review"]},"target_paths":{"type":"array","items":{"type":"string"}},"domains":{"type":"array","items":{"type":"string","enum":["plot_structure","character_world","tone_execution"]}},"task":{"type":"string"}},"required":["activity","target_paths","domains","task"]}},"required":["message","authoring_scope"]}},"required":["kind","result"]}
       ]
@@ -1122,7 +1131,7 @@ canonical path/range, captures the complete artifact state, builds an exact
 change set, validates projected relationships, derives mandatory review
 domains, unions the explicitly requested additional domains in canonical
 order, and computes the candidate digest. An unknown or authority-bearing
-provider field violates the closed wire-v7 result schema, so the response is
+provider field violates the closed wire-v8 result schema, so the response is
 repaired once before candidate construction. If repair also fails, runtime
 emits a visible safe no-action Lead answer and continues the conversation. A
 schema-valid intent that cannot satisfy runtime artifact semantics instead

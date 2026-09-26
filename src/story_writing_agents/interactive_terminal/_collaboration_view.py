@@ -512,7 +512,7 @@ def _payload_items(
                 *(
                     Notice(line, label="validation", role=SemanticRole.ERROR)
                     for detail in payload.validation_details
-                for line in detail.split("\n")
+                    for line in detail.split("\n")
                 ),
                 *_reply_trace_items(payload.trace),
             )

@@ -95,6 +95,7 @@ from story_writing_agents.writing_artifacts.repository import (
 )
 
 from tests.helpers import pristine_initialized_workspace
+from tests.test_agent_context_accounting import _expanded_context_payload, _shared_context_payload
 
 
 _PRIVATE_INPUT = "PRIVATE_CURRENT_INPUT_한🙂"
@@ -163,11 +164,11 @@ def _material(
     return ContextMaterial(entry, encoded)
 
 
-def _materials() -> tuple[ContextMaterial, ...]:
+def _materials(current_input: object = _PRIVATE_INPUT) -> tuple[ContextMaterial, ...]:
     return (
         _material(
             "current-input",
-            _PRIVATE_INPUT,
+            current_input if type(current_input) is str else json.dumps(current_input, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
             source_kind=ContextSourceKind.RUNTIME_INPUT,
             channel=ContextSemanticChannel.CURRENT_INPUT,
             priority=ContextPriority.P0_REQUIRED,
@@ -738,78 +739,30 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
                     ContextExecutionErrorCode.INVALID_VALUE,
                 )
 
-    def test_composite_policy_fingerprint_covers_wire_planning_and_every_limit(
-        self,
-    ) -> None:
+    def test_composite_policy_fingerprint_covers_wire_planning_and_every_limit(self) -> None:
         action_names = tuple(field.name for field in fields(ContextActionPolicy))
         source_names = tuple(field.name for field in fields(ContextSourcePolicy))
-        self.assertEqual(
-            action_names,
-            service_module._ACTION_POLICY_FINGERPRINT_FIELDS,
-        )
-        self.assertEqual(
-            source_names,
-            service_module._SOURCE_POLICY_FINGERPRINT_FIELDS,
-        )
+        self.assertEqual(action_names, service_module._ACTION_POLICY_FINGERPRINT_FIELDS)
+        self.assertEqual(source_names, service_module._SOURCE_POLICY_FINGERPRINT_FIELDS)
         self.assertEqual((len(action_names), len(source_names)), (19, 7))
-        baseline = service_module._execution_policy_fingerprint(
-            DEFAULT_CONTEXT_PLANNING_POLICY,
-            CONTEXT_ACTION_POLICY,
-            CONTEXT_SOURCE_POLICY,
-        )
-        self.assertEqual(
-            baseline,
-            "sha256:d8cfd92e6949dbb817dfb7253cff1865642493d46078fa1e042a64ef81740a18",
-        )
-
-        variants = {
-            service_module._execution_policy_fingerprint(
-                replace(DEFAULT_CONTEXT_PLANNING_POLICY, max_delta_depth=15),
-                CONTEXT_ACTION_POLICY,
-                CONTEXT_SOURCE_POLICY,
-            )
-        }
-        action_values = {
-            name: getattr(CONTEXT_ACTION_POLICY, name) for name in action_names
-        }
-        for name in action_names:
-            candidate = dict(action_values)
-            candidate[name] += 1
-            variants.add(
-                service_module._execution_policy_fingerprint(
-                    DEFAULT_CONTEXT_PLANNING_POLICY,
-                    SimpleNamespace(**candidate),  # type: ignore[arg-type]
-                    CONTEXT_SOURCE_POLICY,
-                )
-            )
-        source_values = {
-            name: getattr(CONTEXT_SOURCE_POLICY, name) for name in source_names
-        }
-        for name in source_names:
-            candidate = dict(source_values)
-            candidate[name] += 1
-            variants.add(
-                service_module._execution_policy_fingerprint(
-                    DEFAULT_CONTEXT_PLANNING_POLICY,
-                    CONTEXT_ACTION_POLICY,
-                    SimpleNamespace(**candidate),  # type: ignore[arg-type]
-                )
-            )
-        with mock.patch.object(
-            service_module,
-            "_CONTEXT_WIRE_VERSION",
-            "agent-context-wire-v4-test",
-        ):
-            variants.add(
-                service_module._execution_policy_fingerprint(
-                    DEFAULT_CONTEXT_PLANNING_POLICY,
-                    CONTEXT_ACTION_POLICY,
-                    CONTEXT_SOURCE_POLICY,
-                )
-            )
+        fingerprint = service_module._execution_policy_fingerprint
+        policy, actions, sources = DEFAULT_CONTEXT_PLANNING_POLICY, CONTEXT_ACTION_POLICY, CONTEXT_SOURCE_POLICY
+        baseline = fingerprint(policy, actions, sources)
+        self.assertEqual(service_module._CONTEXT_WIRE_VERSION, "agent-context-wire-v8")
+        with mock.patch.object(service_module, "_CONTEXT_WIRE_VERSION", "agent-context-wire-v7"):
+            self.assertEqual(fingerprint(policy, actions, sources),
+                             "sha256:d8cfd92e6949dbb817dfb7253cff1865642493d46078fa1e042a64ef81740a18")
+        variants = {fingerprint(replace(policy, max_delta_depth=15), actions, sources)}
+        for fields_, original, is_action in ((action_names, actions, True), (source_names, sources, False)):
+            values = {name: getattr(original, name) for name in fields_}
+            for name in fields_:
+                changed = SimpleNamespace(**{**values, name: values[name] + 1})
+                variants.add(fingerprint(policy, changed if is_action else actions,
+                                         sources if is_action else changed))
+        with mock.patch.object(service_module, "_CONTEXT_WIRE_VERSION", "agent-context-wire-v4-test"):
+            variants.add(fingerprint(policy, actions, sources))
         self.assertNotIn(baseline, variants)
         self.assertEqual(len(variants), 28)
-
 
 class ContextExecutionLifecycleTests(ContextExecutionTestCase):
     async def test_search_and_read_emit_exact_content_free_transient_progress(self) -> None:
@@ -918,7 +871,8 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
     async def test_no_action_reserves_before_provider_and_commits_exact_call(
         self,
     ) -> None:
-        request = self.request()
+        current = {**_shared_context_payload()["i"], "input": _PRIVATE_INPUT}
+        request = self.request(materials=_materials(current))
         provider = _ScriptedProvider(
             (_answer,),
             usage=ProviderUsage(input_tokens=0, output_tokens=3),
@@ -938,7 +892,8 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.assertEqual(len(provider.calls), 1)
         self.assertEqual(hook_calls, 1)
         self.assertEqual(provider.finalizers[0].calls, [("accepted", None)])
-        self.assertEqual(set(provider.calls[0].payload), {"c", "q", "i"})
+        self.assertEqual(set(provider.calls[0].payload), {"c", "q", "i", "context_objects", "context_encoding"})
+        self.assertEqual(_expanded_context_payload(provider.calls[0].payload)["i"], current)
         self.assertEqual(provider.calls[0].payload["q"][0], "conversation")
         self.assertIsNone(provider.calls[0].expected_thread_id)
         self.assertEqual(result.provider_calls[0].accounting.usage, provider.usage)
@@ -1041,28 +996,30 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             [[("accepted", None)]] * 3,
         )
 
-    async def test_compatible_ready_is_delta_and_provider_history_loss_bootstraps(
-        self,
-    ) -> None:
-        provider = _ScriptedProvider((_answer, _answer, _answer))
-        first = await self.invoke(
-            provider,
-            self.request(operation_id="operation-1", result_correlation_id="result-1"),
-        )
-        second = await self.invoke(
-            provider,
-            self.request(operation_id="operation-2", result_correlation_id="result-2"),
-        )
+    async def test_compatible_ready_is_delta_and_provider_history_loss_bootstraps(self) -> None:
+        provider = _ScriptedProvider((_answer,) * 4)
+        current = _shared_context_payload()["i"]
+        def request(index):
+            return self.request(operation_id=f"operation-{index}", result_correlation_id=f"result-{index}",
+                                materials=_materials(current))
+        with mock.patch.object(service_module, "_CONTEXT_WIRE_VERSION", "agent-context-wire-v7"):
+            old_service = AgentContextService(self.workspace)
+        first = await self.invoke(provider, request(1), service=old_service)
+        second = await self.invoke(provider, request(2))
         self.assertIs(first.projection_accounting.mode, ContextDeliveryMode.BOOTSTRAP)
-        self.assertIs(second.projection_accounting.mode, ContextDeliveryMode.DELTA)
-        self.assertEqual(provider.calls[1].expected_thread_id, first.provider_thread_id)
+        self.assertIs(second.projection_accounting.mode, ContextDeliveryMode.BOOTSTRAP)
+        self.assertIsNone(provider.calls[1].expected_thread_id)
+        self.assertNotEqual(first.provider_thread_id, second.provider_thread_id)
+        third = await self.invoke(provider, request(3))
+        self.assertIs(third.projection_accounting.mode, ContextDeliveryMode.DELTA)
+        self.assertEqual(provider.calls[2].expected_thread_id, second.provider_thread_id)
         provider.threads.clear()
-        third = await self.invoke(
-            provider,
-            self.request(operation_id="operation-3", result_correlation_id="result-3"),
-        )
-        self.assertIs(third.projection_accounting.mode, ContextDeliveryMode.BOOTSTRAP)
-        self.assertIsNone(provider.calls[2].expected_thread_id)
+        fourth = await self.invoke(provider, request(4))
+        self.assertIs(fourth.projection_accounting.mode, ContextDeliveryMode.BOOTSTRAP)
+        self.assertIsNone(provider.calls[3].expected_thread_id)
+        for call in provider.calls:
+            self.assertEqual(list(call.payload["context_objects"]), ["o1"])
+            self.assertEqual(_expanded_context_payload(call.payload)["i"], current)
 
     async def test_explicit_bootstrap_retires_reinspects_and_replaces_active_thread(
         self,

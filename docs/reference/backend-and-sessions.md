@@ -65,12 +65,12 @@ server-side default. Provider reply prose and self-identification are never
 execution evidence.
 
 Runtime-built provider-managed definitions use the agent-context service and
-typed wire v7. Package-internal `story_session_context` remains capture and
+typed wire v8. Package-internal `story_session_context` remains capture and
 direct-request compatibility input; it is not the current built-in provider
 envelope. Explicit writing-artifact references are authorized and loaded
 locally before the substantive provider call, and context continuations carry
 only the new authorized observation. See
-[Agent-context design](../design/agent-context.md#typed-provider-wire-v7).
+[Agent-context design](../design/agent-context.md#typed-provider-wire-v8).
 
 Both adapters receive the same provider-neutral `ProviderInvocation`, including
 byte-identical canonical schema and payload semantics. Codex receives the
@@ -80,6 +80,12 @@ schema through `--json-schema <canonical-json>` and must return a root-object
 not replace the shared runtime's validation of runtime-owned correlation, issued
 handles, evidence IDs, Lead outcome matrix, input aliases, artifact authority,
 or confirmation.
+
+For FINALIZE, runtime supplies the current reviewed proposal identity through the
+optional keyword-only `AgentRequest.expected_reviewed_proposal` pair. When present,
+the schema requires that exact ID and digest. Existing callers may omit the pair;
+digest-format validation and the runtime's final stale-identity check still apply.
+The pair describes expected output and grants no publication or Apply authority.
 
 Successful `AgentReply`, `ConversationReply`, and retrieval replies carry a
 runtime-derived `ReplyTrace`. It reports only the role, normalized action,

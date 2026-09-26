@@ -768,7 +768,7 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
 
 
 class CompactWireDecoderTests(unittest.TestCase):
-    """Verify the complete strict typed wire-v7 response contract in isolation."""
+    """Verify the complete strict typed wire-v8 response contract in isolation."""
 
     def setUp(self) -> None:
         manifest, _snapshots = _manifest_fixture()
@@ -969,92 +969,44 @@ class CompactWireDecoderTests(unittest.TestCase):
                 )
 
     def test_search_wire_supports_shared_artifact_prefix_and_kind_matrix(self) -> None:
-        unprefixed = self.decode(
-            _search_wire(
-                self.token,
-                [
-                    ("First", ["writing_artifact"]),
-                    (
-                        "Second",
-                        ["conversation", "active_debate", "own_agent_state"],
-                    ),
-                ],
-            ),
-            allowed=("search",),
-        )
+        def schema(kinds=service_module._SEARCH_SOURCE_KIND_ORDER):
+            return service_module._context_action_schema(allowed_actions=("search",),
+                result_contract=self.result_contract, allowed_search_source_kinds=kinds,
+                action_limits=[4, 2, 2, 4, 8, 8, 16, 200])
+        wire = _search_wire(self.token, [("First", ["writing_artifact"]),
+            ("Second", ["conversation", "active_debate", "own_agent_state"])])
+        self.assertEqual(diagnose_json_text(json.dumps(wire), schema()), ())
+        unprefixed = self.decode(wire, allowed=("search",))
         self.assertIsInstance(unprefixed, ContextSearchAction)
-        assert isinstance(unprefixed, ContextSearchAction)
-        self.assertEqual(
-            tuple(
-                (
-                    query.normalized_text,
-                    query.source_kinds,
-                    query.artifact_path_prefix,
-                )
-                for query in unprefixed.queries
-            ),
-            (
-                ("first", (ContextSourceKind.WRITING_ARTIFACT,), None),
-                (
-                    "second",
-                    (
-                        ContextSourceKind.CONVERSATION,
-                        ContextSourceKind.ACTIVE_DEBATE,
-                        ContextSourceKind.OWN_AGENT_STATE,
-                    ),
-                    None,
-                ),
-            ),
-        )
-
+        self.assertEqual(tuple((q.normalized_text, q.source_kinds, q.artifact_path_prefix) for q in unprefixed.queries),
+            (("first", (ContextSourceKind.WRITING_ARTIFACT,), None), ("second", (ContextSourceKind.CONVERSATION,
+                ContextSourceKind.ACTIVE_DEBATE, ContextSourceKind.OWN_AGENT_STATE), None)))
         prefix = "manuscript/part-01/"
-        prefixed = self.decode(
-            _search_wire(
-                self.token,
-                [
-                    ("Alpha", ["writing_artifact"]),
-                    ("Beta", ["writing_artifact"]),
-                ],
-                path_prefix=prefix,
-            ),
-            allowed=("search",),
-        )
+        wire = _search_wire(self.token, [("Alpha", ["writing_artifact"]), ("Beta", ["writing_artifact"])], path_prefix=prefix)
+        self.assertEqual(diagnose_json_text(json.dumps(wire), schema()), ())
+        prefixed = self.decode(wire, allowed=("search",))
         self.assertIsInstance(prefixed, ContextSearchAction)
-        assert isinstance(prefixed, ContextSearchAction)
-        self.assertEqual(
-            tuple(query.artifact_path_prefix for query in prefixed.queries),
-            (prefix, prefix),
-        )
-        self.assertEqual(
-            tuple(query.normalized_text for query in prefixed.queries),
-            ("alpha", "beta"),
-        )
-
-        canonical_pair = (
-            ContextSourceKind.WRITING_ARTIFACT,
-            ContextSourceKind.CONVERSATION,
-        )
-        for provider_order in (
-            ["writing_artifact", "conversation"],
-            ["conversation", "writing_artifact"],
-        ):
+        self.assertEqual(tuple(q.artifact_path_prefix for q in prefixed.queries), (prefix, prefix))
+        self.assertEqual(tuple(q.normalized_text for q in prefixed.queries), ("alpha", "beta"))
+        for kinds in (["conversation"], ["writing_artifact", "conversation"]):
+            invalid = _search_wire(self.token, [("Alpha", kinds)], path_prefix=prefix)
+            self.assertTrue(diagnose_json_text(json.dumps(invalid), schema()))
+            self.assert_malformed(invalid, allowed=("search",))
+        conversation_schema = schema((ContextSourceKind.CONVERSATION,))
+        self.assertNotIn("path_prefix", repr(conversation_schema))
+        self.assertTrue(diagnose_json_text(json.dumps(wire), conversation_schema))
+        canonical_pair = (ContextSourceKind.WRITING_ARTIFACT, ContextSourceKind.CONVERSATION)
+        for provider_order in (["writing_artifact", "conversation"], ["conversation", "writing_artifact"]):
             with self.subTest(provider_order=provider_order):
-                pair = self.decode(
-                    _search_wire(self.token, [("pair", provider_order)]),
-                    allowed=("search",),
-                    source_kinds=canonical_pair,
-                )
-                assert isinstance(pair, ContextSearchAction)
+                pair = self.decode(_search_wire(self.token, [("pair", provider_order)]),
+                                   allowed=("search",), source_kinds=canonical_pair)
+                self.assertIsInstance(pair, ContextSearchAction)
                 self.assertEqual(pair.queries[0].source_kinds, canonical_pair)
-
         for kind in service_module._SEARCH_SOURCE_KIND_ORDER:
             with self.subTest(kind=kind):
-                action = self.decode(
-                    _search_wire(self.token, [("needle", [kind.value])]),
-                    allowed=("search",),
-                    source_kinds=(kind,),
-                )
-                assert isinstance(action, ContextSearchAction)
+                action = self.decode(_search_wire(self.token, [("kind", [kind.value])]),
+                                     allowed=("search",), source_kinds=(kind,))
+                self.assertIsInstance(action, ContextSearchAction)
                 self.assertEqual(action.queries[0].source_kinds, (kind,))
 
     def test_artifact_prefix_validation_is_exact_and_one_scope_per_search(self) -> None:
@@ -1129,49 +1081,24 @@ class CompactWireDecoderTests(unittest.TestCase):
                 ),
             )
 
-    def test_malformed_exact_shape_types_routes_duplicates_and_limits_reject(
-        self,
-    ) -> None:
-        valid_result = {
-            "kind": "answer",
-            "message": "Visible.",
-            "proposal": None,
-        }
-        base = _answer_wire(self.token, valid_result)
+    def test_malformed_exact_shape_types_routes_duplicates_and_limits_reject(self) -> None:
+        base = _answer_wire(self.token, {"kind": "answer", "message": "Visible.", "proposal": None})
         answer_action = base["action"]
-        assert isinstance(answer_action, dict)
-        malformed = (
-            {},
-            {**base, "extra": 1},
-            {key: value for key, value in base.items() if key != "action"},
-            {**base, "correlation": "A" * 43},
-            {**base, "correlation": True},
-            {**base, "action": True},
+        malformed = ({}, {**base, "extra": 1}, {key: value for key, value in base.items() if key != "action"},
+            {**base, "correlation": "A" * 43}, {**base, "correlation": True}, {**base, "action": True},
             {**base, "action": {**answer_action, "kind": "unknown"}},
             {**base, "action": {**answer_action, "used_handles": True}},
-            {**base, "action": {**answer_action, "extra": 1}},
-            {"action": {"kind": "answer"}},
-            '{"action":%s,"action":%s}'
-            % tuple(json.dumps(answer_action, separators=(",", ":")) for _ in range(2)),
-        )
+            {**base, "action": {**answer_action, "extra": 1}}, {"action": {"kind": "answer"}},
+            '{"action":%s,"action":%s}' % tuple(json.dumps(answer_action, separators=(",", ":")) for _ in range(2)))
         for value in malformed:
             with self.subTest(value=value):
                 self.assert_malformed(value)
-
         self.assert_malformed(base, allowed=("search",))
-        self.assert_malformed(
-            _search_wire(self.token, [("x", ["conversation"])]),
-            source_kinds=(ContextSourceKind.WRITING_ARTIFACT,),
-        )
-        self.assert_malformed(
-            _search_wire(
-                self.token,
-                [
-                    ("x", ["writing_artifact"]),
-                    ("x", ["writing_artifact"]),
-                ],
-            )
-        )
+        self.assert_malformed(_search_wire(self.token, [("x", ["conversation"])]),
+                              source_kinds=(ContextSourceKind.WRITING_ARTIFACT,))
+        self.assert_malformed(_search_wire(self.token, [("x", ["writing_artifact"]), ("Ｘ", ["writing_artifact"])]))
+        distinct = self.decode(_search_wire(self.token, [("x", ["writing_artifact"]), ("Ｘ", ["conversation"])]))
+        self.assertEqual(len(distinct.queries), 2)
         for path_prefix, queries, path, rule in (
             (None, [], "queries", "expected a nonempty array; got array"),
             (None, True, "queries", "expected a nonempty array; got boolean"),
@@ -1197,32 +1124,11 @@ class CompactWireDecoderTests(unittest.TestCase):
         )
         self.assert_malformed(_read_wire(self.token, ["h1", "h1"]))
         read_with_extra = _read_wire(self.token, ["h1"])
-        read_action = read_with_extra["action"]
-        assert isinstance(read_action, dict)
-        read_action["used_handles"] = ["h1"]
+        read_with_extra["action"]["extra"] = True
         self.assert_malformed(read_with_extra)
-        self.assert_malformed(
-            _search_wire(
-                self.token,
-                [
-                    (f"q{index}", ["writing_artifact"])
-                    for index in range(
-                        CONTEXT_ACTION_POLICY.max_queries_per_search + 1
-                    )
-                ],
-            )
-        )
-        self.assert_malformed(
-            _read_wire(
-                self.token,
-                [
-                    f"h{index}"
-                    for index in range(
-                        CONTEXT_ACTION_POLICY.max_handles_per_read + 1
-                    )
-                ],
-            )
-        )
+        self.assert_malformed(_search_wire(self.token, [(f"q{i}", ["writing_artifact"])
+            for i in range(CONTEXT_ACTION_POLICY.max_queries_per_search + 1)]))
+        self.assert_malformed(_read_wire(self.token, [f"h{i}" for i in range(CONTEXT_ACTION_POLICY.max_handles_per_read + 1)]))
 
     def test_invalid_read_values_report_only_fixed_source_handle_guidance(self) -> None:
         private_values = ("conflict", "PRIVATE/critique text")

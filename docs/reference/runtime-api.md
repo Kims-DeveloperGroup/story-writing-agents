@@ -474,6 +474,13 @@ message; runtime resolves it to its event ID and exact UTF-8 digest before
 persisting the request. Other source IDs must be runtime offered. Neither
 aliases nor remembered drafts grant artifact evidence or confirmation authority.
 
+Provider contracts describe required nonempty collections and branch-specific
+objective steps. Frozen preparation contracts also bind the confirmed scope and
+objective. Runtime still checks source completeness, mandatory reviewers, current
+objective ownership, and freshness. Recommendation sources may include authorized
+READ-created aliases, so membership is checked against the current evidence as
+well as the initial offers. Schema-valid output does not itself grant authority.
+
 For `kind=proposal`, exactly one of `proposal` or `artifact_intent` is non-null.
 Artifact intent contains `operations` and `additional_review_domains`.
 Operations are strict provider-neutral `create`, `patch`, `replace`, `rename`,

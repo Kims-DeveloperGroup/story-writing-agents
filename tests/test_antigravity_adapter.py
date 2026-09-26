@@ -51,6 +51,8 @@ from story_writing_agents.provider_adapter import (
 from story_writing_agents.provider_process import ProcessRequest, ProcessResult
 
 from tests.helpers import initialized_workspace
+from story_writing_agents.agent_context.request_compaction import compact_context_payload
+from tests.test_agent_context_accounting import _shared_context_payload
 
 
 _UNSET = object()
@@ -2314,18 +2316,19 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         adapter = self.adapter("contextual-runtime")
         binding = adapter.bind(self.definition)
         schema = {"type": "object"}
-        payload = {
+        payload, component_paths = compact_context_payload(_shared_context_payload(), {
+            ("i",): ContextComponentKind.CURRENT_INPUT, ("h",): ContextComponentKind.CONVERSATION_CONTEXT})
+        payload.update({
             "c": "A" * 43,
             "q": ["conversation", "sa", "wco", [4, 2, 2, 4, 8, 8, 16, 200], "text"],
-            "i": "CONTEXTUAL_한🙂",
-        }
+        })
         invocation = ProviderInvocation(
             session_id="contextual-session",
             schema=schema,
             payload=payload,
             thread_id=None,
             call_kind=ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL,
-            component_paths={("i",): ContextComponentKind.CURRENT_INPUT},
+            component_paths=component_paths,
         )
         requests: list[ProcessRequest] = []
 

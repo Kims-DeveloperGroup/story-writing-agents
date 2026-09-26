@@ -160,6 +160,8 @@ from story_writing_agents.provider_process import (
 )
 from story_writing_agents.models import StoryFocusedContextMode
 
+from story_writing_agents.agent_context.request_compaction import compact_context_payload
+from tests.test_agent_context_accounting import _shared_context_payload
 from tests.helpers import (
     SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE,
     all_manuscripts,
@@ -2880,11 +2882,12 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             PLOT_ARCHITECT,
         )
         policy = "sha256:" + "7" * 64
-        payload = {
+        payload, component_paths = compact_context_payload(_shared_context_payload(), {
+            ("i",): ContextComponentKind.CURRENT_INPUT, ("h",): ContextComponentKind.CONVERSATION_CONTEXT})
+        payload.update({
             "c": "A" * 43,
             "q": ["conversation", "sa", "wco", [4, 2, 2, 4, 8, 8, 16, 200], "text"],
-            "i": "CONTEXTUAL_UNICODE_한🙂",
-        }
+        })
         schema = {"type": "object"}
         captured = []
 
@@ -2910,7 +2913,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         ProviderCallKind.COLLABORATION_INITIAL,
                         schema,
                         payload,
-                        {("i",): ContextComponentKind.CURRENT_INPUT},
+                        component_paths,
                     )
                 )
                 self.assertEqual(
@@ -4949,82 +4952,71 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             invocation["argv"],
         )
 
-    async def test_strict_phase_reply_mapping(self) -> None:
-        candidate = AgentBackend._decode_reply(
-            Phase.DRAFT,
-            '{"message":"candidate"}',
-            revision_id="r2",
-        )
-        self.assertEqual(candidate, AgentReply.candidate("r2", "candidate"))
-
-        approval = AgentBackend._decode_reply(
-            Phase.AUDIT,
-            '{"verdict":"approve","message":""}',
-            revision_id="r2",
-        )
-        self.assertEqual(approval, AgentReply.approval("r2"))
-        conflict = AgentBackend._decode_reply(
-            Phase.AUDIT,
-            '{"verdict":"conflict","message":"fix it"}',
-            revision_id="r2",
-        )
-        self.assertEqual(conflict, AgentReply.conflict("r2", "fix it"))
-
-        repair = AgentBackend._decode_reply(
-            Phase.SYNTHESIZE,
-            '{"next":"repair","message":"repair"}',
-            revision_id="r2",
-        )
-        self.assertEqual(
-            repair,
-            AgentReply.synthesis("r2", "repair", AgentReplyNextPhase.REPAIR),
-        )
-        deadlock = AgentBackend._decode_reply(
-            Phase.SYNTHESIZE,
-            '{"next":"deadlock","message":"blocked"}',
-            revision_id="r2",
-        )
-        self.assertEqual(deadlock, AgentReply.deadlock("r2", "blocked"))
-
-        finalized = AgentBackend._decode_reply(
-            Phase.FINALIZE,
-            (
-                '{"reviewed_proposal_id":"reviewed-proposal",'
-                '"reviewed_proposal_digest":"sha256:' + "a" * 64 + '"}'
-            ),
-            revision_id="r2",
-        )
-        self.assertEqual(
-            finalized,
-            AgentReply.finalization(
-                "r2", "reviewed-proposal", "sha256:" + "a" * 64
-            ),
-        )
-
-        invalid_values = (
-            (Phase.AUDIT, '{"verdict":"maybe","message":""}'),
+    def test_strict_phase_reply_mapping(self) -> None:
+        digest = "sha256:" + "a" * 64
+        identity = ("reviewed-proposal", digest)
+        for phase, value, expected in (
+            (Phase.DRAFT, {"message": "draft"}, AgentReply.candidate("r2", "draft")),
+            (Phase.AUDIT, {"verdict": "approve", "message": ""}, AgentReply.approval("r2")),
+            (Phase.AUDIT, {"verdict": "conflict", "message": "revise"}, AgentReply.conflict("r2", "revise")),
+            (Phase.SYNTHESIZE, {"next": "repair", "message": "repair"}, AgentReply.synthesis("r2", "repair", AgentReplyNextPhase.REPAIR)),
+            (Phase.SYNTHESIZE, {"next": "deadlock", "message": "blocked"}, AgentReply.deadlock("r2", "blocked")),
+            (Phase.FINALIZE, {"reviewed_proposal_id": identity[0], "reviewed_proposal_digest": digest},
+             AgentReply.finalization("r2", *identity)),
+        ):
+            self.assertEqual(AgentBackend._decode_reply(phase, json.dumps(value), revision_id="r2"), expected)
+        request = AgentRequest("session", "debate", "lead_orchestrator", Phase.FINALIZE, 1, "r2", "Finalize.", "")
+        self.assertIsNone(request.expected_reviewed_proposal)
+        self.assertTrue(next(field for field in fields(AgentRequest) if field.name == "expected_reviewed_proposal").kw_only)
+        request = replace(request, expected_reviewed_proposal=identity)
+        self.assertEqual(request.expected_reviewed_proposal, identity)
+        with self.assertRaises(ValueError):
+            replace(request, phase=Phase.DRAFT)
+        schema = AgentBackend._output_schema(Phase.FINALIZE, expected_reviewed_proposal=identity)
+        value = {"reviewed_proposal_id": identity[0], "reviewed_proposal_digest": digest}
+        self.assertEqual(diagnose_json_text(json.dumps(value), schema), ())
+        self.assertEqual(schema["properties"]["reviewed_proposal_id"]["enum"], [identity[0]])
+        self.assertEqual(schema["properties"]["reviewed_proposal_digest"]["enum"], [digest])
+        for field, wrong in (("reviewed_proposal_id", "different-proposal"),
+                             ("reviewed_proposal_digest", "sha256:" + "f" * 64)):
+            self.assertTrue(diagnose_json_text(json.dumps({**value, field: wrong}), schema))
+        for identifier, invalid_digest in (("../unsafe", digest), (identity[0], "sha256:" + "a" * 63),
+                                          (identity[0], "sha256:" + "A" * 64), (identity[0], "a" * 64)):
+            with self.assertRaises((TypeError, ValueError)):
+                replace(request, expected_reviewed_proposal=(identifier, invalid_digest))
+            with self.assertRaises(BackendProtocolError) as caught:
+                AgentBackend._decode_reply(Phase.FINALIZE, json.dumps({"reviewed_proposal_id": identifier,
+                    "reviewed_proposal_digest": invalid_digest}), revision_id="r2")
+            self.assertNotIn("unsafe", str(caught.exception))
+        for invalid_identity in ([*identity], (identity[0],), (identity[0], digest, "extra")):
+            with self.assertRaises((TypeError, ValueError)):
+                replace(request, expected_reviewed_proposal=invalid_identity)
+        with self.assertRaises(ValueError):
+            AgentBackend._output_schema(Phase.DRAFT, expected_reviewed_proposal=identity)
+        self.assertEqual(AgentBackend._decode_reply(Phase.DRAFT, json.dumps({"message": " \t"}), revision_id="r2").content, " \t")
+        invalid_values = ((Phase.AUDIT, '{"verdict":"maybe","message":""}'),
             (Phase.SYNTHESIZE, '{"next":"unknown","message":"ambiguous"}'),
             (Phase.SYNTHESIZE, '{"next":"deadlock","message":"blocked","extra":true}'),
             (Phase.DRAFT, '{"verdict":"approve","message":"ok"}'),
-            (Phase.DRAFT, '{"message":"one","message":"two"}'),
-        )
+            (Phase.DRAFT, '{"message":"one","message":"two"}'))
         for phase, value in invalid_values:
             with self.subTest(phase=phase, value=value):
                 with self.assertRaises(BackendProtocolError):
                     AgentBackend._decode_reply(phase, value, revision_id="r2")
         for phase, value, error, issue in (
-            (Phase.AUDIT, {"verdict": "PRIVATE", "message": ""}, BackendProtocolError, "$.verdict: expected verdict approve or conflict"),
+            (Phase.AUDIT, {"verdict": "PRIVATE", "message": "Visible."}, BackendProtocolError, "$.verdict: expected verdict approve or conflict"),
             (Phase.SYNTHESIZE, {"next": "PRIVATE", "message": "Continue."}, BackendProtocolError, "$.next: expected repair, finalization, or deadlock"),
-            (Phase.AUDIT, {"verdict": "conflict", "message": ""}, ValueError, "$.message: verdict conflict requires nonempty text"),
-            (Phase.FINALIZE, {"reviewed_proposal_id": "valid", "reviewed_proposal_digest": "PRIVATE"}, ValueError,
-             "$.reviewed_proposal_digest: expected sha256: followed by 64 lowercase hexadecimal characters"),
-            (Phase.FINALIZE, {"reviewed_proposal_id": "PRIVATE/id", "reviewed_proposal_digest": "sha256:" + "a" * 64}, SessionIdError,
-             "$.reviewed_proposal_id: expected identifier matching [A-Za-z0-9][A-Za-z0-9_-]{0,63}"),
+            (Phase.AUDIT, {"verdict": "conflict", "message": ""}, BackendProtocolError, "$.message: expected nonempty text"),
+            (Phase.FINALIZE, {"reviewed_proposal_id": "valid", "reviewed_proposal_digest": "PRIVATE"}, BackendProtocolError,
+             "$.reviewed_proposal_digest: expected sha256: followed by exactly 64 lowercase hexadecimal digits"),
+            (Phase.FINALIZE, {"reviewed_proposal_id": "PRIVATE/id", "reviewed_proposal_digest": "sha256:" + "a" * 64}, BackendProtocolError,
+             "$.reviewed_proposal_id: expected a canonical reviewed proposal identifier"),
         ):
             with self.assertRaises(error) as caught:
                 AgentBackend._decode_reply(phase, json.dumps(value), revision_id="r2")
-            self.assertEqual(failure_issues(caught.exception), (issue,))
-            self.assertNotIn("PRIVATE", repr(failure_issues(caught.exception)))
+            issues = failure_issues(caught.exception) or (getattr(caught.exception, "issue", None),)
+            self.assertEqual(issues, (issue,))
+            self.assertNotIn("PRIVATE", repr(issues))
 
     async def test_rejected_debate_attempts_return_phase_safe_deadlocks(self) -> None:
         backend = AgentBackend(self.workspace, executable=str(self.executable))
@@ -8540,7 +8532,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIs(debate_reply.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
         self.assertEqual(debate_reply.trace.action, "none")
         self.assertEqual(len(debate_reply.validation_details), 2)
-        self.assertTrue(all(chunk.splitlines()[1:] == ["$.message: verdict conflict requires nonempty text"]
+        self.assertTrue(all(chunk.splitlines()[1:] == ["$.message: expected nonempty text"]
                             for chunk in debate_reply.validation_details))
         self.assertTrue(debate_reply.validation_details[0].startswith("Original response"))
         self.assertTrue(debate_reply.validation_details[1].startswith("Repair response"))
