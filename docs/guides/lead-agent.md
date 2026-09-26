@@ -205,6 +205,14 @@ uses every returned request identity. Historical recommendations and runtime
 recovery notices are not turned into action requests. An objective is satisfied
 only by a matching successful Apply, regardless of preparation completion.
 
+For confirmed consultation preparation, the provider selects the confirmed story
+sources. After checking the current request and decision, runtime supplies the
+`recommendation_request` and `recommendation_decision` metadata aliases itself.
+Omitting those two aliases does not invalidate an otherwise complete proposal.
+Omitting a real selected source, changing the confirmed scope, or reusing stale
+confirmation still fails before specialist execution. These metadata aliases do
+not become candidate material or grant review, Apply, or Commit authority.
+
 ## Call the lead and confirm a proposal
 
 Assume `runtime` has a configured ready backend and `conversation_id` is an
@@ -926,7 +934,8 @@ variants:
   "properties": {
     "action": {
       "anyOf": [
-        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["search"]},"queries":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"properties":{"text":{"type":"string"},"source_kinds":{"type":"array","minItems":1,"items":{"type":"string","enum":["writing_artifact","conversation","active_debate","own_agent_state"]}}},"required":["text","source_kinds"]}},"path_prefix":{"type":"string"}},"required":["kind","queries"]},
+        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["search"]},"queries":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"properties":{"text":{"type":"string"},"source_kinds":{"type":"array","minItems":1,"items":{"type":"string","enum":["writing_artifact","conversation","active_debate","own_agent_state"]}}},"required":["text","source_kinds"]}}},"required":["kind","queries"]},
+        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["search"]},"queries":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"properties":{"text":{"type":"string"},"source_kinds":{"type":"array","minItems":1,"items":{"type":"string","enum":["writing_artifact"]},"maxItems":1}},"required":["text","source_kinds"]}},"path_prefix":{"type":"string"}},"required":["kind","queries","path_prefix"]},
         {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["read"]},"handles":{"type":"array","minItems":1,"items":{"type":"string"}}},"required":["kind","handles"]},
         {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["answer"]},"result":{"type":"object","additionalProperties":false,"properties":{"message":{"type":"string"},"authoring_scope":{"type":"object","additionalProperties":false,"properties":{"activity":{"type":"string","enum":["workflow","draft","revise","review"]},"target_paths":{"type":"array","items":{"type":"string"}},"domains":{"type":"array","items":{"type":"string","enum":["plot_structure","character_world","tone_execution"]}},"task":{"type":"string"}},"required":["activity","target_paths","domains","task"]}},"required":["message","authoring_scope"]}},"required":["kind","result"]}
       ]

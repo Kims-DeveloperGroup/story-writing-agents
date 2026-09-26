@@ -42,7 +42,7 @@ from story_writing_agents.models import AgentStateEntry
 from story_writing_agents.specialist_routing import AuthoringScope, AuthoringActivity, ArtifactReviewDomain, ReviewBasis
 
 from tests.test_lead_orchestration import (
-    LeadOrchestrationTestCase,
+    LeadOrchestrationTestCase, LeadProviderConstraints, Rule, diagnose_json_text,
     _LeadBackend,
     _SubmittedFailure,
     _decision,
@@ -1030,33 +1030,19 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertEqual(_payloads(self.history(conversation_id),
                                    CollaborationExecutionResult), ())
 
-    async def test_synthesis_contract_is_semantic_and_runtime_derives_attribution(
-        self,
-    ) -> None:
+    async def test_synthesis_contract_is_semantic_and_runtime_derives_attribution(self) -> None:
         def minimal_synthesis(call, _provider):
             self.assertNotIn("reply_event_ids", repr(call.schema))
             self.assertNotIn("unresolved_input_ids", repr(call.schema))
-            return _provider_envelope(
-                call,
-                {"message": "The concerns remain visible."},
-            )
-
+            for message in ("Visible.", " \t\0"):
+                self.assertEqual(LeadProviderConstraints(continuation=True).diagnose(json.dumps({"message": message})), ())
+            return _provider_envelope(call, {"message": "The concerns remain visible."})
         conversation_id = self.conversation("Strict synthesis")
-        proposed = await self.proposal(
-            conversation_id,
-            assignments=_assignments(PLOT_ARCHITECT, CHARACTER_CUSTODIAN),
-        )
+        proposed = await self.proposal(conversation_id, assignments=_assignments(PLOT_ARCHITECT, CHARACTER_CUSTODIAN))
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome("concern"))
-        self.backend.enqueue_for(
-            CHARACTER_CUSTODIAN,
-            _specialist_outcome("insufficient_evidence"),
-        )
+        self.backend.enqueue_for(CHARACTER_CUSTODIAN, _specialist_outcome("insufficient_evidence"))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, minimal_synthesis)
-
-        decision = await self.runtime.decide_lead_step(
-            _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-        )
-
+        decision = await self.runtime.decide_lead_step(_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
         self.assertIs(decision.turn.state, CollaborationStepState.COMPLETED)
         history = self.history(conversation_id)
         reply_events = _events(history, CollaborationEventKind.SPECIALIST_REPLY)
@@ -1064,15 +1050,10 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         synthesis = _payloads(history, CollaborationLeadSynthesisPayload)[0]
         self.assertIs(synthesis.trace.origin, ReplyTraceOrigin.PROVIDER)
         self.assertEqual(synthesis.trace.action, "synthesis")
-        self.assertEqual(
-            synthesis.reply_event_ids,
-            tuple(event.event_id for event in reply_events),
-        )
+        self.assertEqual(synthesis.reply_event_ids, tuple(event.event_id for event in reply_events))
         self.assertEqual(synthesis.unresolved_input_ids, ("user_input",))
         result = _payloads(history, CollaborationExecutionResult)[0]
-        self.assertIs(
-            result.synthesis_outcome, CollaborationSynthesisOutcomeKind.SUCCEEDED
-        )
+        self.assertIs(result.synthesis_outcome, CollaborationSynthesisOutcomeKind.SUCCEEDED)
         self.assertEqual(result.synthesis_submitted_physical_calls, 1)
 
     async def test_synthesis_derives_non_supporting_inputs_locally(
@@ -1190,101 +1171,65 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             )
         self.assertFalse(self.history(mismatch_id))
 
-    async def test_second_round_uses_reply_events_fresh_authority_and_cannot_chain_again(
-        self,
-    ) -> None:
+    async def test_second_round_uses_reply_events_fresh_authority_and_cannot_chain_again(self) -> None:
         conversation_id = self.conversation("Second round")
-        first = await self.proposal(conversation_id)
+        first = await self.proposal(conversation_id, text="Check ${core_documents/global_outline.md}",
+            assignments=[{**_assignments(PLOT_ARCHITECT)[0], "input_ids": ["user_input", "reference_1"]}])
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome("concern"))
-
         def continue_lineage(call, _provider):
             material = _workflow_material(call.payload)
-            contract = material["answer_contract"]
-            assert type(contract) is dict
             reply_ids = [item["reply_event_id"] for item in material["replies"]]
             known_ids = [item["input_id"] for item in material["inputs"]]
-            return _provider_envelope(
-                call,
-                {
-                    "message": "One issue needs a focused second review.",
-                    "reply_event_ids": reply_ids,
-                    "next_intent": {
-                        "relation": "continue_lineage",
-                        "purpose": "Resolve the remaining plot concern.",
-                        "assignments": [
-                            {
-                                "agent_id": PLOT_ARCHITECT,
-                                "instruction": "Reassess using the first reply.",
-                                "input_ids": [*known_ids, *reply_ids],
-                                "mode": "review",
-                            }
-                        ],
-                    },
-                },
-            )
-
+            self.assertIn("reference_1", known_ids)
+            assignment = {"agent_id": PLOT_ARCHITECT, "instruction": "Reassess all sources and the first reply.",
+                          "input_ids": [*known_ids, *reply_ids], "mode": "review"}
+            body = {"message": "One issue needs a second review.", "next_intent": {
+                "purpose": "Resolve the remaining concern.", "assignments": [assignment]}}
+            encoded = json.dumps({"action": {"kind": "answer", "result": body}})
+            self.assertEqual(diagnose_json_text(encoded, call.schema), ())
+            facts = LeadProviderConstraints(input_ids=tuple(known_ids + reply_ids),
+                reviewer_inputs=((PLOT_ARCHITECT, "reference_1"),), scope=first.proposal.authoring_scope, continuation=True)
+            self.assertEqual(facts.diagnose(json.dumps(body)), ())
+            for selected in (known_ids, [alias for alias in assignment["input_ids"] if alias != "reference_1"]):
+                bad = {**body, "next_intent": {**body["next_intent"], "assignments": [{**assignment, "input_ids": selected}]}}
+                self.assertIn(Rule.CONTINUATION_INPUT_COVERAGE, facts.diagnose(json.dumps(bad)))
+            bad = {**body, "next_intent": {**body["next_intent"], "assignments": [{**assignment, "input_ids": ["foreign_reply"]}]}}
+            self.assertTrue(diagnose_json_text(json.dumps({"action": {"kind": "answer", "result": bad}}), call.schema))
+            self.assertIn(Rule.PURPOSE_REQUIRED, facts.diagnose(json.dumps({**body, "next_intent": {**body["next_intent"], "purpose": ""}})))
+            return encoded
         private = "PRIVATE_CONTINUATION_SYNTHESIS_VALUE"
-        self.backend.enqueue_for(
-            LEAD_ORCHESTRATOR,
-            _raw_outcome({"message": "", private: private}),
-        )
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _raw_outcome({"message": "", private: private}))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, continue_lineage)
-        first_decision = await self.runtime.decide_lead_step(
-            _decision(first, CollaborationConfirmationDecision.CONFIRM)
-        )
+        first_decision = await self.runtime.decide_lead_step(_decision(first, CollaborationConfirmationDecision.CONFIRM))
         second = first_decision.turn
         self.assertIsNotNone(second.proposal, second)
-        assert second.proposal is not None
         self.assertIs(second.state, CollaborationStepState.AWAITING_CONFIRMATION)
         self.assertEqual(second.proposal.step_id, first.step_id)
-        self.assertEqual(
-            second.proposal.proposal_revision,
-            first.proposal.proposal_revision + 1,
-        )
-        self.assertEqual(second.proposal.budget.rounds_spent, 1)
-        self.assertEqual(second.proposal.budget.rounds_added, 1)
-        self.assertEqual(second.proposal.budget.physical_calls_spent, 4)
+        self.assertEqual(second.proposal.proposal_revision, first.proposal.proposal_revision + 1)
+        self.assertEqual((second.proposal.budget.rounds_spent, second.proposal.budget.rounds_added,
+                          second.proposal.budget.physical_calls_spent), (1, 1, 4))
         first_history = self.history(conversation_id)
-        expected_details = tuple(
-            chunk
-            for payload in _payloads(first_history, CollaborationProviderCallPayload)
-            if payload.state is CollaborationProviderCallState.SUBMITTED
-            for chunk in payload.validation_details
-        )
+        expected_details = tuple(chunk for payload in _payloads(first_history, CollaborationProviderCallPayload)
+            if payload.state is CollaborationProviderCallState.SUBMITTED for chunk in payload.validation_details)
         self.assertTrue(expected_details)
         self.assertEqual(second.validation_details, expected_details)
         self.assertNotIn(private, repr(first_history))
-        self.assertEqual(
-            tuple(item.kind for item in second.proposal.basis.inputs),
-            (
-                CollaborationInputKind.USER_INPUT,
-                CollaborationInputKind.CONVERSATION_EVENT,
-            ),
-        )
+        self.assertEqual(tuple(item.kind for item in second.proposal.basis.inputs),
+            (CollaborationInputKind.USER_INPUT, CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.CONVERSATION_EVENT))
         with self.assertRaises(ValueError):
-            await self.runtime.decide_lead_step(
-                _decision(first, CollaborationConfirmationDecision.CONFIRM)
-            )
-
+            await self.runtime.decide_lead_step(_decision(first, CollaborationConfirmationDecision.CONFIRM))
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome("supports"))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
-        second_decision = await self.runtime.decide_lead_step(
-            _decision(second, CollaborationConfirmationDecision.CONFIRM)
-        )
+        second_decision = await self.runtime.decide_lead_step(_decision(second, CollaborationConfirmationDecision.CONFIRM))
         self.assertIs(second_decision.turn.state, CollaborationStepState.COMPLETED)
         self.assertIsNone(second_decision.turn.proposal)
         self.assertEqual(second_decision.turn.validation_details, ())
-        history = self.history(conversation_id)
-        syntheses = _payloads(history, CollaborationLeadSynthesisPayload)
+        syntheses = _payloads(self.history(conversation_id), CollaborationLeadSynthesisPayload)
         self.assertEqual(len(syntheses), 2)
         self.assertEqual(syntheses[0].evidence, first.proposal.basis.evidence)
         self.assertEqual(syntheses[1].evidence, second.proposal.basis.evidence)
-        for synthesis in syntheses:
-            self.assertTrue(
-                set(synthesis.reply_event_ids).isdisjoint(
-                    item.evidence_id for item in synthesis.evidence.receipts
-                )
-            )
+        self.assertTrue(all(set(synthesis.reply_event_ids).isdisjoint(item.evidence_id for item in synthesis.evidence.receipts)
+                            for synthesis in syntheses))
         self.assertIsNone(syntheses[-1].next_intent)
 
 

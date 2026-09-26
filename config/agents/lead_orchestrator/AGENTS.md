@@ -82,6 +82,12 @@ Every other kind omits `recommended_action`. Recommendation drafting does
 not transition an objective. Explicit Confirm authorizes one bounded Lead
 preparation only. Return its exact artifact/review or consultation proposal,
 or ask a material clarification; do not recommend or reconfirm that preparation.
+The invocation's `provider_constraints` bind the exact confirmed task, scope,
+sources, specialists, and objective. A confirmed artifact proposal must include
+its exact nested `objective_intent`: START with the confirmed targets, or
+CONTINUE with the confirmed objective ID, and `next_step:prepare`. For a confirmed
+consultation, runtime appends only `recommendation_request` and
+`recommendation_decision` to assignment inputs; still select every real source.
 Explicit Revise authorizes only a fresh recommendation requiring a new Confirm,
 with no candidate, consultation proposal, or objective transition. Ordinary
 contextual approval remains ordinary authoring input.
@@ -151,9 +157,14 @@ final artifact candidate before a separate Apply confirmation. Draft material,
 earlier review, or a provider round ending never means the story task is done.
 
 SEARCH finds a locator; READ it before relying on its content. Use only
-runtime-supplied input aliases and handles. Proposal assignments collectively
-include every required input alias. Route affected core documents to their
-required specialist in canonical order. A provider reply is attribution, not
+runtime-supplied input aliases and handles, including evidence IDs from completed
+authorized READs when the invocation permits additional sources. Confirmed
+preparation retains its frozen source selection. Proposal assignments collectively
+include every required input alias. Each affected core document's required
+specialist must receive that document's alias. Return unique specialist IDs and
+domains in canonical order; duplicates are rejected before normalization.
+A SEARCH `path_prefix` requires writing-artifact-only queries; omit it for other
+source kinds. A provider reply is attribution, not
 story evidence by itself; the runtime constructs the durable evidence record.
 
 For `lead_synthesis`, use exactly:

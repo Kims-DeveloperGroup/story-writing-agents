@@ -39,6 +39,7 @@ from .accounting import (
 )
 
 from .actions import (
+    normalized_search_text,
     CONTEXT_ACTION_POLICY,
     ContextActionCorrelation,
     ContextActionError,
@@ -3063,12 +3064,25 @@ def _context_validation_details(
             if kind == "search":
                 queries = action.get("queries")
                 if type(queries) is list:
+                    normalized_queries: set[tuple[str, tuple[str, ...]]] = set()
                     for index, query in enumerate(queries):
+                        if type(query) is dict and type(query.get("text")) is str:
+                            text = normalized_search_text(query["text"])
+                            kinds_value = query.get("source_kinds")
+                            if not text or len(query["text"]) > CONTEXT_ACTION_POLICY.max_query_characters or len(text) > CONTEXT_ACTION_POLICY.max_query_characters:
+                                issues.append(f"$.action.queries[{index}].text: expected nonempty bounded literal search text")
+                            if type(kinds_value) is list and all(type(item) is str for item in kinds_value):
+                                key = (text, tuple(kind.value for kind in _SEARCH_SOURCE_KIND_ORDER if kind.value in kinds_value))
+                                if key in normalized_queries:
+                                    issues.append(f"$.action.queries[{index}]: duplicate normalized query and source kinds")
+                                normalized_queries.add(key)
                         kinds = query.get("source_kinds") if type(query) is dict else None
                         if type(kinds) is list and len(set(map(repr, kinds))) != len(kinds):
                             issues.append(
                                 f"$.action.queries[{index}].source_kinds: duplicate source kind"
                             )
+                if not issues and "path_prefix" in action:
+                    issues.append("$.action.path_prefix: expected a normalized relative artifact directory and writing_artifact-only queries")
             elif kind == "read" and not _execution_error_has_detail(
                 failure, _ContextExecutionErrorDetail.RESPONSE_CORRELATION_MISMATCH,
             ):
@@ -3142,10 +3156,21 @@ def _context_action_schema(
             },
         }
         variants.append(_closed_provider_object_schema(search_properties))
-        variants.append(_closed_provider_object_schema({
-            **search_properties,
-            "path_prefix": {"type": "string"},
-        }))
+        if ContextSourceKind.WRITING_ARTIFACT in allowed_search_source_kinds:
+            artifact_query = _closed_provider_object_schema({
+                "text": {"type": "string", "description": "Nonempty literal search text."},
+                "source_kinds": {
+                    "type": "array", "items": {"type": "string", "enum": ["writing_artifact"]},
+                    "minItems": 1, "maxItems": 1,
+                },
+            })
+            variants.append(_closed_provider_object_schema({
+                **search_properties,
+                "queries": {"type": "array", "items": artifact_query,
+                            "minItems": 1, "maxItems": query_limit},
+                "path_prefix": {"type": "string",
+                                "description": "Normalized relative artifact directory; writing_artifact queries only."},
+            }))
     if "read" in allowed_actions:
         handle_limit = min(action_limits[5], action_limits[6])
         variants.append(

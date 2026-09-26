@@ -10,7 +10,7 @@ from dataclasses import replace
 from story_writing_agents import conversations as c
 from tests.recommendation_fixture import (
     DRAFT, OUTLINE, RecommendationCase, action, decision, digest,
-    recommendation, rewrite_history,
+    preparation, recommendation, rewrite_history,
 )
 from tests import test_lead_orchestration as lead
 
@@ -104,19 +104,45 @@ class RecommendationActionContractTests(RecommendationCase):
         self.assertEqual(second.recommendation_request.authoring_scope, request.authoring_scope)
         self.assertEqual(tuple(s.content_digest for s in second.recommendation_request.draft_sources),
                          (digest(message), digest("Second whole reply")))
-        for sources in (("foreign_event",), ("current_response", "current_response")):
+        for sources, objective_id in ((("foreign_event",), None),
+                                      (("current_response", "current_response"), None),
+                                      (("current_response",), "foreign_objective")):
             cid = self.conversation("Rejected source aliases")
-            bad = recommendation(recommended_action=action(source_ids=sources))
+            bad = recommendation(recommended_action=action(source_ids=sources, objective_id=objective_id))
             self.backend.enqueue(bad)
             self.backend.enqueue(bad)
             result = await self.runtime.lead_turn(self.session_id, cid, "Reject undisclosed aliases.")
             self.assertIsNone(result.recommendation_request)
             self.assertFalse(self.payload_events(cid, c.LeadRecommendationRequestPayload))
+            self.assert_no_downstream(cid)
 
     async def test_confirm_origin_v2_and_continuing_v1_preserve_exact_wire_facts(self):
+        def checked(offer):
+            producer = preparation(offer)
+            def response(call, provider):
+                raw = producer(call, provider)
+                self.assertEqual(lead.diagnose_json_text(raw, call.schema), ())
+                for change in ("absent", "step", "identity", "scope"):
+                    bad = json.loads(raw)
+                    body = bad["action"]["result"]
+                    intent = body["artifact_intent"]["objective_intent"]
+                    if change == "absent":
+                        del body["artifact_intent"]["objective_intent"]
+                    elif change == "step":
+                        intent["next_step"] = "consult"
+                    elif change == "scope":
+                        body["authoring_scope"]["task"] = "foreign_task@1"
+                    elif intent["action"] == "start":
+                        intent["target_paths"] = ["core_documents/character_sheets.md"]
+                    else:
+                        intent["objective_id"] = "foreign_objective"
+                    self.assertTrue(lead.diagnose_json_text(json.dumps(bad), call.schema), change)
+                return raw
+            return response
         conversation_id, turn = await self.recommend()
         original = tuple(c.encode_collaboration_event(e) for e in self.history(conversation_id))
-        confirmed = await self.confirm(turn)
+        self.backend.enqueue(checked(turn))
+        confirmed = await self.runtime.decide_lead_recommendation(decision(turn))
         objective = self.objective(conversation_id)
         self.assertIs(type(objective.facts), c.ArtifactObjectiveFactsV2)
         self.assertFalse(hasattr(objective.facts, "origin_user_event_id"))
@@ -137,7 +163,8 @@ class RecommendationActionContractTests(RecommendationCase):
         old_event = self.payload_events(other, c.ArtifactObjectivePayload)[0]
         old_wire = c.encode_collaboration_event(old_event)
         _, offer = await self.recommend(other, recommended_action=action(objective_id=before.objective_id))
-        await self.confirm(offer)
+        self.backend.enqueue(checked(offer))
+        await self.runtime.decide_lead_recommendation(decision(offer))
         self.assertEqual(self.objective(other).facts, before)
         self.assertIs(type(self.objective(other).facts), c.ArtifactObjectiveFacts)
         self.assertEqual(c.encode_collaboration_event(self.history(other)[old_event.sequence - 1]), old_wire)

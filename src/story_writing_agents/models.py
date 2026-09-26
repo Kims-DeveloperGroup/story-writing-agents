@@ -755,9 +755,15 @@ class AgentRequest:
     conversation_context: ConversationContextWindow | None = None
     story_session_context: StorySessionContext | None = None
 
+    expected_reviewed_proposal: tuple[str, str] | None = field(default=None, kw_only=True)
+
     def __post_init__(self) -> None:
         """Validate optional context without changing legacy request fields."""
 
+        if self.expected_reviewed_proposal is not None:
+            if self.phase is not Phase.FINALIZE:
+                raise ValueError("expected reviewed identity is allowed only for finalization")
+            validate_reviewed_proposal_identity(self.expected_reviewed_proposal)
         if self.conversation_context is not None:
             object.__setattr__(
                 self,
@@ -1113,6 +1119,20 @@ class DebateResult:
         if self.reference_operation_id is not None:
             result["reference_operation_id"] = self.reference_operation_id
         return result
+
+
+def validate_reviewed_proposal_identity(value: tuple[str, str]) -> None:
+    """Validate an expected identity's format, without granting review authority."""
+    if type(value) is not tuple or len(value) != 2:
+        raise ValueError("expected reviewed identity must be an exact ID/digest pair")
+    if type(value[0]) is not str:
+        raise ValueError("reviewed proposal ID must be exact text")
+    try:
+        _validate_conversation_identifier(value[0], label="reviewed proposal ID")
+    except SessionIdError:
+        raise ValueError("reviewed proposal ID must be a canonical identifier") from None
+    if type(value[1]) is not str or _TAGGED_SHA256.fullmatch(value[1]) is None:
+        raise ValueError("reviewed proposal digest must be tagged lowercase SHA-256")
 
 
 def _validate_conversation_identifier(value: str, *, label: str) -> str:
