@@ -11,6 +11,14 @@ import json
 import math
 import secrets
 import threading
+from ..structured_output_validation import (
+    validation_failure,
+    validation_call,
+    carry_validation,
+    failure_issues,
+    remap_validation,
+    encoding_failure,
+)
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -39,7 +47,6 @@ from .accounting import (
 )
 
 from .actions import (
-    normalized_search_text,
     CONTEXT_ACTION_POLICY,
     ContextActionCorrelation,
     ContextActionError,
@@ -470,7 +477,22 @@ ContextExecutionEventSink = Callable[[ContextExecutionEvent], None]
 
 
 def _action_error(code: ContextActionErrorCode) -> ContextActionError:
-    return ContextActionError(code)
+    paths_and_rules = {
+        ContextActionErrorCode.CORRELATION_MISMATCH: ("$", "action correlation must match the current request"),
+        ContextActionErrorCode.INVALID_TRANSITION: ("$.kind", "action must be allowed by the current phase and completed read state"),
+        ContextActionErrorCode.ACTION_LIMIT_EXCEEDED: ("$.kind", "action count must remain within the disclosed invocation budget"),
+        ContextActionErrorCode.SEARCH_LIMIT_EXCEEDED: ("$.queries", "search count, query count, and requested results must fit the remaining search budget"),
+        ContextActionErrorCode.READ_LIMIT_EXCEEDED: ("$.handles", "read count, handle count, and source bytes must fit the remaining read budget"),
+        ContextActionErrorCode.OBSERVATION_LIMIT_EXCEEDED: ("$.handles", "selected source observations must fit the remaining context budget"),
+        ContextActionErrorCode.HANDLE_INVALID: ("$.handles", "expected unconsumed source handles issued by this invocation's search"),
+        ContextActionErrorCode.OUTSTANDING_READ: ("$.kind", "all outstanding read observations must be delivered before another action"),
+        ContextActionErrorCode.ANSWER_NOT_AUTHORIZED: ("$.result", "answer requires completed mandatory reads and current source authorization"),
+    }
+    failure = ContextActionError(code)
+    if code in paths_and_rules:
+        path, rule = paths_and_rules[code]
+        validation_failure(failure, path, rule)
+    return failure
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -2906,7 +2928,10 @@ def _exact_object(
     fields: frozenset[str],
 ) -> dict[str, object]:
     if type(value) is not dict or set(value) != fields:
-        raise _execution_error(ContextExecutionErrorCode.MALFORMED_ACTION)
+        raise validation_failure(
+            _execution_error(ContextExecutionErrorCode.MALFORMED_ACTION), "$",
+            "expected an object containing exactly " + ", ".join(sorted(fields)),
+        )
     assert isinstance(value, dict)
     return value
 
@@ -2920,8 +2945,15 @@ def _answer_text_for_contract(
     if type(contract) is not ContextJsonObjectResultContract or not (
         _value_matches_provider_schema(value, contract.schema_value())
     ):
-        raise ValueError
-    return _canonical_bytes(value).decode("utf-8", errors="strict")
+        raise validation_failure(
+            ValueError(),
+            '$',
+            'expected a JSON object matching the current result contract',
+        )
+    try:
+        return _canonical_bytes(value).decode("utf-8", errors="strict")
+    except ContextActionError as failure:
+        raise encoding_failure(failure, value, contract.schema_value())
 
 
 def _decode_context_action(
@@ -2930,117 +2962,144 @@ def _decode_context_action(
     correlation: ContextActionCorrelation,
     allowed_actions: tuple[str, ...],
     result_contract: ContextJsonObjectResultContract,
-    allowed_search_source_kinds: tuple[ContextSourceKind, ...] = (
-        _SEARCH_SOURCE_KIND_ORDER
-    ),
+    allowed_search_source_kinds: tuple[ContextSourceKind, ...] = _SEARCH_SOURCE_KIND_ORDER,
     resolve_handle: Callable[[object], ContextSourceHandle] = ContextSourceHandle,
     completed_handles: tuple[ContextSourceHandle, ...] = (),
 ) -> ContextSearchAction | ContextReadAction | ContextAnswerAction:
-    """Strictly decode typed wire v7 and restore the full internal action."""
-
+    """Strictly decode typed wire v7 and retain the actual rejected property."""
     try:
         value = json.loads(
-            response_text,
-            object_pairs_hook=_unique_json_object,
+            response_text, object_pairs_hook=_unique_json_object,
             parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
         )
         raw = _exact_object(value, frozenset({"action"}))
         action = raw["action"]
         if type(action) is not dict or type(action.get("kind")) is not str:
-            raise ValueError
+            raise validation_failure(ValueError(), "$.kind", "expected one of search, read, answer")
         action_kind = action["kind"]
         if action_kind not in {"answer", "read", "search"}:
-            raise ValueError
+            raise validation_failure(ValueError(), "$.kind", "expected one of search, read, answer")
         if action_kind == "search":
             if set(action) not in ({"kind", "queries"}, {"kind", "path_prefix", "queries"}):
-                raise ValueError
-            search = action
-            path_prefix = search.get("path_prefix")
-            query_values = search["queries"]
-            if (
-                action_kind not in allowed_actions
-                or (path_prefix is not None and type(path_prefix) is not str)
-                or type(query_values) is not list
-                or not query_values
-            ):
-                raise ValueError
+                raise validation_failure(
+                    ValueError(),
+                    '$',
+                    'search requires kind and queries, with only optional path_prefix',
+                )
+            path_prefix = action.get("path_prefix")
+            query_values = action["queries"]
+            if action_kind not in allowed_actions:
+                raise validation_failure(
+                    ValueError(),
+                    '$.kind',
+                    'expected an action from ' + ', '.join(allowed_actions),
+                )
+            if path_prefix is not None and type(path_prefix) is not str:
+                raise validation_failure(
+                    ValueError(),
+                    '$.path_prefix',
+                    'expected text or null',
+                    value=path_prefix,
+                )
+            if type(query_values) is not list or not query_values:
+                raise validation_failure(
+                    ValueError(),
+                    '$.queries',
+                    'expected a nonempty array',
+                    value=query_values,
+                )
             queries: list[ContextSearchQuery] = []
-            for query in query_values:
-                query_object = _exact_object(
-                    query,
-                    frozenset({"source_kinds", "text"}),
-                )
+            for query_index, query in enumerate(query_values):
+                query_path = f"$.queries[{query_index}]"
+                query_object = validation_call(query_path, _exact_object, query, frozenset({'source_kinds', 'text'}))
                 kinds = query_object["source_kinds"]
-                if type(query_object["text"]) is not str or type(kinds) is not list:
-                    raise ValueError
-                decoded_kinds = tuple(ContextSourceKind(item) for item in kinds)
-                if (
-                    not decoded_kinds
-                    or len(set(decoded_kinds)) != len(decoded_kinds)
-                    or any(
-                        kind not in allowed_search_source_kinds
-                        for kind in decoded_kinds
+                if type(query_object["text"]) is not str:
+                    raise validation_failure(
+                        ValueError(),
+                        query_path + '.text',
+                        'expected text',
+                        value=query_object['text'],
                     )
-                ):
-                    raise ValueError
-                canonical_kinds = tuple(
-                    kind for kind in _SEARCH_SOURCE_KIND_ORDER if kind in decoded_kinds
+                if type(kinds) is not list:
+                    raise validation_failure(
+                        ValueError(),
+                        query_path + '.source_kinds',
+                        'expected an array',
+                        value=kinds,
+                    )
+                decoded_kinds = tuple(
+                    validation_call(f"{query_path}.source_kinds[{index}]", ContextSourceKind, item)
+                    for index, item in enumerate(kinds)
                 )
-                queries.append(
-                    ContextSearchQuery(
-                        query_object["text"],
+                if not decoded_kinds:
+                    raise validation_failure(
+                        ValueError(),
+                        query_path + '.source_kinds',
+                        'expected at least one source kind',
+                    )
+                if len(set(decoded_kinds)) != len(decoded_kinds):
+                    raise validation_failure(
+                        ValueError(),
+                        query_path + '.source_kinds',
+                        'source kinds must be unique',
+                    )
+                if any(kind not in allowed_search_source_kinds for kind in decoded_kinds):
+                    raise validation_failure(
+                        ValueError(),
+                        query_path + '.source_kinds',
+                        'expected source kinds from ' + ', '.join((kind.value for kind in allowed_search_source_kinds)),
+                    )
+                canonical_kinds = tuple(kind for kind in _SEARCH_SOURCE_KIND_ORDER if kind in decoded_kinds)
+                try:
+                    queries.append(validation_call(
+                        query_path,
+                        ContextSearchQuery,
+                        query_object['text'],
                         canonical_kinds,
-                        cast(str | None, path_prefix),
-                    )
-                )
-            return ContextSearchAction(
-                correlation,
-                tuple(queries),
-            )
+                        path_prefix,
+                    ))
+                except ContextActionError as failure:
+                    raise remap_validation(failure, {query_path + ".path_prefix": "$.path_prefix"})
+            return ContextSearchAction(correlation, tuple(queries))
         if action_kind == "read":
             read = _exact_object(action, frozenset({"handles", "kind"}))
             handles_value = read["handles"]
             if type(handles_value) is not list or not handles_value:
-                raise _execution_error(
-                    ContextExecutionErrorCode.MALFORMED_ACTION,
-                    detail=(_ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED),
-                )
+                raise _execution_error(ContextExecutionErrorCode.MALFORMED_ACTION, detail=_ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED)
             if action_kind not in allowed_actions:
-                raise ValueError
-            try:
-                handles = tuple(resolve_handle(item) for item in handles_value)
-            except ContextActionError as exc:
-                if exc.code in {
-                    ContextActionErrorCode.HANDLE_INVALID,
-                    ContextActionErrorCode.INVALID_VALUE,
-                }:
-                    raise _execution_error(
-                        ContextExecutionErrorCode.MALFORMED_ACTION,
-                        detail=(
-                            _ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED
-                        ),
-                    ) from None
-                raise
-            return ContextReadAction(correlation, handles)
+                raise validation_failure(
+                    ValueError(),
+                    '$.kind',
+                    'expected an action from ' + ', '.join(allowed_actions),
+                )
+            handles: list[ContextSourceHandle] = []
+            for index, item in enumerate(handles_value):
+                try:
+                    handles.append(resolve_handle(item))
+                except ContextActionError as failure:
+                    if failure.code in {ContextActionErrorCode.HANDLE_INVALID, ContextActionErrorCode.INVALID_VALUE}:
+                        raise validation_failure(
+                            _execution_error(ContextExecutionErrorCode.MALFORMED_ACTION, detail=_ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED),
+                            f"$.handles[{index}]", "expected a source handle returned by a preceding search",
+                        ) from None
+                    raise
+            return ContextReadAction(correlation, tuple(handles))
         answer = _exact_object(action, frozenset({"kind", "result"}))
         if action_kind not in allowed_actions:
-            raise ValueError
+            raise validation_failure(
+                ValueError(),
+                '$.kind',
+                'expected an action from ' + ', '.join(allowed_actions),
+            )
         return ContextAnswerAction(
             correlation,
-            _answer_text_for_contract(answer["result"], result_contract),
+            validation_call("$.result", _answer_text_for_contract, answer["result"], result_contract),
             completed_handles,
         )
     except ContextExecutionError:
         raise
-    except (
-        ContextActionError,
-        ContextManifestError,
-        _DuplicateJsonKey,
-        json.JSONDecodeError,
-        TypeError,
-        ValueError,
-    ):
-        raise _execution_error(ContextExecutionErrorCode.MALFORMED_ACTION) from None
+    except (ContextActionError, ContextManifestError, _DuplicateJsonKey, json.JSONDecodeError, TypeError, ValueError) as failure:
+        raise carry_validation(_execution_error(ContextExecutionErrorCode.MALFORMED_ACTION), failure) from None
 
 
 def _context_validation_details(
@@ -3048,57 +3107,19 @@ def _context_validation_details(
     schema_issues: tuple[str, ...],
     failure: ContextExecutionError,
 ) -> tuple[str, ...]:
-    """Describe schema issues and selected known semantic rules without response text."""
-
-    issues = list(schema_issues)
-    if not issues:
-        try:
-            parsed = json.loads(
-                response_text, object_pairs_hook=_unique_json_object,
-                parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
-            )
-        except (_DuplicateJsonKey, json.JSONDecodeError, TypeError, ValueError):
-            parsed = None
-        action = parsed.get("action") if type(parsed) is dict else None
-        if type(action) is dict:
-            kind = action.get("kind")
-            if kind == "search":
-                queries = action.get("queries")
-                if type(queries) is list:
-                    normalized_queries: set[tuple[str, tuple[str, ...]]] = set()
-                    for index, query in enumerate(queries):
-                        if type(query) is dict and type(query.get("text")) is str:
-                            text = normalized_search_text(query["text"])
-                            kinds_value = query.get("source_kinds")
-                            if not text or len(query["text"]) > CONTEXT_ACTION_POLICY.max_query_characters or len(text) > CONTEXT_ACTION_POLICY.max_query_characters:
-                                issues.append(f"$.action.queries[{index}].text: expected nonempty bounded literal search text")
-                            if type(kinds_value) is list and all(type(item) is str for item in kinds_value):
-                                key = (text, tuple(kind.value for kind in _SEARCH_SOURCE_KIND_ORDER if kind.value in kinds_value))
-                                if key in normalized_queries:
-                                    issues.append(f"$.action.queries[{index}]: duplicate normalized query and source kinds")
-                                normalized_queries.add(key)
-                        kinds = query.get("source_kinds") if type(query) is dict else None
-                        if type(kinds) is list and len(set(map(repr, kinds))) != len(kinds):
-                            issues.append(
-                                f"$.action.queries[{index}].source_kinds: duplicate source kind"
-                            )
-                if not issues and "path_prefix" in action:
-                    issues.append("$.action.path_prefix: expected a normalized relative artifact directory and writing_artifact-only queries")
-            elif kind == "read" and not _execution_error_has_detail(
-                failure, _ContextExecutionErrorDetail.RESPONSE_CORRELATION_MISMATCH,
-            ):
-                issues.append("$.action.handles: expected handles from the preceding search")
-        if _execution_error_has_detail(
-            failure, _ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED,
-        ) and not issues:
-            issues.append("$.action.handles: expected handles from the preceding search")
-        if _execution_error_has_detail(
-            failure, _ContextExecutionErrorDetail.RESPONSE_CORRELATION_MISMATCH,
-        ):
-            issues.append("$.action: response correlation did not match this request")
-        if not issues:
-            issues.append("$.action: rejected by a context action rule")
-    return bounded_chunks(issues)
+    """Retain the actual schema/domain rejection; never revalidate heuristically."""
+    issues = schema_issues or failure_issues(failure, path="$.action")
+    if not issues and _execution_error_has_detail(
+        failure, _ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED,
+    ):
+        issues = ("$.action.handles: expected unique handles returned by a preceding search",)
+    if not issues and _execution_error_has_detail(
+        failure, _ContextExecutionErrorDetail.RESPONSE_CORRELATION_MISMATCH,
+    ):
+        issues = ("$.action: response correlation must match the current request",)
+    return bounded_chunks(issues or (
+        "$.action: action decoder failed without a property diagnostic",
+    ))
 
 
 def _closed_provider_object_schema(
@@ -4403,6 +4424,7 @@ class AgentContextService:
         retired_thread_id: str | None = None
         checkpoint_committed = False
         call_finalizer: ContextProviderCallFinalizer | None = None
+        call_validation_details: tuple[str, ...] = ()
         response_rejection_code: ContextProviderTerminalCode | None = None
 
         def execution_event(
@@ -4442,6 +4464,15 @@ class AgentContextService:
             """Finalize and retain one deterministic raw-response rejection."""
 
             nonlocal response_rejection_code
+            details = call_validation_details
+            if not details and code is ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH:
+                details = bounded_chunks(("$.action: response correlation must match the current request",))
+            try:
+                retain_details = getattr(finalizer, "set_validation_details", None)
+                if callable(retain_details):
+                    retain_details(details)
+            except BaseException:
+                pass
             _reject_provider_call_without_replacing(finalizer, code)
             response_rejection_code = code
 
@@ -4875,6 +4906,7 @@ class AgentContextService:
                         )
                     raise failure
                 call_finalizer = result.finalizer
+                call_validation_details = ()
                 submitted_accountings.append(result.accounting)
                 generation = self._append_call(
                     self._ledger,
@@ -4971,13 +5003,11 @@ class AgentContextService:
                         completed_handles=action_session.completed_handles,
                     )
                 except ContextExecutionError as decode_failure:
+                    call_validation_details = _context_validation_details(
+                        result.response_text, schema_issues, decode_failure,
+                    )
                     if validation_sink is not None:
-                        _require_sync_none(validation_sink(
-                            call_id,
-                            _context_validation_details(
-                                result.response_text, schema_issues, decode_failure,
-                            ),
-                        ))
+                        _require_sync_none(validation_sink(call_id, call_validation_details))
                     if (
                         decode_failure.code
                         is ContextExecutionErrorCode.MALFORMED_ACTION
@@ -5187,16 +5217,27 @@ class AgentContextService:
                 if answer_validator is not None:
                     try:
                         _require_sync_none(answer_validator(action.answer, authorization))
-                    except Exception:
-                        if validation_sink is not None:
+                    except Exception as answer_failure:
+                        issues = failure_issues(answer_failure, path="$.action.result")
+                        if issues:
+                            details = bounded_chunks(issues)
+                        else:
                             try:
-                                rules = (
-                                    None if answer_diagnostic is None
-                                    else answer_diagnostic(action.answer)
-                                )
+                                rules = None if answer_diagnostic is None else answer_diagnostic(action.answer)
                             except Exception:
                                 rules = None
                             details = domain_rule_chunks(rules)
+                        call_validation_details = details
+                        if call_finalizer is not None:
+                            try:
+                                retain_details = getattr(
+                                    call_finalizer, "set_validation_details", None,
+                                )
+                                if callable(retain_details):
+                                    retain_details(details)
+                            except BaseException:
+                                pass
+                        if validation_sink is not None:
                             _require_sync_none(validation_sink(
                                 call_id, details,
                             ))
@@ -5307,6 +5348,13 @@ class AgentContextService:
             if checkpoint_committed:
                 raise
             if call_finalizer is not None:
+                if stage in {"action", "answer"} and isinstance(failure, ContextActionError):
+                    call_validation_details = bounded_chunks(failure_issues(failure, path="$.action"))
+                    if validation_sink is not None and call_validation_details:
+                        try:
+                            _require_sync_none(validation_sink(call_id, call_validation_details))
+                        except BaseException:
+                            pass
                 finalizer = call_finalizer
                 call_finalizer = None
                 if isinstance(failure, asyncio.CancelledError):

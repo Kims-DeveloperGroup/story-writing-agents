@@ -249,8 +249,14 @@ Automatic capture attempts one sequence for each physical provider call:
 The shared `exchange_id` correlates these records. The request content is the
 canonical provider-neutral invocation projection. A response contains the raw
 valid `ProviderResult` projection: `response_text`, `thread_id`, nullable usage,
-and nullable actual transport bytes. The outcome contains only a closed outcome
-and fixed code, never arbitrary exception prose.
+and nullable actual transport bytes. The outcome contains a closed outcome and
+fixed code. Rejected provider replies can also include `validation_details`:
+bounded descriptions of the rejected JSON
+property and its expected type, allowed values, or validation rule. Cross-property
+rules name the required relationship. These descriptions come from trusted
+validators and omit provider values, unknown member names, and arbitrary exception
+prose. Each original or repair call has its own outcome and findings; older records
+without this optional field remain readable.
 
 The request's `payload` can contain request-local `context_objects` and
 `context_ref` markers that share repeated runtime context. Read the matching

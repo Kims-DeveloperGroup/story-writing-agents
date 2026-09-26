@@ -80,7 +80,7 @@ from story_writing_agents.conversations import (
 )
 from story_writing_agents.cli import _parse_backend_overrides, build_parser, main
 from story_writing_agents.backend import backend_configuration_snapshot
-from story_writing_agents.structured_output_validation import diagnose_json_text
+from story_writing_agents.structured_output_validation import diagnose_json_text, failure_issues
 from story_writing_agents.agent_context import (
     ContextComponentKind,
     ProviderCallAccounting,
@@ -2745,6 +2745,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         events: list[str] = []
+        details: list[str] = []
 
         class Lifecycle:
             def record_response(self, _result: ProviderResult) -> None:
@@ -2753,8 +2754,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             def accepted(self) -> None:
                 events.append("accepted")
 
-            def rejected(self, _code: object) -> None:
+            def rejected(self, _code: object, *, validation_details: tuple[str, ...] = ()) -> None:
                 events.append("rejected")
+                details.extend(validation_details)
 
             def provider_failure(self, _code: object) -> None:
                 events.append("provider_failure")
@@ -2861,6 +2863,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 "rejected",
             ],
         )
+        self.assertEqual(details, ["Structured response\n$: malformed JSON"])
 
     async def test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread(
         self,
@@ -5000,6 +5003,20 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             with self.subTest(phase=phase, value=value):
                 with self.assertRaises(BackendProtocolError):
                     AgentBackend._decode_reply(phase, value, revision_id="r2")
+        for phase, value, error, issue in (
+            (Phase.AUDIT, {"verdict": "PRIVATE", "message": "Visible."}, BackendProtocolError, "$.verdict: expected verdict approve or conflict"),
+            (Phase.SYNTHESIZE, {"next": "PRIVATE", "message": "Continue."}, BackendProtocolError, "$.next: expected repair, finalization, or deadlock"),
+            (Phase.AUDIT, {"verdict": "conflict", "message": ""}, BackendProtocolError, "$.message: expected nonempty text"),
+            (Phase.FINALIZE, {"reviewed_proposal_id": "valid", "reviewed_proposal_digest": "PRIVATE"}, BackendProtocolError,
+             "$.reviewed_proposal_digest: expected sha256: followed by exactly 64 lowercase hexadecimal digits"),
+            (Phase.FINALIZE, {"reviewed_proposal_id": "PRIVATE/id", "reviewed_proposal_digest": "sha256:" + "a" * 64}, BackendProtocolError,
+             "$.reviewed_proposal_id: expected a canonical reviewed proposal identifier"),
+        ):
+            with self.assertRaises(error) as caught:
+                AgentBackend._decode_reply(phase, json.dumps(value), revision_id="r2")
+            issues = failure_issues(caught.exception) or (getattr(caught.exception, "issue", None),)
+            self.assertEqual(issues, (issue,))
+            self.assertNotIn("PRIVATE", repr(issues))
 
     async def test_rejected_debate_attempts_return_phase_safe_deadlocks(self) -> None:
         backend = AgentBackend(self.workspace, executable=str(self.executable))
@@ -5168,7 +5185,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         private = "PRIVATE_VALIDATION_SENTINEL_한🙂"
         responses = [
             json.dumps({"message": 0, private: private}, ensure_ascii=False),
-            json.dumps({"message": "", "other": private}, ensure_ascii=False),
+            json.dumps({"message": "\ud800"}),
         ]
         with mock.patch.dict(os.environ, {"STORY_FAKE_CODEX_PHYSICAL_OUTPUTS": json.dumps(responses)}):
             rejected = await bound.converse(self.conversation_request(session_id=session_id))
@@ -5179,8 +5196,24 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn("$.message: expected string", original)
         self.assertIn("unexpected properties", original)
         self.assertTrue(repair.startswith("Repair response"))
-        self.assertIn("$.message: expected at least 1", repair)
+        self.assertEqual(repair.splitlines()[1:], ["$.message: expected strict UTF-8 text"])
         self.assertNotIn(private, repr(rejected.validation_details))
+        records = [record for record in _agent_exchange_records(self.workspace)
+                   if record["session_id"] == session_id]
+        groups = {record["exchange_id"]: [] for record in records}
+        for record in records:
+            groups[record["exchange_id"]].append(record)
+        self.assertEqual(len(groups), 2)
+        outcomes = []
+        for group in groups.values():
+            self.assertEqual([record["request_type"] for record in group],
+                             ["request", "response", "outcome"])
+            outcomes.append(json.loads(group[-1]["content"]))
+        for outcome, detail, code in zip(outcomes, (original, repair),
+                                         ("response_semantic_rejected", "malformed_structured_response"), strict=True):
+            self.assertEqual(outcome, {"code": code, "outcome": "rejected",
+                                      "validation_details": ["Structured response\n" + detail.partition("\n")[2]]})
+        self.assertNotIn(private, repr(outcomes))
 
         responses = ["unused", "unused", json.dumps({"message": 0}),
                      json.dumps({"message": "Repaired."})]
@@ -5227,8 +5260,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             and record["request_type"] == "outcome"
         ]
         self.assertEqual(outcomes, [
-            {"code": "malformed_structured_response", "outcome": "rejected"},
-            {"code": "malformed_structured_response", "outcome": "rejected"},
+            {"code": "malformed_structured_response", "outcome": "rejected",
+             "validation_details": ["Structured response\n$: malformed JSON"]},
+            {"code": "malformed_structured_response", "outcome": "rejected",
+             "validation_details": ["Structured response\n$: malformed JSON"]},
         ])
 
     async def test_structured_decode_failures_taint_existing_thread_once(
@@ -6820,32 +6855,37 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
     def test_retrieval_read_explicit_null_is_not_an_omitted_end_sequence(self) -> None:
         request = _retrieval_request()
-        omitted = json.dumps({"action": {
-            "kind": ConversationRetrievalActionKind.READ_HISTORY.value,
-            "citation_id": "s1h1", "start_sequence": 1,
-        }})
+        action = {"kind": "read_history", "citation_id": "s1h1", "start_sequence": 1}
         decoded = AgentBackend._decode_conversation_retrieval_action(
-            omitted, request=request, action_index=2,
-        )
+            json.dumps({"action": action}), request=request, action_index=2)
         self.assertIs(type(decoded), ConversationRetrievalReadAction)
         self.assertIsNone(decoded.end_sequence)
-        explicit_null = json.dumps({"action": {
-            "kind": ConversationRetrievalActionKind.READ_HISTORY.value,
-            "citation_id": "s1h1", "start_sequence": 1, "end_sequence": None,
-        }})
-        self.assertEqual(
-            diagnose_json_text(
-                explicit_null,
-                AgentBackend._conversation_retrieval_action_schema(
-                    allowed_actions=(ConversationRetrievalActionKind.READ_HISTORY,),
-                ),
-            ),
-            ("$.action.end_sequence: expected integer, got null",),
-        )
+        explicit_null = json.dumps({"action": {**action, "end_sequence": None}})
+        self.assertEqual(diagnose_json_text(explicit_null, AgentBackend._conversation_retrieval_action_schema(
+            allowed_actions=(ConversationRetrievalActionKind.READ_HISTORY,))),
+            ("$.action.end_sequence: expected integer, got null",))
         with self.assertRaises(BackendProtocolError):
-            AgentBackend._decode_conversation_retrieval_action(
-                explicit_null, request=request, action_index=2,
-            )
+            AgentBackend._decode_conversation_retrieval_action(explicit_null, request=request, action_index=2)
+        identifier = "expected identifier matching [A-Za-z0-9][A-Za-z0-9_-]{0,63}"
+        nonempty = "Codex conversation retrieval citation_ids must be an array of non-empty text"
+        answer = {"kind": "answer", "message": "Visible."}
+        for value, path, rule in (
+            ({**action, "citation_id": "PRIVATE/id"}, "citation_id", identifier),
+            ({**action, "start_sequence": 2, "end_sequence": 1}, "end_sequence",
+             "end_sequence must be greater than or equal to start_sequence"),
+            ({**answer, "citation_ids": ["PRIVATE/id"]}, "citation_ids[0]", identifier),
+            ({**answer, "citation_ids": ["s1h1", "s1h1"]}, "citation_ids", "citation_ids must be unique"),
+            ({**answer, "citation_ids": ["s1h1", ""]}, "citation_ids[1]", nonempty),
+            ({**answer, "citation_ids": ["s1h1", "PRIVATE\ud800"]}, "citation_ids[1]",
+             "Codex conversation retrieval citation_ids must be valid UTF-8"),
+            ({**answer, "citation_ids": ["PRIVATE\ud800", ""]}, "citation_ids[1]", nonempty),
+        ):
+            error = ConversationRetrievalSemanticError if path in {"end_sequence", "citation_ids"} else BackendProtocolError
+            with self.assertRaises(error) as caught:
+                AgentBackend._decode_conversation_retrieval_action(json.dumps({"action": value}), request=request, action_index=2)
+            issues = failure_issues(caught.exception)
+            self.assertEqual(issues, (f"$.action.{path}: {rule}",))
+            self.assertNotIn("PRIVATE", repr(issues))
 
     def test_retrieval_non_string_kind_reports_exact_type_and_common_issues(self) -> None:
         secret = "PRIVATE_NON_STRING_RETRIEVAL_KIND_한🙂"
@@ -6861,7 +6901,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             schema,
         )
         self.assertEqual(issues, (
-            "$.action.kind: expected an allowed string value, got object",
+            '$.action.kind: expected one of ["read_history"], got object',
             "$.action.citation_id: expected string, got integer",
             "$.action.start_sequence: expected integer, got string",
         ))
@@ -8471,10 +8511,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             )
         )
         seeded_thread = self.thread(debate_session)["thread_id"]
-        debate_body = (
-            '{"kind":"candidate","revision_id":"wrong-revision","content":'
-            '"PRIVATE_REJECTED_RESPONSE_한🙂"}'
-        )
+        debate_body = '{"verdict":"conflict","message":""}'
         with mock.patch.dict(
             os.environ,
             {
@@ -8487,6 +8524,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     session_id=debate_session,
                     debate_id=debate_id,
                     revision_id="expected-revision",
+                    phase=Phase.AUDIT,
                 )
             )
         self.assertEqual(debate_reply.revision_id, "expected-revision")
@@ -8494,9 +8532,17 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIs(debate_reply.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
         self.assertEqual(debate_reply.trace.action, "none")
         self.assertEqual(len(debate_reply.validation_details), 2)
+        self.assertTrue(all(chunk.splitlines()[1:] == ["$.message: expected nonempty text"]
+                            for chunk in debate_reply.validation_details))
         self.assertTrue(debate_reply.validation_details[0].startswith("Original response"))
         self.assertTrue(debate_reply.validation_details[1].startswith("Repair response"))
-        self.assertNotIn("PRIVATE_REJECTED_RESPONSE", repr(debate_reply.validation_details))
+        outcomes = [json.loads(record["content"]) for record in _agent_exchange_records(self.workspace)
+                    if record["session_id"] == debate_session and record["request_type"] == "outcome"]
+        self.assertEqual([item["code"] for item in outcomes],
+                         ["accepted", "response_semantic_rejected", "response_semantic_rejected"])
+        self.assertEqual([item["validation_details"] for item in outcomes[1:]],
+                         [[detail.replace(stage, "Structured response", 1)] for stage, detail in
+                          zip(("Original response", "Repair response"), debate_reply.validation_details, strict=True)])
         self.assertIs(self.thread(debate_session)["tainted"], True)
         self.assertEqual(self.thread(debate_session)["thread_id"], seeded_thread)
 

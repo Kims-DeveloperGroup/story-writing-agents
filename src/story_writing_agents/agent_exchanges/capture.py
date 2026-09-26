@@ -210,10 +210,14 @@ def _response_diagnostic(
 def _terminal_content(
     outcome: AgentExchangeOutcome,
     code: AgentExchangeTerminalCode,
+    validation_details: tuple[str, ...] = (),
 ) -> str:
-    """Serialize one closed terminal outcome without arbitrary diagnostics."""
+    """Serialize one closed outcome with optional trusted validation findings."""
 
-    return _canonical_json({"code": code.value, "outcome": outcome.value})
+    content: dict[str, object] = {"code": code.value, "outcome": outcome.value}
+    if validation_details:
+        content["validation_details"] = list(validation_details)
+    return _canonical_json(content)
 
 
 class AgentExchangeCaptureLifecycle:
@@ -332,6 +336,7 @@ class AgentExchangeCaptureLifecycle:
         code: AgentExchangeTerminalCode,
         *,
         response_required: bool,
+        validation_details: tuple[str, ...] = (),
     ) -> None:
         try:
             if type(code) is not AgentExchangeTerminalCode:
@@ -347,7 +352,7 @@ class AgentExchangeCaptureLifecycle:
                 self._state = _CaptureState.TERMINAL_ATTEMPTED
                 self._record(
                     AgentExchangeRequestType.OUTCOME,
-                    _terminal_content(outcome, code),
+                    _terminal_content(outcome, code, validation_details),
                 )
         except BaseException:
             pass
@@ -361,7 +366,9 @@ class AgentExchangeCaptureLifecycle:
             response_required=True,
         )
 
-    def rejected(self, code: AgentExchangeTerminalCode) -> None:
+    def rejected(
+        self, code: AgentExchangeTerminalCode, *, validation_details: tuple[str, ...] = (),
+    ) -> None:
         """Attempt one closed response-rejection terminal."""
 
         if type(code) is not AgentExchangeTerminalCode or code not in _REJECTED_CODES:
@@ -370,6 +377,7 @@ class AgentExchangeCaptureLifecycle:
             AgentExchangeOutcome.REJECTED,
             code,
             response_required=True,
+            validation_details=validation_details,
         )
 
     def provider_failure(

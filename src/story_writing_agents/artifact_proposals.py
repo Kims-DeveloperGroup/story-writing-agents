@@ -5,6 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from .structured_output_validation import (
+    validation_failure,
+    validation_call,
+    carry_validation,
+    raise_validation,
+)
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -16,12 +22,18 @@ from .writing_artifacts import (
     ArtifactChangeOperationKind,
     ArtifactChangeSet,
     ArtifactChangeSetError,
+    ArtifactChangeSetErrorCode,
     ArtifactCreateOperation,
     ArtifactDeleteOperation,
     ArtifactKind,
     ArtifactPatchOperation,
     ArtifactRelationshipEdge,
     ArtifactRelationshipError,
+    ArtifactRelationshipErrorCode,
+    MAX_RELATIONSHIP_ARTIFACTS,
+    MAX_RELATIONSHIP_ARTIFACT_UTF8_BYTES,
+    MAX_RELATIONSHIP_STATE_UTF8_BYTES,
+    MAX_RELATIONSHIP_EDGES,
     ArtifactRelationshipKind,
     ArtifactRelationshipValidation,
     ArtifactRenameOperation,
@@ -115,17 +127,31 @@ def _raise_content_free_error(
 
 def _strict_text(value: object, *, allow_empty: bool = False) -> str:
     if type(value) is not str or (not value and not allow_empty):
-        raise ArtifactProposalError(ArtifactProposalErrorCode.INVALID_INTENT)
+        raise validation_failure(
+            ArtifactProposalError(ArtifactProposalErrorCode.INVALID_INTENT),
+            '$',
+            'expected text' if allow_empty else 'expected nonempty text',
+        )
     try:
         value.encode("utf-8", errors="strict")
     except UnicodeEncodeError:
-        _raise_content_free_error(ArtifactProposalErrorCode.INVALID_INTENT)
+        raise_validation(
+            validation_failure(
+                ArtifactProposalError(ArtifactProposalErrorCode.INVALID_INTENT),
+                '$',
+                'expected strict UTF-8 text',
+            ),
+        )
     return value
 
 
 def _identifier(value: object) -> str:
     if type(value) is not str or _IDENTIFIER.fullmatch(value) is None:
-        raise ArtifactProposalError(ArtifactProposalErrorCode.INVALID_IDENTIFIER)
+        raise validation_failure(
+            ArtifactProposalError(ArtifactProposalErrorCode.INVALID_IDENTIFIER),
+            '$',
+            'expected identifier matching [A-Za-z0-9][A-Za-z0-9_-]{0,63}',
+        )
     return value
 
 
@@ -141,7 +167,18 @@ def _path(value: object) -> tuple[str, ArtifactKind]:
     except (TypeError, ValueError):
         kind = None
     if type(value) is not str or kind is None:
-        raise ArtifactProposalError(ArtifactProposalErrorCode.INVALID_INTENT)
+        raise validation_failure(
+            ArtifactProposalError(ArtifactProposalErrorCode.INVALID_INTENT),
+            '$',
+            'expected one of core_documents/global_outline.md, '
+            'core_documents/part_outlines.md, core_documents/character_sheets.md, '
+            'core_documents/narrative_rules.md, or manuscript/PART/PATH.md; '
+            'PART must match [A-Za-z0-9][A-Za-z0-9_-]{0,63}; every remaining path '
+            'component must match [A-Za-z0-9][A-Za-z0-9_.-]{0,127}, and the final '
+            'component must end in lowercase .md; paths must be normalized '
+            'workspace-relative POSIX text without backslash, NUL, . or .. '
+            'components, and fit 1024 strict UTF-8 bytes',
+        )
     return value, kind
 
 
@@ -157,8 +194,8 @@ class ArtifactCreateIntent:
         return ArtifactChangeOperationKind.CREATE
 
     def __post_init__(self) -> None:
-        _path(self.suggested_path)
-        _strict_text(self.new_text, allow_empty=True)
+        validation_call('$.suggested_path', _path, self.suggested_path)
+        validation_call('$.new_text', _strict_text, self.new_text, allow_empty=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,8 +210,8 @@ class ArtifactPatchIntent:
         return ArtifactChangeOperationKind.PATCH
 
     def __post_init__(self) -> None:
-        _identifier(self.evidence_id)
-        _strict_text(self.replacement_text, allow_empty=True)
+        validation_call('$.evidence_id', _identifier, self.evidence_id)
+        validation_call('$.replacement_text', _strict_text, self.replacement_text, allow_empty=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,8 +226,8 @@ class ArtifactReplaceIntent:
         return ArtifactChangeOperationKind.REPLACE
 
     def __post_init__(self) -> None:
-        _identifier(self.evidence_id)
-        _strict_text(self.new_text, allow_empty=True)
+        validation_call('$.evidence_id', _identifier, self.evidence_id)
+        validation_call('$.new_text', _strict_text, self.new_text, allow_empty=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,8 +242,8 @@ class ArtifactRenameIntent:
         return ArtifactChangeOperationKind.RENAME
 
     def __post_init__(self) -> None:
-        _identifier(self.evidence_id)
-        _path(self.suggested_destination)
+        validation_call('$.evidence_id', _identifier, self.evidence_id)
+        validation_call('$.suggested_destination', _path, self.suggested_destination)
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,7 +257,7 @@ class ArtifactDeleteIntent:
         return ArtifactChangeOperationKind.DELETE
 
     def __post_init__(self) -> None:
-        _identifier(self.evidence_id)
+        validation_call('$.evidence_id', _identifier, self.evidence_id)
 
 
 ArtifactChangeIntent: TypeAlias = (
@@ -252,7 +289,11 @@ class ArtifactProposalIntent:
             or not self.operations
             or any(type(item) not in _INTENT_TYPES for item in self.operations)
         ):
-            raise ArtifactProposalError(ArtifactProposalErrorCode.INVALID_INTENT)
+            raise validation_failure(
+                ArtifactProposalError(ArtifactProposalErrorCode.INVALID_INTENT),
+                '$.operations',
+                'expected a nonempty array of create, patch, replace, rename, or delete operations',
+            )
         if (
             type(self.additional_review_domains) is not tuple
             or any(
@@ -266,7 +307,11 @@ class ArtifactProposalIntent:
                 item for item in _DOMAIN_ORDER if item in self.additional_review_domains
             )
         ):
-            raise ArtifactProposalError(ArtifactProposalErrorCode.REVIEWER_MAPPING)
+            raise validation_failure(
+                ArtifactProposalError(ArtifactProposalErrorCode.REVIEWER_MAPPING),
+                '$.additional_review_domains',
+                'expected unique review domains in canonical order',
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -373,17 +418,33 @@ def build_artifact_review_candidate(
 
     _identifier(candidate_id)
     if type(candidate_revision) is not int or candidate_revision < 1:
-        raise ArtifactProposalError(ArtifactProposalErrorCode.INVALID_IDENTIFIER)
+        raise validation_failure(
+            ArtifactProposalError(ArtifactProposalErrorCode.INVALID_IDENTIFIER),
+            '$',
+            'candidate revision must be a positive integer',
+        )
     if type(intent) is not ArtifactProposalIntent:
-        raise ArtifactProposalError(ArtifactProposalErrorCode.INVALID_INTENT)
+        raise validation_failure(
+            ArtifactProposalError(ArtifactProposalErrorCode.INVALID_INTENT),
+            '$.operations',
+            'expected a nonempty array of artifact operations',
+        )
     if type(evidence) is not tuple or any(
         type(item) is not ArtifactIntentEvidence for item in evidence
     ):
-        raise ArtifactProposalError(ArtifactProposalErrorCode.INVALID_EVIDENCE)
+        raise validation_failure(
+            ArtifactProposalError(ArtifactProposalErrorCode.INVALID_EVIDENCE),
+            '$.operations',
+            'operations require current artifact evidence',
+        )
     _identifier_tuple(grounding_evidence_ids, allow_empty=False)
     evidence_by_id = {item.evidence_id: item for item in evidence}
     if len(evidence_by_id) != len(evidence):
-        raise ArtifactProposalError(ArtifactProposalErrorCode.INVALID_EVIDENCE)
+        raise validation_failure(
+            ArtifactProposalError(ArtifactProposalErrorCode.INVALID_EVIDENCE),
+            '$.operations',
+            'runtime artifact evidence identifiers must be unique',
+        )
     normalized_base = _normalize_base(base_state)
     evidence_ids_used = tuple(
         item.evidence_id
@@ -395,7 +456,14 @@ def build_artifact_review_candidate(
         or any(item not in evidence_by_id for item in evidence_ids_used)
         or not set(evidence_ids_used).issubset(grounding_evidence_ids)
     ):
-        raise ArtifactProposalError(ArtifactProposalErrorCode.INVALID_EVIDENCE)
+        raise validation_failure(
+            ArtifactProposalError(ArtifactProposalErrorCode.INVALID_EVIDENCE),
+            '$.operations',
+            (
+                'every evidence_id must be unique, offered by the runtime, and included in the '
+                'current grounding evidence'
+            ),
+        )
 
     operations = _resolve_operations(intent.operations, evidence_by_id, normalized_base)
     try:
@@ -405,10 +473,14 @@ def build_artifact_review_candidate(
             change_set,
             attached_core_paths=attached_core_paths,
         )
-    except (ArtifactChangeSetError, ArtifactRelationshipError):
-        _raise_content_free_error(ArtifactProposalErrorCode.INVALID_INTENT)
+    except (ArtifactChangeSetError, ArtifactRelationshipError) as failure:
+        raise_validation(_operation_validation_failure(failure))
     if not relationship.is_valid:
-        raise ArtifactProposalError(ArtifactProposalErrorCode.INVALID_INTENT)
+        raise validation_failure(
+            ArtifactProposalError(ArtifactProposalErrorCode.INVALID_INTENT),
+            '$.operations',
+            'operations must not leave dangling artifact references',
+        )
     mandatory = _domains_from_facts(relationship.review_facts)
     disclosed = tuple(
         item
@@ -532,6 +604,35 @@ def _normalize_base(base_state: Mapping[str, bytes]) -> dict[str, bytes]:
     return dict(sorted(normalized.items(), key=lambda item: item[0].encode("utf-8")))
 
 
+
+def _operation_validation_failure(
+    failure: BaseException, *, operation_index: int | None = None,
+) -> ArtifactProposalError:
+    error = ArtifactProposalError(ArtifactProposalErrorCode.INVALID_INTENT, operation_index=operation_index)
+    path = "$.operations" if operation_index is None else f"$.operations[{operation_index}]"
+    rules = {
+        ArtifactChangeSetErrorCode.INVALID_UTF8: "artifact text must be strict UTF-8",
+        ArtifactChangeSetErrorCode.INVALID_PATH: "paths must be canonical core-document or manuscript .md paths",
+        ArtifactChangeSetErrorCode.INVALID_KIND: "operation artifact kind must match its path",
+        ArtifactChangeSetErrorCode.NO_OP: "new_text or replacement_text must change the selected artifact content",
+        ArtifactChangeSetErrorCode.HUNK_OVERLAP: "patch evidence ranges must not overlap",
+        ArtifactChangeSetErrorCode.DUPLICATE_INSERTION: "patches must not insert twice at the same byte boundary",
+        ArtifactChangeSetErrorCode.HUNK_ORDER: "patch evidence ranges must occur in increasing byte order",
+        ArtifactChangeSetErrorCode.PATH_COLLISION: "operation destinations must be unique and must not collide with existing artifacts",
+        ArtifactChangeSetErrorCode.RENAME_CONFLICT: "rename source and destination must differ and cannot be reused by another operation",
+        ArtifactChangeSetErrorCode.BASE_ARTIFACT_MISMATCH: "evidence_id must identify an artifact in the current base revision",
+        ArtifactRelationshipErrorCode.PROTECTED_CORE_OPERATION: "core documents cannot be deleted or renamed",
+        ArtifactRelationshipErrorCode.PATH_ESCAPE: "artifact references must remain inside canonical workspace artifact paths",
+        ArtifactRelationshipErrorCode.ARTIFACT_COUNT_LIMIT: f"projected state must contain at most {MAX_RELATIONSHIP_ARTIFACTS} artifacts",
+        ArtifactRelationshipErrorCode.ARTIFACT_SIZE_LIMIT: f"each artifact must contain at most {MAX_RELATIONSHIP_ARTIFACT_UTF8_BYTES} UTF-8 bytes",
+        ArtifactRelationshipErrorCode.STATE_SIZE_LIMIT: f"projected artifact state must contain at most {MAX_RELATIONSHIP_STATE_UTF8_BYTES} UTF-8 bytes",
+        ArtifactRelationshipErrorCode.EDGE_COUNT_LIMIT: f"projected state must contain at most {MAX_RELATIONSHIP_EDGES} artifact-reference edges",
+    }
+    code = failure.code if type(failure) in {ArtifactChangeSetError, ArtifactRelationshipError} else None
+    if code in rules:
+        return validation_failure(error, path, rules[code])
+    return carry_validation(error, failure)
+
 def _resolve_operations(
     intents: tuple[ArtifactChangeIntent, ...],
     evidence: Mapping[str, ArtifactIntentEvidence],
@@ -561,23 +662,35 @@ def _resolve_operations(
             if current is None or (
                 "sha256:" + hashlib.sha256(current).hexdigest() != item.source_digest
             ):
-                raise ArtifactProposalError(
-                    ArtifactProposalErrorCode.INVALID_EVIDENCE,
-                    operation_index=operation_index,
+                raise validation_failure(
+                    ArtifactProposalError(
+                        ArtifactProposalErrorCode.INVALID_EVIDENCE,
+                        operation_index=operation_index,
+                    ),
+                    f'$.operations[{operation_index}].evidence_id',
+                    'evidence_id must refer to the current artifact revision',
                 )
             start, end, selected = _evidence_boundary(current, item)
             if "sha256:" + hashlib.sha256(selected).hexdigest() != item.boundary_digest:
-                raise ArtifactProposalError(
-                    ArtifactProposalErrorCode.INVALID_EVIDENCE,
-                    operation_index=operation_index,
+                raise validation_failure(
+                    ArtifactProposalError(
+                        ArtifactProposalErrorCode.INVALID_EVIDENCE,
+                        operation_index=operation_index,
+                    ),
+                    f'$.operations[{operation_index}].evidence_id',
+                    'evidence_id must refer to the current selected artifact boundary',
                 )
             path, kind = _path(item.path)
             base_digest = hashlib.sha256(current).hexdigest()
             if type(intent) is ArtifactPatchIntent:
                 if path in occupied:
-                    raise ArtifactProposalError(
-                        ArtifactProposalErrorCode.INVALID_INTENT,
-                        operation_index=operation_index,
+                    raise validation_failure(
+                        ArtifactProposalError(
+                            ArtifactProposalErrorCode.INVALID_INTENT,
+                            operation_index=operation_index,
+                        ),
+                        f'$.operations[{operation_index}]',
+                        'a patch cannot target a path already used by another operation kind',
                     )
                 patches.setdefault(path, []).append(
                     ArtifactTextHunk(
@@ -593,9 +706,16 @@ def _resolve_operations(
                 patch_kinds[path] = kind
                 continue
             if not item.is_whole or path in occupied or path in patches:
-                raise ArtifactProposalError(
-                    ArtifactProposalErrorCode.INVALID_EVIDENCE,
-                    operation_index=operation_index,
+                raise validation_failure(
+                    ArtifactProposalError(
+                        ArtifactProposalErrorCode.INVALID_EVIDENCE,
+                        operation_index=operation_index,
+                    ),
+                    f'$.operations[{operation_index}].evidence_id',
+                    (
+                        'replace, rename, and delete require whole-file evidence and a path not used '
+                        'by another operation'
+                    ),
                 )
             occupied.add(path)
             if type(intent) is ArtifactReplaceIntent:
@@ -612,9 +732,13 @@ def _resolve_operations(
             elif type(intent) is ArtifactRenameIntent:
                 destination, destination_kind = _path(intent.suggested_destination)
                 if destination_kind is not kind:
-                    raise ArtifactProposalError(
-                        ArtifactProposalErrorCode.INVALID_INTENT,
-                        operation_index=operation_index,
+                    raise validation_failure(
+                        ArtifactProposalError(
+                            ArtifactProposalErrorCode.INVALID_INTENT,
+                            operation_index=operation_index,
+                        ),
+                        f'$.operations[{operation_index}].suggested_destination',
+                        'rename destination must have the same artifact kind as its source',
                     )
                 resolved.append(
                     ArtifactRenameOperation(
@@ -634,16 +758,17 @@ def _resolve_operations(
                     )
                 )
             else:  # pragma: no cover - exact intent tuple validation
-                raise ArtifactProposalError(ArtifactProposalErrorCode.INVALID_INTENT)
+                raise validation_failure(
+                    ArtifactProposalError(ArtifactProposalErrorCode.INVALID_INTENT),
+                    f'$.operations[{operation_index}].kind',
+                    'expected create, patch, replace, rename, or delete',
+                )
         except ArtifactProposalError as failure:
             failure.__cause__ = None
             failure.__context__ = None
             raise
-        except Exception:
-            _raise_content_free_error(
-                ArtifactProposalErrorCode.INVALID_INTENT,
-                operation_index=operation_index,
-            )
+        except Exception as failure:
+            raise_validation(_operation_validation_failure(failure, operation_index=operation_index))
     for path, hunks in patches.items():
         ordered = tuple(
             sorted(hunks, key=lambda item: (item.start_utf8_byte, item.end_utf8_byte))

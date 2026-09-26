@@ -522,6 +522,7 @@ class ContextExecutionTestCase(unittest.IsolatedAsyncioTestCase):
         service: AgentContextService | None = None,
         authorities: dict[str, object] | None = None,
         answer_validator: Callable[[str, object], object] | None = None,
+        answer_diagnostic: Callable[[str], object] | None = None,
         event_sink: ContextExecutionEventSink | None = None,
         progress_sink: Callable[[ContextActionProgressEvent], None] | None = None,
         phase: str | None = None,
@@ -537,6 +538,7 @@ class ContextExecutionTestCase(unittest.IsolatedAsyncioTestCase):
             actual_request,
             provider,
             answer_validator=answer_validator,  # type: ignore[arg-type]
+            answer_diagnostic=answer_diagnostic,  # type: ignore[arg-type]
             event_sink=event_sink,
             progress_sink=progress_sink,
             phase=phase,
@@ -2206,6 +2208,7 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
     async def test_failure_markers_cover_budget_action_source_answer_and_cancel(
         self,
     ) -> None:
+        answer_failure = RuntimeError("PRIVATE_ANSWER")
         budget_service = AgentContextService(
             self.workspace,
             planning_policy=ContextPlanningPolicy(
@@ -2248,7 +2251,7 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
                     result_correlation_id="answer",
                 ),
                 lambda _answer, _authorization: (_ for _ in ()).throw(
-                    RuntimeError("PRIVATE_ANSWER")
+                    answer_failure
                 ),
                 ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED,
             ),
@@ -2268,14 +2271,23 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
         for label, service, provider, request, validator, marker in cases:
             with self.subTest(label=label):
                 events: list[ContextExecutionEvent] = []
-                with self.assertRaises(BaseException):
+                with mock.patch.object(_RecordingFinalizer, "set_validation_details",
+                                       side_effect=RuntimeError("PRIVATE_DETAIL_SINK"), create=True) as retained, \
+                        self.assertRaises(BaseException) as caught:
                     await self.invoke(
                         provider,
                         request,
                         service=service,
                         answer_validator=validator,
+                        answer_diagnostic=lambda _answer: ("PRIVATE_CALLBACK_DIAGNOSTIC",),
                         event_sink=events.append,
                     )
+                if label == "answer":
+                    self.assertIs(caught.exception, answer_failure)
+                    self.assertNotIn("PRIVATE_CALLBACK_DIAGNOSTIC", repr(retained.call_args_list))
+                    retained.assert_called()
+                    self.assertEqual(provider.finalizers[0].calls,
+                                     [("rejected", ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED)])
                 kinds = [event.kind for event in events]
                 self.assertIn(marker, kinds)
                 self.assertEqual(

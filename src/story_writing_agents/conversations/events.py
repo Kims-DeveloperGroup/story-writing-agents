@@ -5,6 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from ..structured_output_validation import (
+    validation_failure,
+    validation_call,
+    carry_validation,
+    raise_validation,
+)
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -500,10 +506,21 @@ def _validate_lead_evidence_matrix(
             or receipts
             or kind is LeadOutcomeKind.PROPOSAL
         ):
-            raise ValueError("workflow/meta judgment evidence is inconsistent")
+            raise validation_failure(
+                ValueError('workflow/meta judgment evidence is inconsistent'),
+                '$.authoring_scope.activity',
+                (
+                    'workflow activity requires no story evidence receipts, evidence status '
+                    'not_applicable, and a kind other than proposal'
+                ),
+            )
         return
     if evidence.status is LeadEvidenceStatus.NOT_APPLICABLE:
-        raise ValueError("story-specific judgment requires an evidence status")
+        raise validation_failure(
+            ValueError('story-specific judgment requires an evidence status'),
+            '$.authoring_scope.activity',
+            'story activity requires a runtime evidence status other than not_applicable',
+        )
 
     content = tuple(
         item
@@ -588,7 +605,15 @@ def _validate_lead_evidence_matrix(
             LeadOutcomeKind.PROPOSAL,
         }
     if not valid or kind not in allowed:
-        raise ValueError("lead judgment violates the closed evidence matrix")
+        raise validation_failure(
+            ValueError('lead judgment violates the closed evidence matrix'),
+            '$' if not valid else '$.kind',
+            (
+                'runtime evidence status ' + evidence.status.value + ' requires ' + {LeadEvidenceStatus.VERIFIED: 'at least one nonempty attached-reference or READ receipt', LeadEvidenceStatus.MISSING: 'an authorized zero-hit artifact search or an absent core-document status', LeadEvidenceStatus.EMPTY: 'an attached-reference or core-document receipt proving zero bytes', LeadEvidenceStatus.INCOMPLETE: 'at least one nonempty content receipt or core-document status', LeadEvidenceStatus.CONFLICTING: 'at least two distinct nonempty content receipt identities'}[evidence.status]
+                if not valid
+                else 'expected one of ' + ', '.join((item.value for item in LeadOutcomeKind if item in allowed)) + ' for evidence status ' + evidence.status.value
+            ),
+        )
 
 
 class CollaborationStepState(StrEnum):
@@ -777,10 +802,25 @@ class ArtifactObjectiveState(StrEnum):
 
 def _validate_objective_paths(paths: tuple[str, ...]) -> None:
     if type(paths) is not tuple or not paths:
-        raise TypeError("artifact objective requires exact target paths")
-    for path in paths:
+        raise validation_failure(
+            TypeError('artifact objective requires exact target paths'),
+            '$',
+            'expected a nonempty array of target_paths',
+        )
+    for path_index, path in enumerate(paths):
         if type(path) is not str or canonical_artifact_kind(path) is None:
-            raise ValueError("artifact objective target is not canonical")
+            raise validation_failure(
+                ValueError('artifact objective target is not canonical'),
+                f'$[{path_index}]',
+                'expected one of core_documents/global_outline.md, '
+                'core_documents/part_outlines.md, core_documents/character_sheets.md, '
+                'core_documents/narrative_rules.md, or manuscript/PART/PATH.md; '
+                'PART must match [A-Za-z0-9][A-Za-z0-9_-]{0,63}; every remaining path '
+                'component must match [A-Za-z0-9][A-Za-z0-9_.-]{0,127}, and the final '
+                'component must end in lowercase .md; paths must be normalized '
+                'workspace-relative POSIX text without backslash, NUL, . or .. '
+                'components, and fit 1024 strict UTF-8 bytes',
+            )
     _require_unique(paths, label="artifact objective targets")
 
 
@@ -796,24 +836,55 @@ class LeadObjectiveIntent:
     draft_source_event_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        _require_enum(self.action, LeadObjectiveAction, "objective action")
-        _validate_identifier_tuple(
-            self.draft_source_event_ids, label="objective draft source event IDs",
+        validation_call('$.action', _require_enum, self.action, LeadObjectiveAction, 'objective action')
+        validation_call(
+            '$.draft_source_event_ids',
+            _validate_identifier_tuple,
+            self.draft_source_event_ids,
+            label='objective draft source event IDs',
         )
         if self.action is LeadObjectiveAction.START:
             if self.objective_id is not None:
-                raise ValueError("only runtime assigns a new objective ID")
-            _validate_visible_text(self.request, label="artifact objective request")
-            _validate_objective_paths(self.target_paths)
+                raise validation_failure(
+                    ValueError('only runtime assigns a new objective ID'),
+                    '$.objective_id',
+                    'only runtime assigns a new objective ID',
+                )
+            validation_call(
+                '$.request',
+                _validate_visible_text,
+                self.request,
+                label='artifact objective request',
+            )
+            validation_call('$.target_paths', _validate_objective_paths, self.target_paths)
         else:
-            _validate_identifier(self.objective_id, label="artifact objective ID")
+            validation_call(
+                '$.objective_id',
+                _validate_identifier,
+                self.objective_id,
+                label='artifact objective ID',
+            )
             if self.request is not None or self.target_paths != ():
-                raise ValueError("objective continuation cannot replace origin facts")
+                raise validation_failure(
+                    ValueError('objective continuation cannot replace origin facts'),
+                    '$.action',
+                    'action continue or cancel cannot supply request or target_paths',
+                )
         if self.action is LeadObjectiveAction.CANCEL:
             if self.next_step is not None or self.draft_source_event_ids:
-                raise ValueError("objective cancellation cannot select work")
+                raise validation_failure(
+                    ValueError('objective cancellation cannot select work'),
+                    '$.draft_source_event_ids',
+                    'objective cancellation cannot select work',
+                )
         else:
-            _require_enum(self.next_step, ArtifactObjectiveNextStep, "objective next step")
+            validation_call(
+                '$.next_step',
+                _require_enum,
+                self.next_step,
+                ArtifactObjectiveNextStep,
+                'objective next step',
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1003,24 +1074,66 @@ class LeadRecommendedAction:
     objective_id: str | None = None
 
     def __post_init__(self) -> None:
-        _require_enum(self.kind, LeadRecommendationActionKind, "recommended action kind")
-        for value in (self.purpose, self.instruction, self.expected_result):
-            _validate_visible_text(value, label="recommended preparation description")
-        _validate_identifier_tuple(self.source_ids, label="recommended source aliases")
+        validation_call(
+            '$.kind',
+            _require_enum,
+            self.kind,
+            LeadRecommendationActionKind,
+            'recommended action kind',
+        )
+        for field_name, value in (("purpose", self.purpose), ("instruction", self.instruction), ("expected_result", self.expected_result)):
+            validation_call(
+                '$.' + field_name,
+                _validate_visible_text,
+                value,
+                label='recommended preparation description',
+            )
+        validation_call(
+            '$.source_ids',
+            _validate_identifier_tuple,
+            self.source_ids,
+            label='recommended source aliases',
+        )
         if not self.source_ids:
-            raise ValueError("recommended preparation requires exact source aliases")
+            raise validation_failure(
+                ValueError('recommended preparation requires exact source aliases'),
+                '$.source_ids',
+                'expected at least one runtime-offered source_id',
+            )
         if self.objective_id is not None:
-            _validate_identifier(self.objective_id, label="recommended objective")
+            validation_call(
+                '$.objective_id',
+                _validate_identifier,
+                self.objective_id,
+                label='recommended objective',
+            )
         if self.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT:
-            _validate_objective_paths(self.target_paths)
+            validation_call('$.target_paths', _validate_objective_paths, self.target_paths)
             if self.specialist_ids != ():
-                raise ValueError("artifact preparation cannot select consultation specialists")
+                raise validation_failure(
+                    ValueError('artifact preparation cannot select consultation specialists'),
+                    '$.specialist_ids',
+                    'artifact preparation cannot select consultation specialists',
+                )
         else:
             if self.target_paths != ():
-                raise ValueError("consultation preparation cannot select artifact targets")
-            _validate_identifier_tuple(self.specialist_ids, label="recommended specialists")
+                raise validation_failure(
+                    ValueError('consultation preparation cannot select artifact targets'),
+                    '$.target_paths',
+                    'consultation preparation cannot select artifact targets',
+                )
+            validation_call(
+                '$.specialist_ids',
+                _validate_identifier_tuple,
+                self.specialist_ids,
+                label='recommended specialists',
+            )
             if not self.specialist_ids or any(item not in SPECIALIST_IDS for item in self.specialist_ids):
-                raise ValueError("consultation preparation requires canonical specialists")
+                raise validation_failure(
+                    ValueError('consultation preparation requires canonical specialists'),
+                    '$.specialist_ids',
+                    'expected at least one unique specialist in this order: ' + ', '.join(SPECIALIST_IDS),
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1035,18 +1148,49 @@ class LeadAssignmentIntent:
 
     def __post_init__(self) -> None:
         if type(self.agent_id) is not str or self.agent_id not in SPECIALIST_IDS:
-            raise ValueError("lead assignment agent ID must be a canonical specialist")
+            raise validation_failure(
+                ValueError('lead assignment agent ID must be a canonical specialist'),
+                '$.agent_id',
+                'expected one of ' + ', '.join(SPECIALIST_IDS),
+            )
         if type(self.instruction) is not str:
-            raise TypeError("lead assignment instruction must be exact text")
-        _validate_visible_text(self.instruction, label="lead assignment instruction")
+            raise validation_failure(
+                TypeError('lead assignment instruction must be exact text'),
+                '$.instruction',
+                'expected text',
+            )
+        validation_call(
+            '$.instruction',
+            _validate_visible_text,
+            self.instruction,
+            label='lead assignment instruction',
+        )
         if type(self.input_ids) is not tuple or not self.input_ids:
-            raise TypeError("lead assignment input IDs must be a nonempty exact tuple")
-        for input_id in self.input_ids:
+            raise validation_failure(
+                TypeError('lead assignment input IDs must be a nonempty exact tuple'),
+                '$.input_ids',
+                'expected a nonempty array of input identifiers',
+            )
+        for input_index, input_id in enumerate(self.input_ids):
             if type(input_id) is not str:
-                raise TypeError("lead assignment input IDs must be exact text")
-            _validate_identifier(input_id, label="lead assignment input ID")
-        _require_unique(self.input_ids, label="lead assignment input IDs")
-        _validate_assignment_routing(self.mode, self.input_ids, self.review_basis)
+                raise validation_failure(
+                    TypeError('lead assignment input IDs must be exact text'),
+                    f'$.input_ids[{input_index}]',
+                    'expected text input identifiers',
+                )
+            validation_call(
+                f'$.input_ids[{input_index}]',
+                _validate_identifier,
+                input_id,
+                label='lead assignment input ID',
+            )
+        validation_call(
+            '$.input_ids',
+            _require_unique,
+            self.input_ids,
+            label='lead assignment input IDs',
+        )
+        validation_call('$', _validate_assignment_routing, self.mode, self.input_ids, self.review_basis)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1059,24 +1203,45 @@ class LeadProposalIntent:
     authoring_scope: AuthoringScope | None = None
 
     def __post_init__(self) -> None:
-        _require_enum(self.relation, LeadProposalRelation, "lead proposal relation")
+        validation_call(
+            '$.relation',
+            _require_enum,
+            self.relation,
+            LeadProposalRelation,
+            'lead proposal relation',
+        )
         if type(self.purpose) is not str:
-            raise TypeError("lead proposal purpose must be exact text")
-        _validate_visible_text(self.purpose, label="lead proposal purpose")
-        _validate_exact_tuple(
+            raise validation_failure(
+                TypeError('lead proposal purpose must be exact text'),
+                '$.purpose',
+                'expected text',
+            )
+        validation_call(
+            '$.purpose',
+            _validate_visible_text,
+            self.purpose,
+            label='lead proposal purpose',
+        )
+        validation_call(
+            '$.assignments',
+            _validate_exact_tuple,
             self.assignments,
             LeadAssignmentIntent,
-            label="lead proposal assignments",
+            label='lead proposal assignments',
             nonempty=True,
         )
-        _require_unique(
+        validation_call(
+            '$.assignments',
+            _require_unique,
             tuple(item.agent_id for item in self.assignments),
             label="lead proposal specialist IDs",
         )
-        _validate_scoped_assignments(
+        validation_call(
+            '$.assignments',
+            _validate_scoped_assignments,
             self.authoring_scope,
-            tuple(item.agent_id for item in self.assignments),
-            tuple(item.mode for item in self.assignments),
+            tuple((item.agent_id for item in self.assignments)),
+            tuple((item.mode for item in self.assignments)),
         )
 
 
@@ -1097,59 +1262,114 @@ class LeadProviderOutcome:
     trace: ReplyTrace | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
-        _require_enum(self.kind, LeadOutcomeKind, "lead outcome kind")
+        validation_call('$.kind', _require_enum, self.kind, LeadOutcomeKind, 'lead outcome kind')
         if type(self.message) is not str:
-            raise TypeError("lead outcome message must be exact text")
-        _validate_visible_text(self.message, label="lead outcome message")
-        _require_enum(self.scope, LeadOutcomeScope, "lead outcome scope")
-        _require_enum(
+            raise validation_failure(
+                TypeError('lead outcome message must be exact text'),
+                '$.message',
+                'lead outcome message must be exact text',
+            )
+        validation_call('$.message', _validate_visible_text, self.message, label='lead outcome message')
+        validation_call('$.scope', _require_enum, self.scope, LeadOutcomeScope, 'lead outcome scope')
+        validation_call(
+            '$.evidence_status',
+            _require_enum,
             self.evidence_status,
             LeadEvidenceStatus,
-            "lead outcome evidence status",
+            'lead outcome evidence status',
         )
-        _validate_identifier_tuple(
+        validation_call(
+            '$.evidence_ids',
+            _validate_identifier_tuple,
             self.evidence_ids,
-            label="lead outcome evidence IDs",
+            label='lead outcome evidence IDs',
         )
         if self.kind is LeadOutcomeKind.PROPOSAL:
             if (type(self.proposal) is LeadProposalIntent) is (
                 type(self.artifact_intent) is ArtifactProposalIntent
             ):
-                raise TypeError(
-                    "proposal outcome requires exactly one supported proposal intent"
+                raise validation_failure(
+                    TypeError('proposal outcome requires exactly one supported proposal intent'),
+                    '$.proposal',
+                    'proposal outcome requires exactly one supported proposal intent',
                 )
         elif self.proposal is not None or self.artifact_intent is not None:
-            raise ValueError("non-proposal lead outcome cannot carry proposal intent")
+            raise validation_failure(
+                ValueError('non-proposal lead outcome cannot carry proposal intent'),
+                '$.proposal',
+                'non-proposal lead outcome cannot carry proposal intent',
+            )
         if self.recommended_action is not None:
             if type(self.recommended_action) is not LeadRecommendedAction:
-                raise TypeError("recommended action must be canonical")
+                raise validation_failure(
+                    TypeError('recommended action must be canonical'),
+                    '$.recommended_action',
+                    'recommended action must be canonical',
+                )
             if self.kind is not LeadOutcomeKind.RECOMMENDATION or self.objective_intent is not None:
-                raise ValueError("only an untransitioned recommendation can offer an action")
+                raise validation_failure(
+                    ValueError('only an untransitioned recommendation can offer an action'),
+                    '$.kind',
+                    'only an untransitioned recommendation can offer an action',
+                )
         if self.objective_intent is not None:
             if type(self.objective_intent) is not LeadObjectiveIntent:
-                raise TypeError("lead objective intent must be canonical")
+                raise validation_failure(
+                    TypeError('lead objective intent must be canonical'),
+                    '$.objective_intent',
+                    'lead objective intent must be canonical',
+                )
             step = self.objective_intent.next_step
             if step is ArtifactObjectiveNextStep.CLARIFY:
                 if self.kind is not LeadOutcomeKind.QUESTION:
-                    raise ValueError("objective clarification requires a question")
+                    raise validation_failure(
+                        ValueError('objective clarification requires a question'),
+                        '$.kind',
+                        'objective clarification requires a question',
+                    )
             elif step is ArtifactObjectiveNextStep.CONSULT:
                 if self.kind is not LeadOutcomeKind.PROPOSAL or self.proposal is None:
-                    raise ValueError("objective consultation requires a consultation proposal")
+                    raise validation_failure(
+                        ValueError('objective consultation requires a consultation proposal'),
+                        '$.kind',
+                        'objective consultation requires a consultation proposal',
+                    )
             elif step is ArtifactObjectiveNextStep.PREPARE:
                 if self.kind is not LeadOutcomeKind.PROPOSAL or self.artifact_intent is None:
-                    raise ValueError("objective preparation requires an artifact proposal")
+                    raise validation_failure(
+                        ValueError('objective preparation requires an artifact proposal'),
+                        '$.kind',
+                        'objective preparation requires an artifact proposal',
+                    )
             elif self.kind is LeadOutcomeKind.PROPOSAL:
-                raise ValueError("objective cancellation cannot propose work")
-        _validate_authoring_evidence_scope(self.authoring_scope, self.scope)
+                raise validation_failure(
+                    ValueError('objective cancellation cannot propose work'),
+                    '$.kind',
+                    'objective cancellation cannot propose work',
+                )
+        validation_call(
+            '$.authoring_scope',
+            _validate_authoring_evidence_scope,
+            self.authoring_scope,
+            self.scope,
+        )
         if self.trace is not None and type(self.trace) is not ReplyTrace:
-            raise TypeError("lead provider outcome trace must be ReplyTrace or None")
+            raise validation_failure(
+                TypeError('lead provider outcome trace must be ReplyTrace or None'),
+                '$.trace',
+                'lead provider outcome trace must be ReplyTrace or None',
+            )
         if (
             self.authoring_scope is not None
             and self.proposal is not None
             and self.proposal.authoring_scope is not None
             and self.proposal.authoring_scope != self.authoring_scope
         ):
-            raise ValueError("lead outcome and intent authoring scopes must agree")
+            raise validation_failure(
+                ValueError('lead outcome and intent authoring scopes must agree'),
+                '$.authoring_scope',
+                'lead outcome and intent authoring scopes must agree',
+            )
 
 
 class CollaborationInvocationKind(StrEnum):
@@ -1242,9 +1462,9 @@ def _validate_positive_integer(value: int, *, label: str) -> int:
     """
 
     if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(f"{label} must be an integer")
+        raise validation_failure(TypeError(f'{label} must be an integer'), '$', f'{label} must be an integer')
     if value < 1:
-        raise ValueError(f"{label} must be positive")
+        raise validation_failure(ValueError(f'{label} must be positive'), '$', f'{label} must be positive')
     return value
 
 
@@ -1653,7 +1873,7 @@ class CollaborationAssignment:
         _validate_visible_text(self.instruction, label="assignment instruction")
         if type(self.input_ids) is not tuple:
             raise TypeError("assignment input IDs must be an exact tuple")
-        for input_id in self.input_ids:
+        for input_index, input_id in enumerate(self.input_ids):
             _validate_identifier(input_id, label="assignment input ID")
         _require_unique(self.input_ids, label="assignment input IDs")
         _validate_positive_integer(
@@ -2069,33 +2289,86 @@ class CollaborationSpecialistReplyPayload:
     trace: ReplyTrace | None = None
 
     def __post_init__(self) -> None:
-        _validate_identifier(self.proposal_id, label="reply proposal ID")
-        _validate_positive_integer(
-            self.proposal_revision, label="reply proposal revision"
+        validation_call(
+            '$.proposal_id',
+            _validate_identifier,
+            self.proposal_id,
+            label='reply proposal ID',
         )
-        _validate_digest(self.proposal_digest, label="reply proposal digest")
-        _validate_identifier(self.execution_attempt_id, label="reply attempt ID")
-        _validate_identifier(self.assignment_id, label="reply assignment ID")
-        _validate_identifier(self.dispatch_event_id, label="reply dispatch event ID")
-        _require_enum(
+        validation_call(
+            '$.proposal_revision',
+            _validate_positive_integer,
+            self.proposal_revision,
+            label='reply proposal revision',
+        )
+        validation_call(
+            '$.proposal_digest',
+            _validate_digest,
+            self.proposal_digest,
+            label='reply proposal digest',
+        )
+        validation_call(
+            '$.execution_attempt_id',
+            _validate_identifier,
+            self.execution_attempt_id,
+            label='reply attempt ID',
+        )
+        validation_call(
+            '$.assignment_id',
+            _validate_identifier,
+            self.assignment_id,
+            label='reply assignment ID',
+        )
+        validation_call(
+            '$.dispatch_event_id',
+            _validate_identifier,
+            self.dispatch_event_id,
+            label='reply dispatch event ID',
+        )
+        validation_call(
+            '$.assessment',
+            _require_enum,
             self.assessment,
             CollaborationSpecialistAssessment,
-            "specialist assessment",
+            'specialist assessment',
         )
-        _validate_visible_text(self.message, label="specialist reply")
-        _validate_identifier_tuple(self.input_ids, label="specialist reply input IDs")
+        validation_call('$.message', _validate_visible_text, self.message, label='specialist reply')
+        validation_call(
+            '$.input_ids',
+            _validate_identifier_tuple,
+            self.input_ids,
+            label='specialist reply input IDs',
+        )
         if self.mode is not None:
-            _require_enum(self.mode, SpecialistAssignmentMode, "specialist reply mode")
+            validation_call(
+                '$.mode',
+                _require_enum,
+                self.mode,
+                SpecialistAssignmentMode,
+                'specialist reply mode',
+            )
         if self.mode is SpecialistAssignmentMode.DRAFT:
             if self.assessment not in {
                 CollaborationSpecialistAssessment.DRAFTED,
                 CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE,
             }:
-                raise ValueError("draft replies cannot assert review assessments")
+                raise validation_failure(
+                    ValueError('draft replies cannot assert review assessments'),
+                    '$.assessment',
+                    'draft replies cannot assert review assessments',
+                )
         elif self.assessment is CollaborationSpecialistAssessment.DRAFTED:
-            raise ValueError("drafted assessment requires explicit draft mode")
+            raise validation_failure(
+                ValueError('drafted assessment requires explicit draft mode'),
+                '$.assessment',
+                'drafted assessment requires explicit draft mode',
+            )
         if self.trace is not None and type(self.trace) is not ReplyTrace:
-            raise TypeError("specialist reply trace must be ReplyTrace or None")
+            raise validation_failure(
+                TypeError('specialist reply trace must be ReplyTrace or None'),
+                '$.trace',
+                'specialist reply trace must be ReplyTrace or None',
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -2115,42 +2388,92 @@ class CollaborationLeadSynthesisPayload:
     trace: ReplyTrace | None = None
 
     def __post_init__(self) -> None:
-        _validate_identifier(self.proposal_id, label="synthesis proposal ID")
-        _validate_positive_integer(
+        validation_call(
+            '$.proposal_id',
+            _validate_identifier,
+            self.proposal_id,
+            label='synthesis proposal ID',
+        )
+        validation_call(
+            '$.proposal_revision',
+            _validate_positive_integer,
             self.proposal_revision,
-            label="synthesis proposal revision",
+            label='synthesis proposal revision',
         )
-        _validate_digest(self.proposal_digest, label="synthesis proposal digest")
-        _validate_identifier(self.execution_attempt_id, label="synthesis attempt ID")
-        _validate_visible_text(self.message, label="lead synthesis")
-        _validate_identifier_tuple(
+        validation_call(
+            '$.proposal_digest',
+            _validate_digest,
+            self.proposal_digest,
+            label='synthesis proposal digest',
+        )
+        validation_call(
+            '$.execution_attempt_id',
+            _validate_identifier,
+            self.execution_attempt_id,
+            label='synthesis attempt ID',
+        )
+        validation_call('$.message', _validate_visible_text, self.message, label='lead synthesis')
+        validation_call(
+            '$.reply_event_ids',
+            _validate_identifier_tuple,
             self.reply_event_ids,
-            label="synthesis reply event IDs",
+            label='synthesis reply event IDs',
         )
-        _validate_identifier_tuple(
+        validation_call(
+            '$.unresolved_input_ids',
+            _validate_identifier_tuple,
             self.unresolved_input_ids,
-            label="synthesis unresolved input IDs",
+            label='synthesis unresolved input IDs',
         )
         if type(self.evidence) is not CollaborationLeadEvidence:
-            raise TypeError("synthesis evidence must be CollaborationLeadEvidence")
+            raise validation_failure(
+                TypeError('synthesis evidence must be CollaborationLeadEvidence'),
+                '$.evidence',
+                'synthesis evidence must be CollaborationLeadEvidence',
+            )
         if self.trace is not None and type(self.trace) is not ReplyTrace:
-            raise TypeError("lead synthesis trace must be ReplyTrace or None")
+            raise validation_failure(
+                TypeError('lead synthesis trace must be ReplyTrace or None'),
+                '$.trace',
+                'lead synthesis trace must be ReplyTrace or None',
+            )
         if self.evidence.scope is not LeadOutcomeScope.STORY_SPECIFIC:
-            raise ValueError("lead synthesis must remain story-specific")
+            raise validation_failure(
+                ValueError('lead synthesis must remain story-specific'),
+                '$.evidence',
+                'lead synthesis must remain story-specific',
+            )
         _validate_lead_evidence_matrix(LeadOutcomeKind.RECOMMENDATION, self.evidence)
-        _validate_authoring_evidence_scope(self.authoring_scope, self.evidence.scope)
+        validation_call(
+            '$.authoring_scope',
+            _validate_authoring_evidence_scope,
+            self.authoring_scope,
+            self.evidence.scope,
+        )
         if self.next_intent is not None:
             if type(self.next_intent) is not LeadProposalIntent:
-                raise TypeError("synthesis next intent must be a LeadProposalIntent")
+                raise validation_failure(
+                    TypeError('synthesis next intent must be a LeadProposalIntent'),
+                    '$.next_intent',
+                    'synthesis next intent must be a LeadProposalIntent',
+                )
             if self.next_intent.relation is not LeadProposalRelation.CONTINUE_LINEAGE:
-                raise ValueError("synthesis next intent must continue the same lineage")
+                raise validation_failure(
+                    ValueError('synthesis next intent must continue the same lineage'),
+                    '$.next_intent',
+                    'synthesis next intent must continue the same lineage',
+                )
             next_scope = self.next_intent.authoring_scope
             if self.authoring_scope is not None and (
                 next_scope is None
                 or next_scope.task_id != self.authoring_scope.task_id
                 or next_scope.task_revision != self.authoring_scope.task_revision
             ):
-                raise ValueError("synthesis continuation must retain task correlation")
+                raise validation_failure(
+                    ValueError('synthesis continuation must retain task correlation'),
+                    '$.authoring_scope',
+                    'synthesis continuation must retain task correlation',
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -3608,29 +3931,56 @@ def authoring_scope_to_dict(scope: AuthoringScope) -> dict[str, object]:
 
 def authoring_scope_from_dict(value: object) -> AuthoringScope:
     """Decode a complete strict scope; absent legacy fields are handled outside."""
-
-    item = _object(
-        value,
-        {
-            "activity", "domains", "interpretation", "schema_version",
-            "target_paths", "task_id", "task_revision",
-        },
-        label="authoring scope",
-    )
+    item = _object(value, {
+        "activity", "domains", "interpretation", "schema_version",
+        "target_paths", "task_id", "task_revision",
+    }, label="authoring scope")
     return AuthoringScope(
-        activity=_enum(AuthoringActivity, item["activity"], label="authoring activity"),
+        activity=validation_call(
+            '$.activity',
+            _enum,
+            AuthoringActivity,
+            item['activity'],
+            label='authoring activity',
+        ),
         target_paths=tuple(
-            _string(path, label="authoring target path")
-            for path in _array(item["target_paths"], label="authoring target paths")
+            validation_call(f"$.target_paths[{index}]", _string, path, label="authoring target path")
+            for index, path in enumerate(validation_call(
+                '$.target_paths',
+                _array,
+                item['target_paths'],
+                label='authoring target paths',
+            ))
         ),
         domains=tuple(
-            _enum(ArtifactReviewDomain, domain, label="authoring domain")
-            for domain in _array(item["domains"], label="authoring domains")
+            validation_call(
+                f'$.domains[{index}]',
+                _enum,
+                ArtifactReviewDomain,
+                domain,
+                label='authoring domain',
+            )
+            for index, domain in enumerate(validation_call('$.domains', _array, item['domains'], label='authoring domains'))
         ),
-        interpretation=_string(item["interpretation"], label="authoring interpretation"),
-        task_id=_string(item["task_id"], label="authoring task ID"),
-        task_revision=_integer(item["task_revision"], label="authoring task revision"),
-        schema_version=_integer(item["schema_version"], label="authoring schema version"),
+        interpretation=validation_call(
+            '$.interpretation',
+            _string,
+            item['interpretation'],
+            label='authoring interpretation',
+        ),
+        task_id=validation_call("$.task_id", _string, item["task_id"], label="authoring task ID"),
+        task_revision=validation_call(
+            '$.task_revision',
+            _integer,
+            item['task_revision'],
+            label='authoring task revision',
+        ),
+        schema_version=validation_call(
+            '$.schema_version',
+            _integer,
+            item['schema_version'],
+            label='authoring schema version',
+        ),
     )
 
 
@@ -6102,12 +6452,20 @@ def _validate_authoring_evidence_scope(
     if scope is None:
         return
     if type(scope) is not AuthoringScope:
-        raise TypeError("authoring scope must be an AuthoringScope")
+        raise validation_failure(
+            TypeError('authoring scope must be an AuthoringScope'),
+            '$',
+            'authoring scope must be an AuthoringScope',
+        )
     if (
         scope.activity is not AuthoringActivity.WORKFLOW
         and evidence_scope is not LeadOutcomeScope.STORY_SPECIFIC
     ):
-        raise ValueError("story authoring requires story-specific evidence scope")
+        raise validation_failure(
+            ValueError('story authoring requires story-specific evidence scope'),
+            '$',
+            'story authoring requires story-specific evidence scope',
+        )
 
 
 def _validate_assignment_routing(
@@ -6117,7 +6475,11 @@ def _validate_assignment_routing(
 ) -> None:
     if mode is None:
         if review_basis is not None:
-            raise ValueError("legacy assignment cannot carry a review basis")
+            raise validation_failure(
+                ValueError('legacy assignment cannot carry a review basis'),
+                '$',
+                'legacy assignment cannot carry a review basis',
+            )
         return
     validate_specialist_assignment(mode, input_ids, review_basis)
 
@@ -6129,13 +6491,25 @@ def _validate_scoped_assignments(
 ) -> None:
     if scope is None:
         if any(mode is not None for mode in modes):
-            raise ValueError("explicit assignment modes require an authoring scope")
+            raise validation_failure(
+                ValueError('explicit assignment modes require an authoring scope'),
+                '$',
+                'explicit assignment modes require an authoring scope',
+            )
         return
     validate_specialist_routing(scope, specialist_ids)
     if scope.activity is AuthoringActivity.WORKFLOW:
-        raise ValueError("workflow scope cannot dispatch story specialists")
+        raise validation_failure(
+            ValueError('workflow scope cannot dispatch story specialists'),
+            '$',
+            'workflow scope cannot dispatch story specialists',
+        )
     if any(type(mode) is not SpecialistAssignmentMode for mode in modes):
-        raise TypeError("scoped assignments require explicit draft or review modes")
+        raise validation_failure(
+            TypeError('scoped assignments require explicit draft or review modes'),
+            '$',
+            'scoped assignments require explicit draft or review modes',
+        )
     expected_mode = (
         SpecialistAssignmentMode.REVIEW
         if scope.activity is AuthoringActivity.REVIEW
@@ -6147,7 +6521,11 @@ def _validate_scoped_assignments(
         for specialist_id, mode in zip(specialist_ids, modes, strict=True)
         if specialist_id in required
     ):
-        raise ValueError("required specialists must perform the scoped activity")
+        raise validation_failure(
+            ValueError('required specialists must perform the scoped activity'),
+            '$',
+            'required specialists must perform the scoped activity',
+        )
 
 
 def _validate_schema_version(value: object) -> None:
@@ -6168,15 +6546,25 @@ def _validate_visible_text(
     maximum: int = COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES,
 ) -> str:
     if not isinstance(value, str):
-        raise TypeError(f"{label} must be a string")
+        raise validation_failure(TypeError(f'{label} must be a string'), '$', 'expected text')
     try:
         encoded = value.encode("utf-8", errors="strict")
     except UnicodeEncodeError:
-        _raise_content_free_value_error(f"{label} must be valid UTF-8")
+        raise_validation(
+            validation_failure(
+                ValueError(f'{label} must be valid UTF-8'),
+                '$',
+                'expected strict UTF-8 text',
+            ),
+        )
     if not encoded:
-        raise ValueError(f"{label} must not be empty")
+        raise validation_failure(ValueError(f'{label} must not be empty'), '$', 'expected nonempty text')
     if len(encoded) > maximum:
-        raise ValueError(f"{label} exceeds the UTF-8 byte limit")
+        raise validation_failure(
+            ValueError(f'{label} exceeds the UTF-8 byte limit'),
+            '$',
+            f'expected at most {maximum} UTF-8 bytes',
+        )
     return value
 
 
@@ -6196,9 +6584,13 @@ def _validate_exact_tuple(
     nonempty: bool = False,
 ) -> None:
     if type(value) is not tuple or any(type(item) is not item_type for item in value):
-        raise TypeError(f"{label} must be an exact tuple of {item_type.__name__}")
+        raise validation_failure(
+            TypeError(f'{label} must be an exact tuple of {item_type.__name__}'),
+            '$',
+            'expected an array of valid objects',
+        )
     if nonempty and not value:
-        raise ValueError(f"{label} must not be empty")
+        raise validation_failure(ValueError(f'{label} must not be empty'), '$', 'expected a nonempty array')
 
 
 def _validate_enum_tuple(
@@ -6214,9 +6606,9 @@ def _validate_enum_tuple(
 
 def _validate_identifier_tuple(value: object, *, label: str) -> None:
     if type(value) is not tuple:
-        raise TypeError(f"{label} must be an exact tuple")
-    for item in value:
-        _validate_identifier(item, label=label)
+        raise validation_failure(TypeError(f'{label} must be an exact tuple'), '$', 'expected an array')
+    for index, item in enumerate(value):
+        validation_call(f"$[{index}]", _validate_identifier, item, label=label)
     _require_unique(value, label=label)
 
 
@@ -6233,14 +6625,18 @@ def _validate_specialist_tuple(value: object, *, label: str) -> None:
 
 def _require_enum(value: object, enum_type: type[StrEnum], label: str) -> None:
     if type(value) is not enum_type:
-        raise TypeError(f"{label} must be a {enum_type.__name__}")
+        raise validation_failure(
+            TypeError(f'{label} must be a {enum_type.__name__}'),
+            '$',
+            'expected one of ' + ', '.join((item.value for item in enum_type)),
+        )
 
 
 def _require_unique(value: object, *, label: str) -> None:
     if not isinstance(value, tuple):
-        raise TypeError(f"{label} must be a tuple")
+        raise validation_failure(TypeError(f'{label} must be a tuple'), '$', 'expected an array')
     if len(set(value)) != len(value):
-        raise ValueError(f"{label} must be unique")
+        raise validation_failure(ValueError(f'{label} must be unique'), '$', 'expected unique array items')
 
 
 def _object_with_extension(
@@ -6293,19 +6689,29 @@ def _object(
     label: str,
 ) -> dict[str, object]:
     if type(value) is not dict or set(value) != fields:
-        raise ValueError(f"{label} has missing or extra fields")
+        raise validation_failure(
+            ValueError(f'{label} has missing or extra fields'),
+            '$',
+            'expected an object containing exactly ' + ', '.join(sorted(fields)),
+            value=value,
+        )
     return value
 
 
 def _array(value: object, *, label: str) -> list[object]:
     if type(value) is not list:
-        raise ValueError(f"{label} must be an array")
+        raise validation_failure(
+            ValueError(f'{label} must be an array'),
+            '$',
+            'expected an array',
+            value=value,
+        )
     return value
 
 
 def _string(value: object, *, label: str) -> str:
     if type(value) is not str:
-        raise ValueError(f"{label} must be a string")
+        raise validation_failure(ValueError(f'{label} must be a string'), '$', 'expected text', value=value)
     return value
 
 
@@ -6317,7 +6723,12 @@ def _optional_string(value: object, *, label: str) -> str | None:
 
 def _integer(value: object, *, label: str) -> int:
     if type(value) is not int:
-        raise ValueError(f"{label} must be an integer")
+        raise validation_failure(
+            ValueError(f'{label} must be an integer'),
+            '$',
+            'expected an integer',
+            value=value,
+        )
     return value
 
 
@@ -6334,23 +6745,24 @@ def _optional_integer(value: object, *, label: str) -> int | None:
 
 
 def _enum(
-    enum_type: type[_EnumT],
-    value: object,
-    *,
-    label: str,
+    enum_type: type[_EnumT], value: object, *, label: str,
 ) -> _EnumT:
     text = _string(value, label=label)
     try:
-        return enum_type(text)
-    except ValueError:
-        _raise_content_free_value_error(f"{label} is not supported")
+        return validation_call("$", enum_type, text)
+    except ValueError as failure:
+        raise_validation(carry_validation(ValueError(f'{label} is not supported'), failure))
 
 
 def _validate_identifier(value: str, *, label: str) -> str:
     """Return a safe identifier or raise ``SessionIdError`` without mutation."""
 
     if not isinstance(value, str) or _SAFE_IDENTIFIER.fullmatch(value) is None:
-        raise SessionIdError(f"{label} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,63}}")
+        raise validation_failure(
+            SessionIdError(f'{label} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,63}}'),
+            '$',
+            'expected identifier matching [A-Za-z0-9][A-Za-z0-9_-]{0,63}',
+        )
     return value
 
 

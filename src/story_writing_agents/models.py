@@ -5,6 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from .structured_output_validation import (
+    validation_failure,
+    validation_call,
+)
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -952,66 +956,75 @@ class AgentReply:
 
     def __post_init__(self) -> None:
         if type(self.kind) is not AgentReplyKind:
-            raise TypeError("agent reply kind is invalid")
+            raise validation_failure(
+                TypeError('agent reply kind is invalid'),
+                '$.kind',
+                'expected a supported agent reply kind',
+            )
         if self.trace is not None and type(self.trace) is not ReplyTrace:
             raise TypeError("agent reply trace must be ReplyTrace or None")
         validate_details(self.validation_details)
         if type(self.deadlocked) is not bool:
-            raise TypeError("agent reply deadlock marker is invalid")
-        review_identity_absent = (
-            self.reviewed_proposal_id is None
-            and self.reviewed_proposal_digest is None
-        )
+            raise validation_failure(
+                TypeError('agent reply deadlock marker is invalid'),
+                '$.deadlocked',
+                'expected a boolean',
+            )
+
+        def require(condition: object, path: str, rule: str) -> None:
+            if not condition:
+                raise validation_failure(ValueError('agent reply fields do not match its kind'), path, rule)
+
+        def without_review_identity() -> None:
+            require(self.reviewed_proposal_id is None, "$.reviewed_proposal_id", "allowed only for finalization")
+            require(self.reviewed_proposal_digest is None, "$.reviewed_proposal_digest", "allowed only for finalization")
+
         if self.kind is AgentReplyKind.CANDIDATE:
-            valid = (
-                bool(self.content)
-                and self.verdict is None
-                and self.next_phase is None
-                and not self.deadlocked
-                and review_identity_absent
-            )
+            require(bool(self.content), "$.content", "expected nonempty text")
+            require(self.verdict is None, "$.verdict", "allowed only for an audit reply")
+            require(self.next_phase is None, "$.next_phase", "allowed only for synthesis")
+            require(not self.deadlocked, "$.deadlocked", "candidate replies cannot mark deadlock")
+            without_review_identity()
         elif self.kind is AgentReplyKind.AUDIT:
-            valid = (
-                type(self.verdict) is Verdict
-                and self.next_phase is None
-                and not self.deadlocked
-                and (self.verdict is Verdict.APPROVE or bool(self.content))
-                and review_identity_absent
-            )
+            require(type(self.verdict) is Verdict, "$.verdict", "expected approve or conflict")
+            require(self.next_phase is None, "$.next_phase", "allowed only for synthesis")
+            require(not self.deadlocked, "$.deadlocked", "audit replies cannot mark deadlock")
+            require(self.verdict is Verdict.APPROVE or bool(self.content), "$.content", "verdict conflict requires nonempty text")
+            without_review_identity()
         elif self.kind is AgentReplyKind.SYNTHESIS:
-            valid = (
-                bool(self.content)
-                and self.verdict is None
-                and type(self.next_phase) is AgentReplyNextPhase
-                and not self.deadlocked
-                and review_identity_absent
-            )
+            require(bool(self.content), "$.content", "expected nonempty text")
+            require(self.verdict is None, "$.verdict", "allowed only for an audit reply")
+            require(type(self.next_phase) is AgentReplyNextPhase, "$.next_phase", "expected repair or finalization")
+            require(not self.deadlocked, "$.deadlocked", "synthesis with next_phase cannot also mark deadlock")
+            without_review_identity()
         elif self.kind is AgentReplyKind.DEADLOCK:
-            valid = (
-                bool(self.content)
-                and self.verdict is None
-                and self.next_phase is None
-                and self.deadlocked
-                and review_identity_absent
-            )
+            require(bool(self.content), "$.content", "expected nonempty text")
+            require(self.verdict is None, "$.verdict", "allowed only for an audit reply")
+            require(self.next_phase is None, "$.next_phase", "deadlock cannot also choose a next phase")
+            require(self.deadlocked, "$.deadlocked", "deadlock replies require a true deadlock marker")
+            without_review_identity()
         else:
-            valid = (
-                not self.content
-                and self.verdict is None
-                and self.next_phase is None
-                and not self.deadlocked
-                and type(self.reviewed_proposal_id) is str
-                and bool(self.reviewed_proposal_id)
-                and _TAGGED_SHA256.fullmatch(
-                    self.reviewed_proposal_digest or ""
+            require(not self.content, "$.content", "finalization cannot carry new content")
+            require(self.verdict is None, "$.verdict", "allowed only for an audit reply")
+            require(self.next_phase is None, "$.next_phase", "finalization cannot choose a next phase")
+            require(not self.deadlocked, "$.deadlocked", "finalization cannot mark deadlock")
+            require(type(self.reviewed_proposal_id) is str, "$.reviewed_proposal_id", "expected text")
+            require(bool(self.reviewed_proposal_id), "$.reviewed_proposal_id", "expected nonempty text")
+            try:
+                digest_matches = _TAGGED_SHA256.fullmatch(self.reviewed_proposal_digest or "")
+            except TypeError as failure:
+                raise validation_failure(
+                    failure,
+                    '$.reviewed_proposal_digest',
+                    'expected sha256: followed by 64 lowercase hexadecimal characters',
                 )
-            )
-        if not valid:
-            raise ValueError("agent reply fields do not match its kind")
+            require(digest_matches, "$.reviewed_proposal_digest", "expected sha256: followed by 64 lowercase hexadecimal characters")
         if self.kind is AgentReplyKind.FINALIZATION:
-            _validate_conversation_identifier(
+            validation_call(
+                '$.reviewed_proposal_id',
+                _validate_conversation_identifier,
                 self.reviewed_proposal_id,
-                label="reviewed proposal ID",
+                label='reviewed proposal ID',
             )
     @classmethod
     def candidate(cls, revision_id: str, content: str) -> AgentReply:
@@ -1142,8 +1155,10 @@ def _validate_conversation_identifier(value: str, *, label: str) -> str:
     """
 
     if not isinstance(value, str) or _SAFE_IDENTIFIER.fullmatch(value) is None:
-        raise SessionIdError(
-            f"{label} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,63}}"
+        raise validation_failure(
+            SessionIdError(f'{label} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,63}}'),
+            '$',
+            'expected identifier matching [A-Za-z0-9][A-Za-z0-9_-]{0,63}',
         )
     return value
 

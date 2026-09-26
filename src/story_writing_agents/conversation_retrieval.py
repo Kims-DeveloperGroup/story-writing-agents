@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from .structured_output_validation import validation_failure
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Callable, Protocol, TypeAlias  # noqa: UP035 - public alias parity
@@ -35,13 +36,17 @@ _BEGIN_UNTRUSTED_STORY_DATA = "<<<BEGIN_UNTRUSTED_STORY_DATA>>>"
 _END_UNTRUSTED_STORY_DATA = "<<<END_UNTRUSTED_STORY_DATA>>>"
 
 
-def _positive_integer(value: int, *, label: str) -> int:
-    """Return one positive built-in integer without I/O or mutation."""
+def _provider_input_failure(failure: Exception, path: str | None, rule: str) -> Exception:
+    """Attach source rules only when a provider field owns this input."""
+    return failure if path is None else validation_failure(failure, path, rule)
 
+
+def _positive_integer(value: int, *, label: str, diagnostic_path: str | None=None) -> int:
+    """Return one positive built-in integer without I/O or mutation."""
     if type(value) is not int:
-        raise TypeError(f"{label} must be an integer")
+        raise _provider_input_failure(TypeError(f'{label} must be an integer'), diagnostic_path, 'expected an integer')
     if value < 1:
-        raise ValueError(f"{label} must be positive")
+        raise _provider_input_failure(ValueError(f'{label} must be positive'), diagnostic_path, 'expected a positive integer')
     return value
 
 
@@ -55,27 +60,25 @@ def _non_negative_integer(value: int, *, label: str) -> int:
     return value
 
 
-def _identifier(value: str, *, label: str) -> str:
+def _identifier(value: str, *, label: str, diagnostic_path: str | None=None) -> str:
     """Return one exact safe identifier or raise before any side effect."""
-
     if type(value) is not str:
-        raise TypeError(f"{label} must be a string")
+        raise _provider_input_failure(TypeError(f'{label} must be a string'), diagnostic_path, 'expected text')
     if _SAFE_IDENTIFIER.fullmatch(value) is None:
-        raise SessionIdError(f"{label} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,63}}")
+        raise _provider_input_failure(SessionIdError(f'{label} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,63}}'), diagnostic_path, 'expected identifier matching [A-Za-z0-9][A-Za-z0-9_-]{0,63}')
     return value
 
 
-def _strict_utf8(value: str, *, label: str, nonempty: bool = False) -> str:
+def _strict_utf8(value: str, *, label: str, nonempty: bool=False, diagnostic_path: str | None=None) -> str:
     """Return exact strict-UTF-8 text, optionally requiring nonempty content."""
-
     if type(value) is not str:
-        raise TypeError(f"{label} must be a string")
-    if nonempty and not value:
-        raise ValueError(f"{label} must not be empty")
+        raise _provider_input_failure(TypeError(f'{label} must be a string'), diagnostic_path, 'expected text')
+    if nonempty and (not value):
+        raise _provider_input_failure(ValueError(f'{label} must not be empty'), diagnostic_path, 'expected nonempty text')
     try:
-        value.encode("utf-8", errors="strict")
+        value.encode('utf-8', errors='strict')
     except UnicodeEncodeError as exc:
-        raise ValueError(f"{label} must be valid UTF-8") from exc
+        raise _provider_input_failure(ValueError(f'{label} must be valid UTF-8'), diagnostic_path, 'expected strict UTF-8 text') from exc
     return value
 
 
@@ -503,11 +506,7 @@ class ConversationRetrievalSearchAction:
             turn_id=self.turn_id,
             action_index=self.action_index,
         )
-        _strict_utf8(
-            self.query,
-            label="conversation retrieval search query",
-            nonempty=True,
-        )
+        _strict_utf8(self.query, label='conversation retrieval search query', nonempty=True, diagnostic_path='$.query')
         if self.trace is not None and type(self.trace) is not ReplyTrace:
             raise TypeError("retrieval search trace must be ReplyTrace or None")
         validate_details(self.validation_details)
@@ -539,12 +538,16 @@ class ConversationRetrievalReadAction:
             turn_id=self.turn_id,
             action_index=self.action_index,
         )
-        _identifier(self.citation_id, label="citation ID")
-        _positive_integer(self.start_sequence, label="start sequence")
+        _identifier(self.citation_id, label='citation ID', diagnostic_path='$.citation_id')
+        _positive_integer(self.start_sequence, label='start sequence', diagnostic_path='$.start_sequence')
         if self.end_sequence is not None:
-            _positive_integer(self.end_sequence, label="end sequence")
+            _positive_integer(self.end_sequence, label='end sequence', diagnostic_path='$.end_sequence')
         if self.end_sequence is not None and self.end_sequence < self.start_sequence:
-            raise ValueError("end sequence must not precede start sequence")
+            raise validation_failure(
+                ValueError('end sequence must not precede start sequence'),
+                '$.end_sequence',
+                'end_sequence must be greater than or equal to start_sequence',
+            )
         if self.trace is not None and type(self.trace) is not ReplyTrace:
             raise TypeError("retrieval read trace must be ReplyTrace or None")
         validate_details(self.validation_details)
@@ -575,18 +578,22 @@ class ConversationRetrievalAnswerAction:
             turn_id=self.turn_id,
             action_index=self.action_index,
         )
-        _strict_utf8(
-            self.content,
-            label="conversation retrieval answer content",
-            nonempty=True,
-        )
+        _strict_utf8(self.content, label='conversation retrieval answer content', nonempty=True, diagnostic_path='$.message')
         if type(self.citation_ids) is not tuple:
-            raise TypeError("answer citation IDs must be a tuple")
+            raise validation_failure(
+                TypeError('answer citation IDs must be a tuple'),
+                '$.citation_ids',
+                'expected an array of citation identifiers',
+            )
         seen: set[str] = set()
-        for citation_id in self.citation_ids:
-            _identifier(citation_id, label="answer citation ID")
+        for citation_index, citation_id in enumerate(self.citation_ids):
+            _identifier(citation_id, label='answer citation ID', diagnostic_path=f'$.citation_ids[{citation_index}]')
             if citation_id in seen:
-                raise ValueError("answer citation IDs must be unique")
+                raise validation_failure(
+                    ValueError('answer citation IDs must be unique'),
+                    '$.citation_ids',
+                    'citation_ids must be unique',
+                )
             seen.add(citation_id)
         if self.trace is not None and type(self.trace) is not ReplyTrace:
             raise TypeError("retrieval answer trace must be ReplyTrace or None")

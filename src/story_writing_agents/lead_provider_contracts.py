@@ -15,7 +15,7 @@ from .specialist_routing import (
     ArtifactReviewDomain, AuthoringActivity, AuthoringScope,
     required_authoring_specialists,
 )
-from .structured_output_validation import DomainValidationRule
+from .structured_output_validation import DomainValidationRule, validation_failure
 
 
 PREPARATION_INPUT_IDS = ("recommendation_request", "recommendation_decision")
@@ -78,7 +78,11 @@ def canonical_assignments(value: list[object]) -> list[object]:
         return value
     ids = [item["agent_id"] for item in value]
     if len(set(ids)) != len(ids):
-        raise LeadContractError((DomainValidationRule.SPECIALIST_DUPLICATE,))
+        raise validation_failure(
+            LeadContractError((DomainValidationRule.SPECIALIST_DUPLICATE,)),
+            '$',
+            'agent_id values must be unique before canonical ordering',
+        )
     return sorted(value, key=lambda item: SPECIALIST_IDS.index(item["agent_id"]))
 
 

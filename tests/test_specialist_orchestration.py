@@ -39,6 +39,8 @@ from story_writing_agents.conversations import (
     project_collaboration_history,
 )
 from story_writing_agents.models import AgentStateEntry
+from story_writing_agents.errors import BackendProtocolError
+from story_writing_agents.structured_output_validation import failure_issues
 from story_writing_agents.specialist_routing import AuthoringScope, AuthoringActivity, ArtifactReviewDomain, ReviewBasis
 
 from tests.test_lead_orchestration import (
@@ -563,19 +565,12 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         invalid_values = (
-            {
-                "assessment": "supports",
-            },
-            {
-                "message": "Missing assessment.",
-            },
-            {
-                "assessment": "supports",
-                "message": "Private state claim.",
-                "private_state": "forbidden",
-            },
+            ({"assessment": "supports"}, "$.action.result.message: required property is missing"),
+            ({"message": "Missing assessment."}, "$.action.result.assessment: required property is missing"),
+            ({"assessment": "supports", "message": "Private state claim.", "private_state": "forbidden"},
+             "$.action.result: contains 1 unexpected properties (names withheld)"),
         )
-        for ordinal, value in enumerate(invalid_values, start=1):
+        for ordinal, (value, issue) in enumerate(invalid_values, start=1):
             with self.subTest(ordinal=ordinal):
                 conversation_id = self.conversation(f"Strict specialist {ordinal}")
                 proposed = await self.proposal(conversation_id)
@@ -617,6 +612,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                     ) if payload.state is CollaborationProviderCallState.SUBMITTED
                     for chunk in payload.validation_details
                 )
+                self.assertTrue(all(issue in chunk for chunk in reports))
                 self.assertTrue(any(chunk.startswith("Original response") for chunk in reports))
                 self.assertTrue(any(chunk.startswith("Repair response") for chunk in reports))
                 self.assertNotIn("private_state", repr(self.history(conversation_id)))
@@ -749,8 +745,9 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                     for detail in payload.validation_details
                 )
                 self.assertTrue(expected)
-                self.assertEqual(expected[0], "Original response\n"
-                                 "$.action.result.message: expected nonempty bounded UTF-8 text")
+                requirement = ("expected nonempty text" if rejected_role == PLOT_ARCHITECT
+                               else "expected nonempty bounded UTF-8 text")
+                self.assertEqual(expected[0], "Original response\n$.action.result.message: " + requirement)
 
                 restarted_backend = _LeadBackend()
                 restarted = StoryRuntime(
@@ -820,7 +817,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         empty_message_details = tuple(
             detail for detail in expected
             if detail == "Original response\n"
-                         "$.action.result.message: expected nonempty bounded UTF-8 text"
+                         "$.action.result.message: expected nonempty text"
         )
         self.assertEqual(len(empty_message_details), 2)
         self.assertEqual(empty_message_details[0], empty_message_details[1])
@@ -899,7 +896,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertEqual(notices[0].validation_invocation_id,
                          submitted[0].invocation_id)
         self.assertEqual(notices[0].validation_details[0], "Original response\n"
-                         "$.action.result.message: expected nonempty bounded UTF-8 text")
+                         "$.action.result.message: expected nonempty text")
         self.assertNotIn(private, repr(known))
 
         restarted_backend = _LeadBackend()
@@ -1056,6 +1053,14 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         result = _payloads(history, CollaborationExecutionResult)[0]
         self.assertIs(result.synthesis_outcome, CollaborationSynthesisOutcomeKind.SUCCEEDED)
         self.assertEqual(result.synthesis_submitted_physical_calls, 1)
+        duplicate = {**_assignments(PLOT_ARCHITECT)[0], "mode": "review"}
+        with self.assertRaises(BackendProtocolError) as caught:
+            self.runtime._decode_lead_synthesis(json.dumps({"message": "Visible.", "next_intent": {
+                "purpose": "Continue the review.", "assignments": [duplicate, duplicate]}}),
+                proposal=proposed.proposal, attempt_id=synthesis.execution_attempt_id,
+                reply_event_ids=synthesis.reply_event_ids, replies=tuple(event.payload for event in reply_events))
+        self.assertEqual(failure_issues(caught.exception, path="$.action.result"),
+                         ("$.action.result.next_intent.assignments: agent_id values must be unique before canonical ordering",))
 
     async def test_synthesis_derives_non_supporting_inputs_locally(
         self,

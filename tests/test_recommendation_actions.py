@@ -104,16 +104,26 @@ class RecommendationActionContractTests(RecommendationCase):
         self.assertEqual(second.recommendation_request.authoring_scope, request.authoring_scope)
         self.assertEqual(tuple(s.content_digest for s in second.recommendation_request.draft_sources),
                          (digest(message), digest("Second whole reply")))
-        for sources, objective_id in ((("foreign_event",), None),
-                                      (("current_response", "current_response"), None),
-                                      (("current_response",), "foreign_objective")):
+        for sources, objective_id, bad_route in ((("foreign_event",), None, False),
+                (("current_response", "current_response"), None, False),
+                (("current_response",), "foreign_objective", False),
+                (("current_response",), None, True)):
             cid = self.conversation("Rejected source aliases")
             bad = recommendation(recommended_action=action(source_ids=sources, objective_id=objective_id))
+            if bad_route:
+                bad = recommendation(recommended_action=action(source_ids=sources,
+                    kind="prepare_consultation", specialist_ids=("character_custodian",)),
+                    authoring_scope=lambda call: lead._live_scope(call, activity="review", paths=(OUTLINE,)))
             self.backend.enqueue(bad)
             self.backend.enqueue(bad)
             result = await self.runtime.lead_turn(self.session_id, cid, "Reject undisclosed aliases.")
             self.assertIsNone(result.recommendation_request)
             self.assertFalse(self.payload_events(cid, c.LeadRecommendationRequestPayload))
+            if bad_route:
+                issue = ("$.action.result.recommended_action.specialist_ids: select unique offered specialist IDs "
+                         "and include every required authoring domain")
+                self.assertEqual(tuple(detail.partition("\n")[2] for detail in result.validation_details),
+                                 (issue, issue))
             self.assert_no_downstream(cid)
 
     async def test_confirm_origin_v2_and_continuing_v1_preserve_exact_wire_facts(self):
