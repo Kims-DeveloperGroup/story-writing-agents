@@ -39,6 +39,8 @@ from story_writing_agents.conversations import (
     project_collaboration_history,
 )
 from story_writing_agents.models import AgentStateEntry
+from story_writing_agents.errors import BackendProtocolError
+from story_writing_agents.structured_output_validation import failure_issues
 from story_writing_agents.specialist_routing import AuthoringScope, AuthoringActivity, ArtifactReviewDomain, ReviewBasis
 
 from tests.test_lead_orchestration import (
@@ -1030,21 +1032,12 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         def minimal_synthesis(call, _provider):
             self.assertNotIn("reply_event_ids", repr(call.schema))
             self.assertNotIn("unresolved_input_ids", repr(call.schema))
-            return _provider_envelope(
-                call,
-                {"message": "The concerns remain visible."},
-            )
+            return _provider_envelope(call, {"message": "The concerns remain visible."})
 
         conversation_id = self.conversation("Strict synthesis")
-        proposed = await self.proposal(
-            conversation_id,
-            assignments=_assignments(PLOT_ARCHITECT, CHARACTER_CUSTODIAN),
-        )
+        proposed = await self.proposal(conversation_id, assignments=_assignments(PLOT_ARCHITECT, CHARACTER_CUSTODIAN))
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome("concern"))
-        self.backend.enqueue_for(
-            CHARACTER_CUSTODIAN,
-            _specialist_outcome("insufficient_evidence"),
-        )
+        self.backend.enqueue_for(CHARACTER_CUSTODIAN, _specialist_outcome("insufficient_evidence"))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, minimal_synthesis)
 
         decision = await self.runtime.decide_lead_step(
@@ -1058,16 +1051,20 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         synthesis = _payloads(history, CollaborationLeadSynthesisPayload)[0]
         self.assertIs(synthesis.trace.origin, ReplyTraceOrigin.PROVIDER)
         self.assertEqual(synthesis.trace.action, "synthesis")
-        self.assertEqual(
-            synthesis.reply_event_ids,
-            tuple(event.event_id for event in reply_events),
-        )
+        self.assertEqual(synthesis.reply_event_ids, tuple(event.event_id for event in reply_events))
         self.assertEqual(synthesis.unresolved_input_ids, ("user_input",))
         result = _payloads(history, CollaborationExecutionResult)[0]
-        self.assertIs(
-            result.synthesis_outcome, CollaborationSynthesisOutcomeKind.SUCCEEDED
-        )
+        self.assertIs(result.synthesis_outcome, CollaborationSynthesisOutcomeKind.SUCCEEDED)
         self.assertEqual(result.synthesis_submitted_physical_calls, 1)
+        duplicate = {**_assignments(PLOT_ARCHITECT)[0], "mode": "review"}
+        with self.assertRaises(BackendProtocolError) as caught:
+            self.runtime._decode_lead_synthesis(json.dumps({"message": "Visible.", "next_intent": {
+                "purpose": "Continue the review.", "assignments": [duplicate, duplicate]}}),
+                proposal=proposed.proposal, attempt_id=synthesis.execution_attempt_id,
+                reply_event_ids=synthesis.reply_event_ids, replies=tuple(event.payload for event in reply_events))
+        self.assertEqual(failure_issues(caught.exception, path="$.action.result"),
+                         ("$.action.result.next_intent.assignments: agent_id values must be unique and follow this order: "
+                          "plot_architect, character_custodian, execution_specialist",))
 
     async def test_synthesis_derives_non_supporting_inputs_locally(
         self,

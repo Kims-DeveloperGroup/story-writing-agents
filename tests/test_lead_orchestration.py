@@ -1429,6 +1429,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
     ) -> None:
         assignment = {"agent_id": PLOT_ARCHITECT, "instruction": "Review the input.",
                       "input_ids": ["user_input"]}
+        rules = {"duplicate-specialist": "expected unique array items", "missing-reviewer":
+                 "must include every specialist required by authoring_scope and affected target_paths: "
+                 "plot_architect, character_custodian"}
         cases = (
             ("lead-specialist", "Plain request.", [{**assignment, "agent_id": LEAD_ORCHESTRATOR}]),
             ("duplicate-specialist", "Plain request.", [dict(assignment), dict(assignment)]),
@@ -1456,35 +1459,21 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     response = reference_grounded_response
                 self.backend.enqueue(response)
                 self.backend.enqueue(response)
-                result = await self.runtime.lead_turn(
-                    self.session_id,
-                    conversation_id,
-                    text,
-                )
-                self.assertIs(
-                    result.next_action,
-                    CollaborationNextAction.CONTINUE_WITH_LEAD,
-                )
+                result = await self.runtime.lead_turn(self.session_id, conversation_id, text)
+                self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
                 self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
-                self.assertFalse(
-                    any(
-                        type(event.payload) is CollaborationProposal
-                        for event in self.history(conversation_id)
-                    )
-                )
-                failures = tuple(
-                    event.payload
-                    for event in self.history(conversation_id)
-                    if type(event.payload) is CollaborationLeadOutcomeFailurePayload
-                )
+                self.assertFalse(any(type(event.payload) is CollaborationProposal
+                                     for event in self.history(conversation_id)))
+                failures = tuple(event.payload for event in self.history(conversation_id)
+                                 if type(event.payload) is CollaborationLeadOutcomeFailurePayload)
                 self.assertEqual(len(failures), 1)
-                self.assertIn(
-                    failures[0].code,
-                    {
-                        CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED,
-                        CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED,
-                    },
-                )
+                self.assertIn(failures[0].code, {
+                    CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED,
+                    CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED})
+                if label in rules:
+                    issue = "$.action.result.proposal.assignments: " + rules[label]
+                    self.assertEqual(tuple(detail.partition("\n")[2] for detail in result.validation_details),
+                                     (issue, issue))
 
 
 class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):

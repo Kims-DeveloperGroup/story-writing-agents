@@ -6874,19 +6874,25 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             ("$.action.end_sequence: expected integer, got null",))
         with self.assertRaises(BackendProtocolError):
             AgentBackend._decode_conversation_retrieval_action(explicit_null, request=request, action_index=2)
+        identifier = "expected identifier matching [A-Za-z0-9][A-Za-z0-9_-]{0,63}"
+        nonempty = "Codex conversation retrieval citation_ids must be an array of non-empty text"
+        answer = {"kind": "answer", "message": "Visible."}
         for value, path, rule in (
-            ({**action, "citation_id": "PRIVATE/id"}, "citation_id", "identifier"),
-            ({**action, "start_sequence": 2, "end_sequence": 1}, "end_sequence", "start_sequence"),
-            ({"kind": "answer", "message": "Visible.", "citation_ids": ["PRIVATE/id"]}, "citation_ids[0]", "identifier"),
-            ({"kind": "answer", "message": "Visible.", "citation_ids": ["s1h1", "s1h1"]}, "citation_ids", "unique"),
+            ({**action, "citation_id": "PRIVATE/id"}, "citation_id", identifier),
+            ({**action, "start_sequence": 2, "end_sequence": 1}, "end_sequence",
+             "end_sequence must be greater than or equal to start_sequence"),
+            ({**answer, "citation_ids": ["PRIVATE/id"]}, "citation_ids[0]", identifier),
+            ({**answer, "citation_ids": ["s1h1", "s1h1"]}, "citation_ids", "citation_ids must be unique"),
+            ({**answer, "citation_ids": ["s1h1", ""]}, "citation_ids[1]", nonempty),
+            ({**answer, "citation_ids": ["s1h1", "PRIVATE\ud800"]}, "citation_ids[1]",
+             "Codex conversation retrieval citation_ids must be valid UTF-8"),
+            ({**answer, "citation_ids": ["PRIVATE\ud800", ""]}, "citation_ids[1]", nonempty),
         ):
             error = ConversationRetrievalSemanticError if path in {"end_sequence", "citation_ids"} else BackendProtocolError
             with self.assertRaises(error) as caught:
                 AgentBackend._decode_conversation_retrieval_action(json.dumps({"action": value}), request=request, action_index=2)
             issues = failure_issues(caught.exception)
-            self.assertEqual(len(issues), 1)
-            self.assertTrue(issues[0].startswith(f"$.action.{path}: "), issues)
-            self.assertIn(rule, issues[0])
+            self.assertEqual(issues, (f"$.action.{path}: {rule}",))
             self.assertNotIn("PRIVATE", repr(issues))
 
     def test_retrieval_non_string_kind_reports_exact_type_and_common_issues(self) -> None:

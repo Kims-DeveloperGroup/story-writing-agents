@@ -2352,7 +2352,12 @@ class StoryRuntime:
                 )
         if action.kind is LeadRecommendationActionKind.PREPARE_CONSULTATION:
             try:
-                validate_specialist_routing(scope, action.specialist_ids)
+                validation_call(
+                    '$.recommended_action.specialist_ids',
+                    validate_specialist_routing,
+                    scope,
+                    action.specialist_ids,
+                )
             except (TypeError, ValueError) as validation_cause:
                 raise carry_validation(
                     validation_failure(
@@ -11377,8 +11382,13 @@ class StoryRuntime:
                 '$.authoring_scope',
                 'live intent requires authoring scope',
             )
-        validate_specialist_routing(intent.authoring_scope, tuple(item.agent_id for item in intent.assignments),
-                                    affected_paths=cls._authoring_affected_paths(inputs, None))
+        validation_call(
+            '$.proposal.assignments',
+            validate_specialist_routing,
+            intent.authoring_scope,
+            tuple(item.agent_id for item in intent.assignments),
+            affected_paths=cls._authoring_affected_paths(inputs, None),
+        )
         specialist_ids = tuple(item.agent_id for item in intent.assignments)
         canonical = tuple(
             agent_id for agent_id in SPECIALIST_IDS if agent_id in specialist_ids

@@ -1230,7 +1230,9 @@ class LeadProposalIntent:
             label='lead proposal assignments',
             nonempty=True,
         )
-        _require_unique(
+        validation_call(
+            '$.assignments',
+            _require_unique,
             tuple(item.agent_id for item in self.assignments),
             label="lead proposal specialist IDs",
         )

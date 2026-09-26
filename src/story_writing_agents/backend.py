@@ -5604,9 +5604,7 @@ class AgentBackend:
                     end_sequence=end_sequence,
                 )
             raw_citation_ids = value["citation_ids"]
-            if type(raw_citation_ids) is not list or any(
-                type(item) is not str or not item for item in raw_citation_ids
-            ):
+            if type(raw_citation_ids) is not list:
                 raise validation_failure(
                     BackendProtocolError(
                         f'{provider_name} conversation retrieval citation_ids must be an array of non-empty text',
@@ -5614,7 +5612,16 @@ class AgentBackend:
                     '$.action.citation_ids',
                     f'{provider_name} conversation retrieval citation_ids must be an array of non-empty text',
                 )
-            for item in raw_citation_ids:
+            for citation_index, item in enumerate(raw_citation_ids):
+                if type(item) is not str or not item:
+                    raise validation_failure(
+                        BackendProtocolError(
+                            f'{provider_name} conversation retrieval citation_ids must be an array of non-empty text',
+                        ),
+                        f'$.action.citation_ids[{citation_index}]',
+                        f'{provider_name} conversation retrieval citation_ids must be an array of non-empty text',
+                    )
+            for citation_index, item in enumerate(raw_citation_ids):
                 try:
                     item.encode("utf-8", errors="strict")
                 except UnicodeEncodeError as exc:
@@ -5622,7 +5629,7 @@ class AgentBackend:
                         BackendProtocolError(
                             f'{provider_name} conversation retrieval citation_ids must be valid UTF-8',
                         ),
-                        '$.action.citation_ids',
+                        f'$.action.citation_ids[{citation_index}]',
                         f'{provider_name} conversation retrieval citation_ids must be valid UTF-8',
                     ) from exc
             if len(set(raw_citation_ids)) != len(raw_citation_ids):

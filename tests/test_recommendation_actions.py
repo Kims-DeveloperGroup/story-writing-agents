@@ -104,14 +104,25 @@ class RecommendationActionContractTests(RecommendationCase):
         self.assertEqual(second.recommendation_request.authoring_scope, request.authoring_scope)
         self.assertEqual(tuple(s.content_digest for s in second.recommendation_request.draft_sources),
                          (digest(message), digest("Second whole reply")))
-        for sources in (("foreign_event",), ("current_response", "current_response")):
+        for sources, bad_route in ((("foreign_event",), False),
+                                   (("current_response", "current_response"), False),
+                                   (("current_response",), True)):
             cid = self.conversation("Rejected source aliases")
             bad = recommendation(recommended_action=action(source_ids=sources))
+            if bad_route:
+                bad = recommendation(recommended_action=action(source_ids=sources,
+                    kind="prepare_consultation", specialist_ids=("character_custodian",)),
+                    authoring_scope=lambda call: lead._live_scope(call, activity="review", paths=(OUTLINE,)))
             self.backend.enqueue(bad)
             self.backend.enqueue(bad)
             result = await self.runtime.lead_turn(self.session_id, cid, "Reject undisclosed aliases.")
             self.assertIsNone(result.recommendation_request)
             self.assertFalse(self.payload_events(cid, c.LeadRecommendationRequestPayload))
+            if bad_route:
+                issue = ("$.action.result.recommended_action.specialist_ids: must include every specialist "
+                         "required by authoring_scope and affected target_paths: plot_architect")
+                self.assertEqual(tuple(detail.partition("\n")[2] for detail in result.validation_details),
+                                 (issue, issue))
 
     async def test_confirm_origin_v2_and_continuing_v1_preserve_exact_wire_facts(self):
         conversation_id, turn = await self.recommend()
