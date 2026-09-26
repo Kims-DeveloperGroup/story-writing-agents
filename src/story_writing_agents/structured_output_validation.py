@@ -106,7 +106,7 @@ _DOMAIN_RULE_ISSUES = {
     DomainValidationRule.RECOMMENDATION_SOURCES: '$.action.result.recommended_action.source_ids: expected nonempty unique offered source aliases',
     DomainValidationRule.SOURCE_NOT_OFFERED: '$.action.result.recommended_action.source_ids: select only frozen offered aliases or evidence IDs from completed authorized READs',
     DomainValidationRule.OBJECTIVE_NOT_OFFERED: '$.action.result.objective_intent.objective_id: select only an offered OPEN objective ID (also applies to recommended_action.objective_id)',
-    DomainValidationRule.OBJECTIVE_BRANCH: '$.action.result.objective_intent.next_step: use prepare for artifact_intent, consult for proposal, and clarify for direct outcomes',
+    DomainValidationRule.OBJECTIVE_BRANCH: '$.action.result.objective_intent: use prepare for artifact_intent, consult for proposal, and clarify only for question direct outcomes; questions cannot cancel an objective',
     DomainValidationRule.MALFORMED_RESULT: "$.action.result: malformed JSON",
     DomainValidationRule.RESULT_OBJECT_REQUIRED: "$.action.result: expected object",
     DomainValidationRule.RECOMMENDATION_REQUIRED: (

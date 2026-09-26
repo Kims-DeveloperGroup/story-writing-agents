@@ -40,7 +40,6 @@ __all__ = [
     "ContextSearchHit",
     "ContextSearchObservation",
     "ContextSearchQuery",
-    "normalized_search_text",
     "ContextSourceBoundary",
     "ContextSourceBoundaryKind",
     "ContextSourceEvidence",

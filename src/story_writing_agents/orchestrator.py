@@ -559,7 +559,7 @@ def _lead_front_result_contract(
             _closed_result_object({**scoped, "kind": {"enum": ["question", "critique"], "type": "string"}}),
             _closed_result_object({**scoped,
                 "kind": {"enum": ["question"], "type": "string"},
-                "objective_intent": facts.objective_schema("clarify", cancel=True)}),
+                "objective_intent": facts.objective_schema("clarify")}),
             recommendation,
         ]
         if facts.objective_ids is None or facts.objective_ids:
@@ -1625,12 +1625,17 @@ class StoryRuntime:
             )
             expected_reviewed_proposal = None
             if phase is Phase.FINALIZE:
-                reviewed_projection = self.conversation_storage_services.event_store.read_context(
-                    invocation.execution_identity.session_id, invocation.execution_identity.conversation_id,
-                )
-                reviewed = reviewed_projection.current_reviewed_artifact_proposal
-                if reviewed is not None and reviewed_projection.current_artifact_state is ArtifactProposalState.REVIEWED:
-                    expected_reviewed_proposal = (reviewed.proposal_id, reviewed.proposal_digest)
+                try:
+                    reviewed_projection = self.conversation_storage_services.event_store.read_context(
+                        invocation.execution_identity.session_id, invocation.execution_identity.conversation_id,
+                    )
+                except ConversationNotFoundError:
+                    # Legacy consensus calls need not have a collaboration conversation.
+                    pass
+                else:
+                    reviewed = reviewed_projection.current_reviewed_artifact_proposal
+                    if reviewed is not None and reviewed_projection.current_artifact_state is ArtifactProposalState.REVIEWED:
+                        expected_reviewed_proposal = (reviewed.proposal_id, reviewed.proposal_digest)
             request = AgentRequest(
                 session_id=invocation.execution_identity.session_id,
                 debate_id=invocation.workflow_id,
@@ -4683,16 +4688,23 @@ class StoryRuntime:
             decoded: object | None = None
             trace_origin = ReplyTraceOrigin.PROVIDER
 
-            validation_constraints = constraints or LeadProviderConstraints()
-
             def diagnose(answer: str) -> tuple[DomainValidationRule, ...]:
-                return validation_constraints.diagnose(answer) or (DomainValidationRule.LEAD_OUTCOME_REJECTED,)
+                if constraints is not None:
+                    return constraints.diagnose(answer) or (DomainValidationRule.LEAD_OUTCOME_REJECTED,)
+                try:
+                    value = json.loads(answer)
+                except (TypeError, ValueError):
+                    return (DomainValidationRule.LEAD_OUTCOME_REJECTED,)
+                if type(value) is dict and not visible_text(value.get("message")):
+                    return (DomainValidationRule.MESSAGE_REQUIRED,)
+                return (DomainValidationRule.LEAD_OUTCOME_REJECTED,)
 
             def validate(answer: str, _authorization: object) -> None:
                 nonlocal decoded
-                rules = validation_constraints.diagnose(answer)
-                if rules:
-                    raise LeadContractError(rules)
+                if constraints is not None:
+                    rules = constraints.diagnose(answer)
+                    if rules:
+                        raise LeadContractError(rules)
                 decoded = decoder(answer)
 
             invocation_arguments = {

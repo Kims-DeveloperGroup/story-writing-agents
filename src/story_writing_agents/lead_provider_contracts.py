@@ -372,7 +372,7 @@ class LeadProviderConstraints:
                 rules.append(R.OBJECTIVE_NOT_OFFERED)
             expected_step = "prepare" if type(artifact) is dict else "consult" if type(proposal) is dict else "clarify"
             if objective.get("action") == "cancel":
-                if type(artifact) is dict or type(proposal) is dict:
+                if type(artifact) is dict or type(proposal) is dict or value.get("kind") == "question":
                     rules.append(R.OBJECTIVE_BRANCH)
             elif (objective.get("next_step") != expected_step
                   or (expected_step == "clarify" and value.get("kind") != "question")):

@@ -1208,6 +1208,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         cancelled = json.dumps({**question, "kind": "answer", "objective_intent": {"action": "cancel", "objective_id": "objective"}})
         self.assertEqual(diagnose_json_text(cancelled, contract), ())
         self.assertEqual(facts.diagnose(cancelled), ())
+        cancel_question = json.dumps({**json.loads(cancelled), "kind": "question"})
+        self.assertTrue(diagnose_json_text(cancel_question, contract))
+        self.assertIn(Rule.OBJECTIVE_BRANCH, facts.diagnose(cancel_question))
         duplicated = {"message": "Visible.", "kind": "proposal", "artifact_intent": {"objective_intent": {
             "action": "start", "next_step": "prepare", "target_paths": ["core_documents/global_outline.md"] * 2}}}
         self.assertIn(Rule.ARTIFACT_OBJECTIVE_TARGETS, facts.diagnose(json.dumps(duplicated)))
@@ -1962,13 +1965,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                                     domains=("plot_structure",),
                                 )
                             ),
-                            "kind": "answer",
                             "message": rejected_body,
-                            "objective_intent": {
-                                "action": "start",
-                                "target_paths": [],
-                                "next_step": "clarify",
-                            },
                         },
                     }
                 },
@@ -2443,11 +2440,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 "authoring_scope": _compact_scope(_live_scope(
                     call, activity="review", domains=("plot_structure",),
                 )),
-                "kind": "answer",
-                "message": "A result with inconsistent objective semantics.",
-                "objective_intent": {
-                    "action": "start", "target_paths": [], "next_step": "clarify",
-                },
+                "message": "A substantive story answer without confirmed specialist work.",
             }}}, separators=(",", ":"))
         self.backend.enqueue(invalid)
         self.backend.enqueue(invalid)

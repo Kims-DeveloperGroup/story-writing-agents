@@ -749,8 +749,8 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                     for detail in payload.validation_details
                 )
                 self.assertTrue(expected)
-                self.assertTrue(expected[0].startswith("Original response"))
-                self.assertIn("rejected by a domain result rule", expected[0])
+                self.assertEqual(expected[0], "Original response\n"
+                                 "$.action.result.message: expected nonempty bounded UTF-8 text")
 
                 restarted_backend = _LeadBackend()
                 restarted = StoryRuntime(
@@ -817,12 +817,13 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         )
         self.assertEqual(len(messages_by_call), 3)
         self.assertEqual(len(expected), 3)
-        domain_details = tuple(
+        empty_message_details = tuple(
             detail for detail in expected
-            if "rejected by a domain result rule" in detail
+            if detail == "Original response\n"
+                         "$.action.result.message: expected nonempty bounded UTF-8 text"
         )
-        self.assertEqual(len(domain_details), 2)
-        self.assertEqual(domain_details[0], domain_details[1])
+        self.assertEqual(len(empty_message_details), 2)
+        self.assertEqual(empty_message_details[0], empty_message_details[1])
         self.assertEqual(
             sum("expected string, got integer" in detail for detail in expected),
             1,
@@ -897,8 +898,8 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertEqual(notices[0].validation_call_id, submitted[0].call_id)
         self.assertEqual(notices[0].validation_invocation_id,
                          submitted[0].invocation_id)
-        self.assertIn("rejected by a domain result rule",
-                      notices[0].validation_details[0])
+        self.assertEqual(notices[0].validation_details[0], "Original response\n"
+                         "$.action.result.message: expected nonempty bounded UTF-8 text")
         self.assertNotIn(private, repr(known))
 
         restarted_backend = _LeadBackend()
