@@ -447,10 +447,10 @@ only for readability:
 cwd=/workspace/agent_states/orchestrator_state/provider_sessions/.antigravity/sessions/novel/lead_orchestrator/<definition-sha256>/workspace
 agy --gemini_dir=<runtime-root>/provider \
   --input-format text --output-format json \
-  --json-schema '<exact Antigravity-rendered wire-v7 schema>' \
+  --json-schema '<exact Antigravity-rendered wire-v8 schema>' \
   --agent lead_orchestrator --sandbox --mode plan \
   --disable-slash-commands --print-timeout 900s --new-project \
-  --print '<exact confidential wire-v7 payload JSON, one argument>'
+  --print '<exact confidential wire-v8 payload JSON, one argument>'
 ```
 
 On a compatible later call, the adapter keeps `--agent lead_orchestrator` and
@@ -489,7 +489,7 @@ object supplied on argv, whose canonical bytes must match exactly.
       }
     }
   },
-  "json_schema": {"<documentation-placeholder>": "exact Antigravity-rendered wire-v7 schema object"},
+  "json_schema": {"<documentation-placeholder>": "exact Antigravity-rendered wire-v8 schema object"},
   "usage": {"input_tokens": 100, "output_tokens": 20, "cache_read_tokens": 0}
 }
 ```
@@ -524,7 +524,7 @@ closed SEARCH, READ, and minimal Lead ANSWER branches are shown in
 Lead policies use the v5 overlay. Ordinary synthesis uses the minimal
 `lead-synthesis-v3` contract. Specialist replies use `specialist-reply-v2`,
 artifact-review synthesis uses `artifact-review-synthesis-v3`, and contextual
-transport remains wire v7. A known
+transport remains wire v8. A known
 read-only Lead failure after reference reads can expose `retry_lead_turn` once
 the exact attempt and reference accounting close. Its authoring objective
 stays open; explicit new input uses fresh evidence. Uncertain cleanup remains
@@ -582,7 +582,7 @@ alone never establishes domain acceptance.
 ### Shared structured-output contract
 
 Codex and Antigravity share provider-neutral result constraints and payload
-semantics. Typed wire v7 has a closed required root object with one `action`:
+semantics. Typed wire v8 has a closed required root object with one `action`:
 SEARCH, READ, or ANSWER. Runtime derives correlation and READ usage. ANSWER
 embeds the invocation-specific result object directly; there is no JSON-in-
 string result layer.

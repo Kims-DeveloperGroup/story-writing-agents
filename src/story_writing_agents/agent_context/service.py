@@ -112,6 +112,7 @@ from .ledger import (
     ContextLedgerProviderCall,
     context_checkpoint_proposal_digest,
 )
+from .request_compaction import compact_context_payload
 from .sources import (
     CONTEXT_SOURCE_POLICY,
     ActiveDebateSourceAdapter,
@@ -156,7 +157,7 @@ __all__ = [
     "record_context_provider_failure",
 ]
 
-_CONTEXT_WIRE_VERSION = "agent-context-wire-v7"
+_CONTEXT_WIRE_VERSION = "agent-context-wire-v8"
 _ACTION_WIRE_CODES = {
     "search": "s",
     "read": "r",
@@ -4571,7 +4572,7 @@ class AgentContextService:
             # local reference load. Its generated observation is checked again
             # in the exact substantive payload before physical submission.
             if history_delivery is not None:
-                known_payload, _, _ = _initial_payload(
+                known_payload, known_component_paths, known_reference_paths = _initial_payload(
                     binding, projection, planning_checkpoint, action_session,
                     materials, phase_contract=_invocation_phase_contract(request),
                     action_index=1,
@@ -4581,6 +4582,10 @@ class AgentContextService:
                     reference_context=(),
                 )
                 known_payload["h"] = history_delivery
+                known_component_paths[("h",)] = ContextComponentKind.CONVERSATION_CONTEXT
+                known_payload, _ = compact_context_payload(
+                    known_payload, known_component_paths, known_reference_paths,
+                )
                 if len(_canonical_bytes(known_payload)) > MAX_SESSION_CONTEXT_UTF8_BYTES:
                     raise SessionContextCapacityError()
 
@@ -4734,8 +4739,6 @@ class AgentContextService:
                     if history_delivery is not None:
                         payload["h"] = history_delivery
                         component_paths[("h",)] = ContextComponentKind.CONVERSATION_CONTEXT
-                        if len(_canonical_bytes(payload)) > MAX_SESSION_CONTEXT_UTF8_BYTES:
-                            raise SessionContextCapacityError()
                     call_kind = (
                         ProviderCallKind.DEBATE
                         if scope.subject_kind is ContextSubjectKind.DEBATE
@@ -4765,6 +4768,15 @@ class AgentContextService:
                             else ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION
                         )
                     )
+                payload, component_paths = compact_context_payload(
+                    payload, component_paths, reference_paths,
+                )
+                if (
+                    observation is None
+                    and history_delivery is not None
+                    and len(_canonical_bytes(payload)) > MAX_SESSION_CONTEXT_UTF8_BYTES
+                ):
+                    raise SessionContextCapacityError()
                 call_request = ContextProviderCallRequest(
                     scope=scope,
                     policy_fingerprint=policy_fingerprint,
