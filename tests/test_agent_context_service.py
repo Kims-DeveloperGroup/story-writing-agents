@@ -730,7 +730,7 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
 
 
 class CompactWireDecoderTests(unittest.TestCase):
-    """Verify the complete strict typed wire-v7 response contract in isolation."""
+    """Verify the complete strict typed wire-v8 response contract in isolation."""
 
     def setUp(self) -> None:
         manifest, _snapshots = _manifest_fixture()

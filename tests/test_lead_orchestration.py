@@ -79,6 +79,7 @@ from story_writing_agents.writing_artifacts.read_actions import (
 
 from tests.collaboration_contract_fixture import contract_batches
 from tests.helpers import pristine_initialized_workspace
+from tests.test_agent_context_accounting import _expanded_context_payload
 from story_writing_agents.specialist_routing import AuthoringScope, AuthoringActivity, ArtifactReviewDomain, ReviewBasis
 
 
@@ -672,6 +673,8 @@ def _proposal_outcome(
 
 
 def _workflow_material(value: object) -> dict[str, object]:
+    if isinstance(value, Mapping) and "context_objects" in value:
+        value = _expanded_context_payload(value)
     if isinstance(value, Mapping):
         if "answer_contract" in value and "workflow" in value:
             return value

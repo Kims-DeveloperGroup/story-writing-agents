@@ -160,6 +160,8 @@ from story_writing_agents.provider_process import (
 )
 from story_writing_agents.models import StoryFocusedContextMode
 
+from story_writing_agents.agent_context.request_compaction import compact_context_payload
+from tests.test_agent_context_accounting import _shared_context_payload
 from tests.helpers import (
     SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE,
     all_manuscripts,
@@ -2877,11 +2879,12 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             PLOT_ARCHITECT,
         )
         policy = "sha256:" + "7" * 64
-        payload = {
+        payload, component_paths = compact_context_payload(_shared_context_payload(), {
+            ("i",): ContextComponentKind.CURRENT_INPUT, ("h",): ContextComponentKind.CONVERSATION_CONTEXT})
+        payload.update({
             "c": "A" * 43,
             "q": ["conversation", "sa", "wco", [4, 2, 2, 4, 8, 8, 16, 200], "text"],
-            "i": "CONTEXTUAL_UNICODE_한🙂",
-        }
+        })
         schema = {"type": "object"}
         captured = []
 
@@ -2907,7 +2910,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         ProviderCallKind.COLLABORATION_INITIAL,
                         schema,
                         payload,
-                        {("i",): ContextComponentKind.CURRENT_INPUT},
+                        component_paths,
                     )
                 )
                 self.assertEqual(

@@ -29,6 +29,8 @@ from story_writing_agents.agent_exchanges.capture import (
 from story_writing_agents.agents import ROSTER
 from story_writing_agents.provider_adapter import ProviderInvocation, ProviderResult, ProviderResponseDiagnostic, ProviderInvocationError
 from story_writing_agents.workspace import Workspace
+from story_writing_agents.agent_context.request_compaction import compact_context_payload
+from tests.test_agent_context_accounting import _shared_context_payload
 
 
 _EXCHANGE_ID = re.compile(r"exchange_[0-9a-f]{32}")
@@ -162,7 +164,8 @@ class AgentExchangeCaptureContractTests(unittest.TestCase):
             self.assertEqual(tuple(Path(temporary).iterdir()), before)
 
         store = _RecordingStore()
-        lifecycle = _begin(store)
+        payload, _ = compact_context_payload(_shared_context_payload(), {})
+        lifecycle = _begin(store, invocation=_invocation(payload=payload))
         self.assertTrue(lifecycle.enabled)
         self.assertRegex(lifecycle.exchange_id or "", _EXCHANGE_ID)
         self.assertEqual(len(store.records), 1)
@@ -190,10 +193,7 @@ class AgentExchangeCaptureContractTests(unittest.TestCase):
             json.loads(request.content),
             {
                 "call_kind": "debate",
-                "payload": {
-                    "answer": "PRIVATE_REQUEST_한🙂",
-                    "enabled": True,
-                },
+                "payload": payload,
                 "prior_thread_id": "prior_thread",
                 "schema": {"required": ["answer"], "type": "object"},
             },

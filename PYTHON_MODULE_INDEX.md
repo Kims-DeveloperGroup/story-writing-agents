@@ -104,11 +104,14 @@ source reads. `service` is the composition boundary; `ledger` owns durable accou
 - `agent_context`, `agent_context.accounting`, `agent_context.actions`
 - `agent_context.continuation`, `agent_context.ledger`, `agent_context.manifest`
 - `agent_context.planning`, `agent_context.progress`, `agent_context.service`
-- `agent_context.sources`
+- `agent_context.request_compaction`, `agent_context.sources`
 
 Dependencies flow from `service`, `sources`, and `progress` toward manifest/action/planning
 contracts. Filesystem source access is delegated to writing-artifact and workspace owners. Optional
 validation diagnostics preserve rejection, repair, checkpoint, and authority decisions.
+
+`service` owns pure, call-local request compaction before provider accounting; the
+projection depends only on accounting contracts and owns no durable state or resources.
 
 ### Agent exchange capture
 

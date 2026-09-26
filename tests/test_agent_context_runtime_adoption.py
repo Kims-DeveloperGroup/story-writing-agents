@@ -37,7 +37,7 @@ SearchSelection = tuple[tuple[str, ...], str] | tuple[str, tuple[str, ...], str]
 
 
 def _framed_observation(value: object) -> dict[str, Any]:
-    """Normalize one authoritative compact wire-v7 observation."""
+    """Normalize one authoritative compact wire-v8 observation."""
 
     def source_facts(raw: object) -> dict[str, object]:
         if (

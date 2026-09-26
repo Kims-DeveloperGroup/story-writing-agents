@@ -45,6 +45,9 @@ class LeadRecommendationTests(RecommendationCase):
             self.assertEqual(started.payload.decision_event_id, decision_event.event_id)
             self.assertEqual(started.payload.request_event_id, request.request_event_id)
             material = lead._workflow_material(call.payload)["structured_recommendation_execution"]
+            self.assertEqual(call.payload["context_encoding"]["format"], "shared-objects-v1")
+            self.assertLess(len(json.dumps(dict(call.payload), ensure_ascii=False)),
+                            len(json.dumps(lead._expanded_context_payload(call.payload), ensure_ascii=False)))
             self.assertEqual(material["request"]["action_digest"], request.action_digest)
             self.assertEqual(material["decision"]["decision"]["kind"], "confirm")
             self.assertEqual(material["start"]["execution_attempt_id"], started.payload.execution_attempt_id)

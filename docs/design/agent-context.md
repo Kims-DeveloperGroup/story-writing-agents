@@ -23,7 +23,7 @@ cycle:
 | `agent_context.continuation` | Shared process-local Lead session transaction; defer coverage commitment until authoritative result publication. |
 | `agent_context.actions` | SEARCH/READ/ANSWER values, policies, correlations, opaque handles, evidence authorization, and provider observations. |
 | `agent_context.sources` | Bounded searchable source capture and drift checks; separate exact retained-session-history capture for Lead continuation. |
-| `agent_context.service` | Provider-neutral typed wire-v7 call loop, local reference loading, lifecycle authority, source/action orchestration, checkpoint commit, usage aggregation, and optional progress observer. |
+| `agent_context.service` | Provider-neutral typed wire-v8 call loop, local reference loading, lifecycle authority, source/action orchestration, checkpoint commit, usage aggregation, and optional progress observer. |
 
 The retained execution entry points are backend/provider component interfaces,
 plus the runtime's lead-turn and confirmed-consultation composition.
@@ -42,7 +42,7 @@ focused user input + zero or more ${path} / ${path}#Lx-Ly references
   -> PREPARE: validate observer, scope, request, references, and source authorities
   -> PLAN: inventory current sources -> manifest -> bootstrap/delta projection
   -> local authorization reads every explicit reference exactly
-  -> runtime builds one per-call typed-v7 schema plus compact input payload
+  -> runtime builds one per-call typed-v8 schema plus compact input payload
   -> selected adapter invokes Codex or Antigravity
   -> provider returns exactly one typed SEARCH, READ, or ANSWER action
      SEARCH -> runtime searches only authorized sources and returns fresh handles
@@ -280,12 +280,13 @@ recaptures and revalidates that status. It proves empty content only. Nonempty
 targets need attached-reference or READ evidence; a metadata revision is kept
 distinct from the recaptured whole-file digest and selected-boundary digest.
 
-<!-- Historical audit-link alias only; the visible normative contract is v7. -->
+<!-- Historical audit-link alias only; the visible normative contract is v8. -->
 <a id="compact-provider-wire-v5"></a>
 <a id="typed-provider-wire-v7"></a>
-## Typed provider wire v7
+<a id="typed-provider-wire-v8"></a>
+## Typed provider wire v8
 
-Contextual bindings define `agent-context-wire-v7`. The initial compact
+Contextual bindings define `agent-context-wire-v8`. The initial compact
 payload uses `c` (correlation), `q` (phase/result contract), and `i` (required
 current input), with required Lead session memory `h`, applicable compact
 candidate `n`, selected documents `docs`, projection `p`, and tombstone/record
@@ -297,6 +298,38 @@ exact visible history, `delivery_mode`, and `current_state` with session
 directives and complete current canonical core bytes. It is mandatory even
 with P3 budget zero or a `workflow_meta` answer contract, but cannot satisfy
 invocation-local evidence or reference obligations.
+
+Wire v8 shares repeated runtime-owned dictionaries within an initial request.
+When the complete encoded payload becomes smaller, `context_encoding` declares
+`shared-objects-v1` and its substitution instructions, and `context_objects`
+stores literal objects under request-local aliases such as `o1`. An exact
+`{"context_ref":"o1"}` at an eligible slot substitutes that table value. Every
+physical request includes its own complete table; aliases never resolve through
+provider memory, a previous request, or external storage.
+
+Eligible slots are history-record `details`, history/current
+`artifact_objectives`, and `structured_recommendation_execution`'s `request`,
+`decision`, `start`, and selected-input `conversation_event`. Only dictionaries
+of at least 256 canonical UTF-8 bytes appearing at least twice are considered.
+Equality uses strict sorted-key JSON, preserving strings, array order, and JSON
+scalar types. Object-member order need not match. Reserved encoding/table keys
+or reference-shaped values at eligible slots disable compaction. Pool contents
+and arbitrary user data are never recursively interpreted as references.
+
+Compaction preserves each original slot's authority: history remains context,
+and references confer no confirmation or evidence authority. Mandatory-reference
+bodies and paths, finer component annotations, and independent source/history
+limits are preserved. The same projection runs before both physical-payload
+capacity checks. Reference wrappers retain their original accounting category;
+table structure and guidance count as control bytes. A pooled object counts
+once as current input if any occurrence comes from `i`, otherwise as conversation
+context. Nonprofitable requests retain their original encoded bytes.
+
+The wire-version change invalidates incompatible checkpoint/thread fingerprints
+and causes fresh bootstrap. It does not change response schemas, semantic result
+contract IDs such as `lead-outcome-v5`, provider-specific schema translation,
+stored conversations, or exchange-record schemas. Providers must still return
+the complete schema-selected output, never output encoded with `context_ref`.
 
 Provider results are exact closed objects with `action` as their only required
 root field. Runtime derives correlation and action-index facts from the active
@@ -360,7 +393,7 @@ submitted outcome instead remains
 Uncertain cleanup or closure remains recovery-gated.
 
 The runtime supplies a deterministic Lead v5 overlay. Fresh defaults use v5. The
-context action envelope stays wire v7. Ordinary synthesis uses `lead-synthesis-v3`
+context action envelope stays wire v8. Ordinary synthesis uses `lead-synthesis-v3`
 with a nullable action, mutually exclusive with `next_intent`; its durable
 historical codec is unchanged. Specialist and artifact-review synthesis results
 retain their own contracts.

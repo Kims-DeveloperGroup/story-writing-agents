@@ -773,7 +773,7 @@ Do not treat every provider-related failure as the same recovery case:
 For example, the former Codex failure was caused by a response schema whose
 array `items` node had no explicit supported type. Codex rejected that schema
 before returning a valid `ProviderResult`, so the exchange could show only
-`provider_invocation_failed`. Typed wire v7 uses a closed
+`provider_invocation_failed`. Typed wire v8 uses a closed
 `{action}` root and embeds every action/result object directly. Runtime derives
 correlation from the active call.
 Conversely, an Antigravity result that adds undeclared bookkeeping fields or
@@ -913,7 +913,7 @@ Initial-payload samples below omit the separate required `h` session-context
 object for readability; they are excerpts, not complete on-wire payloads.
 SEARCH/READ continuation frames carry only their new observation.
 
-Codex and Antigravity receive byte-identical provider-neutral wire-v7 schema
+Codex and Antigravity receive byte-identical provider-neutral wire-v8 schema
 and payload semantics; only their native transport differs. The provider root
 requires only `action`; runtime derives correlation and action-index facts from
 the active invocation. This sanitized structural sample shows all three action
@@ -1117,7 +1117,7 @@ canonical path/range, captures the complete artifact state, builds an exact
 change set, validates projected relationships, derives mandatory review
 domains, unions the explicitly requested additional domains in canonical
 order, and computes the candidate digest. An unknown or authority-bearing
-provider field violates the closed wire-v7 result schema, so the response is
+provider field violates the closed wire-v8 result schema, so the response is
 repaired once before candidate construction. If repair also fails, runtime
 emits a visible safe no-action Lead answer and continues the conversation. A
 schema-valid intent that cannot satisfy runtime artifact semantics instead
