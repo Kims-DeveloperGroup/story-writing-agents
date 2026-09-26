@@ -123,6 +123,7 @@ from .errors import (
 )
 from .git.session_contracts import GitSessionResourceInspection
 from .models import (
+    validate_reviewed_proposal_identity,
     AgentDefinition,
     AgentReply,
     AgentReplyKind,
@@ -238,6 +239,21 @@ _SAFE_STRUCTURED_FALLBACK_MESSAGE = (
     "I couldn't validate the provider's structured reply after one repair attempt, "
     "so no action was taken. You can continue the conversation or try again."
 )
+
+
+class _PhaseReplyConstraintError(BackendProtocolError):
+    """Closed residual phase constraints unsupported by the common schema subset."""
+
+    _ISSUES = {
+        "message": "$.message: expected nonempty text",
+        "digest": "$.reviewed_proposal_digest: expected sha256: followed by exactly 64 lowercase hexadecimal digits",
+        "identity": "$.reviewed_proposal_id: expected a canonical reviewed proposal identifier",
+        "expected_identity": "$.reviewed_proposal_id: ID and digest must match the exact runtime-offered reviewed proposal",
+    }
+
+    def __init__(self, rule: str) -> None:
+        self.issue = self._ISSUES[rule]
+        super().__init__("phase reply violates a closed result constraint")
 
 
 class _StructuredOutputRejected(BackendProtocolError):
@@ -3112,6 +3128,10 @@ class AgentBackend:
                 revision_id=request.revision_id,
                 provider_name=_provider_name,
             )
+            if request.expected_reviewed_proposal is not None and (
+                reply.reviewed_proposal_id, reply.reviewed_proposal_digest
+            ) != request.expected_reviewed_proposal:
+                raise _PhaseReplyConstraintError("expected_identity")
             if reply.revision_id != request.revision_id:
                 raise BackendProtocolError(
                     f"{_provider_name} reply revision_id does not match its request"
@@ -3158,7 +3178,7 @@ class AgentBackend:
                 )
             raise BackendProtocolError("agent request phase has no safe fallback")
 
-        schema = self._output_schema(request.phase)
+        schema = self._output_schema(request.phase, expected_reviewed_proposal=request.expected_reviewed_proposal)
         payload = self._request_payload(request)
         if reference_read is None:
             return await self._invoke_provider_structured_resilient(
@@ -4432,6 +4452,8 @@ class AgentBackend:
                     if schema
                     else ()
                 )
+                if isinstance(failure, _PhaseReplyConstraintError):
+                    schema_issues = (*schema_issues, failure.issue)
                 try:
                     self._record_rejected_provider_response_without_replacing_failure(
                         bound_agent,
@@ -5098,6 +5120,11 @@ class AgentBackend:
             "candidate_payload": request.candidate_payload,
             "messages": [message.to_dict() for message in request.messages],
         }
+        if request.expected_reviewed_proposal is not None:
+            payload["expected_reviewed_proposal"] = {
+                "reviewed_proposal_id": request.expected_reviewed_proposal[0],
+                "reviewed_proposal_digest": request.expected_reviewed_proposal[1],
+            }
         if request.story_session_context is not None:
             payload["story_session_context"] = request.story_session_context.to_dict()
         else:
@@ -5632,7 +5659,13 @@ class AgentBackend:
         )
 
     @staticmethod
-    def _output_schema(phase: Phase) -> dict[str, Any]:
+    def _output_schema(
+        phase: Phase, *, expected_reviewed_proposal: tuple[str, str] | None = None,
+    ) -> dict[str, Any]:
+        if expected_reviewed_proposal is not None:
+            if phase is not Phase.FINALIZE:
+                raise ValueError("expected reviewed identity requires finalization")
+            validate_reviewed_proposal_identity(expected_reviewed_proposal)
         if phase is Phase.AUDIT:
             properties: dict[str, Any] = {
                 "verdict": {"type": "string", "enum": ["approve", "conflict"]},
@@ -5651,12 +5684,17 @@ class AgentBackend:
         elif phase is Phase.FINALIZE:
             properties = {
                 "reviewed_proposal_id": {"type": "string"},
-                "reviewed_proposal_digest": {"type": "string"},
+                "reviewed_proposal_digest": {
+                    "type": "string", "description": "sha256: followed by exactly 64 lowercase hexadecimal digits.",
+                },
             }
             required = [
                 "reviewed_proposal_id",
                 "reviewed_proposal_digest",
             ]
+            if expected_reviewed_proposal is not None:
+                properties["reviewed_proposal_id"]["enum"] = [expected_reviewed_proposal[0]]
+                properties["reviewed_proposal_digest"]["enum"] = [expected_reviewed_proposal[1]]
         else:
             properties = {"message": {"type": "string"}}
             required = ["message"]
@@ -5709,6 +5747,10 @@ class AgentBackend:
             raise BackendProtocolError(
                 f"{provider_name} final response must be a JSON object"
             )
+        if type(value.get("message")) is str and not value["message"] and not (
+            phase is Phase.AUDIT and value.get("verdict") == "approve"
+        ):
+            raise _PhaseReplyConstraintError("message")
         if phase is Phase.AUDIT:
             if set(value) != {"verdict", "message"}:
                 raise BackendProtocolError(
@@ -5737,6 +5779,14 @@ class AgentBackend:
                 raise BackendProtocolError(
                     f"{provider_name} finalization response has an invalid schema"
                 )
+            try:
+                validate_reviewed_proposal_identity(("proposal", value.get("reviewed_proposal_digest")))
+            except (TypeError, ValueError):
+                raise _PhaseReplyConstraintError("digest") from None
+            try:
+                validate_reviewed_proposal_identity((value.get("reviewed_proposal_id"), value["reviewed_proposal_digest"]))
+            except (TypeError, ValueError):
+                raise _PhaseReplyConstraintError("identity") from None
             return AgentReply.finalization(
                 revision_id,
                 _required_text(

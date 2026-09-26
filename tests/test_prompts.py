@@ -284,10 +284,12 @@ class PromptAssemblerTests(unittest.TestCase):
     ) -> None:
         request_fields = fields(AgentRequest)
         self.assertEqual(
-            tuple(field.name for field in request_fields[-2:]),
+            tuple(field.name for field in request_fields if not field.kw_only)[-2:],
             ("conversation_context", "story_session_context"),
         )
-        self.assertTrue(all(field.default is None for field in request_fields[-2:]))
+        self.assertEqual(tuple(field.name for field in request_fields if field.kw_only),
+                         ("expected_reviewed_proposal",))
+        self.assertTrue(all(field.default is None for field in request_fields[-3:]))
         context = ConversationContextWindow(
             events=(),
             total_complete_turns=0,
@@ -315,6 +317,7 @@ class PromptAssemblerTests(unittest.TestCase):
             ConversationContextWindow,
         )
         self.assertIsNone(request.story_session_context)
+        self.assertIsNone(request.expected_reviewed_proposal)
 
         definition = self.assembler.build_definition(
             session_id="prompt_session",
@@ -335,6 +338,7 @@ class PromptAssemblerTests(unittest.TestCase):
             definition=definition,
         )
         self.assertIsNotNone(enveloped.story_session_context)
+        self.assertIsNone(enveloped.expected_reviewed_proposal)
         assert enveloped.story_session_context is not None
         self.assertEqual(
             enveloped.story_session_context.focused_context.conversation_id,

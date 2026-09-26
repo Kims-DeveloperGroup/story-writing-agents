@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import inspect
 import json
 import pickle
@@ -68,7 +69,10 @@ from story_writing_agents.conversation_storage import (
     compose_filesystem_conversation_storage,
 )
 from story_writing_agents.errors import BackendProtocolError
-from story_writing_agents.structured_output_validation import diagnose_json_text
+from story_writing_agents.structured_output_validation import DomainValidationRule as Rule, diagnose_json_text
+from story_writing_agents.lead_provider_contracts import (
+    LeadContractError, LeadProviderConstraints, canonical_assignments, canonical_scope,
+)
 from story_writing_agents.writing_artifacts.authorization import (
     ReferenceAuthorizationErrorCode,
 )
@@ -1126,77 +1130,90 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
     async def test_front_schema_is_minimal_closed_and_provider_strict(self) -> None:
         conversation_id = self.conversation("Minimal schema")
         self.backend.enqueue(_visible_outcome("answer"))
-        await self.runtime.lead_turn(
-            self.session_id,
-            conversation_id,
-            "Explain the collaboration workflow.",
-        )
-        schema = self.backend.calls[-1].schema
-
-        def plain(value: object) -> object:
+        await self.runtime.lead_turn(self.session_id, conversation_id, "Explain collaboration workflow.")
+        action_schema = self.backend.calls[-1].schema["properties"]["action"]
+        schema = next(v["properties"]["result"] for v in action_schema["anyOf"]
+                      if v["properties"]["kind"].get("enum") == ["answer"])
+        def plain(value):
             if isinstance(value, Mapping):
                 return {key: plain(item) for key, item in value.items()}
-            if type(value) is tuple:
-                return [plain(item) for item in value]
-            if type(value) is list:
-                return [plain(item) for item in value]
-            return value
-
+            return [plain(item) for item in value] if type(value) in (tuple, list) else value
         schema = plain(schema)
-        action_schema = schema["properties"]["action"]
-        answer_variant = next(
-            variant
-            for variant in action_schema["anyOf"]
-            if variant["properties"]["kind"].get("enum") == ["answer"]
-        )
-        schema = answer_variant["properties"]["result"]
-        result_variants = schema["anyOf"]
-        self.assertTrue(
-            all(
-                "authoring_scope" in variant["properties"]
-                and "authoring_scope" in variant["required"]
-                for variant in result_variants
-            )
-        )
-        self.assertFalse(
-            any(
-                set(variant["properties"])
-                in ({"message"}, {"kind", "message"})
-                for variant in result_variants
-            )
-        )
+        self.assertTrue(all("authoring_scope" in v["required"] for v in schema["anyOf"]))
+        self.assertFalse(any(set(v["properties"]) in ({"message"}, {"kind", "message"}) for v in schema["anyOf"]))
         encoded = json.dumps(schema, separators=(",", ":"))
         self.assertLessEqual(len(encoded.encode("utf-8")), 11_500)
-        self.assertNotIn('"null"', encoded)
-        for metadata in (
-            "correlation",
-            "schema_version",
-            "evidence_status",
-            "evidence_ids",
-            "interpretation",
-            "task_id",
-            "task_revision",
-            "review_basis",
-            "additional_review_domains",
-            "expected_result",
-        ):
+        for metadata in ("null", "correlation", "schema_version", "evidence_status", "evidence_ids",
+                         "interpretation", "task_id", "task_revision", "review_basis",
+                         "additional_review_domains", "expected_result"):
             self.assertNotIn(f'"{metadata}"', encoded)
-
-        def assert_strict(node: object) -> None:
-            if not isinstance(node, Mapping):
-                return
-            if node.get("type") == "object":
-                properties = node["properties"]
-                self.assertEqual(set(node["required"]), set(properties))
-                self.assertIs(node["additionalProperties"], False)
-            for value in node.values():
-                if type(value) is list:
-                    for item in value:
-                        assert_strict(item)
-                else:
+        def assert_strict(node):
+            if isinstance(node, Mapping):
+                if node.get("type") == "object":
+                    self.assertEqual(set(node["required"]), set(node["properties"]))
+                    self.assertIs(node["additionalProperties"], False)
+                for value in node.values():
                     assert_strict(value)
-
+            elif type(node) in (list, tuple):
+                for value in node:
+                    assert_strict(value)
         assert_strict(schema)
+        facts = LeadProviderConstraints(input_ids=("user_input", "outline"),
+            reviewer_inputs=((PLOT_ARCHITECT, "outline"),), task_revisions=(("task", 1),),
+            source_ids=("current_response",), objective_ids=("objective",))
+        contract = orchestrator_module._lead_front_result_contract(
+            orchestrator_module.LeadProposalRelation.NEW_STEP, facts.input_ids, constraints=facts).schema_value()
+        value = {"kind": "proposal", "message": "Review.", "authoring_scope": {
+            "activity": "review", "domains": ["plot_structure"], "target_paths": [], "task": "task@1"},
+            "proposal": {"assignments": [{"agent_id": PLOT_ARCHITECT, "mode": "review",
+                "instruction": "Review sources.", "input_ids": ["user_input", "outline"]}]}}
+        self.assertEqual(diagnose_json_text(json.dumps(value), contract), ())
+        self.assertEqual(facts.diagnose(json.dumps(value)), ())
+        for field, replacement, rule in (
+            ("input_ids", ["user_input"], Rule.INPUT_COVERAGE),
+            ("input_ids", ["user_input", "outline", "outline"], Rule.INPUT_DUPLICATE),
+            ("input_ids", [], Rule.ASSIGNMENT_INPUTS_REQUIRED),
+            ("instruction", "", Rule.INSTRUCTION_REQUIRED), ("mode", "draft", Rule.ASSIGNMENT_MODE)):
+            bad = copy.deepcopy(value)
+            bad["proposal"]["assignments"][0][field] = replacement
+            self.assertIn(rule, facts.diagnose(json.dumps(bad)))
+        for assignments, rule in (([], Rule.INPUT_COVERAGE),
+            (value["proposal"]["assignments"] * 2, Rule.SPECIALIST_DUPLICATE),
+            ([{**value["proposal"]["assignments"][0], "agent_id": CHARACTER_CUSTODIAN}], Rule.REVIEWER_INPUT)):
+            self.assertIn(rule, facts.diagnose(json.dumps({**value, "proposal": {"assignments": assignments}})))
+        reversed_scope = {**value["authoring_scope"], "domains": ["character_world", "plot_structure"]}
+        self.assertEqual(canonical_scope(reversed_scope)["domains"], ["plot_structure", "character_world"])
+        with self.assertRaises(LeadContractError):
+            canonical_scope({**reversed_scope, "domains": ["plot_structure"] * 2})
+        with self.assertRaises(LeadContractError):
+            canonical_assignments(value["proposal"]["assignments"] * 2)
+        extra = {**value["proposal"]["assignments"][0], "agent_id": CHARACTER_CUSTODIAN}
+        self.assertEqual([a["agent_id"] for a in canonical_assignments([extra, *value["proposal"]["assignments"]])],
+                         [PLOT_ARCHITECT, CHARACTER_CUSTODIAN])
+        for nested, step in (("proposal", "consult"), ("artifact_intent", "prepare"), (None, "clarify")):
+            objective = {"action": "continue", "objective_id": "objective", "next_step": step}
+            body = {"kind": "proposal" if nested else "question", "message": "Visible.",
+                    **({nested: {"objective_intent": objective}} if nested else {"objective_intent": objective})}
+            self.assertNotIn(Rule.OBJECTIVE_BRANCH, facts.diagnose(json.dumps(body)))
+            objective["next_step"] = "prepare" if step != "prepare" else "consult"
+            self.assertIn(Rule.OBJECTIVE_BRANCH, facts.diagnose(json.dumps(body)))
+        question = {"kind": "question", "message": "Clarify.", "authoring_scope": value["authoring_scope"],
+                    "objective_intent": {"action": "continue", "objective_id": "objective", "next_step": "clarify"}}
+        self.assertEqual(diagnose_json_text(json.dumps(question), contract), ())
+        self.assertEqual(facts.diagnose(json.dumps(question)), ())
+        for kind in ("answer", "critique"):
+            bad = json.dumps({**question, "kind": kind})
+            self.assertTrue(diagnose_json_text(bad, contract))
+            self.assertIn(Rule.OBJECTIVE_BRANCH, facts.diagnose(bad))
+        cancelled = json.dumps({**question, "kind": "answer", "objective_intent": {"action": "cancel", "objective_id": "objective"}})
+        self.assertEqual(diagnose_json_text(cancelled, contract), ())
+        self.assertEqual(facts.diagnose(cancelled), ())
+        cancel_question = json.dumps({**json.loads(cancelled), "kind": "question"})
+        self.assertTrue(diagnose_json_text(cancel_question, contract))
+        self.assertIn(Rule.OBJECTIVE_BRANCH, facts.diagnose(cancel_question))
+        duplicated = {"message": "Visible.", "kind": "proposal", "artifact_intent": {"objective_intent": {
+            "action": "start", "next_step": "prepare", "target_paths": ["core_documents/global_outline.md"] * 2}}}
+        self.assertIn(Rule.ARTIFACT_OBJECTIVE_TARGETS, facts.diagnose(json.dumps(duplicated)))
 
     async def test_front_schema_rejection_is_repaired_once(self) -> None:
         conversation_id = self.conversation("Repair schema")
@@ -1434,131 +1451,36 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             (CollaborationInvocationKind.LEAD,) * 2,
         )
 
-    async def test_runtime_repairs_then_safely_ignores_invalid_proposals(
-        self,
-    ) -> None:
+    async def test_runtime_repairs_then_safely_ignores_invalid_proposals(self) -> None:
+        assignment = {"agent_id": PLOT_ARCHITECT, "instruction": "Review the input.", "input_ids": ["user_input"]}
         cases = (
-            (
-                "lead-specialist",
-                "Plain request.",
-                [
-                    {
-                        "agent_id": LEAD_ORCHESTRATOR,
-                        "instruction": "Invalid self assignment.",
-                        "input_ids": ["user_input"],
-                    }
-                ],
-            ),
-            (
-                "duplicate-specialist",
-                "Plain request.",
-                [
-                    {
-                        "agent_id": PLOT_ARCHITECT,
-                        "instruction": "First.",
-                        "input_ids": ["user_input"],
-                    },
-                    {
-                        "agent_id": PLOT_ARCHITECT,
-                        "instruction": "Second.",
-                        "input_ids": ["user_input"],
-                    },
-                ],
-            ),
-            (
-                "noncanonical-order",
-                "Plain request.",
-                [
-                    {
-                        "agent_id": CHARACTER_CUSTODIAN,
-                        "instruction": "Character first.",
-                        "input_ids": ["user_input"],
-                    },
-                    {
-                        "agent_id": PLOT_ARCHITECT,
-                        "instruction": "Plot second.",
-                        "input_ids": ["user_input"],
-                    },
-                ],
-            ),
-            (
-                "unknown-alias",
-                "Plain request.",
-                [
-                    {
-                        "agent_id": PLOT_ARCHITECT,
-                        "instruction": "Use an invalid alias.",
-                        "input_ids": ["unknown"],
-                    }
-                ],
-            ),
-            (
-                "omitted-user-input",
-                "Check ${core_documents/global_outline.md}",
-                [
-                    {
-                        "agent_id": PLOT_ARCHITECT,
-                        "instruction": "Review the supplied outline.",
-                        "input_ids": ["reference_1"],
-                    }
-                ],
-            ),
-            (
-                "missing-reviewer",
-                "Check ${core_documents/global_outline.md}",
-                [
-                    {
-                        "agent_id": CHARACTER_CUSTODIAN,
-                        "instruction": "Wrong mandatory reviewer.",
-                        "input_ids": ["user_input", "reference_1"],
-                    }
-                ],
-            ),
+            ("lead-specialist", "Plain request.", [{**assignment, "agent_id": LEAD_ORCHESTRATOR}]),
+            ("duplicate-specialist", "Plain request.", [dict(assignment), dict(assignment)]),
+            ("duplicate-input", "Plain request.", [{**assignment, "input_ids": ["user_input"] * 2}]),
+            ("unknown-alias", "Plain request.", [{**assignment, "input_ids": ["unknown"]}]),
+            ("omitted-user-input", "Check ${core_documents/global_outline.md}",
+             [{**assignment, "input_ids": ["reference_1"]}]),
+            ("missing-reviewer", "Check ${core_documents/global_outline.md}",
+             [{**assignment, "agent_id": CHARACTER_CUSTODIAN, "input_ids": ["user_input", "reference_1"]}]),
         )
         for label, text, assignments in cases:
             with self.subTest(label=label):
                 conversation_id = self.conversation(label)
                 response = _proposal_outcome(assignments)
-                if label == "omitted-user-input":
-                    def reference_grounded_response(call, provider):
-                        envelope = json.loads(_proposal_outcome(assignments)(call, provider))
-                        answer = envelope["action"]["result"]
-                        answer["evidence_status"] = "verified"
-                        answer["evidence_ids"] = ["reference_1"]
-                        return json.dumps(envelope)
-
-                    response = reference_grounded_response
                 self.backend.enqueue(response)
                 self.backend.enqueue(response)
-                result = await self.runtime.lead_turn(
-                    self.session_id,
-                    conversation_id,
-                    text,
-                )
-                self.assertIs(
-                    result.next_action,
-                    CollaborationNextAction.CONTINUE_WITH_LEAD,
-                )
+                calls = len(self.backend.calls)
+                result = await self.runtime.lead_turn(self.session_id, conversation_id, text)
+                self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
                 self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
-                self.assertFalse(
-                    any(
-                        type(event.payload) is CollaborationProposal
-                        for event in self.history(conversation_id)
-                    )
-                )
-                failures = tuple(
-                    event.payload
-                    for event in self.history(conversation_id)
-                    if type(event.payload) is CollaborationLeadOutcomeFailurePayload
-                )
+                self.assertEqual(len(self.backend.calls) - calls, 2)
+                self.assertFalse(any(type(e.payload) is CollaborationProposal for e in self.history(conversation_id)))
+                failures = tuple(e.payload for e in self.history(conversation_id)
+                                 if type(e.payload) is CollaborationLeadOutcomeFailurePayload)
                 self.assertEqual(len(failures), 1)
-                self.assertIn(
-                    failures[0].code,
-                    {
-                        CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED,
-                        CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED,
-                    },
-                )
+                self.assertIn(failures[0].code, {CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED,
+                                               CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED})
+                self.assertTrue(result.validation_details)
 
 
 class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
@@ -1778,7 +1700,23 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
         self.assertEqual(len(self.backend.calls), 1)
         self.assertTrue(result.validation_details)
-        self.assertIn("rejected by a lead outcome rule", result.validation_details[0])
+        self.assertIn("$.action.result.message:", result.validation_details[0])
+        self.assertNotIn("\"message\"", result.validation_details[0])
+        facts = LeadProviderConstraints(source_ids=("current_response",), objective_ids=("objective",))
+        action = {"kind": "prepare_consultation", "instruction": "Review.",
+                  "source_ids": ["current_response"], "specialist_ids": [PLOT_ARCHITECT]}
+        for field, value, rule in (("instruction", "", Rule.RECOMMENDATION_INSTRUCTION),
+                                  ("source_ids", [], Rule.RECOMMENDATION_SOURCES),
+                                  ("source_ids", ["current_response"] * 2, Rule.RECOMMENDATION_SOURCES),
+                                  ("source_ids", ["PRIVATE_SOURCE"], Rule.SOURCE_NOT_OFFERED),
+                                  ("specialist_ids", [PLOT_ARCHITECT] * 2, Rule.RECOMMENDATION_SPECIALISTS),
+                                  ("objective_id", "PRIVATE_OBJECTIVE", Rule.RECOMMENDATION_OBJECTIVE_NOT_OFFERED)):
+            rules = facts.diagnose(json.dumps({"message": "Visible.", "recommended_action": {**action, field: value}}))
+            self.assertIn(rule, rules)
+            self.assertNotIn("PRIVATE", repr(rules))
+        for paths in ([], ["core_documents/global_outline.md"] * 2):
+            self.assertIn(Rule.RECOMMENDATION_TARGETS, facts.diagnose(json.dumps({"message": "Visible.",
+                "recommended_action": {**action, "kind": "prepare_artifact", "target_paths": paths}})))
         reopened = compose_filesystem_conversation_storage(self.workspace).event_store
         history = reopened.read(self.session_id, conversation_id)
         submitted = tuple(
@@ -2027,13 +1965,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                                     domains=("plot_structure",),
                                 )
                             ),
-                            "kind": "answer",
                             "message": rejected_body,
-                            "objective_intent": {
-                                "action": "start",
-                                "target_paths": [],
-                                "next_step": "clarify",
-                            },
                         },
                     }
                 },
@@ -2508,11 +2440,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 "authoring_scope": _compact_scope(_live_scope(
                     call, activity="review", domains=("plot_structure",),
                 )),
-                "kind": "answer",
-                "message": "A result with inconsistent objective semantics.",
-                "objective_intent": {
-                    "action": "start", "target_paths": [], "next_step": "clarify",
-                },
+                "message": "A substantive story answer without confirmed specialist work.",
             }}}, separators=(",", ":"))
         self.backend.enqueue(invalid)
         self.backend.enqueue(invalid)
