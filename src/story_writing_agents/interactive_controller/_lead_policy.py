@@ -33,6 +33,8 @@ from ..interactive_terminal import (
     InteractivePickerInput,
     InteractivePromptInput,
     InteractiveSemanticOutput,
+    Message,
+    MessagePresentation,
     Notice,
     Prompt,
     ReferenceInputScope,
@@ -173,6 +175,9 @@ class InteractiveLeadAdapter:
     def submit(self, conversation_id: str, text: str) -> bool:
         """Run one literal lead turn; return true only for call-local EOF."""
 
+        self._semantic_output.write_accepted_input(
+            Message("User", text, presentation=MessagePresentation.CHAT_BLOCK)
+        )
         try:
             turn = self._run_turn(
                 self._session.lead_turn(
