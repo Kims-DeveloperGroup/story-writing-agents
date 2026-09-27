@@ -1,27 +1,42 @@
 ---
 name: github-task-lifecycle
 description: >-
-  Guard normal GitHub-tracked planning, linking, delivery, integration, and cleanup;
-  excludes explicit full-lifecycle project-workflow invocation and story-runtime work.
+  Guard normal GitHub-tracked planning, linking, delivery, integration, and cleanup; excludes
+  explicit Project-stage/full-workflow invocation and story-runtime work.
 ---
 
 Follow [GITHUB_WORKFLOW.md](../../../GITHUB_WORKFLOW.md). Before reader-facing records, read
-the [authoring guide](references/issue-pr-authoring.md) and relevant raw template.
+[the authoring guide](references/issue-pr-authoring.md) and the relevant raw template.
 
 This is the default, narrow-authority workflow. Read-only inspection is allowed. Record the
-planning gate before writes. Create or update an Issue, Project item, relationship, branch,
-commit, push, PR, review request, merge, closure, branch deletion, or worktree removal only
-when that step is authorized. Never infer later delivery authority from implementation
-authority. For user-invoked end-to-end authority, the root uses `$project-workflow` instead.
+planning gate before writes: pending permits only authorized Issue/Project planning writes;
+blocked is read-only, and neither permits branch/worktree creation or tracked-file edits.
+Create or update an Issue, Project item, relationship, branch, commit, push, PR, review request,
+merge, closure, branch deletion, or worktree removal only when that step is authorized. Never
+infer later delivery authority from implementation authority.
+
+For explicit stage or end-to-end invocation, the root uses the corresponding Project skill
+under the canonical [authority rules](../../../GITHUB_WORKFLOW.md#authority).
+`$project-implement` may prepare its own missing planning records and continue without a prior
+`$project-plan` invocation or separate plan approval; it still stops before PR/review. Ordinary
+planning stays read-only without planning-write authority. No skill overrides Codex Plan Mode.
 
 ## Plan and link
 
+The detailed plan belongs in the owning Issue's `## Implementation plan` section. Follow the
+canonical [planning and implementation boundary](../../../GITHUB_WORKFLOW.md#planning-and-implementation-boundary);
+keep the summary brief, verify readiness before implementation, and preserve appropriate
+status when resuming.
+
 1. Search open and closed Issues; reuse the owning item when possible.
-2. For nontrivial work, verify the Issue body, native hierarchy/dependencies, Project #1
-   membership, Requirement, Size, Iteration, milestone, labels, owner, base, and status.
+2. For nontrivial work, verify the Issue body and native Requirement field, native
+   hierarchy/dependencies, Project #1 membership, Project Size/Iteration/Status, milestone,
+   labels, owner, and accepted base. Follow canonical
+   [planning metadata](../../../GITHUB_WORKFLOW.md#planning-metadata) for field ownership.
 3. Keep one delivery unit on one Issue. Create children only as a known set of at least two
    independently useful, necessary siblings.
-4. Move an unblocked executable leaf to `Ready`; implementation moves it to `In progress`.
+4. Before first implementation, move an unblocked executable leaf to `Ready`; implementation
+   moves it to `In progress`. Preserve the appropriate current status when resuming.
 5. Create `issue-<number>-<slug>` from the accepted base through the Issue Development link,
    then add one sibling worktree. Verify repository, branch, HEAD, ancestry, and porcelain.
 

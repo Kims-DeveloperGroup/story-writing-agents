@@ -2,41 +2,94 @@
 
 This policy governs tracked work and supplements [AGENTS.md](AGENTS.md),
 [COMMIT_POLICY.md](COMMIT_POLICY.md), and [DEPENDENCY_POLICY.md](DEPENDENCY_POLICY.md).
-Use [`$github-task-lifecycle`](.agents/skills/github-task-lifecycle/SKILL.md) for normal
-tracked work. Use [`$project-workflow`](.agents/skills/project-workflow/SKILL.md) only when
-the user explicitly invokes it.
+
+Use [`$github-task-lifecycle`](.agents/skills/github-task-lifecycle/SKILL.md) for normal tracked work.
+Explicit Project-stage and full-workflow invocations use the root-only skills below.
 
 ## Authority
 
-Code, tests, and docs define behavior; Issues define scope and completion; Project fields
-hold planning state; PRs hold the diff, review, and evidence. Read-only inspection is always
-allowed. Outside explicit `$project-workflow` invocation, each mutating GitHub or Git delivery
-step needs the authority described by `$github-task-lifecycle`. Project-schema changes and
-unrelated scope always require a maintainer decision.
+Code, tests, and docs define behavior; Issues define scope, completion, and native Requirement;
+Project fields hold Size/Iteration/Status; PRs hold the diff, review, and evidence.
+Read-only inspection is always allowed.
+Outside explicit Project-skill invocation, each mutating GitHub or Git delivery step needs
+its own authority as described by `$github-task-lifecycle`. Natural language implementation,
+planning, review, or continuation requests do not implicitly invoke a Project skill.
 
-Explicit `$project-workflow` invocation authorizes the root to complete the in-scope lifecycle
-without repeated approval: Issue and Project planning, linked branch/worktree, commit, push,
-PR, review handling, gated squash merge, Issue closure, Project completion, and safe cleanup.
-It does not authorize unrelated work, bypassing protections, force operations, Project-schema
-changes, or dependency-policy exceptions. Subagents cannot use that authority.
+Explicit invocation authorizes the root to complete the named stage within accepted scope
+without repeated approval. The root coordinator may load stages under its existing authority.
+Subagents cannot load these skills or receive their GitHub/lifecycle authority.
+
+| Invocation | Authorized work | Stop point |
+| --- | --- | --- |
+| [`$project-plan`](.agents/skills/project-plan/SKILL.md) | Issue/Project planning records and native relationships. | Verified planning readiness, before branch/worktree creation or tracked-file edits. |
+| [`$project-implement`](.agents/skills/project-implement/SKILL.md) | Necessary Issue/Project preparation, linked branch/worktree, implementation, verification, staging, coherent commits, and normal push. | Verified committed/pushed change, before PR creation or external review requests. |
+| [`$project-pr-review`](.agents/skills/project-pr-review/SKILL.md) | PR/review records, managed review requests, in-scope fixes, verification, commits/pushes, and reconciliation. | Verified review closure, before integration. |
+| [`$project-complete`](.agents/skills/project-complete/SKILL.md) | Final integration audit, manual squash merge, closure, Project completion, durable records, and safe cleanup. | Verified completion with preserved residual state reported. |
+| [`$project-workflow`](.agents/skills/project-workflow/SKILL.md) | All four stages in sequence. | Full in-scope lifecycle completion. |
+
+Standalone stages do not automatically advance to another stage. Direct `$project-implement`
+invocation includes preparing missing planning prerequisites: it requires neither a prior
+`$project-plan` invocation nor separate approval of the prepared plan. This does not waive
+readiness, dependency, verification, or protection gates. Scope expansion and missing material
+requirements require a decision; routine in-scope planning preparation does not.
+
+No invocation authorizes unrelated work, force operations, bypassed protections,
+Project-schema changes, dependency-policy exceptions, or destructive cleanup without verified
+recoverability. Project-schema changes and unrelated scope always require a maintainer decision.
+Codex Plan Mode remains read-only regardless of skill invocation.
 
 ## Planning Gate
 
-Record `github_planning_gate=not_required|pending|passed|blocked` before writes. Pending or
-blocked is read-only. Nontrivial tracked work needs one complete Issue and Project item unless
-a maintainer explicitly grants a mechanical exception. Large work needs its known Issue graph
-before implementation.
+Record `github_planning_gate=not_required|pending|passed|blocked` with its reason before writes.
+A pending gate permits only explicitly authorized Issue/Project planning writes needed to
+establish readiness. A blocked gate is read-only. Neither permits branch/worktree creation or
+tracked-file edits. Record a passed gate only after required readiness is verified, accounting
+for any explicitly approved mechanical exception; never infer an exception or waive unrelated
+readiness requirements.
 
-Use [Project #1](https://github.com/orgs/Kims-DeveloperGroup/projects/1). Each executable leaf
-must have the required type/area labels, Requirement, Size, Iteration, milestone, owner,
-accepted base, dependencies, and `Ready` status. Preserve successful mutations and repair
-missing metadata instead of duplicating records.
+Nontrivial tracked work needs one complete Issue and Project item unless the maintainer
+explicitly grants a mechanical exception. Large work needs its known Issue graph before
+implementation. Use [Project #1](https://github.com/orgs/Kims-DeveloperGroup/projects/1).
+Each executable leaf must have required type/area labels, native Issue Requirement, Size, Iteration,
+milestone, owner, accepted base, dependencies, and `Ready` status before first implementation.
+Preserve successful mutations and repair missing metadata instead of duplicating records.
+New scope repeats the planning gate.
 
 Keep a single delivery unit on its owning Issue. Children are allowed only when at least two
-independent, necessary sibling slices are known and created or verified together. Use native
+independent, necessary sibling slices are known and created/verified together. Use native
 sub-Issues and `blocked by`; never replace them with prose links.
 
+## Planning and Implementation Boundary
+
+The durable detailed implementation plan belongs in the owning Issue's existing
+`## Implementation plan` section, using the raw Issue template. It records affected
+components, intended behavior and interface changes, implementation order, relevant failure
+cases, and verification mapped to acceptance criteria. Keep `## Implementation summary`
+brief and the template's verification section current.
+
+Planning inspects behavior and resolves scope, constraints, criteria, and readiness. Authorized
+planning writes are limited to Issue/Project records and native relationships. Planning ends
+when the detailed plan and metadata are complete, dependencies are unblocked, the executable
+Issue is `Ready`, and the gate passes. Implementation starts with linked branch/worktree
+creation or verified reuse, followed by `In progress` and tracked-file changes. Resumed work
+revalidates equivalent readiness and preserves its appropriate current status.
+
+`$project-plan` stops at that boundary. `$project-implement` prepares missing planning records
+itself and automatically continues after readiness, without loading `$project-plan` or asking
+for a separate plan approval. Neither path may bypass a blocked dependency or missing material
+scope decision. The other standalone stages validate their prerequisites and report missing
+owner/actions instead of automatically executing earlier stages.
+
 ## Planning Metadata
+
+Requirement is the organization-level native **Issue field**, with `Must|Recommended|Optional`
+choices. Inspect organization Issue-field definitions and the owning Issue's field values,
+or verify them in the Issue's Fields sidebar. Project Size, Iteration, and Status use Project
+fields; a same-named Project field is not the authoritative Requirement field. An empty
+Project-field option list does not prove the Issue field is unavailable. Set the existing
+Issue field and verify it without changing either schema. The
+[Issue field-values API](https://docs.github.com/en/rest/issues/issue-field-values) supports
+adding the value without replacing unrelated Issue field values.
 
 - Requirement is `Must|Recommended|Optional`; required delivery dependencies are `Must`.
 - Size is `XS=1, S=2, M=3, L=5, XL=8`; planned load must fit release capacity.
