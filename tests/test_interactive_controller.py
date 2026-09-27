@@ -6966,29 +6966,27 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             return await operation  # type: ignore[misc]
 
     class _Picker:
-        def __init__(self, *outcomes: ControlOutcome) -> None:
-            self.outcomes = list(outcomes)
+        def __init__(self, *outcomes: ControlOutcome) -> None: self.outcomes = list(outcomes)
 
-        def read_picker(self, *_args: object, **_kwargs: object) -> ControlOutcome:
-            return self.outcomes.pop(0)
+        def read_picker(self, *_args: object, **_kwargs: object) -> ControlOutcome: return self.outcomes.pop(0)
 
     class _Prompt:
-        def __init__(self, *outcomes: ControlOutcome) -> None:
-            self.outcomes = list(outcomes)
+        def __init__(self, *outcomes: ControlOutcome) -> None: self.outcomes = list(outcomes)
 
-        def read_prompt(self, *_args: object, **_kwargs: object) -> ControlOutcome:
-            return self.outcomes.pop(0)
+        def read_prompt(self, *_args: object, **_kwargs: object) -> ControlOutcome: return self.outcomes.pop(0)
 
     class _Output:
         def __init__(self) -> None:
-            self.components: list[object] = []
+            self.components: list[object] = []; self.events: list[object] = []
 
         def write_component(self, component: object) -> None:
-            self.components.append(component)
+            self.components.append(component); self.events.append(component)
+
+        def write_accepted_input(self, component: object) -> None:
+            self.events.append(component)
 
     @staticmethod
-    def _commit(text: str) -> ControlOutcome:
-        return ControlOutcome(ControlOutcomeKind.COMMIT, text=text)
+    def _commit(text: str) -> ControlOutcome: return ControlOutcome(ControlOutcomeKind.COMMIT, text=text)
 
     @staticmethod
     def _raw(value_type: type[object], **values: object) -> object:
@@ -7004,15 +7002,10 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         evidence: object | None = None,
     ) -> LeadTurnResult:
         return LeadTurnResult(
-            "session",
-            _UNIQUE_C,
-            "turn",
-            STEP_ID,
+            "session", _UNIQUE_C, "turn", STEP_ID,
             LeadOutcomeKind.RECOMMENDATION,
             "The lead completed the requested decision.",
-            None,
-            state,
-            None,
+            None, state, None,
             CollaborationNextAction.CONTINUE_WITH_LEAD,
             evidence=evidence,  # type: ignore[arg-type]
         )
@@ -7149,11 +7142,12 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
 
     def test_provider_invocation_failure_writes_error_notice_without_crashing(self) -> None:
         session = RuntimeSession.__new__(RuntimeSession)
-        runner = asyncio.Runner()
-        self.addCleanup(runner.close)
+        runner = asyncio.Runner(); self.addCleanup(runner.close)
         progress, output = self._Progress(), self._Output()
 
         async def failing_turn(_session, _cid, _text, *, action_progress_sink=None):
+            self.assertEqual(output.events[-1], terminal_module.Message("User", _text, presentation=terminal_module.MessagePresentation.CHAT_BLOCK))
+            if _text != "test prompt": return self._terminal_turn(CollaborationStepState.COMPLETED)
             raise BackendProtocolError("Antigravity CLI failed (status 1): 503 Overloaded")
 
         with mock.patch.object(RuntimeSession, "lead_turn", failing_turn):
@@ -7161,20 +7155,26 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 session, runner, progress,
                 self._Picker(), self._Prompt(), output,
             )
+            texts = ("  first\nsecond  ", "next reply")
+            for text in texts:
+                start = len(output.events)
+                self.assertFalse(adapter.submit(_UNIQUE_C, text))
+                self.assertIsInstance(output.events[start], terminal_module.Message)
+                self.assertTrue(any(isinstance(item, terminal_module.Panel) and item.title == "Lead" for item in output.events[start + 1:]))
+            output.components.clear()
             result = adapter.submit(_UNIQUE_C, "test prompt")
+            retained = [item for item in output.events if isinstance(item, terminal_module.Message)]
+            self.assertEqual([item.content for item in retained], [*texts, "test prompt"])
+            self.assertTrue(all(item.sender == "User" and item.presentation is terminal_module.MessagePresentation.CHAT_BLOCK for item in retained))
 
-        self.assertFalse(result)
-        self.assertEqual(len(output.components), 3)
-        panel = output.components[0]
-        self.assertIsInstance(panel, terminal_module.Panel)
-        self.assertEqual(panel.title, "Lead")
-        self.assertEqual(panel.state, terminal_module.ViewState.ERROR)
+        self.assertFalse(result); self.assertEqual(len(output.components), 3)
+        panel = output.components[0]; self.assertIsInstance(panel, terminal_module.Panel)
+        self.assertEqual(panel.title, "Lead"); self.assertEqual(panel.state, terminal_module.ViewState.ERROR)
         self.assertEqual(panel.items[0].label, "Outcome")
         self.assertEqual(panel.items[0].value, "failed")
         self.assertEqual(panel.items[1].sender, "Lead")
         self.assertIn("Antigravity CLI failed (status 1): 503 Overloaded", panel.items[1].content)
-        notice = output.components[1]
-        self.assertIsInstance(notice, terminal_module.Notice)
+        notice = output.components[1]; self.assertIsInstance(notice, terminal_module.Notice)
         self.assertEqual(notice.label, "provider failure")
         self.assertIn("Antigravity CLI failed (status 1): 503 Overloaded", notice.text)
         self.assertEqual(output.components[2].text, "Elapsed: 00:00:00")
