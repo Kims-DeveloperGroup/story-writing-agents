@@ -265,6 +265,14 @@ not authorize mutations or replace native relations.
 
 ## Completion and Cleanup
 
+Before closure, classify the PR as completing or partial against every remaining acceptance
+criterion of its owning Issue and evidence integrated on the accepted base. Review closure,
+mergeability, or an Issue keyword alone is not proof of completing delivery. Only a completing
+delivery may close its owning Issue or move its Project item to `Done`. Partial integration
+keeps the Issue open and its Project item `In progress`; record remaining criteria and their
+owner/action, and preserve resources needed by that unfinished delivery. A child PR never
+closes its parent.
+
 Complete means scope, acceptance criteria, required verification, verified review closure, and
 current checks/protections pass; the PR is squash-merged; the completing Issue is closed; and Project status
 is `Done`. Parent Issues close only after all required children and integration are complete.
