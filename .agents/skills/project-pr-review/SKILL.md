@@ -12,6 +12,7 @@ it under an active `$project-workflow` invocation. Only the root may load or exe
 skill; never delegate GitHub operations or lifecycle authority.
 
 Invocation authorizes in-scope PR/Project records, managed review requests and reconciliation,
+scoped local branch/worktree restoration for the existing Development-linked PR branch,
 review fixes, their verification, coherent commits, and normal pushes. It does not authorize
 integration, Issue closure, Project completion, branch deletion, or worktree removal.
 A standalone invocation never advances to `$project-complete`.
@@ -25,7 +26,8 @@ PR, evidence, or status template being used. Preserve all visible headings and m
 ## Verify prerequisites and open the PR
 
 1. Inspect the owning Issue's accepted scope and detailed plan, Project item, accepted base,
-   Development-linked branch/worktree, current head, porcelain, pushed change, and verification.
+   Development-linked PR branch, current pushed head, and verification. A local worktree is
+   optional for GitHub-only PR/review actions; its absence does not block those actions.
    Record or revalidate the planning gate. Reuse an existing PR and successful records;
    preserve numbered review history. Missing prerequisites stop dependent writes and identify
    the required owner/action; this stage does not automatically execute planning or initial
@@ -42,7 +44,12 @@ PR, evidence, or status template being used. Preserve all visible headings and m
 
 ## Reconcile and fix
 
-1. Reconcile feedback into one batch against actual scope and the current diff. Apply and
+1. Before local fixes, verify the repository, existing Development-linked remote branch,
+   accepted base, current PR head, and local porcelain. Reuse its verified local tracking
+   branch/worktree, or restore a local tracking branch and one sibling worktree from that
+   existing remote branch. Verify path, branch, HEAD, and ancestry before editing. Preserve
+   unrelated changes; this authority creates no new remote delivery branch or initial scope.
+   Reconcile feedback into one batch against actual scope and the current diff. Apply and
    verify confirmed in-scope defects, then create coherent commits and push normally.
    Use AGENTS routing for development work; subagents receive no lifecycle authority.
    Runtime-code fixes require affected canonical tests; runtime/test changes require full CI.

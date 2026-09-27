@@ -23,7 +23,7 @@ Subagents cannot load these skills or receive their GitHub/lifecycle authority.
 | --- | --- | --- |
 | [`$project-plan`](.agents/skills/project-plan/SKILL.md) | Issue/Project planning records and native relationships. | Verified planning readiness, before branch/worktree creation or tracked-file edits. |
 | [`$project-implement`](.agents/skills/project-implement/SKILL.md) | Necessary Issue/Project preparation, linked branch/worktree, implementation, verification, staging, coherent commits, and normal push. | Verified committed/pushed change, before PR creation or external review requests. |
-| [`$project-pr-review`](.agents/skills/project-pr-review/SKILL.md) | PR/review records, managed review requests, in-scope fixes, verification, commits/pushes, and reconciliation. | Verified review closure, before integration. |
+| [`$project-pr-review`](.agents/skills/project-pr-review/SKILL.md) | PR/review records, managed review requests, scoped local branch/worktree restoration for the existing linked PR branch, in-scope fixes, verification, commits/pushes, and reconciliation. | Verified review closure, before integration. |
 | [`$project-complete`](.agents/skills/project-complete/SKILL.md) | Final integration audit, manual squash merge, closure, Project completion, durable records, and safe cleanup. | Verified completion with preserved residual state reported. |
 | [`$project-workflow`](.agents/skills/project-workflow/SKILL.md) | All four stages in sequence. | Full in-scope lifecycle completion. |
 
