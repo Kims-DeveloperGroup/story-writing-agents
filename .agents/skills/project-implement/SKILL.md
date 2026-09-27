@@ -15,7 +15,8 @@ this skill; never delegate GitHub operations or lifecycle authority.
 Invocation authorizes necessary in-scope Issue/Project preparation, native relationships,
 Development-linked branch/worktree creation, implementation, verification, staging, coherent
 commits, and normal push. It does not authorize PR creation, external review requests,
-integration, closure, or cleanup. It requires neither a prior `$project-plan` invocation nor
+integration, closure, or delivery cleanup. Local CI may create and clean up one owned disposable
+detached validation checkout under the canonical fallback; it never removes delivery resources. It requires neither a prior `$project-plan` invocation nor
 a separate approval of the prepared plan. A natural language implementation request does not
 invoke this stage's delivery authority by itself.
 

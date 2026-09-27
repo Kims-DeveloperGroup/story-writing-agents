@@ -242,6 +242,14 @@ fast tier, affected runtime tests, both full shards, reconciliation, and frozen-
 An actual validation failure must be diagnosed and fixed; switching execution locations does
 not erase it. Unknown failure causes are not an established outage.
 
+An authorized implementation or PR/review stage includes narrowly scoped creation and cleanup
+of one root-owned disposable, detached validation worktree when the prospective merge must be
+tested separately. Record its path, base/head, temporary test-merge commit/tree, and ownership;
+create no remote branch and leave the delivery history untouched. Remove only that clean,
+recoverable temporary checkout after retaining evidence, without force. This exception grants
+no delivery-worktree/branch cleanup, integration, or unrelated-resource authority; preserve and
+report a temporary checkout that cannot be safely removed.
+
 Complete passing local evidence satisfies the repository's validation gate during confirmed
 non-execution. Keep the hosted failure/skips visible and label the evidence as local, never as
 a successful GitHub check. Enforced GitHub checks and required approvals remain mandatory;
@@ -250,9 +258,16 @@ fabricated check result, auto-merge, or merge queue is authorized.
 
 If the managed review workflow also cannot execute, the root may orchestrate the same authorized
 review directly. First inventory native requests, reviews, comments, and existing bot records;
-reconcile any outstanding or uncertain attempt before sending one request. For Codex, post
-`@codex review` once at the verified current snapshot; Balanced Copilot still uses the Reviewers
-UI and actual-effort attestation. Keep one root-authored reconciliation record per round, marked
+reconcile any outstanding or uncertain attempt before sending one request. If a bot reservation
+or uncertain record already exists, manual takeover requires a terminal run plus evidence that
+its native submission never occurred, and a fresh inventory confirming no delivered request.
+Record the original bot comment/round/attempt/marker and its proven non-delivery in the manual
+ledger; this root assessment permits one replacement request without editing bot state. An
+unknown submission outcome still blocks takeover. The replacement belongs to that same logical
+round, records its current snapshot separately, and links the original marker in its ledger.
+For Codex, post `@codex review` once at the verified snapshot. Both Lite and Balanced Copilot
+can be requested through the Reviewers UI during this outage; verify and record the actual
+Lite/Balanced effort from the resulting overview. Do not silently change effort/provider. Keep one root-authored reconciliation record per round, marked
 `<!-- ai-review-manual:v1:PR_NUMBER:ROUND -->`, with provider/attempt history, base/head, request
 and response URLs, proven non-delivery, findings/dispositions, local validation, and closure
 assessment. Preserve the original reviewed SHA separately from later fixes. A posted request,
@@ -260,11 +275,20 @@ eyes reaction, or absent reply is not a completed review. Never impersonate bot-
 `ai-review-state` records or silently restart numbering.
 
 Root-recorded manual closure is allowed once the same acceptance, finding, local/hosted
-validation, enforced-check/approval, and final-diff gates pass. When Actions resumes, reconcile
-existing bot history through the managed writer; if there is only manual/native history, use
-`adopt` with its canonical minimum of two prior rounds and the actual history/completion
-evidence, then `close` when justified. Do not replay the initial request or request a clean
-review merely to repair the ledger. Manual and failed automation evidence remain visible.
+validation, enforced-check/approval, and final-diff gates pass. When Actions resumes and the
+PR is still open, reconcile any original non-delivered bot attempt as `not_sent`/`failed`
+with its proof. A numeric provider review may be reconciled as `completed` only if the writer's
+original provider/head/time checks actually match. A clean reaction on a root-authored request
+or a changed snapshot may not be representable by that bot attempt: retain explicit manual
+completion/closure instead of fabricating a bot-authored request or response.
+
+For only manual/native history on an open PR, use `adopt` only when at least two actual prior
+rounds and the writer's other prerequisites are satisfied, then `close` when justified. A
+single actual manual round keeps explicit manual closure; never invent a second round merely
+to satisfy the writer's legacy-import minimum. Already merged PRs retain their manual closure
+and audit history without reopening: the managed writer accepts only open PRs. Do not replay
+the initial request or request a clean review merely to repair the ledger. Manual assessments,
+original bot records, and failed automation evidence remain visible.
 
 ### Review Comments
 

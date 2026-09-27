@@ -14,7 +14,9 @@ skill; never delegate GitHub operations or lifecycle authority.
 Invocation authorizes in-scope PR/Project records, managed review requests and reconciliation,
 scoped local branch/worktree restoration for the existing Development-linked PR branch,
 review fixes, their verification, coherent commits, and normal pushes. It does not authorize
-integration, Issue closure, Project completion, branch deletion, or worktree removal.
+integration, Issue closure, Project completion, delivery-branch deletion, or delivery-worktree
+removal. Local CI may create and clean up one owned disposable detached validation checkout
+under the canonical fallback; this exception never removes the delivery worktree.
 A standalone invocation never advances to `$project-complete`.
 
 Follow [GITHUB_WORKFLOW.md](../../../GITHUB_WORKFLOW.md),

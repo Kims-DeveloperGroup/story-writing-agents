@@ -12,7 +12,9 @@ not grant additional stage or GitHub mutation authority.
 2. Verify repository, accepted base, current PR head (or implementation candidate), branch,
    checkout commit/tree, and porcelain. Pin full SHAs rather than moving branch names. Validate
    the prospective merge tree: when the head contains the accepted base, the head tree suffices;
-   otherwise use an authorized disposable validation worktree with a recorded test merge.
+   otherwise use the stage-authorized disposable detached validation worktree with a recorded
+   temporary test-merge commit/tree. Record ownership/path, retain evidence, and remove only
+   that clean recoverable test checkout without force. Delivery resources remain protected.
    Conflicts stop integration. Never rewrite the delivery branch to manufacture evidence.
 3. Read the pinned [.github/workflows/pr-validation.yml](../../../../.github/workflows/pr-validation.yml),
    including `classify`, setup, every selected job, and reconciliation. Use both old and new
@@ -76,7 +78,7 @@ import time
 from pathlib import Path
 
 def git(*args):
-    return subprocess.check_output(["git", *args], text=True).strip()
+    return subprocess.check_output(["git", *args], text=True).rstrip("\n")
 
 workflow = Path(".github/workflows/pr-validation.yml")
 extract = '''
@@ -156,13 +158,25 @@ PYTHONPATH=src .venv/bin/python -m tests.runner run \
   --shard 2/2 --json "$ci_report_dir/full-2.json" \
   >"$ci_report_dir/full-2.log" 2>&1 &
 ci_shard_two_pid=$!
-ci_shard_status=0
-wait "$ci_shard_one_pid" || ci_shard_status=1
-wait "$ci_shard_two_pid" || ci_shard_status=1
-test "$ci_shard_status" -eq 0
+ci_shard_one_status=0
+ci_shard_two_status=0
+wait "$ci_shard_one_pid" || ci_shard_one_status=$?
+wait "$ci_shard_two_pid" || ci_shard_two_status=$?
+.venv/bin/python - "$ci_report_dir/full-exit-status.json" \
+  "$ci_shard_one_status" "$ci_shard_two_status" <<'PY'
+import json
+import sys
+statuses = {"full-1": int(sys.argv[2]), "full-2": int(sys.argv[3])}
+with open(sys.argv[1], "x", encoding="utf-8") as target:
+    json.dump(statuses, target)
+    target.write("\n")
+raise SystemExit(int(any(statuses.values())))
+PY
 ```
 
-Then run both reconciliation and the current frozen inventory/time-budget check:
+The per-shard exit-status file identifies which process failed and preserves its actual code,
+including a crash before a canonical JSON report exists. A nonzero code prevents acceptance.
+After successful complete shards, run both reconciliation and the current frozen inventory/time-budget check:
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m tests.runner reconcile \
