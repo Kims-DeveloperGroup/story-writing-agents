@@ -15,7 +15,8 @@ this skill; never delegate GitHub operations or lifecycle authority.
 Invocation authorizes necessary in-scope Issue/Project preparation, native relationships,
 Development-linked branch/worktree creation, implementation, verification, staging, coherent
 commits, and normal push. It does not authorize PR creation, external review requests,
-integration, closure, or cleanup. It requires neither a prior `$project-plan` invocation nor
+integration, closure, or delivery cleanup. Local CI may create and clean up one owned disposable
+detached validation checkout under the canonical fallback; it never removes delivery resources. It requires neither a prior `$project-plan` invocation nor
 a separate approval of the prepared plan. A natural language implementation request does not
 invoke this stage's delivery authority by itself.
 
@@ -62,6 +63,10 @@ exceptions, or destructive cleanup authority.
    [TEST_POLICY.md](../../../TEST_POLICY.md). Policy, docs, templates, skills,
    development-agent configuration (`.codex/agents/`), and index-only changes use static
    validation and diff review.
+   If Actions cannot execute, run the same applicable CI locally under the canonical
+   [fallback](../../../GITHUB_WORKFLOW.md#actions-non-execution-fallback), without another
+   confirmation. Retain exact source identity and complete evidence; never reduce selected
+   lanes, erase actual validation failures, or waive enforced hosted checks/approvals.
 5. Review the final diff, stage only the accepted change, and create coherent commits under
    COMMIT_POLICY. Push normally. Never reset, clean, rebase, force-push, or overwrite unrelated
    work to manufacture a clean state. New scope repeats the planning gate.
