@@ -35,9 +35,14 @@ evidence/status template being used. Preserve all visible headings and meanings.
    completing delivery. A partial PR may integrate within its accepted scope, but cannot
    close unfinished work or move it to `Done`.
 2. Immediately before integration, recheck accepted base, current head, changed behavior since
-   provider review, every review thread/blocking finding, required approvals/checks, and
-   mergeability. If fresh verification or review fixes are needed, stop integration and report
+   provider review, every review thread/blocking finding, applicable CI evidence, enforced
+   required approvals/checks, and mergeability. If fresh verification or review fixes are needed, stop integration and report
    the action needed from PR/review. Do not enable auto-merge or merge queue.
+   Confirmed Actions non-execution may use complete passing local CI and root-recorded review
+   closure under the canonical [fallback](../../../GITHUB_WORKFLOW.md#actions-non-execution-fallback).
+   Recheck its exact base/head/checkout and artifacts. It never satisfies an enforced hosted
+   check or required approval by itself; keep failed hosted records visible and stop if those
+   gates remain unmet.
 3. Manually use GitHub **Squash and merge**. Include the owning Issue number in the squash
    commit. Never bypass protection or treat historical/stale checks as a current pass.
 4. Verify the merged SHA on the target, Development links, and remote branch disposition.

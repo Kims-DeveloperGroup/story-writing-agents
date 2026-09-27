@@ -62,6 +62,10 @@ exceptions, or destructive cleanup authority.
    [TEST_POLICY.md](../../../TEST_POLICY.md). Policy, docs, templates, skills,
    development-agent configuration (`.codex/agents/`), and index-only changes use static
    validation and diff review.
+   If Actions cannot execute, run the same applicable CI locally under the canonical
+   [fallback](../../../GITHUB_WORKFLOW.md#actions-non-execution-fallback), without another
+   confirmation. Retain exact source identity and complete evidence; never reduce selected
+   lanes, erase actual validation failures, or waive enforced hosted checks/approvals.
 5. Review the final diff, stage only the accepted change, and create coherent commits under
    COMMIT_POLICY. Push normally. Never reset, clean, rebase, force-push, or overwrite unrelated
    work to manufacture a clean state. New scope repeats the planning gate.

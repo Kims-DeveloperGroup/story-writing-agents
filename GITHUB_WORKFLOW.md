@@ -136,6 +136,14 @@ terminal provider failure justifies switching; record the reason and preserve al
 Never request both providers routinely or switch to evade a finding. An outstanding or
 uncertain request must be reconciled before requesting either provider again.
 
+Explicit Copilot budget/quota exhaustion is a terminal provider failure: retain its diagnostic
+or non-delivery evidence, reconcile the outstanding attempt, and request Codex instead without
+another confirmation. Replace the Copilot selector with `review:codex`, record the fallback
+rationale, and preserve every finding and the numbered history. A proven non-delivered attempt
+may retry the same logical round; completed reviews and unknown outcomes are not non-delivery.
+This exception does not authorize another provider while an earlier request is still uncertain,
+or repeated requests when Codex also lacks capacity. Report that remaining provider blocker.
+
 Copilot effort is a product setting, not an API model parameter. Keep requestor, repository,
 and organization defaults at Lite. Balanced requests use GitHub's Reviewers UI; the agent
 or maintainer records the actual effort shown by the resulting review. A switch from a
@@ -161,7 +169,8 @@ Codex P0/P1 map to Critical/High and P2 to Medium. A provider label or the word 
 is not proof of blocking impact. A new preference is not a missing agreed requirement.
 
 **Verified closure** requires acceptance criteria, evidence-backed resolution or rejection
-of every confirmed High/Critical finding, passing required checks/approvals, and inspection
+of every confirmed High/Critical finding, passing applicable CI evidence (hosted or the local
+fallback below), all enforced required checks/approvals, and inspection
 of the final diff. A further clean AI review is unnecessary. Close after round 1 if those
 conditions already pass. Medium findings never block completion. Round 3 is not mandatory.
 
@@ -220,6 +229,43 @@ Post-merge verification checks Issue closure, Project `Done`, Development links,
 branch cleanup; failures remain visible for repair. Managed post-merge verification needs
 `PROJECT_STATUS_TOKEN` with organization ProjectV2 read access.
 
+### Actions non-execution fallback
+
+When annotations, logs, or service status establish that Actions cannot execute because of
+billing/quota, disabled execution, or an infrastructure outage, the root records the evidence
+and runs the applicable CI commands locally without another confirmation. Use the canonical
+[local CI procedure](.agents/skills/github-task-lifecycle/references/local-ci-fallback.md):
+pin base/head and the checkout tree, use the locked Python 3.11 environment, select every lane
+from the current workflow, and retain commands, exit codes, exact test IDs, artifacts, and
+platform limits. Static-only changes run all static steps; runtime/test changes also run the
+fast tier, affected runtime tests, both full shards, reconciliation, and frozen-budget checks.
+An actual validation failure must be diagnosed and fixed; switching execution locations does
+not erase it. Unknown failure causes are not an established outage.
+
+Complete passing local evidence satisfies the repository's validation gate during confirmed
+non-execution. Keep the hosted failure/skips visible and label the evidence as local, never as
+a successful GitHub check. Enforced GitHub checks and required approvals remain mandatory;
+if they cannot be satisfied, integration stops with the exact owner/action. No admin bypass,
+fabricated check result, auto-merge, or merge queue is authorized.
+
+If the managed review workflow also cannot execute, the root may orchestrate the same authorized
+review directly. First inventory native requests, reviews, comments, and existing bot records;
+reconcile any outstanding or uncertain attempt before sending one request. For Codex, post
+`@codex review` once at the verified current snapshot; Balanced Copilot still uses the Reviewers
+UI and actual-effort attestation. Keep one root-authored reconciliation record per round, marked
+`<!-- ai-review-manual:v1:PR_NUMBER:ROUND -->`, with provider/attempt history, base/head, request
+and response URLs, proven non-delivery, findings/dispositions, local validation, and closure
+assessment. Preserve the original reviewed SHA separately from later fixes. A posted request,
+eyes reaction, or absent reply is not a completed review. Never impersonate bot-authored
+`ai-review-state` records or silently restart numbering.
+
+Root-recorded manual closure is allowed once the same acceptance, finding, local/hosted
+validation, enforced-check/approval, and final-diff gates pass. When Actions resumes, reconcile
+existing bot history through the managed writer; if there is only manual/native history, use
+`adopt` with its canonical minimum of two prior rounds and the actual history/completion
+evidence, then `close` when justified. Do not replay the initial request or request a clean
+review merely to repair the ledger. Manual and failed automation evidence remain visible.
+
 ### Review Comments
 
 Maintain one concise reconciliation record per round: finding URLs, verified severity,
@@ -256,6 +302,10 @@ changes need static validation and diff review. An absent, cancelled, stale,
 incomplete, or over-budget check is not a pass. Evidence names source/head
 SHA, commands, failures, skips, gaps, and assessment.
 
+Confirmed Actions non-execution uses the equivalent local CI procedure above. Its complete
+passing evidence is a separate local result; it does not convert a failed hosted check to a
+pass, reduce selected coverage or budgets, or waive enforced protection and approvals.
+
 ## Templates and Records
 
 Before creating or substantially updating an Issue, PR, evidence record, or status comment,
@@ -274,7 +324,7 @@ owner/action, and preserve resources needed by that unfinished delivery. A child
 closes its parent.
 
 Complete means scope, acceptance criteria, required verification, verified review closure, and
-current checks/protections pass; the PR is squash-merged; the completing Issue is closed; and Project status
+current applicable validation and enforced checks/protections pass; the PR is squash-merged; the completing Issue is closed; and Project status
 is `Done`. Parent Issues close only after all required children and integration are complete.
 
 Before cleanup, inventory the worktree, branch, HEAD, porcelain, PR/Issue state, integration,

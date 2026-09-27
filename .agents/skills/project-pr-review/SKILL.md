@@ -41,6 +41,10 @@ PR, evidence, or status template being used. Preserve all visible headings and m
    record `Review rationale`, choose exactly one provider selector, add `workflow:managed`,
    and move the item to `In review`. Request through the managed workflow while affected CI
    runs. Balanced uses the Reviewers UI; never silently substitute another effort/provider.
+   Confirmed Copilot budget exhaustion uses the canonical Codex fallback after reconciling
+   non-delivery. If Actions cannot execute, use the root-owned local CI and direct review
+   [fallback](../../../GITHUB_WORKFLOW.md#actions-non-execution-fallback), preserving request
+   deduplication, numbered history, provider snapshots, and all findings.
 
 ## Reconcile and fix
 
@@ -64,15 +68,17 @@ PR, evidence, or status template being used. Preserve all visible headings and m
    request; further rounds need material uncertainty and evidence. Never routinely request
    both providers or switch to evade a finding. Continue independent work while review/CI runs.
 4. Stop at verified closure: accepted criteria, evidence-backed resolution/rejection of every
-   confirmed High/Critical finding, passing current required checks/approvals, and inspection
+   confirmed High/Critical finding, passing current applicable CI evidence (hosted or canonical
+   local fallback), all enforced required checks/approvals, and inspection
    of the final diff. An additional clean AI review is unnecessary. Audit every blocking
    finding and all required conversation-resolution protections.
 
 ## Finish and hand off
 
 Preserve the provider-reviewed base/head SHA separately from later local verification and
-current checks. Report Issue/Project/PR links, current base/head, numbered rounds and finding
+current validation. Report Issue/Project/PR links, current base/head, numbered rounds and finding
 closure, verification, approvals/checks, and remaining owner/actions. Record managed closure
-through the canonical workflow and stop before merge. If prerequisites or required checks
-remain unmet, report that state without claiming verified closure. The full coordinator may
+through the canonical workflow, or a root-authored manual record during confirmed Actions
+non-execution, and stop before merge. Keep hosted failures and the execution location explicit.
+If prerequisites or enforced required checks remain unmet, report that state without claiming verified closure. The full coordinator may
 continue to integration only after closure is verified. Codex Plan Mode remains read-only.

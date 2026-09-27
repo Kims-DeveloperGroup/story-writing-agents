@@ -71,6 +71,13 @@ evidence. Runtime and test changes require full CI under TEST_POLICY.md.
 Policy/docs/templates/skills/development-agent configuration/module-index-only changes use
 static checks and diff review only.
 
+Confirmed Actions non-execution runs the same selected CI locally without another confirmation;
+explicit Copilot budget exhaustion falls back to Codex after non-delivery reconciliation.
+Use the canonical [fallback](../../../GITHUB_WORKFLOW.md#actions-non-execution-fallback) for
+source identity, complete evidence, direct root review requests/manual closure, and preserved
+numbered history. Local evidence never rewrites hosted failures or waives enforced checks and
+approvals. Unknown request outcomes remain outstanding and prevent another provider request.
+
 After merge, verify the merged SHA, review closure, current-head checks, Issue closure,
 Project `Done`, milestone disposition, Development links, and remote branch state. Before cleanup,
 record worktree/branch/HEAD/porcelain, integration, recoverability, and authority. Remove only
