@@ -24,8 +24,9 @@ handler and any storage transaction around the low-level call.
 
 ## Action loop
 
-Every action carries correlated session/conversation/turn IDs and a sequential
-action index.
+Every accepted action carries correlated session/conversation/turn IDs and a
+sequential action index. A structured repair is another physical provider call
+for the same action index; only an accepted action advances the index.
 
 | Action | Additional fields | Rule |
 | --- | --- | --- |
@@ -33,17 +34,19 @@ action index.
 | `read_history` | Citation and sequence range | Uses a hit from this same logical turn. |
 | `answer` | Content and ordered unique citation IDs | Terminal. |
 
-After the first read, only another read or answer is accepted. The fifth call
-must answer. Search is active-only; a read is bounded to the cited source and
-returns structured `ConversationRetrievalHistoryRecord` values. Every closed
-field receives a deterministic citation ID such as `r2e1f1`. Private event
-payload, prompts, credentials, private provider state, and arbitrary files are
-excluded.
+After the first read, only another read or answer is accepted. The complete
+turn permits at most five physical provider calls, including structured repair
+calls. When only one physical call remains, it must answer; rejection on that
+final call returns the safe local fallback without a sixth call. Search is
+active-only; a read is bounded to the cited source and returns structured
+`ConversationRetrievalHistoryRecord` values. Every closed field receives a
+deterministic citation ID such as `r2e1f1`. Private event payload, prompts,
+credentials, private provider state, and arbitrary files are excluded.
 
 Observations are framed as canonical JSON between fixed untrusted-story-data
-markers. They are story data, never instructions. Fixed budgets bound calls,
-queries, hits, pages, events, bytes, and citations; exact values are defined by
-`ConversationRetrievalPolicy`.
+markers. They are story data, never instructions. Fixed budgets bound physical
+provider calls, queries, hits, pages, events, bytes, and citations; exact values
+are defined by `ConversationRetrievalPolicy`.
 
 ## Provider-call input and output
 
@@ -88,9 +91,11 @@ include an authorized `rag_context`. A search action returns an untrusted
 observation with `s1`, `s2`, ... citation IDs. A later `read_history` action
 returns canonical record identity and `rAeRfF` field-citation IDs. Continuation
 calls deliberately omit `content` and initial context; they carry only the
-correlation fields, updated retrieval control, and one framed observation.
-After a read, `allowed_actions` contains only `read_history` and `answer`; call
-five permits only `answer`.
+correlation fields, updated retrieval control, and one framed observation. A
+repair repeats the current `action_index` and adds the repair instruction.
+After a read, `allowed_actions` contains only `read_history` and `answer`. The
+payload and schema permit only `answer` when the next attempt would consume the
+last physical call, including when that last attempt is a repair.
 
 This provider sequence is a direct `BoundAgent` component API. The installed
 lead workflow does not call it, and provider-free `/search`, `/transcript`, and
@@ -113,6 +118,9 @@ shell has no one-turn RAG arming command. See
 integrator, every addressed invocation must complete the ordered authorized
 reference read before its answer is accepted. Focused shell Lead references use
 their own mandatory-reference operation rather than this generic retrieval hook.
+If structured repair exhaustion produces the visible local fallback instead,
+the reference invocation and operation terminate with `provider_failure` and
+record neither `result_received` nor `accepted`.
 
 Retrieval progress values remain synchronous, content-free observation
 contracts. A caller can render or store them. The shell's Lead-reference

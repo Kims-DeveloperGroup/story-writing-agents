@@ -14,7 +14,7 @@ import tempfile
 import tomllib
 import unittest
 from collections.abc import Awaitable, Callable
-from dataclasses import MISSING, FrozenInstanceError, fields
+from dataclasses import MISSING, FrozenInstanceError, fields, replace
 from pathlib import Path
 from unittest import mock
 
@@ -31,11 +31,14 @@ from story_writing_agents import (
     DebateContextMode,
     DebateContextRequest,
     DebateFailureKind,
+    DebateMessage,
     DebateProgressEvent,
     DebateProgressPhase,
     InputKind,
     PLOT_ARCHITECT,
     ProgressObserverError,
+    ReplyTrace,
+    ReplyTraceOrigin,
     StoryRuntime,
     Workspace,
 )
@@ -71,12 +74,20 @@ from story_writing_agents.interactive_auth import (
     InteractiveAuthResult,
     InteractiveAuthResultKind,
 )
+from story_writing_agents.interactive_settings import (
+    SettingsError,
+    SettingsErrorKind,
+)
 from story_writing_agents.provider_auth import (
     ProviderAuthSnapshot,
     ProviderAuthState,
     ProviderAuthStatus,
 )
-from tests.helpers import initialized_workspace, workspace_git_identity
+from tests.helpers import (
+    initialized_workspace,
+    pristine_initialized_workspace,
+    workspace_git_identity,
+)
 from tests.sqlite_conversation_storage_fixture import database_path, provision
 
 
@@ -185,6 +196,17 @@ class AuthenticatedCliCoordinator:
     def run(self, *args: object, **kwargs: object) -> object:
         raise AssertionError("fully authenticated CLI fixture opened the auth picker")
 
+    def select_default(
+        self,
+        current: ProviderAuthSnapshot,
+        *,
+        selected_provider: str | None = None,
+    ) -> InteractiveAuthResult:
+        self.events.append("select_default")
+        if current is not self.snapshot or selected_provider != "codex":
+            raise AssertionError("unexpected default-provider recommendation")
+        return provider_result(current, "codex")
+
 
 class ScriptedCliCoordinator:
     """Supply exact startup snapshots/results while recording gate order."""
@@ -195,10 +217,12 @@ class ScriptedCliCoordinator:
         *,
         snapshots: tuple[object, ...],
         results: tuple[object, ...] = (),
+        default_results: tuple[object, ...] = (),
     ) -> None:
         self.events = events
         self.snapshots = list(snapshots)
         self.results = list(results)
+        self.default_results = list(default_results)
 
     def show_welcome(self) -> None:
         self.events.append(("welcome", None))
@@ -222,6 +246,20 @@ class ScriptedCliCoordinator:
         if not self.results:
             raise AssertionError("unexpected CLI auth picker")
         value = self.results.pop(0)
+        if isinstance(value, BaseException):
+            raise value
+        return value  # type: ignore[return-value]
+
+    def select_default(
+        self,
+        current: ProviderAuthSnapshot,
+        *,
+        selected_provider: str | None = None,
+    ) -> InteractiveAuthResult:
+        self.events.append(("select_default", selected_provider))
+        if not self.default_results:
+            raise AssertionError("unexpected CLI default-provider picker")
+        value = self.default_results.pop(0)
         if isinstance(value, BaseException):
             raise value
         return value  # type: ignore[return-value]
@@ -285,7 +323,7 @@ class PublicApiTests(unittest.TestCase):
     def test_all_declared_public_imports_exist_and_runtime_aliases_are_absent(
         self,
     ) -> None:
-        self.assertEqual(len(story_writing_agents.__all__), 104)
+        self.assertEqual(len(story_writing_agents.__all__), 106)
         for name in story_writing_agents.__all__:
             with self.subTest(name=name):
                 self.assertTrue(hasattr(story_writing_agents, name))
@@ -330,6 +368,8 @@ class PublicApiTests(unittest.TestCase):
             "ConversationResult",
             "DirectiveKind",
             "PromptFileReference",
+            "ReplyTrace",
+            "ReplyTraceOrigin",
             "StoryWritingAgentsError",
             "WorkspaceSecurityError",
             "WorkspaceFormatError",
@@ -369,6 +409,8 @@ class PublicApiTests(unittest.TestCase):
                 "ConversationResult",
                 "DirectiveKind",
                 "PromptFileReference",
+                "ReplyTrace",
+                "ReplyTraceOrigin",
                 "StoryWritingAgentsError",
             }
         ):
@@ -743,25 +785,166 @@ class PublicApiTests(unittest.TestCase):
 
 
 class PersistenceValidationTests(unittest.TestCase):
-    def test_persisted_debate_log_rejects_wrong_field_types(self) -> None:
-        workspace = initialized_workspace(self)
-        workspace.write_text(
-            "discussion_logs/session_a/debate_a.jsonl",
-            json.dumps(
-                {
-                    "sender": "plot_architect",
-                    "phase": "audit",
-                    "round": "not-an-integer",
-                    "revision": "r0",
-                    "kind": "approval",
-                    "content": "neutral",
-                    "timestamp": "2026-01-01T00:00:00+00:00",
-                }
-            )
-            + "\n",
+    @staticmethod
+    def _message(*, trace: ReplyTrace | None = None) -> DebateMessage:
+        return DebateMessage(
+            sender="plot_architect",
+            phase="audit",
+            round=1,
+            revision="r0",
+            kind="approval",
+            content="Visible assessment.",
+            timestamp="2026-01-01T00:00:00+00:00",
+            trace=trace,
         )
-        with self.assertRaisesRegex(WorkspaceFormatError, "line 1"):
+
+    def test_persisted_debate_log_reopens_traced_and_untraced_messages_exactly(
+        self,
+    ) -> None:
+        workspace = pristine_initialized_workspace(self)
+        trace = ReplyTrace(
+            role="plot_architect",
+            action="audit",
+            context_sources=("current_input", "read:writing_artifact"),
+            recovered_fields=("structured_reply",),
+            origin=ReplyTraceOrigin.RECOVERED,
+        )
+        untraced = self._message()
+        traced = self._message(trace=trace)
+        workspace.append_debate_message("session_a", "debate_a", untraced)
+        workspace.append_debate_message("session_a", "debate_a", traced)
+
+        restored = workspace.read_debate_messages("session_a", "debate_a")
+        self.assertEqual(restored, (untraced, traced))
+        self.assertIsNone(restored[0].trace)
+        self.assertIs(type(restored[1].trace), ReplyTrace)
+        self.assertEqual(restored[1].trace, trace)
+        self.assertEqual(
+            workspace.read_debate_messages("session_a", "debate_a"),
+            restored,
+        )
+
+        raw = tuple(
+            json.loads(line)
+            for line in workspace.read_text(
+                "discussion_logs/session_a/debate_a.jsonl"
+            ).splitlines()
+        )
+        base_fields = {
+            "sender",
+            "phase",
+            "round",
+            "revision",
+            "kind",
+            "content",
+            "timestamp",
+        }
+        self.assertEqual(set(raw[0]), base_fields)
+        self.assertNotIn("trace", raw[0])
+        self.assertEqual(set(raw[1]), {*base_fields, "trace"})
+        self.assertEqual(raw[1]["trace"], trace.to_dict())
+
+    def test_persisted_debate_log_reopens_validation_details_with_optional_trace(
+        self,
+    ) -> None:
+        workspace = pristine_initialized_workspace(self)
+        relative = "discussion_logs/session_a/debate_a.jsonl"
+        detail = "Original response:\n$.action.result: expected object, got array"
+        trace = ReplyTrace(
+            role="plot_architect",
+            action="audit",
+            context_sources=("current_input",),
+            recovered_fields=("structured_reply",),
+            origin=ReplyTraceOrigin.RECOVERED,
+        )
+        legacy = self._message()
+        untraced = replace(legacy, validation_details=(detail,))
+        traced = replace(self._message(trace=trace), validation_details=(detail,))
+        for message in (legacy, untraced, traced):
+            workspace.append_debate_message("session_a", "debate_a", message)
+
+        self.assertEqual(
+            workspace.read_debate_messages("session_a", "debate_a"),
+            (legacy, untraced, traced),
+        )
+        raw = tuple(json.loads(line) for line in workspace.read_text(relative).splitlines())
+        self.assertNotIn("validation_details", raw[0])
+        self.assertNotIn("trace", raw[1])
+        self.assertEqual(raw[1]["validation_details"], [detail])
+        self.assertEqual(raw[2]["validation_details"], [detail])
+        self.assertEqual(raw[2]["trace"], trace.to_dict())
+
+        workspace.write_text(
+            relative,
+            workspace.read_text(relative)
+            + json.dumps({**raw[2], "unknown": "not a valid extension"}) + "\n",
+        )
+        with self.assertRaisesRegex(
+            WorkspaceFormatError, r"^invalid debate log entry at line 4$",
+        ):
             workspace.read_debate_messages("session_a", "debate_a")
+
+    def test_persisted_debate_log_rejects_noncanonical_fields_values_and_rounds(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        relative = "discussion_logs/session_a/debate_a.jsonl"
+        base = self._message().to_dict()
+        valid_trace = ReplyTrace(
+            role="plot_architect",
+            action="audit",
+            context_sources=("current_input",),
+        ).to_dict()
+        invalid_trace = dict(valid_trace)
+        invalid_trace["origin"] = "unknown"
+        missing_trace_field = dict(valid_trace)
+        missing_trace_field.pop("action")
+        extra_trace_field = {**valid_trace, "message": "must not be persisted"}
+
+        invalid = [
+            ("unknown base field", {**base, "unknown": True}),
+            (
+                "unknown traced field",
+                {**base, "trace": valid_trace, "unknown": True},
+            ),
+            ("missing base field", {key: value for key, value in base.items() if key != "kind"}),
+            ("null trace", {**base, "trace": None}),
+            ("trace scalar", {**base, "trace": "invalid"}),
+            ("trace list", {**base, "trace": []}),
+            ("missing trace field", {**base, "trace": missing_trace_field}),
+            ("extra trace field", {**base, "trace": extra_trace_field}),
+            ("invalid trace origin", {**base, "trace": invalid_trace}),
+            *(
+                (
+                    f"non-string {field}",
+                    {**base, field: None},
+                )
+                for field in (
+                    "sender",
+                    "phase",
+                    "revision",
+                    "kind",
+                    "content",
+                    "timestamp",
+                )
+            ),
+            ("boolean round", {**base, "round": True}),
+            ("negative round", {**base, "round": -1}),
+            ("string round", {**base, "round": "1"}),
+            ("float round", {**base, "round": 1.0}),
+        ]
+        valid_prefix = json.dumps(base, sort_keys=True) + "\n"
+        for label, value in invalid:
+            with self.subTest(label=label):
+                workspace.write_text(
+                    relative,
+                    valid_prefix + json.dumps(value, sort_keys=True) + "\n",
+                )
+                with self.assertRaisesRegex(
+                    WorkspaceFormatError,
+                    r"^invalid debate log entry at line 2$",
+                ):
+                    workspace.read_debate_messages("session_a", "debate_a")
 
 
 class CliTests(unittest.TestCase):
@@ -1414,21 +1597,11 @@ class CliTests(unittest.TestCase):
                 expected_workspace_option = str(workspace.root) if arguments else None
                 resolve_workspace.assert_called_once_with(expected_workspace_option)
                 load_context.assert_called_once_with(workspace)
-                effective_overrides = dict.fromkeys(
-                    (
-                        "lead_orchestrator",
-                        "plot_architect",
-                        "character_custodian",
-                        "execution_specialist",
-                    ),
-                    "codex",
-                )
-                effective_overrides.update(overrides)
                 backend_factory.assert_called_once_with(
                     workspace,
                     model=model,
                     timeout_seconds=timeout,
-                    backend_overrides=effective_overrides,
+                    backend_overrides=overrides,
                     antigravity_executable=antigravity_executable,
                     antigravity_model=antigravity_model,
                     antigravity_effort=antigravity_effort,
@@ -1466,6 +1639,20 @@ class CliTests(unittest.TestCase):
                 catalog_value.discover.assert_not_called()
                 self.assertEqual(stdout.getvalue(), "")
                 self.assertEqual(stderr.getvalue(), "")
+                self.assertEqual(
+                    workspace.read_json("config/system_defaults.json")[
+                        "default_backend"
+                    ],
+                    "codex",
+                )
+                self.assertTrue(
+                    all(
+                        agent["backend"] is None
+                        for agent in workspace.read_json(
+                            "config/agent_configs.json"
+                        ).values()
+                    )
+                )
 
     def test_interactive_startup_orders_every_gate_before_runtime_artifacts(
         self,
@@ -1476,6 +1663,7 @@ class CliTests(unittest.TestCase):
         coordinator = ScriptedCliCoordinator(
             events,
             snapshots=(both, both),
+            default_results=(provider_result(both, "codex"),),
         )
         auth_service = object()
         catalog_service = object()
@@ -1504,6 +1692,7 @@ class CliTests(unittest.TestCase):
         original_select_default = cli_module.select_default_provider
         original_load_snapshot = cli_module.ConfigManager.load_configuration_snapshot
         original_routes = cli_module._effective_interactive_providers
+        original_establish_default = cli_module.establish_default_backend
         original_activate = cli_module.activate_configured_conversation_storage
         storage_startups: list[ConversationStorageStartup] = []
 
@@ -1523,6 +1712,10 @@ class CliTests(unittest.TestCase):
         def routes(*args: object, **kwargs: object) -> tuple[str, ...]:
             events.append(("routes", None))
             return original_routes(*args, **kwargs)  # type: ignore[arg-type]
+
+        def establish_default(*args: object, **kwargs: object) -> bool:
+            events.append(("persist_default", args[1]))
+            return original_establish_default(*args, **kwargs)  # type: ignore[arg-type]
 
         def activate(current_workspace: Workspace) -> ConversationStorageStartup:
             events.append(("storage", None))
@@ -1617,6 +1810,11 @@ class CliTests(unittest.TestCase):
             ),
             mock.patch.object(
                 cli_module,
+                "establish_default_backend",
+                side_effect=establish_default,
+            ),
+            mock.patch.object(
+                cli_module,
                 "_effective_interactive_providers",
                 side_effect=routes,
             ),
@@ -1670,6 +1868,9 @@ class CliTests(unittest.TestCase):
                 "probe_all",
                 "default",
                 "snapshot",
+                "select_default",
+                "persist_default",
+                "snapshot",
                 "routes",
                 "probe_all",
                 "progress_start",
@@ -1682,6 +1883,10 @@ class CliTests(unittest.TestCase):
         )
         self.assertEqual(events[8][1], workspace.root)
         self.assertEqual(events[9][1], workspace.root)
+        self.assertEqual(
+            workspace.read_json("config/system_defaults.json")["default_backend"],
+            "codex",
+        )
         backend.close.assert_not_called()
         self.assertEqual(stderr.getvalue(), "")
 
@@ -2007,6 +2212,321 @@ class CliTests(unittest.TestCase):
                     ["welcome", "probe_all", "run"],
                 )
 
+    def test_missing_default_retries_and_persists_only_authenticated_choice(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        codex_only = provider_snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.UNAUTHENTICATED,
+        )
+        both = authenticated_provider_snapshot()
+        events: list[tuple[str, object | None]] = []
+        coordinator = ScriptedCliCoordinator(
+            events,
+            snapshots=(codex_only, both),
+            default_results=(
+                provider_result(codex_only, "antigravity"),
+                provider_result(both, "antigravity"),
+            ),
+        )
+        terminal = InteractiveTerminal(lambda _prompt: "", lambda _text: None)
+        backend = mock.Mock()
+        controller = mock.Mock()
+        controller.run_session_lobby.return_value = 0
+        stdin = TtyStringIO(is_terminal=True)
+        stdout = TtyStringIO(is_terminal=True)
+        stderr = io.StringIO()
+
+        with (
+            mock.patch.object(sys, "stdin", stdin),
+            mock.patch.object(sys, "stdout", stdout),
+            mock.patch.object(sys, "stderr", stderr),
+            mock.patch.object(cli_module, "resolve_workspace", return_value=workspace),
+            mock.patch.object(
+                cli_module,
+                "build_stream_terminal",
+                return_value=terminal,
+            ),
+            mock.patch.object(cli_module, "ProviderAuthService", return_value=object()),
+            mock.patch.object(
+                cli_module,
+                "InteractiveAuthCoordinator",
+                return_value=coordinator,
+            ),
+            mock.patch.object(
+                cli_module,
+                "establish_default_backend",
+                wraps=cli_module.establish_default_backend,
+            ) as establish,
+            mock.patch.object(
+                cli_module,
+                "AgentBackend",
+                return_value=backend,
+            ) as backend_factory,
+            mock.patch.object(
+                cli_module,
+                "InteractiveController",
+                return_value=controller,
+            ),
+        ):
+            self.assertEqual(main(["chat", "--workspace", str(workspace.root)]), 0)
+
+        self.assertEqual(
+            [event for event in events if event[0] in {"select_default", "probe_all"}],
+            [
+                ("probe_all", None),
+                ("select_default", "codex"),
+                ("select_default", "antigravity"),
+                ("probe_all", None),
+            ],
+        )
+        establish.assert_called_once_with(workspace, "antigravity")
+        self.assertEqual(
+            workspace.read_json("config/system_defaults.json")["default_backend"],
+            "antigravity",
+        )
+        self.assertEqual(backend_factory.call_args.kwargs["backend_overrides"], {})
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_concurrent_default_winner_is_reloaded_and_remains_authoritative(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        both = authenticated_provider_snapshot()
+        coordinator = ScriptedCliCoordinator(
+            [],
+            snapshots=(both, both),
+            default_results=(provider_result(both, "codex"),),
+        )
+        terminal = InteractiveTerminal(lambda _prompt: "", lambda _text: None)
+        controller = mock.Mock()
+        controller.run_session_lobby.return_value = 0
+
+        def concurrent_winner(current: Workspace, proposed: str) -> None:
+            self.assertIs(current, workspace)
+            self.assertEqual(proposed, "codex")
+            system = current.read_json("config/system_defaults.json")
+            system["default_backend"] = "antigravity"
+            current.write_json("config/system_defaults.json", system)
+            raise SettingsError(SettingsErrorKind.CONFLICT)
+
+        with (
+            mock.patch.object(sys, "stdin", TtyStringIO(is_terminal=True)),
+            mock.patch.object(sys, "stdout", TtyStringIO(is_terminal=True)),
+            mock.patch.object(sys, "stderr", io.StringIO()),
+            mock.patch.object(cli_module, "resolve_workspace", return_value=workspace),
+            mock.patch.object(
+                cli_module,
+                "build_stream_terminal",
+                return_value=terminal,
+            ),
+            mock.patch.object(cli_module, "ProviderAuthService", return_value=object()),
+            mock.patch.object(
+                cli_module,
+                "InteractiveAuthCoordinator",
+                return_value=coordinator,
+            ),
+            mock.patch.object(
+                cli_module,
+                "establish_default_backend",
+                side_effect=concurrent_winner,
+            ) as establish,
+            mock.patch.object(
+                cli_module,
+                "_effective_interactive_providers",
+                wraps=cli_module._effective_interactive_providers,
+            ) as routes,
+            mock.patch.object(cli_module, "AgentBackend", return_value=mock.Mock()) as backend,
+            mock.patch.object(
+                cli_module,
+                "InteractiveController",
+                return_value=controller,
+            ),
+        ):
+            self.assertEqual(main(["chat", "--workspace", str(workspace.root)]), 0)
+
+        establish.assert_called_once_with(workspace, "codex")
+        self.assertEqual(
+            routes.call_args.args[1].system_defaults.default_backend,
+            "antigravity",
+        )
+        self.assertEqual(
+            workspace.read_json("config/system_defaults.json")["default_backend"],
+            "antigravity",
+        )
+        self.assertEqual(backend.call_args.kwargs["backend_overrides"], {})
+
+    def test_missing_default_controls_and_write_failure_precede_runtime_setup(
+        self,
+    ) -> None:
+        both = authenticated_provider_snapshot()
+        for kind in (
+            InteractiveAuthResultKind.CANCEL,
+            InteractiveAuthResultKind.INTERRUPT,
+            InteractiveAuthResultKind.EOF,
+        ):
+            with self.subTest(kind=kind):
+                workspace = initialized_workspace(self)
+                before = workspace.path("config/system_defaults.json").read_bytes()
+                coordinator = ScriptedCliCoordinator(
+                    [],
+                    snapshots=(both,),
+                    default_results=(InteractiveAuthResult(kind, both),),
+                )
+                with (
+                    mock.patch.object(sys, "stdin", TtyStringIO(is_terminal=True)),
+                    mock.patch.object(sys, "stdout", TtyStringIO(is_terminal=True)),
+                    mock.patch.object(sys, "stderr", io.StringIO()),
+                    mock.patch.object(
+                        cli_module,
+                        "resolve_workspace",
+                        return_value=workspace,
+                    ),
+                    mock.patch.object(
+                        cli_module,
+                        "build_stream_terminal",
+                        return_value=InteractiveTerminal(
+                            lambda _prompt: "",
+                            lambda _text: None,
+                        ),
+                    ),
+                    mock.patch.object(
+                        cli_module,
+                        "ProviderAuthService",
+                        return_value=object(),
+                    ),
+                    mock.patch.object(
+                        cli_module,
+                        "InteractiveAuthCoordinator",
+                        return_value=coordinator,
+                    ),
+                    mock.patch.object(cli_module, "establish_default_backend") as establish,
+                    mock.patch.object(cli_module, "load_cli_context") as context,
+                    mock.patch.object(cli_module, "AgentBackend") as backend,
+                    mock.patch.object(cli_module, "InteractiveController") as controller,
+                ):
+                    self.assertEqual(main(["chat"]), 0)
+                establish.assert_not_called()
+                context.assert_not_called()
+                backend.assert_not_called()
+                controller.assert_not_called()
+                self.assertEqual(
+                    workspace.path("config/system_defaults.json").read_bytes(),
+                    before,
+                )
+
+        workspace = initialized_workspace(self)
+        before = workspace.path("config/system_defaults.json").read_bytes()
+        coordinator = ScriptedCliCoordinator(
+            [],
+            snapshots=(both,),
+            default_results=(provider_result(both, "codex"),),
+        )
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(sys, "stdin", TtyStringIO(is_terminal=True)),
+            mock.patch.object(sys, "stdout", TtyStringIO(is_terminal=True)),
+            mock.patch.object(sys, "stderr", stderr),
+            mock.patch.object(cli_module, "resolve_workspace", return_value=workspace),
+            mock.patch.object(
+                cli_module,
+                "build_stream_terminal",
+                return_value=InteractiveTerminal(lambda _prompt: "", lambda _text: None),
+            ),
+            mock.patch.object(cli_module, "ProviderAuthService", return_value=object()),
+            mock.patch.object(
+                cli_module,
+                "InteractiveAuthCoordinator",
+                return_value=coordinator,
+            ),
+            mock.patch.object(
+                cli_module,
+                "establish_default_backend",
+                side_effect=OSError("persistence-secret"),
+            ),
+            mock.patch.object(cli_module, "load_cli_context") as context,
+            mock.patch.object(cli_module, "AgentBackend") as backend,
+            mock.patch.object(cli_module, "InteractiveController") as controller,
+        ):
+            self.assertEqual(main(["chat"]), 2)
+        self.assertEqual(
+            stderr.getvalue(),
+            expected_interactive_error(
+                InteractiveErrorCode.WORKSPACE_INVALID,
+                debug_log_available=True,
+            ),
+        )
+        self.assertNotIn("persistence-secret", stderr.getvalue())
+        context.assert_not_called()
+        backend.assert_not_called()
+        controller.assert_not_called()
+        self.assertEqual(
+            workspace.path("config/system_defaults.json").read_bytes(),
+            before,
+        )
+
+        workspace = initialized_workspace(self)
+        system_before = workspace.path("config/system_defaults.json").read_bytes()
+        agents_before = workspace.path("config/agent_configs.json").read_bytes()
+        coordinator = ScriptedCliCoordinator(
+            [],
+            snapshots=(both,),
+            default_results=(provider_result(both, "codex"),),
+        )
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(sys, "stdin", TtyStringIO(is_terminal=True)),
+            mock.patch.object(sys, "stdout", TtyStringIO(is_terminal=True)),
+            mock.patch.object(sys, "stderr", stderr),
+            mock.patch.object(cli_module, "resolve_workspace", return_value=workspace),
+            mock.patch.object(
+                cli_module,
+                "build_stream_terminal",
+                return_value=InteractiveTerminal(lambda _prompt: "", lambda _text: None),
+            ),
+            mock.patch.object(cli_module, "ProviderAuthService", return_value=object()),
+            mock.patch.object(
+                cli_module,
+                "InteractiveAuthCoordinator",
+                return_value=coordinator,
+            ),
+            mock.patch.object(
+                cli_module,
+                "establish_default_backend",
+                side_effect=SettingsError(SettingsErrorKind.CONFLICT),
+            ),
+            mock.patch.object(cli_module, "load_cli_context") as context,
+            mock.patch.object(cli_module, "AgentBackend") as backend,
+            mock.patch.object(cli_module, "InteractiveController") as controller,
+        ):
+            self.assertEqual(main(["chat"]), 2)
+        self.assertEqual(
+            stderr.getvalue(),
+            expected_interactive_error(
+                InteractiveErrorCode.CONFIGURATION_INVALID,
+                debug_log_available=True,
+            ),
+        )
+        context.assert_not_called()
+        backend.assert_not_called()
+        controller.assert_not_called()
+        self.assertEqual(
+            workspace.path("config/system_defaults.json").read_bytes(),
+            system_before,
+        )
+        self.assertEqual(
+            workspace.path("config/agent_configs.json").read_bytes(),
+            agents_before,
+        )
+        self.assertFalse(
+            tuple(
+                workspace.path(
+                    "agent_states/orchestrator_state/provider_sessions"
+                ).glob("*.json")
+            )
+        )
+
     def test_storage_activation_cas_remains_after_later_provider_interrupt(
         self,
     ) -> None:
@@ -2114,6 +2634,7 @@ class CliTests(unittest.TestCase):
                 "InteractiveAuthCoordinator",
                 return_value=coordinator,
             ),
+            mock.patch.object(cli_module, "establish_default_backend") as establish,
             mock.patch.object(
                 cli_module,
                 "load_cli_context",
@@ -2147,6 +2668,8 @@ class CliTests(unittest.TestCase):
                 ("backend", None),
             ],
         )
+        establish.assert_not_called()
+        self.assertNotIn("select_default", [name for name, _value in events])
 
     def test_noninteractive_and_non_tty_forms_never_construct_auth(self) -> None:
         provider_catalog_factory = mock.Mock()

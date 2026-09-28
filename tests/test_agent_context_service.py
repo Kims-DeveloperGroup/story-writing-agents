@@ -64,6 +64,11 @@ from story_writing_agents.agent_context.sources import (
     ContextSourceSearchMatch,
     ContextSourceSnapshot,
 )
+from story_writing_agents.structured_output_validation import (
+    bounded_chunks,
+    diagnose_json_text,
+    carry_validation, diagnose_value, encoding_failure, failure_issues, validation_call, validation_failure,
+)
 
 
 _PRIVATE_ANSWER = "PRIVATE_FINAL_ANSWER_한🙂"
@@ -76,6 +81,144 @@ _SCOPE = ContextScope(
     "conversation",
     "lead_orchestrator",
 )
+
+
+class StructuredOutputValidationTests(unittest.TestCase):
+    def test_diagnose_json_text_reports_all_independent_safe_issues(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "minLength": 1},
+                "count": {"type": "integer", "minimum": 1},
+                "maximum": {"type": "number", "maximum": 2},
+                "short": {"type": "string", "maxLength": 2},
+                "few": {"type": "array", "minItems": 1},
+                "many": {"type": "array", "maxItems": 1},
+                "mode": {"type": "string", "enum": ["draft", "review"]},
+                "items": {
+                    "type": "array", "items": {"type": "string", "minLength": 1},
+                },
+                "required_note": {"type": "string"},
+            },
+            "required": ["message", "count", "items", "required_note"],
+            "additionalProperties": False,
+        }
+        secret = "PRIVATE_PROVIDER_VALUE_한🙂"
+        body = json.dumps({
+            "message": "", "count": 0, "maximum": 3, "short": secret,
+            "few": [], "many": [1, 2], "mode": secret,
+            "items": ["", 3], secret: secret,
+        }, ensure_ascii=False)
+        issues = diagnose_json_text(body, schema)
+        self.assertEqual(issues, (
+            "$.required_note: required property is missing",
+            "$: contains 1 unexpected properties (names withheld)",
+            "$.message: expected at least 1 characters, got 0",
+            "$.count: expected at least 1, got integer",
+            "$.maximum: expected at most 2, got integer",
+            f"$.short: expected at most 2 characters, got {len(secret)}",
+            "$.few: expected at least 1 items, got 0",
+            "$.many: expected at most 1 items, got 2",
+            '$.mode: expected one of ["draft", "review"] (string), got string',
+            "$.items[0]: expected at least 1 characters, got 0",
+            "$.items[1]: expected string, got integer",
+        ))
+        self.assertNotIn(secret, repr(issues))
+
+    def test_union_selects_matching_branch_without_other_branch_noise(self) -> None:
+        schema = {"anyOf": [
+            {"type": "object", "properties": {
+                "kind": {"type": "string", "enum": ["search"]},
+                "query": {"type": "string"},
+            }, "required": ["kind", "query"], "additionalProperties": False},
+            {"type": "object", "properties": {
+                "kind": {"type": "string", "enum": ["answer"]},
+                "message": {"type": "string", "minLength": 1},
+                "citation_ids": {"type": "array"},
+            }, "required": ["kind", "message", "citation_ids"],
+                "additionalProperties": False},
+        ]}
+        issues = diagnose_json_text(
+            '{"kind":"answer","message":0,"PRIVATE_UNKNOWN":"secret"}', schema,
+        )
+        self.assertEqual(issues, (
+            "$.citation_ids: required property is missing",
+            "$: contains 1 unexpected properties (names withheld)",
+            "$.message: expected string, got integer",
+        ))
+        self.assertNotIn("query", repr(issues))
+        self.assertNotIn("PRIVATE_UNKNOWN", repr(issues))
+
+    def test_malformed_and_duplicate_json_have_value_free_diagnostics(self) -> None:
+        schema = {"type": "object", "properties": {}, "additionalProperties": False}
+        for text, expected in (("{", ("$: malformed JSON",)),
+                               ('{"private":1,"private":2}', ("$: duplicate object key",)),
+                               ("NaN", ("$: malformed JSON",)), ("{}", ())):
+            self.assertEqual(diagnose_json_text(text, schema), expected)
+        private = "PRIVATE_EXCEPTION_AND_VALUE_한🙂"
+        failure = validation_failure(ValueError(private), "$.message",
+                                     "expected nonempty text", value=private)
+        with self.assertRaises(ValueError) as caught:
+            validation_call("$.result", lambda: (_ for _ in ()).throw(failure))
+        self.assertIs(caught.exception, failure)
+        wrapper = carry_validation(TypeError(private), failure)
+        self.assertEqual(failure_issues(wrapper, path="$.action"),
+                         ("$.action.result.message: expected nonempty text; got string",))
+        self.assertNotIn(private, repr(failure_issues(wrapper)))
+        with self.assertRaises(FrozenInstanceError):
+            failure.provider_validation_findings[0].requirement = private
+        self.assertEqual(failure_issues(ValueError(private)), ())
+        failure.provider_validation_findings = (private,)
+        self.assertEqual(failure_issues(failure), ())
+        self.assertEqual(diagnose_value(float("inf"), {"type": "number"}),
+                         ("$: expected a finite number, got number",))
+        self.assertEqual(diagnose_value(True, {"type": "integer"}),
+                         ("$: expected integer, got boolean",))
+
+    def test_properties_omitted_from_required_remain_optional(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string"},
+                "optional_count": {"type": "integer"},
+            },
+            "required": ["message"],
+            "additionalProperties": False,
+        }
+        self.assertEqual(diagnose_json_text('{"message":"ok"}', schema), ())
+        self.assertEqual(
+            diagnose_json_text('{"message":"ok","optional_count":"bad"}', schema),
+            ("$.optional_count: expected integer, got string",),
+        )
+        self.assertEqual(
+            diagnose_json_text("{}", schema),
+            ("$.message: required property is missing",),
+        )
+
+    def test_bounded_chunks_preserve_order_and_over_32k_content(self) -> None:
+        properties = {f"field_{index:04d}": {"type": "string"} for index in range(1500)}
+        schema = {"type": "object", "properties": properties,
+                  "required": list(properties), "additionalProperties": False}
+        issues = diagnose_json_text("{}", schema)
+        chunks = bounded_chunks(issues)
+        self.assertGreater(sum(len(chunk.encode()) for chunk in chunks), 32_768)
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(len(chunk.encode()) < 32_768 for chunk in chunks))
+        self.assertEqual(tuple(line for chunk in chunks for line in chunk.splitlines()[1:]), issues)
+        properties = {f"field_{index:04d}": {"anyOf": [{"type": "string"}] * 2}
+                      for index in range(2050)}
+        failure = encoding_failure(ValueError("PRIVATE_ERROR"),
+            {**dict.fromkeys(properties, "PRIVATE_VALUE\ud800"), "PRIVATE_KEY": "\ud800"},
+            {"type": "object", "properties": properties})
+        chunks = bounded_chunks(failure_issues(failure))
+        lines = tuple(line for chunk in chunks for line in chunk.splitlines()[1:])
+        self.assertEqual(len(lines), 2049)
+        self.assertEqual(len(set(lines)), len(lines))
+        self.assertEqual(lines[-1], "$: additional validation issues omitted")
+        self.assertEqual(lines[-2],
+            "$.field_2047: expected strict UTF-8 text without unpaired surrogates")
+        self.assertTrue(all(len(chunk.encode()) < 32_768 for chunk in chunks))
+        self.assertNotIn("PRIVATE", "\n".join(chunks))
 
 
 def _digest(body: bytes) -> str:
@@ -101,12 +244,11 @@ def _answer_wire(
     *,
     used_handles: tuple[str, ...] = (),
 ) -> dict[str, object]:
+    del correlation, used_handles
     return {
-        "correlation": correlation,
         "action": {
             "kind": "answer",
             "result": result,
-            "used_handles": list(used_handles),
         },
     }
 
@@ -117,23 +259,21 @@ def _search_wire(
     *,
     path_prefix: str | None = None,
 ) -> dict[str, object]:
-    return {
-        "correlation": correlation,
-        "action": {
-            "kind": "search",
-            "path_prefix": path_prefix,
-            "queries": [
-                {"text": text, "source_kinds": kinds} for text, kinds in queries
-            ],
-        },
+    del correlation
+    action: dict[str, object] = {
+        "kind": "search",
+        "queries": [
+            {"text": text, "source_kinds": kinds} for text, kinds in queries
+        ],
     }
+    if path_prefix is not None:
+        action["path_prefix"] = path_prefix
+    return {"action": action}
 
 
 def _read_wire(correlation: str, handles: list[object]) -> dict[str, object]:
-    return {
-        "correlation": correlation,
-        "action": {"kind": "read", "handles": handles},
-    }
+    del correlation
+    return {"action": {"kind": "read", "handles": handles}}
 
 
 def _snapshot(
@@ -628,7 +768,7 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
 
 
 class CompactWireDecoderTests(unittest.TestCase):
-    """Verify the complete strict typed wire-v7 response contract in isolation."""
+    """Verify the complete strict typed wire-v8 response contract in isolation."""
 
     def setUp(self) -> None:
         manifest, _snapshots = _manifest_fixture()
@@ -687,7 +827,7 @@ class CompactWireDecoderTests(unittest.TestCase):
         source_kinds: tuple[ContextSourceKind, ...] = (
             service_module._SEARCH_SOURCE_KIND_ORDER
         ),
-    ) -> None:
+    ) -> service_module.ContextExecutionError:
         with self.assertRaises(service_module.ContextExecutionError) as caught:
             self.decode(
                 action,
@@ -700,32 +840,23 @@ class CompactWireDecoderTests(unittest.TestCase):
             service_module.ContextExecutionErrorCode.MALFORMED_ACTION,
         )
         self.assertIsNone(caught.exception.__cause__)
+        return caught.exception
 
-    def test_schema_and_full_correlation_token_are_exact(self) -> None:
+    def test_schema_is_action_only_and_runtime_correlation_is_exact(self) -> None:
         limits = [4, 2, 2, 4, 8, 8, 16, 200]
         schema = service_module._context_action_schema(
-            correlation=self.correlation,
             allowed_actions=("search", "read", "answer"),
             result_contract=self.result_contract,
             allowed_search_source_kinds=service_module._SEARCH_SOURCE_KIND_ORDER,
             action_limits=limits,
-            max_used_handles=CONTEXT_ACTION_POLICY.max_cumulative_handles,
         )
         self.assertIs(schema["additionalProperties"], False)
-        self.assertEqual(schema["required"], ["correlation", "action"])
-        self.assertEqual(set(schema["properties"]), {"correlation", "action"})
-        self.assertEqual(
-            schema["properties"]["correlation"],
-            {
-                "description": "Echo the exact correlation token from this call.",
-                "enum": [self.token],
-                "type": "string",
-            },
-        )
+        self.assertEqual(schema["required"], ["action"])
+        self.assertEqual(set(schema["properties"]), {"action"})
         action_variants = schema["properties"]["action"]["anyOf"]
         self.assertEqual(
             tuple(variant["properties"]["kind"]["enum"][0] for variant in action_variants),
-            ("search", "read", "answer"),
+            ("search", "search", "read", "answer"),
         )
         for variant in action_variants:
             self.assertIs(variant["additionalProperties"], False)
@@ -733,7 +864,9 @@ class CompactWireDecoderTests(unittest.TestCase):
                 set(variant["required"]),
                 set(variant["properties"]),
             )
-        search, read, answer = action_variants
+        search, prefixed_search, read, answer = action_variants
+        self.assertNotIn("path_prefix", search["properties"])
+        self.assertIn("path_prefix", prefixed_search["properties"])
         self.assertEqual(search["properties"]["queries"]["maxItems"], 4)
         query_schema = search["properties"]["queries"]["items"]
         source_kinds_schema = query_schema["properties"]["source_kinds"]
@@ -755,10 +888,7 @@ class CompactWireDecoderTests(unittest.TestCase):
         )
         self.assertEqual(read["properties"]["handles"]["maxItems"], 8)
         self.assertEqual(answer["properties"]["result"], self.result_schema)
-        self.assertEqual(
-            answer["properties"]["used_handles"]["maxItems"],
-            CONTEXT_ACTION_POLICY.max_cumulative_handles,
-        )
+        self.assertEqual(set(answer["properties"]), {"kind", "result"})
         canonical_provider_json(schema)
         self.assertRegex(self.token, r"\A[A-Za-z0-9_-]{43}\Z")
         variants = (
@@ -774,23 +904,16 @@ class CompactWireDecoderTests(unittest.TestCase):
             service_module._correlation_token(value) for value in variants
         )
         self.assertEqual(len(set(tokens)), len(tokens))
-        compare = service_module.hmac.compare_digest
-        with mock.patch.object(
-            service_module.hmac,
-            "compare_digest",
-            wraps=compare,
-        ) as checked:
-            self.assertIsInstance(
-                self.decode(
-                    _answer_wire(
-                        self.token,
-                        {"kind": "answer", "message": "answer", "proposal": None},
-                    ),
-                    allowed=("answer",),
+        self.assertIsInstance(
+            self.decode(
+                _answer_wire(
+                    self.token,
+                    {"kind": "answer", "message": "answer", "proposal": None},
                 ),
-                ContextAnswerAction,
-            )
-        checked.assert_called_once()
+                allowed=("answer",),
+            ),
+            ContextAnswerAction,
+        )
 
     def test_valid_search_read_and_natural_result_shapes_decode_exactly(self) -> None:
         search = self.decode(
@@ -837,7 +960,7 @@ class CompactWireDecoderTests(unittest.TestCase):
             structured.answer,
             '{"kind":"answer","message":"Visible.","proposal":null}',
         )
-        self.assertEqual(structured.used_handles, (answer_handle,))
+        self.assertEqual(structured.used_handles, ())
         for invalid in ([], "text", 1, None, True):
             with self.subTest(json_object_invalid=invalid):
                 self.assert_malformed(
@@ -846,92 +969,44 @@ class CompactWireDecoderTests(unittest.TestCase):
                 )
 
     def test_search_wire_supports_shared_artifact_prefix_and_kind_matrix(self) -> None:
-        unprefixed = self.decode(
-            _search_wire(
-                self.token,
-                [
-                    ("First", ["writing_artifact"]),
-                    (
-                        "Second",
-                        ["conversation", "active_debate", "own_agent_state"],
-                    ),
-                ],
-            ),
-            allowed=("search",),
-        )
+        def schema(kinds=service_module._SEARCH_SOURCE_KIND_ORDER):
+            return service_module._context_action_schema(allowed_actions=("search",),
+                result_contract=self.result_contract, allowed_search_source_kinds=kinds,
+                action_limits=[4, 2, 2, 4, 8, 8, 16, 200])
+        wire = _search_wire(self.token, [("First", ["writing_artifact"]),
+            ("Second", ["conversation", "active_debate", "own_agent_state"])])
+        self.assertEqual(diagnose_json_text(json.dumps(wire), schema()), ())
+        unprefixed = self.decode(wire, allowed=("search",))
         self.assertIsInstance(unprefixed, ContextSearchAction)
-        assert isinstance(unprefixed, ContextSearchAction)
-        self.assertEqual(
-            tuple(
-                (
-                    query.normalized_text,
-                    query.source_kinds,
-                    query.artifact_path_prefix,
-                )
-                for query in unprefixed.queries
-            ),
-            (
-                ("first", (ContextSourceKind.WRITING_ARTIFACT,), None),
-                (
-                    "second",
-                    (
-                        ContextSourceKind.CONVERSATION,
-                        ContextSourceKind.ACTIVE_DEBATE,
-                        ContextSourceKind.OWN_AGENT_STATE,
-                    ),
-                    None,
-                ),
-            ),
-        )
-
+        self.assertEqual(tuple((q.normalized_text, q.source_kinds, q.artifact_path_prefix) for q in unprefixed.queries),
+            (("first", (ContextSourceKind.WRITING_ARTIFACT,), None), ("second", (ContextSourceKind.CONVERSATION,
+                ContextSourceKind.ACTIVE_DEBATE, ContextSourceKind.OWN_AGENT_STATE), None)))
         prefix = "manuscript/part-01/"
-        prefixed = self.decode(
-            _search_wire(
-                self.token,
-                [
-                    ("Alpha", ["writing_artifact"]),
-                    ("Beta", ["writing_artifact"]),
-                ],
-                path_prefix=prefix,
-            ),
-            allowed=("search",),
-        )
+        wire = _search_wire(self.token, [("Alpha", ["writing_artifact"]), ("Beta", ["writing_artifact"])], path_prefix=prefix)
+        self.assertEqual(diagnose_json_text(json.dumps(wire), schema()), ())
+        prefixed = self.decode(wire, allowed=("search",))
         self.assertIsInstance(prefixed, ContextSearchAction)
-        assert isinstance(prefixed, ContextSearchAction)
-        self.assertEqual(
-            tuple(query.artifact_path_prefix for query in prefixed.queries),
-            (prefix, prefix),
-        )
-        self.assertEqual(
-            tuple(query.normalized_text for query in prefixed.queries),
-            ("alpha", "beta"),
-        )
-
-        canonical_pair = (
-            ContextSourceKind.WRITING_ARTIFACT,
-            ContextSourceKind.CONVERSATION,
-        )
-        for provider_order in (
-            ["writing_artifact", "conversation"],
-            ["conversation", "writing_artifact"],
-        ):
+        self.assertEqual(tuple(q.artifact_path_prefix for q in prefixed.queries), (prefix, prefix))
+        self.assertEqual(tuple(q.normalized_text for q in prefixed.queries), ("alpha", "beta"))
+        for kinds in (["conversation"], ["writing_artifact", "conversation"]):
+            invalid = _search_wire(self.token, [("Alpha", kinds)], path_prefix=prefix)
+            self.assertTrue(diagnose_json_text(json.dumps(invalid), schema()))
+            self.assert_malformed(invalid, allowed=("search",))
+        conversation_schema = schema((ContextSourceKind.CONVERSATION,))
+        self.assertNotIn("path_prefix", repr(conversation_schema))
+        self.assertTrue(diagnose_json_text(json.dumps(wire), conversation_schema))
+        canonical_pair = (ContextSourceKind.WRITING_ARTIFACT, ContextSourceKind.CONVERSATION)
+        for provider_order in (["writing_artifact", "conversation"], ["conversation", "writing_artifact"]):
             with self.subTest(provider_order=provider_order):
-                pair = self.decode(
-                    _search_wire(self.token, [("pair", provider_order)]),
-                    allowed=("search",),
-                    source_kinds=canonical_pair,
-                )
-                assert isinstance(pair, ContextSearchAction)
+                pair = self.decode(_search_wire(self.token, [("pair", provider_order)]),
+                                   allowed=("search",), source_kinds=canonical_pair)
+                self.assertIsInstance(pair, ContextSearchAction)
                 self.assertEqual(pair.queries[0].source_kinds, canonical_pair)
-
         for kind in service_module._SEARCH_SOURCE_KIND_ORDER:
             with self.subTest(kind=kind):
-                action = self.decode(
-                    _search_wire(self.token, [("needle", [kind.value])]),
-                    allowed=("search",),
-                    source_kinds=(kind,),
-                )
-                assert isinstance(action, ContextSearchAction)
+                action = self.decode(_search_wire(self.token, [("kind", [kind.value])]),
+                                     allowed=("search",), source_kinds=(kind,))
+                self.assertIsInstance(action, ContextSearchAction)
                 self.assertEqual(action.queries[0].source_kinds, (kind,))
 
     def test_artifact_prefix_validation_is_exact_and_one_scope_per_search(self) -> None:
@@ -1006,156 +1081,54 @@ class CompactWireDecoderTests(unittest.TestCase):
                 ),
             )
 
-    def test_malformed_exact_shape_types_routes_duplicates_and_limits_reject(
-        self,
-    ) -> None:
-        valid_result = {
-            "kind": "answer",
-            "message": "Visible.",
-            "proposal": None,
-        }
-        base = _answer_wire(self.token, valid_result)
+    def test_malformed_exact_shape_types_routes_duplicates_and_limits_reject(self) -> None:
+        base = _answer_wire(self.token, {"kind": "answer", "message": "Visible.", "proposal": None})
         answer_action = base["action"]
-        assert isinstance(answer_action, dict)
-        malformed = (
-            {},
-            {**base, "extra": 1},
-            {key: value for key, value in base.items() if key != "action"},
-            {key: value for key, value in base.items() if key != "correlation"},
-            {**base, "correlation": "A" * 43},
-            {**base, "correlation": True},
-            {**base, "action": True},
+        malformed = ({}, {**base, "extra": 1}, {key: value for key, value in base.items() if key != "action"},
+            {**base, "correlation": "A" * 43}, {**base, "correlation": True}, {**base, "action": True},
             {**base, "action": {**answer_action, "kind": "unknown"}},
             {**base, "action": {**answer_action, "used_handles": True}},
-            {**base, "action": {**answer_action, "extra": 1}},
-            {
-                "correlation": self.token,
-                "action": {"kind": "answer", "used_handles": []},
-            },
-            _answer_wire(self.token, valid_result, used_handles=("h1", "h1")),
-            '{"correlation":"%s","correlation":"%s","action":%s}'
-            % (
-                self.token,
-                self.token,
-                json.dumps(answer_action, separators=(",", ":")),
-            ),
-        )
+            {**base, "action": {**answer_action, "extra": 1}}, {"action": {"kind": "answer"}},
+            '{"action":%s,"action":%s}' % tuple(json.dumps(answer_action, separators=(",", ":")) for _ in range(2)))
         for value in malformed:
             with self.subTest(value=value):
                 self.assert_malformed(value)
-
         self.assert_malformed(base, allowed=("search",))
-        self.assert_malformed(
-            _search_wire(self.token, [("x", ["conversation"])]),
-            source_kinds=(ContextSourceKind.WRITING_ARTIFACT,),
-        )
-        self.assert_malformed(
-            _search_wire(
-                self.token,
-                [
-                    ("x", ["writing_artifact"]),
-                    ("x", ["writing_artifact"]),
-                ],
-            )
-        )
-        for action in (
-            {"kind": "search", "path_prefix": None, "queries": []},
-            {"kind": "search", "path_prefix": None, "queries": True},
-            {
-                "kind": "search",
-                "path_prefix": None,
-                "queries": [{"text": "x"}],
-            },
-            {
-                "kind": "search",
-                "path_prefix": None,
-                "queries": [{"text": "x", "source_kinds": []}],
-            },
-            {
-                "kind": "search",
-                "path_prefix": None,
-                "queries": [
-                    {
-                        "text": "x",
-                        "source_kinds": ["conversation", "conversation"],
-                    }
-                ],
-            },
-            {
-                "kind": "search",
-                "path_prefix": None,
-                "queries": [{"text": "x", "source_kinds": ["unknown"]}],
-            },
-            {
-                "kind": "search",
-                "path_prefix": None,
-                "queries": [
-                    {
-                        "text": "x",
-                        "source_kinds": ["writing_artifact"],
-                        "extra": True,
-                    }
-                ],
-            },
-            {
-                "kind": "search",
-                "path_prefix": "manuscript/part-01/chapter.md",
-                "queries": [
-                    {"text": "x", "source_kinds": ["writing_artifact"]}
-                ],
-            },
-            {
-                "kind": "search",
-                "path_prefix": "manuscript/",
-                "queries": [{"text": "x", "source_kinds": ["conversation"]}],
-            },
-            {
-                "kind": "search",
-                "path_prefix": "manuscript/",
-                "queries": [
-                    {
-                        "text": "x",
-                        "source_kinds": ["conversation", "writing_artifact"],
-                    }
-                ],
-            },
+        self.assert_malformed(_search_wire(self.token, [("x", ["conversation"])]),
+                              source_kinds=(ContextSourceKind.WRITING_ARTIFACT,))
+        self.assert_malformed(_search_wire(self.token, [("x", ["writing_artifact"]), ("Ｘ", ["writing_artifact"])]))
+        distinct = self.decode(_search_wire(self.token, [("x", ["writing_artifact"]), ("Ｘ", ["conversation"])]))
+        self.assertEqual(len(distinct.queries), 2)
+        for path_prefix, queries, path, rule in (
+            (None, [], "queries", "expected a nonempty array; got array"),
+            (None, True, "queries", "expected a nonempty array; got boolean"),
+            (None, [{"text": "x"}], "queries[0]", "expected an object containing exactly source_kinds, text"),
+            (None, [{"text": "x", "source_kinds": []}], "queries[0].source_kinds", "expected at least one source kind"),
+            (None, [{"text": "x", "source_kinds": ["conversation", "conversation"]}], "queries[0].source_kinds", "source kinds must be unique"),
+            (None, [{"text": "x", "source_kinds": ["unknown"]}], "queries[0].source_kinds[0]", "expected one of ["),
+            (None, [{"text": "x", "source_kinds": ["writing_artifact"], "extra": True}], "queries[0]", "expected an object containing exactly source_kinds, text"),
+            ("manuscript/part-01/chapter.md", [{"text": "x", "source_kinds": ["writing_artifact"]}], "path_prefix", "relative POSIX prefix ending in /"),
+            ("manuscript/", [{"text": "x", "source_kinds": ["conversation"]}], "path_prefix", "path_prefix requires source_kinds to contain only writing_artifact"),
+            ("manuscript/", [{"text": "x", "source_kinds": ["conversation", "writing_artifact"]}], "path_prefix", "path_prefix requires source_kinds to contain only writing_artifact"),
         ):
+            action = {"kind": "search", "path_prefix": path_prefix, "queries": queries}
             with self.subTest(search_action=action):
-                self.assert_malformed(
-                    {"correlation": self.token, "action": action}
-                )
+                failure = self.assert_malformed({"action": action})
+                issues = failure_issues(failure, path="$.action")
+                self.assertEqual(len(issues), 1)
+                self.assertTrue(issues[0].startswith(f"$.action.{path}: "), issues)
+                self.assertIn(rule, issues[0])
         self.assert_malformed(
             _search_wire(self.token, [("x", ["writing_artifact"])]),
             source_kinds=(ContextSourceKind.CONVERSATION,),
         )
         self.assert_malformed(_read_wire(self.token, ["h1", "h1"]))
         read_with_extra = _read_wire(self.token, ["h1"])
-        read_action = read_with_extra["action"]
-        assert isinstance(read_action, dict)
-        read_action["used_handles"] = ["h1"]
+        read_with_extra["action"]["extra"] = True
         self.assert_malformed(read_with_extra)
-        self.assert_malformed(
-            _search_wire(
-                self.token,
-                [
-                    (f"q{index}", ["writing_artifact"])
-                    for index in range(
-                        CONTEXT_ACTION_POLICY.max_queries_per_search + 1
-                    )
-                ],
-            )
-        )
-        self.assert_malformed(
-            _read_wire(
-                self.token,
-                [
-                    f"h{index}"
-                    for index in range(
-                        CONTEXT_ACTION_POLICY.max_handles_per_read + 1
-                    )
-                ],
-            )
-        )
+        self.assert_malformed(_search_wire(self.token, [(f"q{i}", ["writing_artifact"])
+            for i in range(CONTEXT_ACTION_POLICY.max_queries_per_search + 1)]))
+        self.assert_malformed(_read_wire(self.token, [f"h{i}" for i in range(CONTEXT_ACTION_POLICY.max_handles_per_read + 1)]))
 
     def test_invalid_read_values_report_only_fixed_source_handle_guidance(self) -> None:
         private_values = ("conflict", "PRIVATE/critique text")
@@ -1184,23 +1157,21 @@ class CompactWireDecoderTests(unittest.TestCase):
         for private in private_values:
             self.assertNotIn(private, rendered)
 
-    def test_correlation_mismatch_precedes_read_validation_and_is_content_free(
+    def test_provider_correlation_echo_is_rejected_as_an_extra_field(
         self,
     ) -> None:
         actual_correlation = "PRIVATE critique prose\x1b]unsafe\x07"
         with self.assertRaises(service_module.ContextExecutionError) as caught:
-            self.decode(_read_wire(actual_correlation, []))
+            value = _read_wire(actual_correlation, [])
+            value["correlation"] = actual_correlation
+            self.decode(value)
 
         failure = caught.exception
         self.assertIs(
             failure.code,
             service_module.ContextExecutionErrorCode.MALFORMED_ACTION,
         )
-        self.assertEqual(
-            str(failure),
-            "contextual provider response is invalid: `correlation` does not match the "
-            "current request correlation token",
-        )
+        self.assertEqual(str(failure), "contextual provider action is malformed")
         self.assertIsNone(failure.__cause__)
         rendered = "\n".join(
             (
@@ -1252,26 +1223,16 @@ class CompactWireDecoderTests(unittest.TestCase):
             self.assertIsNone(caught.exception.__cause__)
 
     def test_double_encoded_or_invalid_structured_results_reject(self) -> None:
-        valid = {
-            "kind": "answer",
-            "message": "Visible.",
-            "proposal": None,
-        }
-        cases = (
-            json.dumps(valid, separators=(",", ":")),
-            {"kind": "answer", "message": "Visible."},
-            {**valid, "extra": True},
-            {**valid, "kind": "unknown"},
-            [],
-            "text",
-            None,
-        )
+        valid = {"kind": "answer", "message": "Visible.", "proposal": None}
+        cases = (json.dumps(valid, separators=(",", ":")), {"kind": "answer", "message": "Visible."},
+                 {**valid, "extra": True}, {**valid, "kind": "unknown"}, [],
+                 {**valid, "message": "\ud800"}, None)
         for result in cases:
             with self.subTest(result=result):
-                self.assert_malformed(
-                    _answer_wire(self.token, result),
-                    allowed=("answer",),
-                )
+                failure = self.assert_malformed(json.dumps(_answer_wire(self.token, result)), allowed=("answer",))
+                if type(result) is dict and result.get("message") == "\ud800":
+                    self.assertEqual(failure_issues(failure, path="$.action"),
+                                     ("$.action.result.message: expected strict UTF-8 text without unpaired surrogates",))
 
 
 class HandleAndReadLifecycleTests(unittest.TestCase):
@@ -2192,6 +2153,8 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
             safe_locator = (
                 f"{locator}/debate-one"
                 if kind is ContextSourceKind.OWN_AGENT_STATE
+                else locator.removeprefix("manuscript/")
+                if kind is ContextSourceKind.WRITING_ARTIFACT
                 else locator
             )
             self.assertEqual(provenance, ["provenance", authority.value, safe_locator])

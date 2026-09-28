@@ -53,6 +53,13 @@ audit. Audits always call all three voters against the same candidate digest.
 Synthesis is a nonvoting lead judgment. Repair creates a new unpublished
 candidate; its revision increments when the re-audit request is created.
 
+A rejected structured phase reply receives one bounded repair. If that repair
+is also rejected, DRAFT fails without creating a candidate. REPAIR and
+FINALIZATION instead become noncontinuable deadlocks that preserve the trusted
+candidate and report `next_action=inspect_failure`. A SYNTHESIS deadlock also
+preserves the candidate but reports `next_action=continue_deadlock`. None of
+these outcomes grants publication.
+
 ## Visible states
 
 Use both `inspection.projection.state` and `next_action`; a phase name alone
@@ -67,10 +74,10 @@ does not grant authority.
 | `rejected` | This phase is closed. | No provider ran and no authority remains. |
 | `superseded` | Request a replacement for the same phase. | Revise closed the old request and invalidated its authority. |
 | `interrupted` | Inspect the failure; begin a new workflow if appropriate. | The exact running task was cancelled and closed durably. |
-| `failed` | Inspect diagnostics; retry only with a new workflow after correction. | Execution definitely failed; nothing was published. |
+| `failed` | Inspect diagnostics; retry only with a new workflow after correction. | Execution definitely failed and nothing was published; specifically, exhausted DRAFT repair retains no candidate. |
 | `outcome_unknown` | Stop automation and perform operator recovery. | Provider outcome cannot be proved; replay may duplicate work. |
 | `recovery_required` | Reconcile durable storage before proceeding. | Runtime cannot prove a safe append/interruption boundary. |
-| `deadlocked` | Review the unresolved critiques, then either stop or explicitly prepare a continuation. | Lead selected no safe successor; the candidate and conflict provenance remain immutable and nothing was published. |
+| `deadlocked` | For SYNTHESIS, review the unresolved critiques and either stop or explicitly prepare a continuation. For REPAIR or FINALIZATION, inspect the failure; continuation is unavailable. | The trusted candidate remains immutable, no successor was selected, and nothing was published. |
 
 `capability_available=True` means this process holds private one-use authority
 for the exact pending request. After restart, `awaiting_confirmation` may be
@@ -165,7 +172,10 @@ Audit/re-audit maps to `Phase.AUDIT` and calls the three specialists in roster
 order. Repair maps to `PROPOSE_REVISION`, synthesis to `SYNTHESIZE`, and
 finalization to `FINALIZE`. Post-draft calls also receive the exact current
 candidate text. Strict reply shape, revision, assignment, and digest checks
-run before a result is accepted.
+run before a result is accepted. An exhausted structured repair is reported by
+the returned `ConsensusProviderResult.trace` as `origin=runtime_fallback` and
+`action=none`; it does not turn fallback prose into a candidate or publication
+authority.
 
 Canonical artifact input uses the normal reference operation: runtime
 revalidates the path and digest and gives the provider an authorized read
@@ -187,7 +197,7 @@ cleanup nor the old operation ID as a live-owner exclusion. With no registered
 cleanup the call performs no artifact scan merely to discover one; a restart
 orphan is instead reconciled at the next artifact-sensitive boundary.
 
-## Continue a deadlock without copying the candidate
+## Continue a synthesis deadlock without copying the candidate
 
 A terminal synthesis deadlock exposes `next_action=continue_deadlock`. The
 application may offer two choices:

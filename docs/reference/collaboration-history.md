@@ -146,7 +146,11 @@ step with no reviewer call. Otherwise confirmation and durable start record
 `artifact_proposal_state=reviewing`, and every disclosed reviewer receives the
 same candidate. When all succeed, `artifact_review_synthesis` stores the lead's
 `propose`, `revise`, or `reject` decision, message, rationale, user impact,
-limitations, every reply event ID, and every unresolved input ID.
+limitations, every reply event ID, and every unresolved input ID. The provider
+supplies only the decision and message. Runtime uses the message as rationale,
+adds the no-change impact, and derives limitations truthfully: no additional
+limitations when the unresolved set is empty, otherwise the exact unresolved
+reviewer input IDs.
 
 Only `propose` records `artifact_reviewed_proposal` and artifact state
 `reviewed`. The immutable reviewed proposal closes over candidate,
@@ -166,8 +170,10 @@ Filesystem/SQLite history, archive, and transfer retain the same objective
 records; projection itself appends nothing.
 
 `ArtifactObjectiveFacts` freezes the runtime objective ID, origin conversation
-and user event, visible request, exact canonical target paths, and the offered
-draft-source snapshot. `ArtifactObjectivePayload` records `start`, `continue`,
+and user event, the exact originating user-event content as its visible request,
+exact canonical target paths, and the offered draft-source snapshot. The
+provider cannot replace that request with a paraphrase.
+`ArtifactObjectivePayload` records `start`, `continue`,
 or `cancel` beside its accepted Lead judgment in the same atomic batch. A
 continuation names the exact previous objective event and preserves the origin
 facts. A PREPARE transition also binds its co-batched candidate by event ID,
@@ -403,6 +409,25 @@ accounting. Every other code requires both exact non-null call identities;
 original user event and never creates a successful judgment or execution
 result. Payloads contain visible facts, not hidden reasoning.
 
+Agent-authored visible messages, Lead judgments, specialist replies, and Lead
+syntheses persist an optional `trace` object with exactly `role`, `action`,
+`context_sources`, `recovered_fields`, and `origin`. These are bounded labels
+derived by runtime after provider validation; no prompt, retrieved content,
+reply prose, hidden reasoning, or authority is copied into the trace. A newly
+opened event store decodes the same trace, allowing terminal history to show
+how the reply was constructed. `runtime_fallback` always reports
+`action=none`.
+
+A `message` event uses wire `payload_type="message"`. Its optional
+`validation_details` is an array of nonempty, bounded UTF-8 chunks describing
+trusted JSON property paths, expected and actual types, or fixed validation
+rules. Runtime validation messages can also carry the paired optional
+`validation_invocation_id` and `validation_call_id` fields when details are
+present. These IDs correlate a notice with its submitted physical call for
+restart recovery, including concurrent specialist calls. The details contain
+no raw provider values, unknown property names, or parser error text. Older
+message payloads omit these fields and still decode.
+
 `provider_call_accounting` contains no request or response content. It records
 one invocation/call identity, contiguous ordinal, canonical agent role,
 invocation kind (`lead`, `specialist_assignment`, `lead_synthesis`, or
@@ -411,6 +436,11 @@ invocation kind (`lead`, `specialist_assignment`, `lead_synthesis`, or
 `submitted`). PREPARED records intent before a provider boundary; only the
 matching unique SUBMITTED record spends one of the twelve lineage calls.
 Submitted failures, timeouts, and cancellations still count.
+
+The event's wire `payload_type` is `provider_call`; only a `state="submitted"`
+payload may include optional `validation_details` with the same bounded safe
+chunks. Omission decodes as an empty tuple, so existing stored calls remain
+compatible.
 
 A running attempt dispatches assignments in proposal order. Every reply binds
 the exact proposal ID/revision/digest, execution attempt, assignment, and

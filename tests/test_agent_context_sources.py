@@ -5,9 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import tempfile
 import unittest
 from dataclasses import FrozenInstanceError, fields, replace
+from pathlib import Path
 from unittest import mock
 
 from story_writing_agents import Workspace
@@ -53,7 +53,7 @@ from story_writing_agents.writing_artifacts.repository import (
 )
 
 from tests.collaboration_contract_fixture import contract_batches
-from tests.helpers import initialize_test_workspace
+from tests.helpers import pristine_initialized_workspace
 
 
 _PRIVATE_SOURCE = "PRIVATE_SOURCE_한🙂"
@@ -158,9 +158,7 @@ class _SourceFixture(unittest.TestCase):
     repository: WritingArtifactRepository
 
     def setUp(self) -> None:
-        temporary = tempfile.TemporaryDirectory(prefix="context-sources-")
-        self.addCleanup(temporary.cleanup)
-        self.workspace = initialize_test_workspace(temporary.name)
+        self.workspace = pristine_initialized_workspace(self)
         self.repository = WritingArtifactRepository(self.workspace.root)
 
     def publish(
@@ -322,16 +320,32 @@ class RealAuthorityAdapterTests(_SourceFixture):
     """Exercise each real canonical owner and exact isolation boundary."""
 
     def test_artifact_capture_preserves_crlf_lf_cr_and_classifies_paths(self) -> None:
+        cores = sources_module.CORE_ARTIFACT_PATHS
+        original = {path: self.workspace.path(path).read_bytes() for path in cores}
+        for path in cores:
+            self.workspace.path(path).unlink()
+        adapter = WritingArtifactSourceAdapter(self.repository, _scope())
+        try:
+            with mock.patch.object(self.repository, "are_sources_absent", wraps=self.repository.are_sources_absent) as absent, mock.patch.object(adapter, "_list_paths", wraps=adapter._list_paths) as listed:
+                statuses = adapter.canonical_core_statuses(_DIGEST, CONTEXT_SOURCE_POLICY)
+            self.assertEqual(tuple(item.status for item in statuses), (sources_module.ContextSourceStatusKind.ABSENT,) * 4)
+            self.assertEqual(absent.call_args_list, [mock.call(cores, max_bytes=CONTEXT_SOURCE_POLICY.max_source_utf8_bytes)] * 2)
+            self.assertEqual(listed.call_count, 3)
+        finally:
+            for path, body in original.items():
+                self.workspace.path(path).write_bytes(body)
+        with mock.patch.object(self.repository, "_locked_sources") as guard:
+            for invalid in ((), [], (cores[0], cores[0]), ("manuscript/part-01/chapter-01.md",), (*cores, cores[0])):
+                with self.assertRaises((TypeError, ValueError)):
+                    self.repository.are_sources_absent(invalid)
+            guard.assert_not_called()
         content = "one\r\ntwo\nthree\rfour 한🙂"
         path = "core_documents/global_outline.md"
         self.publish(core_updates={"global_outline.md": content})
         adapter = WritingArtifactSourceAdapter(self.repository, _scope())
         snapshot = adapter.capture(path, CONTEXT_SOURCE_POLICY)
         self.assertEqual(snapshot.content, content.encode("utf-8"))
-        self.assertEqual(
-            tuple(record.content for record in snapshot.records),
-            ("one\r\n", "two\n", "three\r", "four 한🙂"),
-        )
+        self.assertEqual(tuple((record.content for record in snapshot.records)), ('one\r\n', 'two\n', 'three\r', 'four 한🙂'))
         self.assertEqual(snapshot.descriptor.source_id, _artifact_id(path))
         for locator, code in (
             (
@@ -346,13 +360,18 @@ class RealAuthorityAdapterTests(_SourceFixture):
                 with self.assertRaises(ContextSourceError) as caught:
                     adapter.capture(locator, CONTEXT_SOURCE_POLICY)
                 self.assertEqual(caught.exception.code, code)
-        self.assertEqual(
-            adapter.capture(
-                "core_documents/character_sheets.md",
-                CONTEXT_SOURCE_POLICY,
-            ).content,
-            b"",
-        )
+        self.assertEqual(adapter.capture('core_documents/character_sheets.md', CONTEXT_SOURCE_POLICY).content, b'')
+
+        cores = sources_module.CORE_ARTIFACT_PATHS
+        bodies = {path: content if index % 2 == 0 else "" for index, path in enumerate(cores)}
+        self.repository.commit_consensus(output_path="part-01/core-status.md", candidate="core", core_updates={Path(path).name: body for path, body in bodies.items()}, session_id="session", debate_id="core-status", revision_id="r0", candidate_author_agent_id=EXECUTION_SPECIALIST)
+        expected = []
+        for ordinal, (path, body) in enumerate(bodies.items(), 1):
+            descriptor = adapter.capture(path, CONTEXT_SOURCE_POLICY).descriptor
+            expected.append(sources_module.ContextSourceStatusReceipt(evidence_id=f'status_{ordinal}', source_id=descriptor.source_id, locator=path, status=sources_module.ContextSourceStatusKind.PRESENT if body else sources_module.ContextSourceStatusKind.EMPTY, ordinal=ordinal, manifest_digest=_DIGEST, revision=descriptor.revision, source_digest=descriptor.content_digest, source_utf8_bytes=descriptor.utf8_bytes))
+        with mock.patch.object(self.repository, "read_current", wraps=self.repository.read_current) as read:
+            self.assertEqual(adapter.canonical_core_statuses(_DIGEST, CONTEXT_SOURCE_POLICY), tuple(expected))
+        self.assertEqual(read.call_args_list, [mock.call(cores)] * 4)
 
     def test_assignment_local_artifact_allowlist_filters_inventory_and_capture(
         self,
@@ -395,12 +414,7 @@ class RealAuthorityAdapterTests(_SourceFixture):
         with mock.patch.object(
             adapter, "_capture_once", side_effect=(first, second, stable, stable)
         ) as capture:
-            self.assertEqual(
-                adapter.capture(
-                    "core_documents/global_outline.md", CONTEXT_SOURCE_POLICY
-                ),
-                stable,
-            )
+            self.assertEqual(adapter.capture('core_documents/global_outline.md', CONTEXT_SOURCE_POLICY), stable)
         self.assertEqual(capture.call_count, 4)
         with mock.patch.object(
             adapter, "_capture_once", side_effect=(first, second, first, second)
@@ -411,42 +425,66 @@ class RealAuthorityAdapterTests(_SourceFixture):
                 )
         self.assertEqual(caught.exception.code, ContextSourceErrorCode.SOURCE_DRIFT)
 
+        cores = sources_module.CORE_ARTIFACT_PATHS
+        self.publish(core_updates={Path(path).name: "core" for path in cores})
+        original = self.repository.read_current
+        snapshots = original(cores)
+        for bad, code in ((snapshots[::-1], ContextSourceErrorCode.SOURCE_DRIFT), (snapshots[:-1], ContextSourceErrorCode.SOURCE_MISSING), (snapshots + snapshots[:1], ContextSourceErrorCode.SOURCE_DRIFT)):
+            with mock.patch.object(self.repository, "read_current", side_effect=lambda paths: bad if len(paths) > 1 else original(paths)):
+                with self.assertRaises(ContextSourceError) as caught:
+                    adapter._capture_core_sources(frozenset(cores), CONTEXT_SOURCE_POLICY)
+            self.assertIs(caught.exception.code, code)
+        with mock.patch.object(adapter, "_capture_source_group_once", side_effect=tuple((item,) * 4 for item in (first, second, stable, stable))) as capture:
+            self.assertEqual(adapter._capture_core_sources(frozenset(cores), CONTEXT_SOURCE_POLICY), dict.fromkeys(cores, stable))
+        self.assertEqual(capture.call_count, 4)
+        with mock.patch.object(adapter, "_capture_source_group_once", side_effect=((first,) * 4, (second,) * 4) * 2):
+            with self.assertRaises(ContextSourceError) as caught:
+                adapter._capture_core_sources(frozenset(cores), CONTEXT_SOURCE_POLICY)
+        self.assertIs(caught.exception.code, ContextSourceErrorCode.SOURCE_DRIFT)
+
     def test_artifact_inventory_is_complete_or_fails_custom_traversal_and_eligible_caps(
         self,
     ) -> None:
-        self.publish(
-            core_updates={
-                "global_outline.md": "outline",
-                "character_sheets.md": "characters",
-            }
-        )
+        self.publish(core_updates={'global_outline.md': 'outline', 'character_sheets.md': 'characters'})
         self.workspace.write_text("discussion_logs/internal.md", "internal")
         adapter = WritingArtifactSourceAdapter(self.repository, _scope())
-        inventory = adapter.inventory(CONTEXT_SOURCE_POLICY)
-        self.assertEqual(
-            {item.provenance.locator for item in inventory},
-            {
-                "core_documents/global_outline.md",
-                "core_documents/character_sheets.md",
-                "core_documents/narrative_rules.md",
-                "core_documents/part_outlines.md",
-                "manuscript/part-01/chapter-01.md",
-            },
-        )
-        self.assertNotIn(
-            "discussion_logs/internal.md",
-            {item.provenance.locator for item in inventory},
-        )
+        with mock.patch.object(self.repository, "read_current", wraps=self.repository.read_current) as read:
+            inventory = adapter.inventory(CONTEXT_SOURCE_POLICY)
+        paths = tuple(sorted(item.provenance.locator for item in inventory))
+        self.assertEqual(read.call_args_list, [mock.call(paths[:4])] * 2 + [mock.call(paths[4:])] * 2)
+        singleton_policy = replace(CONTEXT_SOURCE_POLICY, max_inventory_body_utf8_bytes=sources_module.MAX_VIEWER_UTF8_BYTES)
+        with mock.patch.object(self.repository, "read_current", wraps=self.repository.read_current) as read:
+            self.assertEqual(adapter.inventory(singleton_policy), inventory)
+        self.assertEqual(read.call_args_list, [mock.call((path,)) for path in paths for _ in range(2)])
+        self.assertEqual({item.provenance.locator for item in inventory}, {'core_documents/global_outline.md', 'core_documents/character_sheets.md', 'core_documents/narrative_rules.md', 'core_documents/part_outlines.md', 'manuscript/part-01/chapter-01.md'})
+        self.assertNotIn('discussion_logs/internal.md', {item.provenance.locator for item in inventory})
         with self.assertRaises(ContextSourceError) as eligible:
             adapter.inventory(replace(CONTEXT_SOURCE_POLICY, max_inventory_sources=2))
-        self.assertEqual(
-            eligible.exception.code, ContextSourceErrorCode.INVENTORY_LIMIT_EXCEEDED
-        )
+        self.assertEqual(eligible.exception.code, ContextSourceErrorCode.INVENTORY_LIMIT_EXCEEDED)
         with self.assertRaises(ContextSourceError) as traversal:
             adapter.inventory(replace(CONTEXT_SOURCE_POLICY, max_traversal_entries=1))
-        self.assertEqual(
-            traversal.exception.code, ContextSourceErrorCode.INVENTORY_LIMIT_EXCEEDED
-        )
+        self.assertEqual(traversal.exception.code, ContextSourceErrorCode.INVENTORY_LIMIT_EXCEEDED)
+
+        with self.assertRaises(ContextSourceError) as limited:
+            adapter.canonical_core_statuses(_DIGEST, replace(CONTEXT_SOURCE_POLICY, max_source_utf8_bytes=1, max_source_scan_utf8_bytes=1))
+        self.assertIs(limited.exception.code, ContextSourceErrorCode.SOURCE_LIMIT_EXCEEDED)
+
+        original = self.repository.read_current
+        with mock.patch.object(self.repository, "read_current", side_effect=lambda paths: (_ for _ in ()).throw(sources_module.ArtifactSourceInvalidUtf8Error("later private batch")) if len(paths) > 1 else original(paths)):
+            with self.assertRaises(ContextSourceError) as earlier:
+                adapter.inventory(replace(CONTEXT_SOURCE_POLICY, max_source_utf8_bytes=1, max_source_scan_utf8_bytes=1))
+        self.assertIs(earlier.exception.code, ContextSourceErrorCode.SOURCE_LIMIT_EXCEEDED)
+        with self.assertRaises(ContextSourceError) as aggregate:
+            adapter.inventory(replace(CONTEXT_SOURCE_POLICY, max_source_utf8_bytes=10, max_source_scan_utf8_bytes=10, max_inventory_body_utf8_bytes=10))
+        self.assertIs(aggregate.exception.code, ContextSourceErrorCode.INVENTORY_LIMIT_EXCEEDED)
+        path = sources_module.CORE_ARTIFACT_PATHS[0]
+        tiny = replace(CONTEXT_SOURCE_POLICY, max_source_utf8_bytes=1, max_source_scan_utf8_bytes=1)
+        with self.assertRaises(ContextSourceError) as vector_cap:
+            adapter._require_absent_cores((path,), tiny)
+        with self.assertRaises(ContextSourceError) as single_cap:
+            adapter._require_absent_core(path, tiny)
+        self.assertIs(vector_cap.exception.code, ContextSourceErrorCode.SOURCE_UNAVAILABLE)
+        self.assertIs(vector_cap.exception.code, single_cap.exception.code)
 
     def test_artifact_inventory_relist_drift_and_nonregular_sources_fail_completely(
         self,
@@ -467,20 +505,32 @@ class RealAuthorityAdapterTests(_SourceFixture):
         self.assertEqual(drift.exception.code, ContextSourceErrorCode.SOURCE_DRIFT)
         outside = self.workspace.root / "outside.md"
         outside.write_text("outside", encoding="utf-8")
-        attacks = (
-            ("manuscript/symlink.md", lambda target: target.symlink_to(outside)),
-            ("manuscript/hardlink.md", lambda target: os.link(outside, target)),
-            ("manuscript/directory.md", lambda target: target.mkdir()),
-        )
+        attacks = (('manuscript/symlink.md', lambda target: target.symlink_to(outside)), ('manuscript/hardlink.md', lambda target: os.link(outside, target)), ('manuscript/directory.md', lambda target: target.mkdir()))
         for locator, create in attacks:
             target = self.workspace.root / locator
             create(target)
             with self.subTest(locator=locator):
                 with self.assertRaises(ContextSourceError) as caught:
                     adapter.capture(locator, CONTEXT_SOURCE_POLICY)
-                self.assertEqual(
-                    caught.exception.code, ContextSourceErrorCode.SOURCE_MISSING
-                )
+                self.assertEqual(caught.exception.code, ContextSourceErrorCode.SOURCE_MISSING)
+            target.unlink() if not target.is_dir() or target.is_symlink() else target.rmdir()
+
+        self.publish(core_updates={Path(path).name: "core" for path in sources_module.CORE_ARTIFACT_PATHS})
+        with mock.patch.object(self.repository, "read_current", side_effect=sources_module.WorkspaceSecurityError("private source")):
+            with self.assertRaises(ContextSourceError) as unsafe:
+                adapter.canonical_core_statuses(_DIGEST, CONTEXT_SOURCE_POLICY)
+        self.assertIs(unsafe.exception.code, ContextSourceErrorCode.SOURCE_UNSAFE)
+        self.assertNotIn("private source", repr(unsafe.exception))
+        first, later = sources_module.CORE_ARTIFACT_PATHS[:2]
+        later_path = self.workspace.path(later); saved = later_path.read_bytes()
+        later_path.unlink(); later_path.symlink_to(outside)
+        try:
+            self.assertFalse(self.repository.are_sources_absent((first, later)))
+            with self.assertRaises(ContextSourceError) as real_unsafe:
+                adapter._require_absent_cores((later, first), CONTEXT_SOURCE_POLICY)
+            self.assertIs(real_unsafe.exception.code, ContextSourceErrorCode.SOURCE_UNSAFE)
+        finally:
+            later_path.unlink(); later_path.write_bytes(saved)
 
     def test_focused_conversation_exposes_bounded_readable_v2_records(self) -> None:
         services = compose_filesystem_conversation_storage(self.workspace)

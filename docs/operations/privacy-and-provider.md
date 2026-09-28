@@ -38,6 +38,13 @@ below. All remain plaintext. The runtime log is content-safe; the other two
 deliberately admit provider-call content within different schemas and lifecycle
 boundaries.
 
+Consensus workflow terminal result events can retain bounded safe
+`validation_details_by_provider` in provider invocation order when structured
+reply validation finds issues. These plaintext details contain trusted schema
+paths and type or rule findings, not raw provider values or unknown property
+names. The field is optional in stored results, so older events still load.
+Consensus workflow history is separate from schema-v2 collaboration archives.
+
 Blackboards can contain input, drafts, reviews, and errors. Provider output is
 not generally scrubbed; catalog archive status neither deletes nor conceals
 conversations; transcripts retain messages, replies, and runtime errors.
@@ -163,13 +170,32 @@ not make its included collaboration content safe to disclose. Import copies the
 included plaintext and neither deletes excluded state nor securely erases a
 source or caller-owned archive copy.
 
-Provider-private state, hidden reasoning, raw provider responses and
-diagnostics, credentials, capabilities, full referenced-file bytes, artifact
-contents, and derived FTS/RAG data are not archive payloads. Therefore an
+Provider-private state, hidden reasoning, raw provider responses and private
+provider diagnostics, credentials, capabilities, full referenced-file bytes,
+artifact contents, and derived FTS/RAG data are not archive payloads. Therefore an
 archive or backend transfer is not a workspace, provider-session, or recovery
 backup. Only canonical archive schema 2 is accepted; legacy transcript files,
 database event rows, and schema-1 archive bytes are rejected rather than
 redacted or converted.
+
+Canonical collaboration events can include bounded `validation_details` from
+rejected structured replies. These are safe schema paths, type or rule
+descriptions, and attempt labels; they omit provider values, unknown property
+names, parser messages, and raw rejected responses. They remain plaintext in
+history and any archive or transfer copy. Older events without this optional
+field remain readable.
+
+Reports that exceed the diagnostic cap retain up to 2,048 schema findings and a
+fixed content-free notice that additional issues were omitted; ordinary
+reports list every detectable finding. Each generated display chunk remains
+below 32,000 UTF-8 bytes.
+
+Validation message events may also retain optional invocation and call IDs.
+These identify the submitted provider call for safe diagnostic recovery across
+restart, including when specialists ran concurrently. The IDs expose call
+correlation metadata in local history and its archive or transfer copies; they
+do not contain provider response values. Older messages without the IDs still
+decode.
 
 The runtime owns no archive file or retention policy. A caller that stores,
 transmits, logs, or otherwise retains the returned bytes owns protection and
@@ -603,6 +629,19 @@ consumer. Python callers can nevertheless supply this callback and retain its
 events; the caller then owns access control, retention, and cleanup for that
 copy.
 
+Provider execution additionally supports an additive, process-local
+`provider_stream_sink` context variable emitting `ProviderStreamEvent`
+instances (`STATUS`, `THOUGHT_DELTA`, `TEXT_DELTA`). While SEARCH and READ cards
+never display provider responses or excerpts, active capable raw terminals may
+render transient status notices and a bounded rolling preview of streamed
+output. Frame retention upon turn completion is mode-dependent: under `/progress on`
+(expanded mode), the completed frame remains visible as an interactive nested scroll
+view for inspection, whereas under `/progress off` (collapsed mode) it is cleared
+cleanly before persistent output. Like
+`action_progress_sink`, stream events are not durable ledger records or public
+lifecycle events; callers binding or retaining a custom stream sink receive
+raw deltas and own access control, retention, and cleanup for that stream.
+
 Observer delivery adds no provider call, result field, story content,
 conversation event, debate record, or second context ledger. The component has
 no supported post-hoc observer inspection. A consumer may render public compact
@@ -610,8 +649,8 @@ facts into terminal output, where an emulator, multiplexer, or remote terminal
 may retain them in scrollback. The installed shell's detailed frame is actively
 redrawn and cleared, but that is presentation cleanup rather than secure
 erasure: terminal capture, scrollback, multiplexers, remote terminals, or
-accessibility tooling may retain its exact queries and relative locators/ranges.
-A Python caller may deliberately retain
+accessibility tooling may retain its exact queries, relative locators/ranges,
+and transient preview output. A Python caller may deliberately retain
 callback values, in which case that caller owns access control, retention, and
 cleanup for the new copy.
 
@@ -639,12 +678,12 @@ for the user-visible lifecycle and limits.
 
 ## Provider disclosure
 
-A built-in substantive call uses typed agent-context wire v7. Codex and
+A built-in substantive call uses typed agent-context wire v8. Codex and
 Antigravity share the same closed domain constraints and payload semantics: the
-required root fields are `correlation` and `action`, and `action` is one closed
+only required root field is `action`, which is one closed
 SEARCH, READ, or ANSWER object. ANSWER embeds its invocation-specific result
-object directly and names only successful supporting READ handles in
-`used_handles`, or `[]` when none was used. There is no JSON-in-string layer,
+object directly. Runtime derives correlation and successful supporting READ
+handles from the active invocation. There is no JSON-in-string layer,
 compatibility decoder, or migration. Typed structure does not redact or reduce
 the sensitivity of action data.
 
@@ -841,12 +880,13 @@ Automatic request content is canonical JSON of only `call_kind`, `payload`,
 `actual_transport_utf8_bytes`, `response_text`, `thread_id`, and nullable
 validated usage. A recovered Antigravity native `ERROR`, or a timeout/truncation
 warning accepted with exact current-call completion proof, adds
-`response_diagnostic`, preserving its completed stdout, stderr, and exit code.
+`response_diagnostic`, preserving its error, status, exit code, and stderr stream.
 A completed provider failure instead uses a response object containing
 `provider_failure: true` and, when available, `response_diagnostic`, followed by a fixed
 `provider_failure` outcome. Inside `response_diagnostic`, `exit_code` is the
-native integer status; `stdout` and `stderr` each contain `encoding` and `data`.
-Each stream uses strict `utf-8` when possible, otherwise reversible `base64`.
+native integer status; nullable `error` and `status` preserve the diagnostic
+failure details; and `stderr` contains `encoding` and `data`.
+The stream uses strict `utf-8` when possible, otherwise reversible `base64`.
 This is private diagnostic evidence, not a semantic result or a retry grant.
 
 Terminal content still contains only a closed `outcome` and fixed `code`, never
@@ -906,10 +946,10 @@ checked separately.
 The isolated package neutralizes terminal and bidirectional controls and emits
 only printable text, newlines, and optionally semantic SGR. Story remains sole
 owner of input, output, raw mode, alternate screen, signals, geometry, and
-restoration. Capable close restores the prior shell surface; ordinary-line
-fallback necessarily leaves its plain frames and input in scrollback. Either
-path can be retained by terminal, remote-session, accessibility, recording, or
-operating-system infrastructure. Story picker state and viewer-owned drafts,
+restoration. Capable close restores the prior shell surface; `/exchanges`
+refuses line fallback before showing a viewer frame. Terminal, remote-session,
+accessibility, recording, and operating-system infrastructure can still retain
+displayed content. Story picker state and viewer-owned drafts,
 logical cursor, mode, search, match position, footer result/index, and help
 state are process-local and discarded on close;
 that does not erase exchange files, process memory, scrollback, screenshots, or
@@ -1158,13 +1198,14 @@ outer sandbox; that work remains
 
 Antigravity also runs without shell evaluation. The backend passes the exact
 confidential story request JSON as one `--print` argument, uses
-`--input-format text --output-format json`, and sends empty stdin. The full
-request can therefore appear in local process listings and inspection tools,
-including any story text, drafts, references, and retrieval observations it
-contains. CLI 1.1.27 ignored raw text stdin in transport probes, so this adapter
-uses the prompt argument. OS argument-size limits may reject large requests
-before process creation with a typed start failure and no submitted transport
-count.
+`--input-format text --output-format json` (or `--output-format stream-json` when
+an active capable terminal or caller binds a stream sink), and sends empty stdin.
+The full request can therefore appear in local process listings and inspection
+tools, including any story text, drafts, references, and retrieval observations
+it contains. CLI 1.1.27 ignored raw text stdin in transport probes, so this
+adapter uses the prompt argument. OS argument-size limits may reject large
+requests before process creation with a typed start failure and no submitted
+transport count.
 
 It stages and selects a custom main agent beneath an isolated provider
 workspace, uses `--new-project` for fresh history or the exact retained

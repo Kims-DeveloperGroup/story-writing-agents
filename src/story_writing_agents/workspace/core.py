@@ -521,7 +521,7 @@ class Workspace:
         for line_number, line in enumerate(self.read_text(relative).splitlines(), 1):
             try:
                 value = json.loads(line)
-                expected = {
+                base_fields = {
                     "sender",
                     "phase",
                     "round",
@@ -530,9 +530,19 @@ class Workspace:
                     "content",
                     "timestamp",
                 }
-                if not isinstance(value, dict) or set(value) != expected:
+                valid_fields = (
+                    base_fields,
+                    {*base_fields, "trace"},
+                    {*base_fields, "validation_details"},
+                    {*base_fields, "trace", "validation_details"},
+                )
+                if not isinstance(value, dict) or set(value) not in valid_fields:
                     raise TypeError("debate log entry has an invalid schema")
-                string_fields = expected.difference({"round"})
+                if "trace" in value and type(value["trace"]) is not dict:
+                    raise TypeError("debate log trace must be an object")
+                if "validation_details" in value and type(value["validation_details"]) is not list:
+                    raise TypeError("debate log validation details must be an array")
+                string_fields = base_fields.difference({"round"})
                 if any(not isinstance(value[field], str) for field in string_fields):
                     raise TypeError("debate log string field has an invalid type")
                 round_number = value["round"]
@@ -542,8 +552,8 @@ class Workspace:
                     or round_number < 0
                 ):
                     raise TypeError("debate log round must be a non-negative integer")
-                messages.append(DebateMessage(**value))
-            except (json.JSONDecodeError, TypeError) as exc:
+                messages.append(DebateMessage.from_dict(value))
+            except (json.JSONDecodeError, TypeError, ValueError) as exc:
                 raise WorkspaceFormatError(
                     f"invalid debate log entry at line {line_number}"
                 ) from exc

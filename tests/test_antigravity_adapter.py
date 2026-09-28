@@ -27,6 +27,8 @@ from story_writing_agents import (
     PLOT_ARCHITECT,
     Phase,
     PromptFileReference,
+    ReplyTrace,
+    ReplyTraceOrigin,
 )
 from story_writing_agents.antigravity_adapter import AntigravityAdapter
 from story_writing_agents.codex_adapter import CodexAdapter
@@ -48,7 +50,9 @@ from story_writing_agents.provider_adapter import (
 )
 from story_writing_agents.provider_process import ProcessRequest, ProcessResult
 
-from tests.helpers import initialized_workspace
+from tests.helpers import initialized_workspace, live_provider_execution_workspace, pristine_initialized_workspace
+from story_writing_agents.agent_context.request_compaction import compact_context_payload
+from tests.test_agent_context_accounting import _shared_context_payload
 
 
 _UNSET = object()
@@ -140,7 +144,7 @@ def _expected_antigravity_role(value: bytes, *, contextual: bool = True) -> byte
             b"Return exactly one JSON object with this shape and no additional fields:",
             b"The specialist assessment in action.result has exactly this shape and\n"
             b"no additional fields. Submit the complete schema-selected outer object\n"
-            b"with correlation and action through finish; do not submit this inner\n"
+            b"with action through finish; do not submit this inner\n"
             b"assessment alone:",
         ).replace(
             b"Use evidence IDs in runtime order: attached references by ordinal, canonical\n"
@@ -277,7 +281,11 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
     """Verify binding, protocol, transport, and backend integration offline."""
 
     def setUp(self) -> None:
-        self.workspace = initialized_workspace(self)
+        self.workspace = (
+            pristine_initialized_workspace(self)
+            if self._testMethodName == "test_shared_default_and_explicit_timeouts_keep_native_and_outer_deadlines_distinct"
+            else initialized_workspace(self)
+        )
         codex_definition = PromptAssembler(self.workspace).build_definition(
             session_id="definition_session",
             agent_id=PLOT_ARCHITECT,
@@ -681,12 +689,12 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(original_role_clause, captured_prompt)
         self.assertEqual(
             definition.fingerprint,
-            "7d856feaa92d88789c41248a7b33594620b230d0e0022aeb46ab194aeb639943",
+            "a7bb90c92173fdd52ad5ff1ad1ef47325dde328094987dd57f9e648c58848e0b",
         )
-        self.assertEqual(len(codex_bytes), 9934)
+        self.assertEqual(len(codex_bytes), 9626)
         self.assertEqual(
             hashlib.sha256(codex_bytes).hexdigest(),
-            "ad563bdb0c07dee0c51b77d7e01adf454ec32ad8b176cab9c7fe9c217ba2a6a5",
+            "dbcc2bdf0141b35a3c51e41f1455e1acbf9842cfdf0d58ec2f6300203fc9fcf6",
         )
         expected_role = _expected_antigravity_role(captured_prompt)
         provider_constraint_bytes = next(
@@ -700,8 +708,8 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         ).replace(
             b"No tool, subagent, or CoT.", b"No subagent or CoT."
         ).replace(
-            b"Return exactly the schema-selected root object with correlation and action.",
-            b"Call finish with exactly the schema-selected root object as its arguments, including correlation and action.",
+            b"Return exactly the schema-selected root object with action as its only field; the runtime owns correlation metadata.",
+            b"Call finish with exactly the schema-selected root object as its arguments, with action as its only field; the runtime owns correlation metadata.",
         )
         expected_provider = expected_provider.replace(
             b"directly in result", b"directly in action.result"
@@ -723,7 +731,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         }
         self.assertEqual(
             tuple(item.serialized_utf8_bytes for item in codex_components),
-            (4, 9007, 251, 10, 662),
+            (4, 8710, 251, 10, 651),
         )
         for codex_component, antigravity_component in zip(
             codex_components, antigravity_components, strict=True
@@ -737,24 +745,22 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(codex_bytes), sum(item.serialized_utf8_bytes for item in codex_components))
         self.assertEqual(len(antigravity_bytes), sum(item.serialized_utf8_bytes for item in antigravity_components))
         provider_constraints = original_provider
-        self.assertEqual(len(provider_constraints), 662)
+        self.assertEqual(len(provider_constraints), 651)
         self.assertEqual(
             hashlib.sha256(provider_constraints).hexdigest(),
-            "694dab453bc06a15ce0c1bcb3dc8bae9dbd9cd738f02b01d66274ffee7e72f89",
+            "45c7e298a03108a8d92345e8d1031090bc2dc0ac548b1d6ed2dc32cb6c87c1da",
         )
         text = codex_bytes.decode("utf-8")
         for rule in (
-            "Return exactly the schema-selected root object with correlation and "
-            "action.",
-            "Set correlation to the exact input c.",
+            "Return exactly the schema-selected root object with action as its only "
+            "field; the runtime owns correlation metadata.",
             "Set action.kind to search, read, or answer and include only the fields "
             "required by that schema variant.",
-            "SEARCH uses path_prefix plus {text,source_kinds} queries.",
+            "SEARCH uses {text,source_kinds} queries and an optional path_prefix.",
             "READ uses handles from SEARCH.",
-            "ANSWER puts the exact q result object directly in result and lists only "
-            "supporting successful READ handles in used_handles.",
-            "Do not JSON-encode objects as strings or move the result into "
-            "correlation.",
+            "ANSWER puts the exact q result object directly in result; runtime attaches "
+            "successful READ receipts.",
+            "Do not JSON-encode objects as strings or move the result outside action.",
             "n ptr/splice:p[id] verify;=k=n;p upsert;keep n;t rm",
         ):
             self.assertIn(rule, text)
@@ -775,23 +781,26 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         antigravity_sample, antigravity_sample_components = (
             AntigravityAdapter._definition_file(sample_definition)
         )
-        self.assertEqual(len(codex_sample), 14156)
+        self.assertEqual(len(codex_sample), 11682)
         self.assertEqual(
             hashlib.sha256(codex_sample).hexdigest(),
-            "030b2069229dbe2d247a855bea446fc0313bb20ce7edc70f22fd02ec28931188",
+            "17410478a062c1b4974fd87879390b33f1ce9111a776639d6db50c70097729ab",
         )
         self.assertEqual(
             tuple(item.serialized_utf8_bytes for item in codex_sample_components),
-            (4, 13229, 251, 10, 662),
+            (4, 10766, 251, 10, 651),
         )
         self.assertEqual(antigravity_sample, _expected_antigravity_role(codex_sample).replace(original_provider, expected_provider))
         captured_lead_role = sample_definition.system_prompt_file.content
         expected_lead_role = _expected_antigravity_role(captured_lead_role)
-        self.assertIn(b"status IDs alone are insufficient", expected_lead_role)
-        self.assertIn(b"assignments must collectively cover every input_id", expected_lead_role)
-        self.assertIn(b"including user_input, and every cited READ evidence ID", expected_lead_role)
-        self.assertIn(b"Preserve every required unresolved_input_ids entry", expected_lead_role)
-        self.assertIn(b"including those without an artifact candidate", expected_lead_role)
+        self.assertIn(b"Runtime derives schema versions, interpretation", expected_lead_role)
+        self.assertIn(
+            b"Omit unused fields instead of\nwriting `null`",
+            expected_lead_role,
+        )
+        self.assertIn(b"runtime derives the review basis", expected_lead_role)
+        self.assertIn(b"runtime restores\nproposal identity", expected_lead_role)
+        self.assertIn(b"runtime derives review bookkeeping", expected_lead_role)
         self.assertEqual(
             sample_definition.system_prompt_file.content,
             (repository_root / "config/agents/lead_orchestrator/AGENTS.md").read_bytes(),
@@ -2311,18 +2320,19 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         adapter = self.adapter("contextual-runtime")
         binding = adapter.bind(self.definition)
         schema = {"type": "object"}
-        payload = {
+        payload, component_paths = compact_context_payload(_shared_context_payload(), {
+            ("i",): ContextComponentKind.CURRENT_INPUT, ("h",): ContextComponentKind.CONVERSATION_CONTEXT})
+        payload.update({
             "c": "A" * 43,
             "q": ["conversation", "sa", "wco", [4, 2, 2, 4, 8, 8, 16, 200], "text"],
-            "i": "CONTEXTUAL_한🙂",
-        }
+        })
         invocation = ProviderInvocation(
             session_id="contextual-session",
             schema=schema,
             payload=payload,
             thread_id=None,
             call_kind=ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL,
-            component_paths={("i",): ContextComponentKind.CURRENT_INPUT},
+            component_paths=component_paths,
         )
         requests: list[ProcessRequest] = []
 
@@ -2636,10 +2646,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         first_invoke = mock.AsyncMock(
             return_value=ProviderResult(
                 thread_id="agy-conversation",
-                response_text=(
-                    '{"kind":"candidate","revision_id":"r0",'
-                    '"content":"candidate"}'
-                ),
+                response_text='{"message":"candidate"}',
             )
         )
         with mock.patch.object(
@@ -2648,7 +2655,19 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             first_invoke,
         ):
             reply = await bound.invoke(self.request(session_id, debate_id="debate-one"))
-        self.assertEqual(reply, AgentReply.candidate("r0", "candidate"))
+        self.assertEqual(
+            reply,
+            replace(
+                AgentReply.candidate("r0", "candidate"),
+                trace=ReplyTrace(
+                    role=PLOT_ARCHITECT,
+                    action="candidate",
+                    context_sources=("current_input",),
+                    recovered_fields=(),
+                    origin=ReplyTraceOrigin.PROVIDER,
+                ),
+            ),
+        )
         first_invocation = first_invoke.await_args.args[1]
         self.assertIsNone(first_invocation.thread_id)
         manifest = self.workspace.read_json(
@@ -2686,10 +2705,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         second_invoke = mock.AsyncMock(
             return_value=ProviderResult(
                 thread_id="agy-conversation",
-                response_text=(
-                    '{"kind":"candidate","revision_id":"r0",'
-                    '"content":"resumed"}'
-                ),
+                response_text='{"message":"resumed"}',
             )
         )
         with mock.patch.object(
@@ -2700,7 +2716,19 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             resumed_reply = await resumed_bound.invoke(
                 self.request(session_id, debate_id="debate-two")
             )
-        self.assertEqual(resumed_reply, AgentReply.candidate("r0", "resumed"))
+        self.assertEqual(
+            resumed_reply,
+            replace(
+                AgentReply.candidate("r0", "resumed"),
+                trace=ReplyTrace(
+                    role=PLOT_ARCHITECT,
+                    action="candidate",
+                    context_sources=("current_input",),
+                    recovered_fields=(),
+                    origin=ReplyTraceOrigin.PROVIDER,
+                ),
+            ),
+        )
         second_invocation = second_invoke.await_args.args[1]
         self.assertEqual(second_invocation.thread_id, "agy-conversation")
 
@@ -3374,9 +3402,13 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                                 self.assertNotIn("--print-timeout", request.command)
                             raise ProcessTimedOut()
 
-                        with mock.patch(f"story_writing_agents.{vendor}_adapter.run_process", new=expire):
-                            with self.assertRaises(ProviderInvocationError) as caught:
-                                await adapter.invoke(binding, invocation)
+                        with contextlib.ExitStack() as stack:
+                            if vendor == "codex":
+                                workspace = stack.enter_context(live_provider_execution_workspace(self.workspace.root, invocation.session_id))
+                                invocation = replace(invocation, execution_workspace=workspace)
+                            with mock.patch(f"story_writing_agents.{vendor}_adapter.run_process", new=expire):
+                                with self.assertRaises(ProviderInvocationError) as caught:
+                                    await adapter.invoke(binding, invocation)
                         self.assertIn(f"after {expected:g} seconds", str(caught.exception))
                         self.assertTrue(AgentBackend._context_failure_timed_out(caught.exception))
 

@@ -250,12 +250,35 @@ class GitProcessRunner:
             threading.Thread(target=stdout.read, daemon=True),
             threading.Thread(target=stderr.read, daemon=True),
         )
+        returncode: int | None = None
+        wait_failure: BaseException | None = None
+
+        def wait_for_process() -> None:
+            nonlocal returncode, wait_failure
+            try:
+                returncode = process.wait(timeout=None)
+            except BaseException as failure:
+                wait_failure = failure
+
+        waiter = threading.Thread(target=wait_for_process, daemon=True)
         started: list[threading.Thread] = []
         close_failed = False
+        body_failure: BaseException | None = None
+
+        def start_worker(worker: threading.Thread) -> None:
+            # Track before start so a partial start is also owned.
+            started.append(worker)
+            start_failed = False
+            try:
+                worker.start()
+            except (OSError, RuntimeError):
+                start_failed = True
+            if start_failed:
+                raise _process_failure(GitFailureCode.PROCESS_START_FAILED)
+
         try:
             for reader in readers:
-                reader.start()
-                started.append(reader)
+                start_worker(reader)
             if stdin:
                 assert process_stdin is not None
                 try:
@@ -265,28 +288,40 @@ class GitProcessRunner:
                     process_stdin = None
             timed_out = False
             try:
-                returncode = process.wait(timeout=_PROCESS_TIMEOUT_SECONDS)
+                start_worker(waiter)
+                waiter.join(_PROCESS_TIMEOUT_SECONDS)
+                timed_out = waiter.is_alive()
+                if not timed_out and wait_failure is not None:
+                    raise wait_failure
             except subprocess.TimeoutExpired:
                 timed_out = True
             if timed_out:
                 _stop_process(process)
                 raise _process_failure(GitFailureCode.PROCESS_TIMED_OUT)
-        except BaseException:
+            if returncode is None:
+                raise _process_failure(GitFailureCode.PROCESS_START_FAILED)
+        except BaseException as failure:
+            body_failure = failure
             _stop_process(process)
             raise
         finally:
-            for reader in started:
-                reader.join(_PROCESS_STOP_TIMEOUT_SECONDS)
+            for worker in started:
+                if worker.ident is not None:
+                    worker.join(_PROCESS_STOP_TIMEOUT_SECONDS)
             for stream in (process_stdin, process_stdout, process_stderr):
                 close_failed |= not _close_stream(stream)
-            for reader in started:
-                if reader.is_alive():
-                    reader.join(_PROCESS_STOP_TIMEOUT_SECONDS)
+            for worker in started:
+                if worker.is_alive():
+                    worker.join(_PROCESS_STOP_TIMEOUT_SECONDS)
+            if body_failure is not None and any(
+                worker.is_alive() for worker in started
+            ):
+                body_failure.add_note("Git process worker cleanup did not finish")
         self._verify_root(expected_identity)
         if alternate_index is not None:
             self._verify_alternate_index(alternate_index)
         if (
-            any(reader.is_alive() for reader in readers)
+            any(worker.is_alive() for worker in (*readers, waiter))
             or stdout.failed
             or stderr.failed
             or close_failed

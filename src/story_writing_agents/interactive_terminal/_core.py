@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
+import inspect
 import json
 import re
 import textwrap
 import time
 import unicodedata
-from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping
 from dataclasses import KW_ONLY, dataclass
 from enum import StrEnum
 from types import MappingProxyType
@@ -50,6 +52,7 @@ from ._controls import (
     transition_line_input,
     transition_prefilled_prompt_input,
     transition_prompt_input,
+    transition_nested_scroll,
 )
 from ._collaboration_view import (
     collaboration_view_context,
@@ -59,11 +62,18 @@ from ._collaboration_view import (
 from ._advisory_progress import (
     AdvisoryProgressRequest,
     AdvisoryProgressState,
+    active_advisory_progress_state,
     bind_advisory_progress,
     format_elapsed,
     reset_advisory_progress,
 )
-from ..agent_context.progress import ContextActionProgressEvent
+from ..errors import BackendProtocolError
+from ..agent_context.progress import (
+    ContextActionProgressEvent,
+    ProviderStreamEvent,
+    bind_provider_stream_sink,
+    reset_provider_stream_sink,
+)
 from ._driver import (
     AdvisoryProgressError as AdvisoryProgressError,
     RawTerminalDriver,
@@ -71,6 +81,7 @@ from ._driver import (
 )
 from ._external_view import (
     _BorrowedLineViewerHost,
+    ExternalViewUnavailableError,
     ExternalViewOperation,
 )
 from ._live_composer import (
@@ -103,6 +114,8 @@ from ._model import (
     MainInputHistoryState as MainInputHistoryState,
     Message,
     MessagePresentation,
+    MultiAgentScrollState,
+    NestedScrollViewport,
     Notice,
     Panel,
     Picker,
@@ -152,6 +165,7 @@ from ._viewer_model import (
 from ._viewer_render import (
     render_text_viewer,
     render_text_viewer_fallback,
+    render_nested_scroll_view,
 )
 
 
@@ -564,6 +578,7 @@ class InteractiveTerminal:
         "_read_line",
         "_width",
         "_write_text",
+        "_progress_frame_collapsed",
     )
 
     def __init__(
@@ -639,6 +654,27 @@ class InteractiveTerminal:
         self._write_text = write_text
         self._width = width
         self._capability_provider = lambda: _plain_capabilities(width)
+        self._progress_frame_collapsed = False
+
+    @property
+    def progress_frame_collapsed(self) -> bool:
+        """Return whether advisory progress frames are in collapsed single-line mode."""
+        return self._progress_frame_collapsed
+
+    @progress_frame_collapsed.setter
+    def progress_frame_collapsed(self, value: bool) -> None:
+        self._progress_frame_collapsed = bool(value)
+        active_state = active_advisory_progress_state()
+        if active_state is not None:
+            active_state.collapsed = self._progress_frame_collapsed
+
+    def toggle_progress_frame(self) -> bool:
+        """Toggle progress frame collapsed mode and return the new state."""
+        self._progress_frame_collapsed = not self._progress_frame_collapsed
+        active_state = active_advisory_progress_state()
+        if active_state is not None:
+            active_state.collapsed = self._progress_frame_collapsed
+        return self._progress_frame_collapsed
 
     def read_main(
         self,
@@ -1846,32 +1882,69 @@ class InteractiveExternalViewer:
 
         if not isinstance(terminal, InteractiveTerminal):
             raise TypeError("terminal must be an InteractiveTerminal")
-        self._open: Callable[[ExternalViewOperation], None] = (
+        self._open: Callable[..., None] = (
             terminal._external_view_open
         )
 
-    def open(self, operation: ExternalViewOperation) -> None:
+    def open(
+        self,
+        operation: ExternalViewOperation,
+        *,
+        transient_only: bool = False,
+    ) -> None:
         """Run one injected view while its host owns no terminal resource."""
 
+        if type(transient_only) is not bool:
+            raise TypeError("transient_only must be a bool")
         if not callable(operation):
             raise TypeError("operation must be callable")
-        self._open(operation)
+        self._open(operation, transient_only=transient_only)
 
 
 class InteractiveAdvisoryProgress:
     """Retain one terminal's package-internal advisory progress session."""
 
-    __slots__ = ("_run", "_state")
+    __slots__ = ("_run", "_state", "_capability_provider", "_terminal")
 
     def __init__(self, terminal: InteractiveTerminal) -> None:
         """Bind progress lifecycle without inspecting streams or capabilities."""
 
         if not isinstance(terminal, InteractiveTerminal):
             raise TypeError("terminal must be an InteractiveTerminal")
+        self._terminal = terminal
         self._run: Callable[[Awaitable[object]], Awaitable[object]] = (
             terminal._advisory_progress
         )
         self._state = AdvisoryProgressState()
+        self._capability_provider = terminal._capability_provider
+
+    @property
+    def collapsed(self) -> bool:
+        """Return whether advisory progress frames are rendered in collapsed mode."""
+        return self._state.collapsed
+
+    @collapsed.setter
+    def collapsed(self, value: bool) -> None:
+        self._state.collapsed = bool(value)
+        if hasattr(self._terminal, "progress_frame_collapsed"):
+            self._terminal.progress_frame_collapsed = bool(value)
+
+    def toggle_collapsed(self) -> bool:
+        """Toggle collapsed mode and return the new state."""
+        new_val = self._state.toggle_collapsed()
+        if hasattr(self._terminal, "progress_frame_collapsed"):
+            self._terminal.progress_frame_collapsed = new_val
+        return new_val
+
+    def _is_capable(self) -> bool:
+        """Return True when this terminal is configured for capable raw-mode progress."""
+
+        if self._run is _plain_advisory_progress:
+            return False
+        try:
+            return bool(self._capability_provider().raw_mode)
+        except Exception:
+            return False
 
     def begin(self, requests: tuple[AdvisoryProgressRequest, ...] = ()) -> None:
         """Begin one timer and reset its transient ordered cards."""
@@ -1883,19 +1956,276 @@ class InteractiveAdvisoryProgress:
 
         self._state.observe(event)
 
+    def observe_stream(self, event: ProviderStreamEvent) -> None:
+        """Apply one provider streaming event."""
+
+        self._state.observe_stream(event)
+
     def finish(self) -> str:
         """Discard transient state and return the final elapsed duration."""
 
         return format_elapsed(self._state.finish())
 
-    async def run(self, operation: Awaitable[object]) -> object:
+    @property
+    def last_error_message(self) -> str | None:
+        """Expose the most recently observed error status message, if any."""
+
+        return self._state.last_error_message
+
+    def record_error(self, message: str) -> None:
+        """Explicitly record a terminal diagnostic for outcome presentation."""
+
+        self._state.record_error(message)
+
+    @contextlib.contextmanager
+    def bound_stream_sink(self) -> Iterator[None]:
+        """Temporarily bind the active stream sink to the calling context on capable terminals."""
+
+        if not self._is_capable():
+            yield
+            return
+        sink_token = bind_provider_stream_sink(self._state.observe_stream)
+        try:
+            yield
+        finally:
+            reset_provider_stream_sink(sink_token)
+
+    def dismiss_failure_snapshot(self) -> None:
+        """Explicitly evict the retained failure snapshot."""
+        self._state.dismiss_failure_snapshot()
+
+    def to_scroll_state(
+        self,
+        visible_height: int = 6,
+        state: ViewState = ViewState.ERROR,
+        collapsed: bool | None = None,
+    ) -> MultiAgentScrollState:
+        """Project current buffered agent streams into a MultiAgentScrollState."""
+
+        views: list[NestedScrollViewport] = []
+        ordered_keys: list[tuple[str, str]] = []
+
+        source_buffers: dict[tuple[str, str], list[str] | tuple[str, ...]] = dict(
+            self._state.agent_buffers
+        )
+        source_error: str | None = None
+        source_agent_errors: dict[tuple[str, str], str] = {}
+        using_snapshot = False
+        if state == ViewState.ERROR:
+            source_error = self._state.last_error_message
+            source_agent_errors = dict(self._state.agent_errors)
+            if not source_buffers and self._state.failure_snapshot is not None:
+                snap_buffers, snap_error = self._state.failure_snapshot
+                source_buffers = {k: list(v) for k, v in snap_buffers.items()}
+                source_error = snap_error or source_error
+                source_agent_errors = dict(self._state.failure_agent_errors)
+                using_snapshot = True
+
+        if not using_snapshot:
+            for req in self._state.requests:
+                key = (req.agent_id, req.operation_id)
+                if key not in ordered_keys:
+                    ordered_keys.append(key)
+        for key in list(self._state.stream_preview.keys()) + list(source_buffers.keys()):
+            if key not in ordered_keys:
+                ordered_keys.append(key)
+
+        for i, key in enumerate(ordered_keys):
+            agent_id, op_id = key
+            buffer = list(source_buffers.get(key, ()))
+            if not buffer:
+                preview = self._state.stream_preview.get(key, "")
+                buffer = [p for p in preview.splitlines() if p] or [
+                    self._state.stream_status.get(key, "Working...")
+                ]
+            if state == ViewState.ERROR:
+                err_to_append: str | None = None
+                if key in source_agent_errors:
+                    err_to_append = source_agent_errors[key]
+                elif len(ordered_keys) == 1 and source_error:
+                    err_to_append = source_error
+                if err_to_append:
+                    err_lines = [
+                        line for line in err_to_append.splitlines() if line
+                    ]
+                    if err_lines and not any(err_lines[0] in line for line in buffer):
+                        buffer.extend(err_lines)
+            total_lines = len(buffer)
+            auto_scroll = self._state.auto_scroll_flags.get(key, True)
+            max_start = max(1, total_lines - visible_height + 1)
+            if auto_scroll:
+                start_line = max_start
+            else:
+                start_line = max(1, min(self._state.scroll_offsets.get(key, 1), max_start))
+            visible_lines = tuple(
+                buffer[start_line - 1 : start_line - 1 + visible_height]
+            )
+            is_focused = i == (self._state.focused_agent_index % max(1, len(ordered_keys)))
+            views.append(
+                NestedScrollViewport(
+                    view_id=f"{agent_id}:{op_id}",
+                    title=agent_id,
+                    total_lines=total_lines,
+                    start_line=start_line,
+                    visible_lines=visible_lines,
+                    visible_height=visible_height,
+                    is_focused=is_focused,
+                    state=state,
+                    auto_scroll=auto_scroll,
+                    buffer_lines=tuple(buffer),
+                )
+            )
+        if state == ViewState.ERROR and source_error and views and len(ordered_keys) > 1:
+            if not any(source_error in source_agent_errors.get(k, "") for k in ordered_keys):
+                err_lines = [line for line in source_error.splitlines() if line] or ["Execution failed."]
+                views.append(
+                    NestedScrollViewport(
+                        view_id="Lead:error",
+                        title="Lead Error",
+                        total_lines=len(err_lines),
+                        start_line=1,
+                        visible_lines=tuple(err_lines[:visible_height]),
+                        visible_height=visible_height,
+                        is_focused=False,
+                        state=state,
+                        auto_scroll=False,
+                        buffer_lines=tuple(err_lines),
+                    )
+                )
+        if not views:
+            fallback_text = source_error or (
+                "Execution failed." if state == ViewState.ERROR else "Completed."
+            )
+            fallback_lines = [
+                line for line in fallback_text.splitlines() if line
+            ] or ["Execution failed." if state == ViewState.ERROR else "Completed."]
+            total_lines = len(fallback_lines)
+            views.append(
+                NestedScrollViewport(
+                    view_id="Lead:turn",
+                    title="Lead",
+                    total_lines=total_lines,
+                    start_line=1,
+                    visible_lines=tuple(fallback_lines[:visible_height]),
+                    visible_height=visible_height,
+                    is_focused=True,
+                    state=state,
+                    auto_scroll=False,
+                    buffer_lines=tuple(fallback_lines),
+                )
+            )
+        is_collapsed = self._state.collapsed if collapsed is None else bool(collapsed)
+        return MultiAgentScrollState(
+            tuple(views),
+            self._state.focused_agent_index,
+            collapsed=is_collapsed,
+        )
+
+    async def run(
+        self,
+        operation: Awaitable[object],
+        *,
+        is_failure: Callable[[object], bool] | None = None,
+        keep_frame: bool | None = None,
+    ) -> object:
         """Join one advisory operation with the terminal-owned indicator."""
 
+        if hasattr(self._terminal, "progress_frame_collapsed"):
+            self._state.collapsed = self._terminal.progress_frame_collapsed
+
         token = bind_advisory_progress(self._state)
+        sink_token = None
+        if self._is_capable():
+            sink_token = bind_provider_stream_sink(self._state.observe_stream)
         try:
-            return await self._run(operation)
+            try:
+                sig = inspect.signature(self._run)
+                accepts_kwargs = any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD
+                    for p in sig.parameters.values()
+                ) or "scroll_state_provider" in sig.parameters
+            except (ValueError, TypeError):
+                accepts_kwargs = True
+
+            failure_check = is_failure or _default_is_failure
+            if accepts_kwargs:
+                def _provide_scroll_state(
+                    failure: BaseException | object | None = None,
+                ) -> MultiAgentScrollState:
+                    is_err = isinstance(failure, BaseException) or (
+                        failure is not None and failure_check(failure)
+                    )
+                    if isinstance(failure, BaseException):
+                        if not self._state.last_error_message:
+                            if _is_content_safe_failure(failure):
+                                err_msg = str(failure).strip() or "Backend protocol error."
+                            else:
+                                err_msg = "Unexpected failure during operation."
+                            self._state.record_error(err_msg)
+                    elif is_err and failure is not None:
+                        msg = getattr(failure, "message", None) or getattr(
+                            failure, "last_error_message", None
+                        )
+                        if msg and not self._state.last_error_message:
+                            self._state.record_error(str(msg))
+                    return self.to_scroll_state(
+                        visible_height=6,
+                        state=ViewState.ERROR if is_err else ViewState.IDLE,
+                    )
+
+                run_kwargs: dict[str, object] = {
+                    "scroll_state_provider": _provide_scroll_state,
+                    "is_failure": failure_check,
+                }
+                if keep_frame is not None:
+                    run_kwargs["keep_frame"] = keep_frame
+                result = await self._run(
+                    operation,
+                    **run_kwargs,
+                )
+            else:
+                result = await self._run(operation)
+
+            if result is not None and not failure_check(result):
+                self._state.last_error_message = None
+                self._state.agent_errors.clear()
+                self._state.dismiss_failure_snapshot()
+            return result
+        except BaseException as exc:
+            if not self._state.last_error_message:
+                if _is_content_safe_failure(exc):
+                    err_msg = str(exc).strip() or "Backend protocol error."
+                else:
+                    err_msg = "Unexpected failure during operation."
+                self._state.record_error(err_msg)
+            raise
         finally:
+            if sink_token is not None:
+                reset_provider_stream_sink(sink_token)
             reset_advisory_progress(token)
+
+
+def _is_content_safe_failure(failure: BaseException) -> bool:
+    """Return True only if failure is an allowlisted content-safe protocol error."""
+    return isinstance(failure, BackendProtocolError)
+
+
+def _default_is_failure(result: object) -> bool:
+    """Return True if result indicates a failed turn or required recovery."""
+
+    turn = getattr(result, "turn", None)
+    target = turn if turn is not None else result
+    next_action = getattr(target, "next_action", None)
+    if next_action is not None and str(next_action) == "retry_lead_turn":
+        return True
+    step_state = getattr(target, "state", None)
+    if step_state is not None and str(step_state) in {
+        "outcome_unknown",
+        "recovery_required",
+        "failed",
+    }:
+        return True
+    return False
 
 
 class InteractiveDebateProgress:
@@ -2046,13 +2376,25 @@ def _plain_prompt_reader(
     return read_prompt
 
 
-async def _plain_advisory_progress(operation: Awaitable[object]) -> object:
+async def _plain_advisory_progress(
+    operation: Awaitable[object],
+    *,
+    scroll_state_provider: Callable[[], MultiAgentScrollState] | None = None,
+    is_failure: Callable[[object], bool] | None = None,
+    **kwargs: object,
+) -> object:
     """Keep callback and non-TTY advisory execution visually silent."""
 
     return await operation
 
 
-async def _plain_debate_progress(operation: Awaitable[object]) -> object:
+async def _plain_debate_progress(
+    operation: Awaitable[object],
+    *,
+    scroll_state_provider: Callable[[], MultiAgentScrollState] | None = None,
+    is_failure: Callable[[object], bool] | None = None,
+    **kwargs: object,
+) -> object:
     """Keep callback and non-TTY consensus execution visually silent."""
 
     return await operation
@@ -2194,12 +2536,22 @@ def _plain_external_view_opener(
     read_line: Callable[[str], str],
     write_text: Callable[[str], None],
     width: int,
-) -> Callable[[ExternalViewOperation], None]:
-    """Adapt borrowed callbacks for a line-only transient external view."""
+) -> Callable[..., None]:
+    """Adapt borrowed callbacks for an optional line-only external view."""
 
-    def open_view(operation: ExternalViewOperation) -> None:
+    def open_view(
+        operation: ExternalViewOperation,
+        *,
+        transient_only: bool = False,
+    ) -> None:
+        if type(transient_only) is not bool:
+            raise TypeError("transient_only must be a bool")
         if not callable(operation):
             raise TypeError("operation must be callable")
+        if transient_only:
+            raise ExternalViewUnavailableError(
+                "external viewer requires an alternate screen"
+            )
         host = _BorrowedLineViewerHost(read_line, write_text, width)
         active_failure: BaseException | None = None
         try:
@@ -2683,16 +3035,61 @@ def build_stream_terminal(
     )
     terminal._external_view_open = driver.open_external_view
 
-    async def run_advisory_progress(operation):
+    async def run_advisory_progress(
+        operation,
+        *,
+        scroll_state_provider=None,
+        is_failure=None,
+        keep_frame=None,
+    ):
+        def _resolve_keep_frame() -> bool:
+            if keep_frame is not None:
+                if callable(keep_frame):
+                    return bool(keep_frame())
+                return bool(keep_frame)
+            active_state = active_advisory_progress_state()
+            is_active_turn = (
+                active_state is not None
+                and (active_state.started_at is not None or bool(active_state.requests))
+            )
+            return (not terminal.progress_frame_collapsed) and is_active_turn
+
         return await driver.run_advisory_progress(
             operation,
             render_advisory_progress_frame,
+            scroll_state_provider=scroll_state_provider,
+            is_failure=is_failure,
+            nested_scroll_transition=transition_nested_scroll,
+            nested_scroll_renderer=render_nested_scroll_view,
+            toggle_callback=terminal.toggle_progress_frame,
+            keep_frame=_resolve_keep_frame,
         )
 
-    async def run_debate_progress(operation):
+    async def run_debate_progress(
+        operation,
+        *,
+        scroll_state_provider=None,
+        is_failure=None,
+        keep_frame=None,
+    ):
+        def _resolve_keep_frame() -> bool:
+            if scroll_state_provider is None:
+                return False
+            if keep_frame is not None:
+                if callable(keep_frame):
+                    return bool(keep_frame())
+                return bool(keep_frame)
+            return False
+
         return await driver.run_advisory_progress(
             operation,
             render_advisory_progress_frame,
+            scroll_state_provider=scroll_state_provider,
+            is_failure=is_failure,
+            nested_scroll_transition=transition_nested_scroll,
+            nested_scroll_renderer=render_nested_scroll_view,
+            toggle_callback=terminal.toggle_progress_frame,
+            keep_frame=_resolve_keep_frame,
         )
 
     terminal._advisory_progress = run_advisory_progress

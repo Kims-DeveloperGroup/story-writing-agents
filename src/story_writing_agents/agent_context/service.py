@@ -11,6 +11,14 @@ import json
 import math
 import secrets
 import threading
+from ..structured_output_validation import (
+    validation_failure,
+    validation_call,
+    carry_validation,
+    failure_issues,
+    remap_validation,
+    encoding_failure,
+)
 from contextlib import AsyncExitStack
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
@@ -19,6 +27,9 @@ from types import MappingProxyType
 from typing import AsyncContextManager, Protocol, cast, runtime_checkable
 
 from ..errors import ProviderAuthenticationRequiredError
+from ..structured_output_validation import (
+    DomainValidationRule, bounded_chunks, diagnose_json_text, domain_rule_chunks,
+)
 from ..provider_auth_recovery import authentication_replay, request_authentication
 from ..provider_execution_workspace import ProviderExecutionWorkspace
 from ..workspace import Workspace
@@ -110,6 +121,7 @@ from .ledger import (
     ContextLedgerProviderCall,
     context_checkpoint_proposal_digest,
 )
+from .request_compaction import compact_context_payload
 from .sources import (
     CONTEXT_SOURCE_POLICY,
     ActiveDebateSourceAdapter,
@@ -154,7 +166,7 @@ __all__ = [
     "record_context_provider_failure",
 ]
 
-_CONTEXT_WIRE_VERSION = "agent-context-wire-v7"
+_CONTEXT_WIRE_VERSION = "agent-context-wire-v8"
 _ACTION_WIRE_CODES = {
     "search": "s",
     "read": "r",
@@ -467,7 +479,22 @@ ContextExecutionEventSink = Callable[[ContextExecutionEvent], None]
 
 
 def _action_error(code: ContextActionErrorCode) -> ContextActionError:
-    return ContextActionError(code)
+    paths_and_rules = {
+        ContextActionErrorCode.CORRELATION_MISMATCH: ("$", "action correlation must match the current request"),
+        ContextActionErrorCode.INVALID_TRANSITION: ("$.kind", "action must be allowed by the current phase and completed read state"),
+        ContextActionErrorCode.ACTION_LIMIT_EXCEEDED: ("$.kind", "action count must remain within the disclosed invocation budget"),
+        ContextActionErrorCode.SEARCH_LIMIT_EXCEEDED: ("$.queries", "search count, query count, and requested results must fit the remaining search budget"),
+        ContextActionErrorCode.READ_LIMIT_EXCEEDED: ("$.handles", "read count, handle count, and source bytes must fit the remaining read budget"),
+        ContextActionErrorCode.OBSERVATION_LIMIT_EXCEEDED: ("$.handles", "selected source observations must fit the remaining context budget"),
+        ContextActionErrorCode.HANDLE_INVALID: ("$.handles", "expected unconsumed source handles issued by this invocation's search"),
+        ContextActionErrorCode.OUTSTANDING_READ: ("$.kind", "all outstanding read observations must be delivered before another action"),
+        ContextActionErrorCode.ANSWER_NOT_AUTHORIZED: ("$.result", "answer requires completed mandatory reads and current source authorization"),
+    }
+    failure = ContextActionError(code)
+    if code in paths_and_rules:
+        path, rule = paths_and_rules[code]
+        validation_failure(failure, path, rule)
+    return failure
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -1573,7 +1600,7 @@ class ContextProviderCallResult:
 
 @dataclass(frozen=True, slots=True)
 class ContextReferencePreludeRequest:
-    """One separately budgeted exact mandatory-reference provider prelude."""
+    """One exact mandatory-reference request resolved locally by the backend."""
 
     scope: ContextScope
     policy_fingerprint: str
@@ -1609,23 +1636,13 @@ class ContextReferencePreludeRequest:
 
 @dataclass(frozen=True, slots=True)
 class ContextReferencePreludeResult:
-    """Transient exact reference context and its physical-call facts."""
+    """Transient exact reference context loaded by the runtime."""
 
     context: tuple[Mapping[str, object], ...] = field(repr=False)
-    thread_id: str
-    accounting: ProviderCallAccounting
 
     def __post_init__(self) -> None:
         if type(self.context) is not tuple or any(
             not isinstance(item, Mapping) for item in self.context
-        ):
-            raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
-        _safe_identity(self.thread_id)
-        if (
-            type(self.accounting) is not ProviderCallAccounting
-            or self.accounting.state is not ProviderCallState.SUBMITTED
-            or self.accounting.payload.call_kind
-            is not ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ
         ):
             raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
 
@@ -1668,7 +1685,7 @@ class ContextProvider(Protocol):
         self,
         request: ContextReferencePreludeRequest,
     ) -> ContextReferencePreludeResult:
-        """Run the existing mandatory-reference prelude on the scoped thread."""
+        """Load authorized mandatory references without a provider call."""
 
     async def invoke_context(
         self,
@@ -1949,6 +1966,17 @@ class ContextInvocationSession:
 
         with self._lock:
             return self._next_action_index
+
+    @property
+    def completed_handles(self) -> tuple[ContextSourceHandle, ...]:
+        """Return locally completed READ handles in deterministic receipt order."""
+
+        with self._lock:
+            return tuple(
+                evidence.handle
+                for receipt in self._completed_receipts
+                for evidence in receipt.evidence
+            )
 
     def _handle_message(
         self,
@@ -2944,25 +2972,12 @@ def _exact_object(
     fields: frozenset[str],
 ) -> dict[str, object]:
     if type(value) is not dict or set(value) != fields:
-        raise _execution_error(ContextExecutionErrorCode.MALFORMED_ACTION)
+        raise validation_failure(
+            _execution_error(ContextExecutionErrorCode.MALFORMED_ACTION), "$",
+            "expected an object containing exactly " + ", ".join(sorted(fields)),
+        )
     assert isinstance(value, dict)
     return value
-
-
-def _correlation_token_matches(
-    value: object,
-    correlation: ContextActionCorrelation,
-) -> bool:
-    """Compare one untrusted token to the complete expected correlation."""
-
-    candidate = b""
-    if type(value) is str:
-        try:
-            candidate = value.encode("ascii", errors="strict")
-        except UnicodeEncodeError:
-            pass
-    expected = _correlation_token(correlation).encode("ascii")
-    return hmac.compare_digest(candidate, expected)
 
 
 def _answer_text_for_contract(
@@ -2974,8 +2989,15 @@ def _answer_text_for_contract(
     if type(contract) is not ContextJsonObjectResultContract or not (
         _value_matches_provider_schema(value, contract.schema_value())
     ):
-        raise ValueError
-    return _canonical_bytes(value).decode("utf-8", errors="strict")
+        raise validation_failure(
+            ValueError(),
+            '$',
+            'expected a JSON object matching the current result contract',
+        )
+    try:
+        return _canonical_bytes(value).decode("utf-8", errors="strict")
+    except ContextActionError as failure:
+        raise encoding_failure(failure, value, contract.schema_value())
 
 
 def _decode_context_action(
@@ -2984,126 +3006,164 @@ def _decode_context_action(
     correlation: ContextActionCorrelation,
     allowed_actions: tuple[str, ...],
     result_contract: ContextJsonObjectResultContract,
-    allowed_search_source_kinds: tuple[ContextSourceKind, ...] = (
-        _SEARCH_SOURCE_KIND_ORDER
-    ),
+    allowed_search_source_kinds: tuple[ContextSourceKind, ...] = _SEARCH_SOURCE_KIND_ORDER,
     resolve_handle: Callable[[object], ContextSourceHandle] = ContextSourceHandle,
+    completed_handles: tuple[ContextSourceHandle, ...] = (),
 ) -> ContextSearchAction | ContextReadAction | ContextAnswerAction:
-    """Strictly decode typed wire v7 and restore the full internal action."""
-
+    """Strictly decode typed wire v7 and retain the actual rejected property."""
     try:
         value = json.loads(
-            response_text,
-            object_pairs_hook=_unique_json_object,
+            response_text, object_pairs_hook=_unique_json_object,
             parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
         )
-        raw = _exact_object(value, frozenset({"action", "correlation"}))
-        if not _correlation_token_matches(raw["correlation"], correlation):
-            raise _execution_error(
-                ContextExecutionErrorCode.MALFORMED_ACTION,
-                detail=(_ContextExecutionErrorDetail.RESPONSE_CORRELATION_MISMATCH),
-            )
+        raw = _exact_object(value, frozenset({"action"}))
         action = raw["action"]
         if type(action) is not dict or type(action.get("kind")) is not str:
-            raise ValueError
+            raise validation_failure(ValueError(), "$.kind", "expected one of search, read, answer")
         action_kind = action["kind"]
         if action_kind not in {"answer", "read", "search"}:
-            raise ValueError
+            raise validation_failure(ValueError(), "$.kind", "expected one of search, read, answer")
         if action_kind == "search":
-            search = _exact_object(
-                action,
-                frozenset({"kind", "path_prefix", "queries"}),
-            )
-            path_prefix = search["path_prefix"]
-            query_values = search["queries"]
-            if (
-                action_kind not in allowed_actions
-                or (path_prefix is not None and type(path_prefix) is not str)
-                or type(query_values) is not list
-                or not query_values
-            ):
-                raise ValueError
+            if set(action) not in ({"kind", "queries"}, {"kind", "path_prefix", "queries"}):
+                raise validation_failure(
+                    ValueError(),
+                    '$',
+                    'search requires kind and queries, with only optional path_prefix',
+                )
+            path_prefix = action.get("path_prefix")
+            query_values = action["queries"]
+            if action_kind not in allowed_actions:
+                raise validation_failure(
+                    ValueError(),
+                    '$.kind',
+                    'expected an action from ' + ', '.join(allowed_actions),
+                )
+            if path_prefix is not None and type(path_prefix) is not str:
+                raise validation_failure(
+                    ValueError(),
+                    '$.path_prefix',
+                    'expected text or null',
+                    value=path_prefix,
+                )
+            if type(query_values) is not list or not query_values:
+                raise validation_failure(
+                    ValueError(),
+                    '$.queries',
+                    'expected a nonempty array',
+                    value=query_values,
+                )
             queries: list[ContextSearchQuery] = []
-            for query in query_values:
-                query_object = _exact_object(
-                    query,
-                    frozenset({"source_kinds", "text"}),
-                )
+            for query_index, query in enumerate(query_values):
+                query_path = f"$.queries[{query_index}]"
+                query_object = validation_call(query_path, _exact_object, query, frozenset({'source_kinds', 'text'}))
                 kinds = query_object["source_kinds"]
-                if type(query_object["text"]) is not str or type(kinds) is not list:
-                    raise ValueError
-                decoded_kinds = tuple(ContextSourceKind(item) for item in kinds)
-                if (
-                    not decoded_kinds
-                    or len(set(decoded_kinds)) != len(decoded_kinds)
-                    or any(
-                        kind not in allowed_search_source_kinds
-                        for kind in decoded_kinds
+                if type(query_object["text"]) is not str:
+                    raise validation_failure(
+                        ValueError(),
+                        query_path + '.text',
+                        'expected text',
+                        value=query_object['text'],
                     )
-                ):
-                    raise ValueError
-                canonical_kinds = tuple(
-                    kind for kind in _SEARCH_SOURCE_KIND_ORDER if kind in decoded_kinds
+                if type(kinds) is not list:
+                    raise validation_failure(
+                        ValueError(),
+                        query_path + '.source_kinds',
+                        'expected an array',
+                        value=kinds,
+                    )
+                decoded_kinds = tuple(
+                    validation_call(f"{query_path}.source_kinds[{index}]", ContextSourceKind, item)
+                    for index, item in enumerate(kinds)
                 )
-                queries.append(
-                    ContextSearchQuery(
-                        query_object["text"],
+                if not decoded_kinds:
+                    raise validation_failure(
+                        ValueError(),
+                        query_path + '.source_kinds',
+                        'expected at least one source kind',
+                    )
+                if len(set(decoded_kinds)) != len(decoded_kinds):
+                    raise validation_failure(
+                        ValueError(),
+                        query_path + '.source_kinds',
+                        'source kinds must be unique',
+                    )
+                if any(kind not in allowed_search_source_kinds for kind in decoded_kinds):
+                    raise validation_failure(
+                        ValueError(),
+                        query_path + '.source_kinds',
+                        'expected source kinds from ' + ', '.join((kind.value for kind in allowed_search_source_kinds)),
+                    )
+                canonical_kinds = tuple(kind for kind in _SEARCH_SOURCE_KIND_ORDER if kind in decoded_kinds)
+                try:
+                    queries.append(validation_call(
+                        query_path,
+                        ContextSearchQuery,
+                        query_object['text'],
                         canonical_kinds,
-                        cast(str | None, path_prefix),
-                    )
-                )
-            return ContextSearchAction(
-                correlation,
-                tuple(queries),
-            )
+                        path_prefix,
+                    ))
+                except ContextActionError as failure:
+                    raise remap_validation(failure, {query_path + ".path_prefix": "$.path_prefix"})
+            return ContextSearchAction(correlation, tuple(queries))
         if action_kind == "read":
             read = _exact_object(action, frozenset({"handles", "kind"}))
             handles_value = read["handles"]
             if type(handles_value) is not list or not handles_value:
-                raise _execution_error(
-                    ContextExecutionErrorCode.MALFORMED_ACTION,
-                    detail=(_ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED),
-                )
+                raise _execution_error(ContextExecutionErrorCode.MALFORMED_ACTION, detail=_ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED)
             if action_kind not in allowed_actions:
-                raise ValueError
-            try:
-                handles = tuple(resolve_handle(item) for item in handles_value)
-            except ContextActionError as exc:
-                if exc.code in {
-                    ContextActionErrorCode.HANDLE_INVALID,
-                    ContextActionErrorCode.INVALID_VALUE,
-                }:
-                    raise _execution_error(
-                        ContextExecutionErrorCode.MALFORMED_ACTION,
-                        detail=(
-                            _ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED
-                        ),
-                    ) from None
-                raise
-            return ContextReadAction(correlation, handles)
-        answer = _exact_object(
-            action,
-            frozenset({"kind", "result", "used_handles"}),
-        )
-        used_handles = answer["used_handles"]
-        if action_kind not in allowed_actions or type(used_handles) is not list:
-            raise ValueError
+                raise validation_failure(
+                    ValueError(),
+                    '$.kind',
+                    'expected an action from ' + ', '.join(allowed_actions),
+                )
+            handles: list[ContextSourceHandle] = []
+            for index, item in enumerate(handles_value):
+                try:
+                    handles.append(resolve_handle(item))
+                except ContextActionError as failure:
+                    if failure.code in {ContextActionErrorCode.HANDLE_INVALID, ContextActionErrorCode.INVALID_VALUE}:
+                        raise validation_failure(
+                            _execution_error(ContextExecutionErrorCode.MALFORMED_ACTION, detail=_ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED),
+                            f"$.handles[{index}]", "expected a source handle returned by a preceding search",
+                        ) from None
+                    raise
+            return ContextReadAction(correlation, tuple(handles))
+        answer = _exact_object(action, frozenset({"kind", "result"}))
+        if action_kind not in allowed_actions:
+            raise validation_failure(
+                ValueError(),
+                '$.kind',
+                'expected an action from ' + ', '.join(allowed_actions),
+            )
         return ContextAnswerAction(
             correlation,
-            _answer_text_for_contract(answer["result"], result_contract),
-            tuple(resolve_handle(item) for item in used_handles),
+            validation_call("$.result", _answer_text_for_contract, answer["result"], result_contract),
+            completed_handles,
         )
     except ContextExecutionError:
         raise
-    except (
-        ContextActionError,
-        ContextManifestError,
-        _DuplicateJsonKey,
-        json.JSONDecodeError,
-        TypeError,
-        ValueError,
+    except (ContextActionError, ContextManifestError, _DuplicateJsonKey, json.JSONDecodeError, TypeError, ValueError) as failure:
+        raise carry_validation(_execution_error(ContextExecutionErrorCode.MALFORMED_ACTION), failure) from None
+
+
+def _context_validation_details(
+    response_text: str,
+    schema_issues: tuple[str, ...],
+    failure: ContextExecutionError,
+) -> tuple[str, ...]:
+    """Retain the actual schema/domain rejection; never revalidate heuristically."""
+    issues = schema_issues or failure_issues(failure, path="$.action")
+    if not issues and _execution_error_has_detail(
+        failure, _ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED,
     ):
-        raise _execution_error(ContextExecutionErrorCode.MALFORMED_ACTION) from None
+        issues = ("$.action.handles: expected unique handles returned by a preceding search",)
+    if not issues and _execution_error_has_detail(
+        failure, _ContextExecutionErrorDetail.RESPONSE_CORRELATION_MISMATCH,
+    ):
+        issues = ("$.action: response correlation must match the current request",)
+    return bounded_chunks(issues or (
+        "$.action: action decoder failed without a property diagnostic",
+    ))
 
 
 def _closed_provider_object_schema(
@@ -3124,12 +3184,10 @@ def _closed_provider_object_schema(
 
 def _context_action_schema(
     *,
-    correlation: ContextActionCorrelation,
     allowed_actions: tuple[str, ...],
     result_contract: ContextJsonObjectResultContract,
     allowed_search_source_kinds: tuple[ContextSourceKind, ...],
     action_limits: list[int],
-    max_used_handles: int,
 ) -> dict[str, object]:
     """Build one closed typed action envelope for the exact physical call."""
 
@@ -3154,24 +3212,31 @@ def _context_action_schema(
                 },
             }
         )
-        variants.append(
-            _closed_provider_object_schema(
-                {
-                    "kind": {"enum": ["search"], "type": "string"},
-                    "path_prefix": {"type": ["string", "null"]},
-                    "queries": {
-                        "items": query_schema,
-                        "maxItems": query_limit,
-                        "minItems": 1,
-                        "type": "array",
-                    },
+        search_properties = {
+            "kind": {"enum": ["search"], "type": "string"},
+            "queries": {
+                "items": query_schema,
+                "maxItems": query_limit,
+                "minItems": 1,
+                "type": "array",
+            },
+        }
+        variants.append(_closed_provider_object_schema(search_properties))
+        if ContextSourceKind.WRITING_ARTIFACT in allowed_search_source_kinds:
+            artifact_query = _closed_provider_object_schema({
+                "text": {"type": "string", "description": "Nonempty literal search text."},
+                "source_kinds": {
+                    "type": "array", "items": {"type": "string", "enum": ["writing_artifact"]},
+                    "minItems": 1, "maxItems": 1,
                 },
-                description=(
-                    "SEARCH: find source locators; path_prefix is null unless "
-                    "restricting writing-artifact paths."
-                ),
-            )
-        )
+            })
+            variants.append(_closed_provider_object_schema({
+                **search_properties,
+                "queries": {"type": "array", "items": artifact_query,
+                            "minItems": 1, "maxItems": query_limit},
+                "path_prefix": {"type": "string",
+                                "description": "Normalized relative artifact directory; writing_artifact queries only."},
+            }))
     if "read" in allowed_actions:
         handle_limit = min(action_limits[5], action_limits[6])
         variants.append(
@@ -3194,15 +3259,10 @@ def _context_action_schema(
                 {
                     "kind": {"enum": ["answer"], "type": "string"},
                     "result": result_contract.schema_value(),
-                    "used_handles": {
-                        "items": {"type": "string"},
-                        "maxItems": max_used_handles,
-                        "type": "array",
-                    },
                 },
                 description=(
-                    "ANSWER: return the exact result and only supporting handles "
-                    "emitted by successful READ actions."
+                    "ANSWER: return only the exact semantic result. Runtime "
+                    "attaches successful READ receipts."
                 ),
             )
         )
@@ -3212,17 +3272,10 @@ def _context_action_schema(
         variants[0] if len(variants) == 1 else {"anyOf": variants}
     )
     schema = _closed_provider_object_schema(
-        {
-            "correlation": {
-                "description": "Echo the exact correlation token from this call.",
-                "enum": [_correlation_token(correlation)],
-                "type": "string",
-            },
-            "action": action_schema,
-        },
+        {"action": action_schema},
         description=(
-            "Return exactly one schema-selected context action with its exact "
-            "correlation token."
+            "Return exactly one schema-selected context action. The runtime "
+            "owns correlation and action-index bookkeeping."
         ),
     )
     _validate_provider_schema_node(schema)
@@ -4249,6 +4302,8 @@ class AgentContextService:
         own_agent_state: OwnAgentStateSourceAdapter,
         answer_validator: Callable[[str, ContextAnswerAuthorization], object]
         | None = None,
+        answer_diagnostic: Callable[[str], tuple[DomainValidationRule, ...]] | None = None,
+        validation_sink: Callable[[str, tuple[str, ...]], object] | None = None,
         event_sink: ContextExecutionEventSink | None = None,
         progress_sink: ContextActionProgressSink | None = None,
         phase: str | None = None,
@@ -4282,10 +4337,12 @@ class AgentContextService:
         )
         if (
             physical_call_limit > self._action_policy.max_provider_calls
-            or physical_call_limit <= int(bool(request.mandatory_references))
+            or physical_call_limit <= 0
         ):
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         _validate_sync_callback(answer_validator)
+        _validate_sync_callback(answer_diagnostic)
+        _validate_sync_callback(validation_sink)
         _validate_sync_callback(event_sink)
         _validate_sync_callback(progress_sink)
         if request.subject_kind is ContextSubjectKind.DEBATE:
@@ -4399,6 +4456,8 @@ class AgentContextService:
                         own_agent_state=own_agent_state,
                         physical_call_limit=physical_call_limit,
                         answer_validator=answer_validator,
+                        answer_diagnostic=answer_diagnostic,
+                        validation_sink=validation_sink,
                         event_sink=event_sink,
                         progress_sink=progress_sink,
                         phase=phase,
@@ -4448,6 +4507,8 @@ class AgentContextService:
         own_agent_state: OwnAgentStateSourceAdapter,
         physical_call_limit: int,
         answer_validator: Callable[[str, ContextAnswerAuthorization], object] | None,
+        answer_diagnostic: Callable[[str], tuple[DomainValidationRule, ...]] | None,
+        validation_sink: Callable[[str, tuple[str, ...]], object] | None,
         event_sink: ContextExecutionEventSink | None,
         progress_sink: ContextActionProgressSink | None,
         phase: str | None,
@@ -4507,6 +4568,7 @@ class AgentContextService:
         retired_thread_id: str | None = None
         checkpoint_committed = False
         call_finalizer: ContextProviderCallFinalizer | None = None
+        call_validation_details: tuple[str, ...] = ()
         response_rejection_code: ContextProviderTerminalCode | None = None
 
         def execution_event(
@@ -4546,6 +4608,15 @@ class AgentContextService:
             """Finalize and retain one deterministic raw-response rejection."""
 
             nonlocal response_rejection_code
+            details = call_validation_details
+            if not details and code is ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH:
+                details = bounded_chunks(("$.action: response correlation must match the current request",))
+            try:
+                retain_details = getattr(finalizer, "set_validation_details", None)
+                if callable(retain_details):
+                    retain_details(details)
+            except BaseException:
+                pass
             _reject_provider_call_without_replacing(finalizer, code)
             response_rejection_code = code
 
@@ -4665,17 +4736,15 @@ class AgentContextService:
                     projection,
                 ),
                 allowed_search_source_kinds=(request.allowed_search_source_kinds),
-                physical_call_limit=(
-                    physical_call_limit - int(bool(request.mandatory_references))
-                ),
+                physical_call_limit=physical_call_limit,
                 core_statuses=core_statuses,
             )
 
             # All statically available mandatory material is checked before the
-            # reference prelude. Its generated observation is checked again in
-            # the exact substantive payload before that physical submission.
+            # local reference load. Its generated observation is checked again
+            # in the exact substantive payload before physical submission.
             if history_delivery is not None:
-                known_payload, _, _ = _initial_payload(
+                known_payload, known_component_paths, known_reference_paths = _initial_payload(
                     binding, projection, planning_checkpoint, action_session,
                     materials, phase_contract=_invocation_phase_contract(request),
                     action_index=1,
@@ -4685,6 +4754,10 @@ class AgentContextService:
                     reference_context=(),
                 )
                 known_payload["h"] = history_delivery
+                known_component_paths[("h",)] = ContextComponentKind.CONVERSATION_CONTEXT
+                known_payload, _ = compact_context_payload(
+                    known_payload, known_component_paths, known_reference_paths,
+                )
                 if len(_canonical_bytes(known_payload)) > MAX_SESSION_CONTEXT_UTF8_BYTES:
                     raise SessionContextCapacityError()
 
@@ -4790,129 +4863,11 @@ class AgentContextService:
                     None if continuation is None else continuation.identity,
                     request.execution_workspace,
                 )
-                for auth_attempt in range(2):
-                    call_id = prelude_request.call_id
-                    try:
-                        if auth_attempt:
-                            with authentication_replay(auth_failure, replay_sources_unchanged):
-                                prelude = await provider.prepare_references(prelude_request)
-                        else:
-                            prelude = await provider.prepare_references(prelude_request)
-                        break
-                    except BaseException as failure:
-                        if (
-                            isinstance(failure, ProviderAuthenticationRequiredError)
-                            and failure.replay_aborted
-                        ):
-                            raise
-                        facts = context_provider_failure_facts(failure)
-                        recorded_before = len(calls)
-                        if facts.accounting is not None:
-                            if facts.accounting.state is ProviderCallState.SUBMITTED:
-                                submitted_accountings.append(facts.accounting)
-                            generation = self._append_failure_call_without_replacing(
-                                self._ledger, key, generation, attempt_id,
-                                calls, call_id, facts.accounting,
-                            )
-                        provider_failure = True
-                        if (
-                            not isinstance(failure, ProviderAuthenticationRequiredError)
-                            or auth_attempt
-                        ):
-                            raise
-                        try:
-                            authenticated = await request_authentication(failure)
-                        except BaseException:
-                            failure.clear_replay_validator()
-                            raise
-                        if not (
-                            authenticated and failure.replay_safe
-                            and not facts.timed_out and not facts.submission_uncertain
-                            and not facts.taint_existing_thread
-                            and len(calls) == recorded_before + 1
-                            and len(calls) + 1 < physical_call_limit
-                        ):
-                            raise
-                        if not failure.validate_replay() or not replay_sources_unchanged():
-                            raise
-                        auth_failure = failure
-                        prelude_request = replace(
-                            prelude_request,
-                            call_id=f"{attempt_id}_call_{len(calls) + 1}",
-                        )
+                prelude = await provider.prepare_references(prelude_request)
                 stage = "reference_result"
-                terminal_provider_succeeded = True
                 if type(prelude) is not ContextReferencePreludeResult:
-                    failure = _execution_error(
-                        ContextExecutionErrorCode.PROVIDER_CONTRACT
-                    )
-                    accounting = getattr(prelude, "accounting", None)
-                    if (
-                        type(accounting) is ProviderCallAccounting
-                        and accounting.state is ProviderCallState.SUBMITTED
-                    ):
-                        submitted_accountings.append(accounting)
-                        record_context_provider_failure(
-                            failure,
-                            ContextProviderFailureFacts(
-                                accounting,
-                                taint_existing_thread=True,
-                            ),
-                        )
-                        generation = self._append_failure_call_without_replacing(
-                            self._ledger,
-                            key,
-                            generation,
-                            attempt_id,
-                            calls,
-                            call_id,
-                            accounting,
-                        )
-                    raise failure
-                submitted_accountings.append(prelude.accounting)
-                generation = self._append_call(
-                    self._ledger,
-                    key,
-                    generation,
-                    attempt_id,
-                    calls,
-                    call_id,
-                    prelude.accounting,
-                )
-                if (
-                    current_thread_id is not None
-                    and prelude.thread_id != current_thread_id
-                ):
-                    failure = _execution_error(
-                        ContextExecutionErrorCode.CONTINUATION_MISMATCH
-                    )
-                    record_context_provider_failure(
-                        failure,
-                        ContextProviderFailureFacts(
-                            prelude.accounting,
-                            taint_existing_thread=True,
-                        ),
-                    )
-                    raise failure
-                if (
-                    retired_thread_id is not None
-                    and prelude.thread_id == retired_thread_id
-                ):
-                    failure = _execution_error(
-                        ContextExecutionErrorCode.CONTINUATION_MISMATCH
-                    )
-                    record_context_provider_failure(
-                        failure,
-                        ContextProviderFailureFacts(
-                            prelude.accounting,
-                            taint_existing_thread=True,
-                        ),
-                    )
-                    raise failure
-                terminal_provider_succeeded = False
-                current_thread_id = prelude.thread_id
+                    raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
                 reference_context = prelude.context
-                history_advanced = True
 
             observation: str | None = None
             pending_read: ContextReadReceipt | None = None
@@ -4932,16 +4887,12 @@ class AgentContextService:
                 call_id = f"{attempt_id}_call_{len(calls) + 1}"
                 correlation = _action_correlation(binding, action_index)
                 schema = _context_action_schema(
-                    correlation=correlation,
                     allowed_actions=allowed_actions,
                     result_contract=phase_contract[1],
                     allowed_search_source_kinds=(
                         request.allowed_search_source_kinds
                     ),
                     action_limits=action_session.action_limits(),
-                    max_used_handles=(
-                        self._action_policy.max_cumulative_handles
-                    ),
                 )
                 if observation is None:
                     payload, component_paths, reference_paths = _initial_payload(
@@ -4958,8 +4909,6 @@ class AgentContextService:
                     if history_delivery is not None:
                         payload["h"] = history_delivery
                         component_paths[("h",)] = ContextComponentKind.CONVERSATION_CONTEXT
-                        if len(_canonical_bytes(payload)) > MAX_SESSION_CONTEXT_UTF8_BYTES:
-                            raise SessionContextCapacityError()
                     call_kind = (
                         ProviderCallKind.DEBATE
                         if scope.subject_kind is ContextSubjectKind.DEBATE
@@ -4989,6 +4938,15 @@ class AgentContextService:
                             else ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION
                         )
                     )
+                payload, component_paths = compact_context_payload(
+                    payload, component_paths, reference_paths,
+                )
+                if (
+                    observation is None
+                    and history_delivery is not None
+                    and len(_canonical_bytes(payload)) > MAX_SESSION_CONTEXT_UTF8_BYTES
+                ):
+                    raise SessionContextCapacityError()
                 call_request = ContextProviderCallRequest(
                     scope=scope,
                     policy_fingerprint=policy_fingerprint,
@@ -5088,6 +5046,7 @@ class AgentContextService:
                         )
                     raise failure
                 call_finalizer = result.finalizer
+                call_validation_details = ()
                 submitted_accountings.append(result.accounting)
                 generation = self._append_call(
                     self._ledger,
@@ -5170,6 +5129,9 @@ class AgentContextService:
                     pending_read = None
                 stage = "decode"
                 try:
+                    schema_issues = diagnose_json_text(result.response_text, schema)
+                    if schema_issues:
+                        raise _execution_error(ContextExecutionErrorCode.MALFORMED_ACTION)
                     action = _decode_context_action(
                         result.response_text,
                         correlation=correlation,
@@ -5179,8 +5141,14 @@ class AgentContextService:
                             request.allowed_search_source_kinds
                         ),
                         resolve_handle=action_session.resolve_wire_handle,
+                        completed_handles=action_session.completed_handles,
                     )
                 except ContextExecutionError as decode_failure:
+                    call_validation_details = _context_validation_details(
+                        result.response_text, schema_issues, decode_failure,
+                    )
+                    if validation_sink is not None:
+                        _require_sync_none(validation_sink(call_id, call_validation_details))
                     if (
                         decode_failure.code
                         is ContextExecutionErrorCode.MALFORMED_ACTION
@@ -5196,6 +5164,7 @@ class AgentContextService:
                                     request.allowed_search_source_kinds
                                 ),
                                 resolve_handle=(action_session.resolve_wire_handle),
+                                completed_handles=action_session.completed_handles,
                             )
                         except ContextExecutionError:
                             finalizer = call_finalizer
@@ -5389,7 +5358,33 @@ class AgentContextService:
                     raise ContextSourceError(ContextSourceErrorCode.SOURCE_DRIFT)
                 stage = "answer_validation"
                 if answer_validator is not None:
-                    _require_sync_none(answer_validator(action.answer, authorization))
+                    try:
+                        _require_sync_none(answer_validator(action.answer, authorization))
+                    except Exception as answer_failure:
+                        issues = failure_issues(answer_failure, path="$.action.result")
+                        if issues:
+                            details = bounded_chunks(issues)
+                        else:
+                            try:
+                                rules = None if answer_diagnostic is None else answer_diagnostic(action.answer)
+                            except Exception:
+                                rules = None
+                            details = domain_rule_chunks(rules)
+                        call_validation_details = details
+                        if call_finalizer is not None:
+                            try:
+                                retain_details = getattr(
+                                    call_finalizer, "set_validation_details", None,
+                                )
+                                if callable(retain_details):
+                                    retain_details(details)
+                            except BaseException:
+                                pass
+                        if validation_sink is not None:
+                            _require_sync_none(validation_sink(
+                                call_id, details,
+                            ))
+                        raise
                 stage = "answer_observer"
                 _emit_context_event(
                     event_sink,
@@ -5554,6 +5549,13 @@ class AgentContextService:
             if checkpoint_committed:
                 raise
             if call_finalizer is not None:
+                if stage in {"action", "answer"} and isinstance(failure, ContextActionError):
+                    call_validation_details = bounded_chunks(failure_issues(failure, path="$.action"))
+                    if validation_sink is not None and call_validation_details:
+                        try:
+                            _require_sync_none(validation_sink(call_id, call_validation_details))
+                        except BaseException:
+                            pass
                 finalizer = call_finalizer
                 call_finalizer = None
                 if isinstance(failure, asyncio.CancelledError):

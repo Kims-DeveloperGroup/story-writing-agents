@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import subprocess
 import sys
-import tempfile
 import textwrap
 import unittest
+from contextlib import contextmanager
 from importlib import metadata
 from pathlib import Path
 from unittest import mock
@@ -16,11 +16,18 @@ from story_writing_agents import conversation_rag_composition as composition
 from story_writing_agents import conversation_rag_local as local
 from story_writing_agents import conversation_rag_store as rag_store
 
-from tests.helpers import initialize_test_workspace
+from tests.helpers import pristine_initialized_workspace
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _GENERIC_RAG_SOURCE = _REPOSITORY_ROOT / "vendor" / "generic-rag" / "src"
 _VISIBLE_TURN_SCHEMA_ID = "story-collaboration-rag-readable-event-v2"
+
+
+@contextmanager
+def _ready_workspace(test_case: unittest.TestCase):
+    """Provide one independent ready workspace for a scoped RAG case."""
+
+    yield pristine_initialized_workspace(test_case)
 
 
 def _collaborators() -> rag.ConversationRagCollaborators:
@@ -407,8 +414,7 @@ class ConversationRagCompositionTests(unittest.TestCase):
     def test_local_composition_exact_pin_projects_reopens_and_retrieves(self) -> None:
         if str(_GENERIC_RAG_SOURCE) not in sys.path:
             sys.path.insert(0, str(_GENERIC_RAG_SOURCE))
-        with tempfile.TemporaryDirectory() as temporary:
-            workspace = initialize_test_workspace(temporary)
+        with _ready_workspace(self) as workspace:
             store = rag_store.ConversationRagGenerationStore(workspace)
             lexical = _EmptyLexicalRetriever()
             real_compose = composition.compose_conversation_rag
@@ -511,8 +517,7 @@ class ConversationRagCompositionTests(unittest.TestCase):
     ) -> None:
         if str(_GENERIC_RAG_SOURCE) not in sys.path:
             sys.path.insert(0, str(_GENERIC_RAG_SOURCE))
-        with tempfile.TemporaryDirectory() as temporary:
-            workspace = initialize_test_workspace(temporary)
+        with _ready_workspace(self) as workspace:
             store = rag_store.ConversationRagGenerationStore(workspace)
             with mock.patch.object(
                 composition.metadata, "version", return_value="0.1.0"
@@ -553,9 +558,8 @@ class ConversationRagCompositionTests(unittest.TestCase):
         for control in (KeyboardInterrupt("stop"), SystemExit(8)):
             with (
                 self.subTest(control=type(control).__name__),
-                tempfile.TemporaryDirectory() as temporary,
+                _ready_workspace(self) as workspace,
             ):
-                workspace = initialize_test_workspace(temporary)
                 store = rag_store.ConversationRagGenerationStore(workspace)
                 with mock.patch.object(
                     composition.metadata, "version", return_value="0.1.0"
@@ -610,8 +614,7 @@ class ConversationRagCompositionTests(unittest.TestCase):
     ) -> None:
         if str(_GENERIC_RAG_SOURCE) not in sys.path:
             sys.path.insert(0, str(_GENERIC_RAG_SOURCE))
-        with tempfile.TemporaryDirectory() as temporary:
-            workspace = initialize_test_workspace(temporary)
+        with _ready_workspace(self) as workspace:
             store = rag_store.ConversationRagGenerationStore(workspace)
             with mock.patch.object(
                 composition.metadata, "version", return_value="0.1.0"
@@ -692,8 +695,7 @@ class ConversationRagCompositionTests(unittest.TestCase):
     def test_local_retrieval_maps_corrupt_store_to_literal_fallback(self) -> None:
         if str(_GENERIC_RAG_SOURCE) not in sys.path:
             sys.path.insert(0, str(_GENERIC_RAG_SOURCE))
-        with tempfile.TemporaryDirectory() as temporary:
-            workspace = initialize_test_workspace(temporary)
+        with _ready_workspace(self) as workspace:
             store = rag_store.ConversationRagGenerationStore(workspace)
             with mock.patch.object(
                 composition.metadata,
@@ -736,8 +738,7 @@ class ConversationRagCompositionTests(unittest.TestCase):
     def test_local_missing_dependency_and_invalid_inputs_do_not_touch_storage(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            workspace = initialize_test_workspace(temporary)
+        with _ready_workspace(self) as workspace:
             store = rag_store.ConversationRagGenerationStore(workspace)
             rag_root = (
                 workspace.root / "agent_states/orchestrator_state/conversation_rag"
@@ -770,8 +771,7 @@ class ConversationRagCompositionTests(unittest.TestCase):
                 composition.LocalConversationRagComposition(store, object())  # type: ignore[arg-type]
 
     def test_compatibility_probe_is_deferred_sanitized_and_resource_free(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            workspace = initialize_test_workspace(temporary)
+        with _ready_workspace(self) as workspace:
             rag_root = (
                 workspace.root / "agent_states/orchestrator_state/conversation_rag"
             )
@@ -820,8 +820,7 @@ class ConversationRagCompositionTests(unittest.TestCase):
     def test_concrete_runtime_state_maps_every_store_status_and_marks_stale(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            workspace = initialize_test_workspace(temporary)
+        with _ready_workspace(self) as workspace:
             store = rag_store.ConversationRagGenerationStore(workspace)
             state = composition.LocalConversationRagRuntimeState(store)
             request = _projection_request()
@@ -925,8 +924,7 @@ class ConversationRagCompositionTests(unittest.TestCase):
     def test_concrete_runtime_bundle_is_correlated_and_construction_has_no_io(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            workspace = initialize_test_workspace(temporary)
+        with _ready_workspace(self) as workspace:
             rag_root = (
                 workspace.root / "agent_states/orchestrator_state/conversation_rag"
             )

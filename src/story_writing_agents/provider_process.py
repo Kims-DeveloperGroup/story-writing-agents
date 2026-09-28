@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import sys
@@ -34,6 +35,9 @@ class ProcessStartFailed(Exception):
 
 class ProcessTimedOut(Exception):
     """The bounded provider process exceeded its timeout."""
+
+
+StdoutLineCallback = Callable[[bytes], Awaitable[None] | None]
 
 
 @dataclass(frozen=True)
@@ -86,6 +90,7 @@ class ProcessRequest:
     timeout_seconds: float
     cwd: Path | None = None
     env: Mapping[str, str] | None = None
+    on_stdout_line: StdoutLineCallback | None = None
     execution_workspace: ProviderExecutionWorkspace | None = field(
         default=None,
         repr=False,
@@ -125,6 +130,99 @@ class ProcessResult:
 
 CreateProcess = Callable[..., Awaitable[asyncio.subprocess.Process]]
 WaitFor = Callable[..., Awaitable[object]]
+
+
+async def _communicate_streaming(
+    process: asyncio.subprocess.Process,
+    stdin: bytes,
+    on_stdout_line: StdoutLineCallback,
+) -> tuple[bytes, bytes]:
+    """Drain process streams while dispatching lines to a callback in real time."""
+
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+
+    async def write_stdin() -> None:
+        if process.stdin is None:
+            return
+        try:
+            if stdin:
+                process.stdin.write(stdin)
+                drain = process.stdin.drain()
+                if inspect.isawaitable(drain):
+                    await drain
+            close = getattr(process.stdin, "close", None)
+            if callable(close):
+                close()
+            wait_closed = getattr(process.stdin, "wait_closed", None)
+            if callable(wait_closed):
+                res = wait_closed()
+                if inspect.isawaitable(res):
+                    await res
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    async def read_stdout() -> None:
+        if process.stdout is None:
+            return
+        buffer = bytearray()
+        search_start = 0
+        while True:
+            chunk = await process.stdout.read(65536)
+            if not chunk:
+                break
+            stdout_chunks.append(chunk)
+            buffer.extend(chunk)
+            start = 0
+            while True:
+                newline_index = buffer.find(b"\n", max(start, search_start))
+                if newline_index == -1:
+                    search_start = len(buffer)
+                    break
+                line = bytes(buffer[start : newline_index + 1])
+                start = newline_index + 1
+                search_start = start
+                try:
+                    callback_result = on_stdout_line(line)
+                    if inspect.isawaitable(callback_result):
+                        await callback_result
+                except Exception:
+                    pass
+            if start > 0:
+                del buffer[:start]
+                search_start -= start
+        if buffer:
+            trailing_line = bytes(buffer)
+            try:
+                callback_result = on_stdout_line(trailing_line)
+                if inspect.isawaitable(callback_result):
+                    await callback_result
+            except Exception:
+                pass
+
+    async def read_stderr() -> None:
+        if process.stderr is None:
+            return
+        while True:
+            chunk = await process.stderr.read(65536)
+            if not chunk:
+                break
+            stderr_chunks.append(chunk)
+
+    tasks = [
+        asyncio.ensure_future(write_stdin()),
+        asyncio.ensure_future(read_stdout()),
+        asyncio.ensure_future(read_stderr()),
+        asyncio.ensure_future(process.wait()),
+    ]
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    return b"".join(stdout_chunks), b"".join(stderr_chunks)
 
 
 async def run_process(
@@ -192,10 +290,20 @@ async def run_process(
             raise
 
     try:
-        communicated = await wait_for(
-            process.communicate(request.stdin),
-            timeout=request.timeout_seconds,
-        )
+        if (
+            request.on_stdout_line is None
+            or getattr(process, "stdout", None) is None
+            or not hasattr(process.stdout, "read")
+        ):
+            communicated = await wait_for(
+                process.communicate(request.stdin),
+                timeout=request.timeout_seconds,
+            )
+        else:
+            communicated = await wait_for(
+                _communicate_streaming(process, request.stdin, request.on_stdout_line),
+                timeout=request.timeout_seconds,
+            )
     except TimeoutError as exc:
         await stop_process(process, wait_for=wait_for)
         raise ProcessTimedOut from exc

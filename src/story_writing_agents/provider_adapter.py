@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+import inspect
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping, Protocol
@@ -17,8 +18,10 @@ from .agent_context import (
     ProviderCallState,
     ProviderJsonEncodingError,
     ProviderPayloadAccounting,
+    ProviderStreamSink,
     ProviderUsage,
     account_provider_payload,
+    active_provider_stream_sink,
 )
 from .errors import ProviderAuthenticationRequiredError
 from .models import AgentDefinition
@@ -109,6 +112,11 @@ class ProviderInvocation:
         default=(),
         repr=False,
     )
+    stream_sink: ProviderStreamSink | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
     execution_workspace: ProviderExecutionWorkspace | None = field(
         default=None,
         repr=False,
@@ -119,6 +127,22 @@ class ProviderInvocation:
     call_accounting: ProviderCallAccounting | None = field(init=False)
 
     def __post_init__(self) -> None:
+        if self.stream_sink is None:
+            active_sink = active_provider_stream_sink()
+            if active_sink is not None:
+                object.__setattr__(self, "stream_sink", active_sink)
+        if self.stream_sink is not None:
+            call = getattr(self.stream_sink, "__call__", None)
+            if (
+                not callable(self.stream_sink)
+                or inspect.iscoroutinefunction(self.stream_sink)
+                or inspect.isasyncgenfunction(self.stream_sink)
+                or inspect.iscoroutinefunction(call)
+                or inspect.isasyncgenfunction(call)
+            ):
+                raise TypeError(
+                    "provider invocation stream sink must be a synchronous callable or None"
+                )
         schema = MappingProxyType(dict(self.schema))
         payload = MappingProxyType(dict(self.payload))
         component_paths = MappingProxyType(dict(self.component_paths))

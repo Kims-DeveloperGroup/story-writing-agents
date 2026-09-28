@@ -8,6 +8,10 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from .structured_output_validation import (
+    validation_failure,
+    validation_call,
+)
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import PurePosixPath
@@ -64,18 +68,30 @@ def artifact_domain(path: str) -> ArtifactReviewDomain | None:
     """
 
     if type(path) is not str:
-        raise TypeError("routing artifact path must be exact text")
+        raise validation_failure(TypeError('routing artifact path must be exact text'), '$', 'expected text')
     if not path or "\\" in path or "\x00" in path:
-        raise ValueError("routing artifact path must be a nonempty POSIX path")
+        raise validation_failure(
+            ValueError('routing artifact path must be a nonempty POSIX path'),
+            '$',
+            'routing artifact path must be a nonempty POSIX path',
+        )
     if len(path.encode("utf-8", errors="strict")) > 1_024:
-        raise ValueError("routing artifact path is too long")
+        raise validation_failure(
+            ValueError('routing artifact path is too long'),
+            '$',
+            'expected at most 1024 UTF-8 bytes',
+        )
     parsed = PurePosixPath(path)
     if (
         parsed.is_absolute()
         or parsed.as_posix() != path
         or any(part in {"", ".", ".."} for part in parsed.parts)
     ):
-        raise ValueError("routing artifact path must be normalized and relative")
+        raise validation_failure(
+            ValueError('routing artifact path must be normalized and relative'),
+            '$',
+            'expected a normalized relative path without absolute roots or dot segments',
+        )
     if path in _CORE_DOMAIN_BY_PATH:
         return _CORE_DOMAIN_BY_PATH[path]
     if (
@@ -113,19 +129,40 @@ class AuthoringScope:
     def __post_init__(self) -> None:
         _version(self.schema_version, AUTHORING_SCOPE_SCHEMA_VERSION)
         if type(self.activity) is not AuthoringActivity:
-            raise TypeError("authoring activity must be an AuthoringActivity")
-        _path_domains(self.target_paths)
-        _domain_tuple(self.domains)
-        _text(self.interpretation, label="authoring interpretation")
-        _identifier(self.task_id)
+            raise validation_failure(
+                TypeError('authoring activity must be an AuthoringActivity'),
+                '$.activity',
+                'expected activity from ' + ', '.join((activity.value for activity in AuthoringActivity)),
+            )
+        validation_call('$.target_paths', _path_domains, self.target_paths)
+        validation_call('$.domains', _domain_tuple, self.domains)
+        validation_call(
+            '$.interpretation',
+            _text,
+            self.interpretation,
+            label='authoring interpretation',
+        )
+        validation_call('$.task_id', _identifier, self.task_id)
         if type(self.task_revision) is not int or self.task_revision < 1:
-            raise ValueError("authoring task revision must be a positive integer")
-        required = set(self.domains) | _path_domains(self.target_paths)
+            raise validation_failure(
+                ValueError('authoring task revision must be a positive integer'),
+                '$.task_revision',
+                'expected a positive integer task revision',
+            )
+        required = set(self.domains) | validation_call('$.target_paths', _path_domains, self.target_paths)
         if self.activity is AuthoringActivity.WORKFLOW:
             if required:
-                raise ValueError("workflow scope cannot carry story domains or targets")
+                raise validation_failure(
+                    ValueError('workflow scope cannot carry story domains or targets'),
+                    '$',
+                    'activity workflow requires domains and target_paths to both be empty',
+                )
         elif not required:
-            raise ValueError("story authoring requires explicit domains or targets")
+            raise validation_failure(
+                ValueError('story authoring requires explicit domains or targets'),
+                '$',
+                'story activity requires at least one domain or target_path',
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,10 +179,14 @@ class ReviewBasis:
 
     def __post_init__(self) -> None:
         _version(self.schema_version, REVIEW_BASIS_SCHEMA_VERSION)
-        _input_ids(self.candidate_input_ids)
+        validation_call('$.candidate_input_ids', _input_ids, self.candidate_input_ids)
         if not self.candidate_input_ids:
-            raise ValueError("review basis requires concrete candidate inputs")
-        _text(self.criteria, label="review criteria")
+            raise validation_failure(
+                ValueError('review basis requires concrete candidate inputs'),
+                '$.candidate_input_ids',
+                'review mode requires at least one concrete candidate in input_ids',
+            )
+        validation_call('$.criteria', _text, self.criteria, label='review criteria')
 
 
 def specialists_for_domains(
@@ -170,12 +211,20 @@ def required_authoring_domains(
     """
 
     if type(scope) is not AuthoringScope:
-        raise TypeError("authoring scope must be an AuthoringScope")
+        raise validation_failure(
+            TypeError('authoring scope must be an AuthoringScope'),
+            '$',
+            'authoring scope must be an AuthoringScope',
+        )
     domains = set(scope.domains)
     domains.update(_path_domains(scope.target_paths))
     domains.update(_path_domains(affected_paths))
     if scope.activity is AuthoringActivity.WORKFLOW and domains:
-        raise ValueError("workflow scope cannot carry affected story artifacts")
+        raise validation_failure(
+            ValueError('workflow scope cannot carry affected story artifacts'),
+            '$',
+            'workflow scope cannot carry affected story artifacts',
+        )
     return tuple(domain for domain in ArtifactReviewDomain if domain in domains)
 
 
@@ -203,16 +252,32 @@ def validate_specialist_routing(
         type(item) is not str or item not in _SPECIALIST_BY_DOMAIN.values()
         for item in specialist_ids
     ):
-        raise TypeError("routing participants must be canonical specialist IDs")
+        raise validation_failure(
+            TypeError('routing participants must be canonical specialist IDs'),
+            '$',
+            'expected specialist IDs from ' + ', '.join(_SPECIALIST_BY_DOMAIN.values()),
+        )
     if len(set(specialist_ids)) != len(specialist_ids):
-        raise ValueError("routing participants must be unique")
+        raise validation_failure(
+            ValueError('routing participants must be unique'),
+            '$',
+            'specialist IDs must be unique',
+        )
     if specialist_ids != tuple(
         item for item in _SPECIALIST_BY_DOMAIN.values() if item in specialist_ids
     ):
-        raise ValueError("routing participants must be in canonical order")
+        raise validation_failure(
+            ValueError('routing participants must be in canonical order'),
+            '$',
+            'specialist IDs must follow this order: ' + ', '.join(_SPECIALIST_BY_DOMAIN.values()),
+        )
     required = required_authoring_specialists(scope, affected_paths=affected_paths)
     if not set(required).issubset(specialist_ids):
-        raise ValueError("routing omits a required story specialist")
+        raise validation_failure(
+            ValueError('routing omits a required story specialist'),
+            '$',
+            'must include every specialist required by authoring_scope and affected target_paths: ' + ', '.join(required),
+        )
 
 
 def validate_specialist_assignment(
@@ -223,68 +288,131 @@ def validate_specialist_assignment(
     """Validate explicit drafting or review against disclosed input aliases."""
 
     if type(mode) is not SpecialistAssignmentMode:
-        raise TypeError("assignment mode must be a SpecialistAssignmentMode")
-    _input_ids(input_ids)
+        raise validation_failure(
+            TypeError('assignment mode must be a SpecialistAssignmentMode'),
+            '$.mode',
+            'assignment mode must be a SpecialistAssignmentMode',
+        )
+    validation_call("$.input_ids", _input_ids, input_ids)
     if mode is SpecialistAssignmentMode.DRAFT:
         if review_basis is not None:
-            raise ValueError("draft assignment cannot carry a review basis")
+            raise validation_failure(
+                ValueError('draft assignment cannot carry a review basis'),
+                '$.input_ids',
+                'draft assignment cannot carry a review basis',
+            )
     else:
         if type(review_basis) is not ReviewBasis:
-            raise TypeError("review assignment requires a ReviewBasis")
+            raise validation_failure(
+                TypeError('review assignment requires a ReviewBasis'),
+                '$.input_ids',
+                'review assignment requires a ReviewBasis',
+            )
         if not set(review_basis.candidate_input_ids).issubset(input_ids):
-            raise ValueError("review candidates must be disclosed assignment inputs")
+            raise validation_failure(
+                ValueError('review candidates must be disclosed assignment inputs'),
+                '$.input_ids',
+                'every review candidate must be included in input_ids',
+            )
 
 
 def _version(value: object, expected: int) -> None:
     if type(value) is not int or value != expected:
-        raise ValueError("specialist routing schema version is unsupported")
+        raise validation_failure(
+            ValueError('specialist routing schema version is unsupported'),
+            '$',
+            f'expected schema version {expected}',
+        )
 
 
 def _identifier(value: object) -> None:
     if type(value) is not str or _IDENTIFIER.fullmatch(value) is None:
-        raise ValueError("specialist routing identifier is invalid")
+        raise validation_failure(
+            ValueError('specialist routing identifier is invalid'),
+            '$',
+            'expected identifier matching [A-Za-z0-9][A-Za-z0-9_-]{0,63}',
+        )
 
 
 def _text(value: object, *, label: str) -> None:
     if type(value) is not str:
-        raise TypeError(f"{label} must be exact text")
+        raise validation_failure(TypeError(f'{label} must be exact text'), '$', 'expected text')
     if (
         not value.strip()
         or "\x00" in value
         or len(value.encode("utf-8", errors="strict")) > 32_768
     ):
-        raise ValueError(f"{label} must be nonempty bounded text")
+        raise validation_failure(
+            ValueError(f'{label} must be nonempty bounded text'),
+            '$',
+            'expected nonempty text after trimming whitespace, without NUL, of at most 32768 UTF-8 bytes',
+        )
 
 
 def _input_ids(value: object) -> None:
     if type(value) is not tuple:
-        raise TypeError("specialist input IDs must be an exact tuple")
-    for item in value:
-        _identifier(item)
+        raise validation_failure(
+            TypeError('specialist input IDs must be an exact tuple'),
+            '$',
+            'expected an array of input identifiers',
+        )
+    for index, item in enumerate(value):
+        validation_call(f"$[{index}]", _identifier, item)
     if len(set(value)) != len(value):
-        raise ValueError("specialist input IDs must be unique")
+        raise validation_failure(
+            ValueError('specialist input IDs must be unique'),
+            '$',
+            'specialist input IDs must be unique',
+        )
 
 
 def _domain_tuple(value: object) -> None:
     if type(value) is not tuple or any(
         type(item) is not ArtifactReviewDomain for item in value
     ):
-        raise TypeError("routing domains must be an exact domain tuple")
+        raise validation_failure(
+            TypeError('routing domains must be an exact domain tuple'),
+            '$',
+            'expected domains from ' + ', '.join((domain.value for domain in ArtifactReviewDomain)),
+        )
     if value != tuple(domain for domain in ArtifactReviewDomain if domain in value):
-        raise ValueError("routing domains must be unique and in canonical order")
+        raise validation_failure(
+            ValueError('routing domains must be unique and in canonical order'),
+            '$',
+            'domains must be unique and follow this order: ' + ', '.join((domain.value for domain in ArtifactReviewDomain)),
+        )
 
 
 def _path_domains(paths: tuple[str, ...]) -> set[ArtifactReviewDomain]:
     if type(paths) is not tuple:
-        raise TypeError("routing artifact paths must be an exact tuple")
+        raise validation_failure(
+            TypeError('routing artifact paths must be an exact tuple'),
+            '$',
+            'expected an array of artifact paths',
+        )
     result: set[ArtifactReviewDomain] = set()
-    for path in paths:
-        domain = artifact_domain(path)
+    for index, path in enumerate(paths):
+        domain = validation_call(f"$[{index}]", artifact_domain, path)
         if domain is None:
-            raise ValueError("routing target must be a canonical artifact identity")
+            raise validation_failure(
+                ValueError('routing target must be a canonical artifact identity'),
+                f'$[{index}]',
+                'expected one of core_documents/global_outline.md, '
+                'core_documents/part_outlines.md, core_documents/character_sheets.md, '
+                'core_documents/narrative_rules.md, or manuscript/PART/PATH.md; '
+                'PART must match [A-Za-z0-9][A-Za-z0-9_-]{0,63}; every remaining path '
+                'component must match [A-Za-z0-9][A-Za-z0-9_.-]{0,127}, and the final '
+                'component must end in lowercase .md; paths must be normalized '
+                'workspace-relative POSIX text without backslash, NUL, . or .. '
+                'components, and fit 1024 strict UTF-8 bytes',
+            )
         result.add(domain)
     if len(set(paths)) != len(paths):
-        raise ValueError("routing artifact paths must be unique")
+        raise validation_failure(
+            ValueError('routing artifact paths must be unique'),
+            '$',
+            'target_paths must be unique',
+        )
     return result
 
 

@@ -6,7 +6,9 @@ import asyncio
 import os
 import select as _select
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import TextIO, TypeAlias, TypeVar
 
@@ -29,6 +31,7 @@ from ._live_composer import (
 from ._external_view import (
     _BorrowedLineViewerHost,
     _require_external_view_frame,
+    ExternalViewUnavailableError,
     ExternalViewerHost,
     ExternalViewOperation,
 )
@@ -44,6 +47,8 @@ from ._model import (
     MainCommandControlState,
     MainInputControlState,
     MainInputHistoryState,
+    MultiAgentScrollState,
+    NestedScrollViewport,
     PickerControlState,
     PickerViewport,
     RenderedInputFrame,
@@ -117,6 +122,9 @@ _VIEWER_SCREEN_ENTER = "\x1b[?1049h\x1b[2J\x1b[H"
 _VIEWER_SCREEN_REDRAW = "\x1b[H\x1b[2J"
 _VIEWER_SCREEN_EXIT = "\x1b[?1049l"
 _T = TypeVar("_T")
+_NestedScrollRenderer: TypeAlias = Callable[
+    [MultiAgentScrollState, TerminalCapabilities], RenderedFrame
+]
 
 
 class AdvisoryProgressError(RuntimeError):
@@ -413,6 +421,7 @@ class RawTerminalDriver:
         "_progress_renderer",
         "_progress_rows",
         "_termios_provider",
+        "_typeahead_buffer",
     )
 
     def __init__(
@@ -461,6 +470,7 @@ class RawTerminalDriver:
         self._progress_frame = 0
         self._progress_renderer: Callable[[int], str] | None = None
         self._progress_rows = 0
+        self._typeahead_buffer: deque[str] = deque()
         self._termios_provider = (
             (lambda: _termios) if termios_provider is None else termios_provider
         )
@@ -524,14 +534,16 @@ class RawTerminalDriver:
     def _clear_progress_frame(self) -> None:
         """Clear every physical row owned by the current indicator."""
 
-        rows = max(1, self._progress_rows)
+        if self._progress_rows <= 0:
+            return
+        rows = self._progress_rows
         commands: list[str] = []
         for ordinal in range(rows):
             commands.append("\r\x1b[K")
             if ordinal + 1 < rows:
                 commands.append("\x1b[1A")
-        self._write_raw_text("".join(commands))
         self._progress_rows = 0
+        self._write_raw_text("".join(commands))
 
     def _draw_progress_frame(
         self,
@@ -564,13 +576,23 @@ class RawTerminalDriver:
         ):
             raise ValueError("progress frame must contain safe text rows")
         display_frame = frame if plain_frame != frame else "\n".join(lines)
-        self._write_raw_text("\r" + display_frame)
         self._progress_rows = len(lines)
+        self._write_raw_text("\r" + display_frame)
 
     async def run_advisory_progress(
         self,
         operation: Awaitable[_T],
         frame_renderer: Callable[[int], str],
+        *,
+        scroll_state_provider: Callable[[], MultiAgentScrollState] | None = None,
+        is_failure: Callable[[_T], bool] | None = None,
+        nested_scroll_transition: Callable[
+            [MultiAgentScrollState, KeyEvent], MultiAgentScrollState
+        ]
+        | None = None,
+        nested_scroll_renderer: _NestedScrollRenderer | None = None,
+        toggle_callback: Callable[[], bool] | None = None,
+        keep_frame: bool | Callable[[], bool] | None = None,
     ) -> _T:
         """Join one advisory operation with a capable-terminal indicator."""
 
@@ -593,6 +615,7 @@ class RawTerminalDriver:
             ):
                 raise ValueError("progress frame must be safe text")
             available_width = max(0, capabilities.width - 1)
+            available_height = 10
             rows: list[str] = []
             for logical in rendered.split("\n"):
                 if not logical:
@@ -612,51 +635,103 @@ class RawTerminalDriver:
                     fitted_width += character_width
                 if fitted:
                     rows.append("".join(fitted))
+            if len(rows) > available_height:
+                rows = [rows[0]] + rows[-(available_height - 1) :]
             fitted_text = "\n".join(rows)
             if len(rows) == 1 and fitted_text and capabilities.decorative_sgr:
                 return f"{_PROGRESS_SGR_FRAMES[frame]}{fitted_text}{_SGR_RESET}"
             return fitted_text
 
-        self._progress_active = True
-        self._progress_frame = 0
-        self._progress_renderer = fitted_frame_renderer
-        try:
-            self._draw_progress_frame(fitted_frame_renderer)
-        except BaseException as exc:
-            self._progress_active = False
-            self._progress_renderer = None
+        configuration: _TerminalConfiguration | None = None
+        if toggle_callback is not None:
             try:
-                self._clear_progress_frame()
-            except BaseException:
-                pass
-            close = getattr(operation, "close", None)
-            if callable(close):
-                close()
-            raise AdvisoryProgressError(
-                "advisory progress could not be displayed"
-            ) from exc
+                observed = self._observe_input_capabilities()
+                _caps, configuration = self._prepare_input(observed)
+            except Exception:
+                configuration = None
 
-        operation_task = asyncio.ensure_future(operation)
-        progress_task = asyncio.create_task(
-            self._run_progress_frames(fitted_frame_renderer)
+        input_context = (
+            self._input_latch.input_operation()
+            if configuration is not None
+            else nullcontext()
         )
-        operation_failure: BaseException | None = None
-        progress_failure: BaseException | None = None
-        result: _T | None = None
-        operation_succeeded = False
-        outer_failure = False
-        try:
-            while True:
-                done, _pending = await asyncio.wait(
-                    (operation_task, progress_task),
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                if operation_task in done:
+
+        with input_context:
+            if configuration is not None:
+                try:
+                    _activate_terminal(configuration)
+                except BaseException as act_exc:
+                    close = getattr(operation, "close", None)
+                    if callable(close):
+                        try:
+                            close()
+                        except Exception:
+                            pass
+                    _restore_terminal_or_raise(
+                        configuration, act_exc, discard_input=False
+                    )
+                    raise
+
+            self._progress_active = True
+            self._progress_frame = 0
+            self._progress_renderer = fitted_frame_renderer
+            try:
+                self._draw_progress_frame(fitted_frame_renderer)
+            except BaseException as exc:
+                self._progress_active = False
+                self._progress_renderer = None
+                try:
+                    self._clear_progress_frame()
+                except BaseException:
+                    pass
+                close = getattr(operation, "close", None)
+                if callable(close):
                     try:
-                        result = operation_task.result()
-                        operation_succeeded = True
-                    except BaseException as exc:
-                        operation_failure = exc
+                        close()
+                    except Exception:
+                        pass
+                if configuration is not None:
+                    _restore_terminal_or_raise(
+                        configuration, exc, discard_input=False
+                    )
+                raise AdvisoryProgressError(
+                    "advisory progress could not be displayed"
+                ) from exc
+
+            operation_task = asyncio.ensure_future(operation)
+            progress_task = asyncio.create_task(
+                self._run_progress_frames(
+                    fitted_frame_renderer,
+                    configuration=configuration,
+                    toggle_callback=toggle_callback,
+                )
+            )
+            operation_failure: BaseException | None = None
+            progress_failure: BaseException | None = None
+            restoration_failure: BaseException | None = None
+            result: _T | None = None
+            operation_succeeded = False
+            outer_failure = False
+            try:
+                while True:
+                    done, _pending = await asyncio.wait(
+                        (operation_task, progress_task),
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if operation_task in done:
+                        try:
+                            result = operation_task.result()
+                            operation_succeeded = True
+                        except BaseException as exc:
+                            operation_failure = exc
+                        if progress_task in done:
+                            try:
+                                progress_task.result()
+                            except asyncio.CancelledError:
+                                pass
+                            except BaseException as exc:
+                                progress_failure = exc
+                        break
                     if progress_task in done:
                         try:
                             progress_task.result()
@@ -664,70 +739,386 @@ class RawTerminalDriver:
                             pass
                         except BaseException as exc:
                             progress_failure = exc
-                    break
-                if progress_task in done:
+                        if progress_failure is None:
+                            progress_failure = RuntimeError(
+                                "advisory progress worker stopped unexpectedly"
+                            )
+                        break
+            except BaseException as exc:
+                operation_failure = exc
+                outer_failure = True
+            finally:
+                try:
+                    if (operation_failure is not None or progress_failure is not None) and (
+                        not operation_task.done()
+                    ):
+                        operation_task.cancel()
+                    if not operation_task.done():
+                        try:
+                            await operation_task
+                        except BaseException as exc:
+                            if not outer_failure and progress_failure is None:
+                                operation_failure = operation_failure or exc
+                    elif operation_failure is None and progress_failure is None:
+                        try:
+                            operation_task.result()
+                        except BaseException as exc:
+                            operation_failure = exc
+
+                    if not progress_task.done():
+                        progress_task.cancel()
                     try:
-                        progress_task.result()
+                        await progress_task
                     except asyncio.CancelledError:
                         pass
                     except BaseException as exc:
-                        progress_failure = exc
-                    if progress_failure is None:
-                        progress_failure = RuntimeError(
-                            "advisory progress worker stopped unexpectedly"
-                        )
-                    break
-        except BaseException as exc:
-            operation_failure = exc
-            outer_failure = True
-        finally:
-            if (operation_failure is not None or progress_failure is not None) and (
-                not operation_task.done()
-            ):
-                operation_task.cancel()
-            if not operation_task.done():
-                try:
-                    await operation_task
-                except BaseException as exc:
-                    if not outer_failure and progress_failure is None:
-                        operation_failure = operation_failure or exc
-            elif operation_failure is None and progress_failure is None:
-                try:
-                    operation_task.result()
-                except BaseException as exc:
-                    operation_failure = exc
+                        progress_failure = progress_failure or exc
 
-            if not progress_task.done():
-                progress_task.cancel()
+                    if configuration is not None:
+                        try:
+                            _restore_terminal_or_raise(
+                                configuration,
+                                operation_failure or progress_failure,
+                                discard_input=False,
+                            )
+                        except BaseException as exc:
+                            restoration_failure = exc
+                finally:
+                    self._progress_active = False
+                    self._progress_renderer = None
+
+        if restoration_failure is not None:
             try:
-                await progress_task
-            except asyncio.CancelledError:
+                self._clear_progress_frame()
+            except BaseException:
                 pass
-            except BaseException as exc:
-                progress_failure = progress_failure or exc
+            raise restoration_failure
 
-            clear_failure: BaseException | None = None
-            self._progress_active = False
-            self._progress_renderer = None
+        clear_failure: BaseException | None = None
+        failed = False
+        try:
+            failed = (
+                operation_failure is not None
+                and not isinstance(
+                    operation_failure, (asyncio.CancelledError, KeyboardInterrupt)
+                )
+            ) or (
+                is_failure is not None and operation_succeeded and is_failure(result)
+            )
+        except BaseException:
+            try:
+                self._clear_progress_frame()
+            except BaseException:
+                pass
+            raise
+
+        inspector_failure: BaseException | None = None
+        should_keep = (keep_frame is None) if failed else False
+        if callable(keep_frame):
+            try:
+                should_keep = bool(keep_frame())
+            except Exception:
+                should_keep = False
+        elif keep_frame is not None:
+            should_keep = bool(keep_frame)
+
+        is_cancelled = isinstance(
+            operation_failure, (asyncio.CancelledError, KeyboardInterrupt)
+        ) or isinstance(progress_failure, (asyncio.CancelledError, KeyboardInterrupt))
+
+        if is_cancelled:
             try:
                 self._clear_progress_frame()
             except BaseException as exc:
                 clear_failure = exc
+        elif not failed:
+            if should_keep and result is not None:
+                if (
+                    scroll_state_provider is not None
+                    and nested_scroll_renderer is not None
+                    and nested_scroll_transition is not None
+                ):
+                    try:
+                        try:
+                            scroll_state = scroll_state_provider(result)
+                        except TypeError:
+                            scroll_state = scroll_state_provider()
+                        if scroll_state.views:
+                            self.run_nested_scroll_inspector(
+                                scroll_state,
+                                nested_scroll_transition,
+                                nested_scroll_renderer,
+                                toggle_callback=toggle_callback,
+                                keep_frame=True,
+                            )
+                        elif self._progress_rows > 0:
+                            try:
+                                self._write_raw_text("\r\n")
+                            except Exception:
+                                pass
+                            self._progress_rows = 0
+                    except BaseException as exc:
+                        inspector_failure = exc
+                        if self._progress_rows > 0:
+                            try:
+                                self._write_raw_text("\r\n")
+                            except Exception:
+                                pass
+                            self._progress_rows = 0
+                elif self._progress_rows > 0:
+                    try:
+                        self._write_raw_text("\r\n")
+                    except Exception:
+                        pass
+                    self._progress_rows = 0
+            else:
+                try:
+                    self._clear_progress_frame()
+                except BaseException as exc:
+                    clear_failure = exc
+        else:
             if (
-                operation_failure is None
-                and progress_failure is None
-                and clear_failure is not None
+                should_keep
+                and scroll_state_provider is not None
+                and nested_scroll_renderer is not None
+                and nested_scroll_transition is not None
             ):
-                progress_failure = clear_failure
+                try:
+                    failure_arg = (
+                        operation_failure
+                        if operation_failure is not None
+                        else result
+                    )
+                    try:
+                        scroll_state = scroll_state_provider(failure_arg)
+                    except TypeError:
+                        scroll_state = scroll_state_provider()
+                    if scroll_state.views:
+                        self.run_nested_scroll_inspector(
+                            scroll_state,
+                            nested_scroll_transition,
+                            nested_scroll_renderer,
+                            toggle_callback=toggle_callback,
+                        )
+                except BaseException as exc:
+                    inspector_failure = exc
+                finally:
+                    try:
+                        self._clear_progress_frame()
+                    except BaseException as exc:
+                        if clear_failure is None:
+                            clear_failure = exc
+            else:
+                try:
+                    self._clear_progress_frame()
+                except BaseException as exc:
+                    clear_failure = exc
+
+        if (
+            operation_failure is None
+            and progress_failure is None
+            and inspector_failure is not None
+        ):
+            raise inspector_failure
+
+        if (
+            operation_failure is None
+            and progress_failure is None
+            and clear_failure is not None
+        ):
+            progress_failure = clear_failure
 
         if operation_failure is not None:
             raise operation_failure
         if progress_failure is not None:
+            if isinstance(progress_failure, (KeyboardInterrupt, EOFError)):
+                raise progress_failure
             raise AdvisoryProgressError(
                 "advisory progress worker failed"
             ) from progress_failure
         assert operation_succeeded
         return result
+
+    def run_nested_scroll_inspector(
+        self,
+        initial_state: MultiAgentScrollState,
+        transition: Callable[[MultiAgentScrollState, KeyEvent], MultiAgentScrollState],
+        renderer: _NestedScrollRenderer,
+        *,
+        toggle_callback: Callable[[], bool] | None = None,
+        keep_frame: bool = False,
+    ) -> MultiAgentScrollState:
+        """Run interactive scrolling on the retained nested agent view."""
+
+        if type(initial_state) is not MultiAgentScrollState:
+            raise TypeError("initial_state must be a MultiAgentScrollState")
+        if not callable(transition):
+            raise TypeError("transition must be callable")
+        if not callable(renderer):
+            raise TypeError("renderer must be callable")
+
+        with self._input_latch.input_operation():
+            observed_capabilities = self._observe_input_capabilities()
+            capabilities, configuration = self._prepare_input(observed_capabilities)
+            if configuration is None:
+                self._redraw_nested_scroll_frame(initial_state, capabilities, renderer)
+                if keep_frame:
+                    if self._progress_rows > 0:
+                        try:
+                            self._write_raw_text("\r\n")
+                        except Exception:
+                            pass
+                        self._progress_rows = 0
+                else:
+                    try:
+                        self._clear_progress_frame()
+                    except Exception:
+                        self._progress_rows = 0
+                return initial_state
+            return self._run_live_nested_scroll_inspector(
+                initial_state,
+                configuration,
+                capabilities,
+                transition,
+                renderer,
+                toggle_callback=toggle_callback,
+                keep_frame=keep_frame,
+            )
+
+    def _run_live_nested_scroll_inspector(
+        self,
+        initial_state: MultiAgentScrollState,
+        configuration: _TerminalConfiguration,
+        capabilities: TerminalCapabilities,
+        transition: Callable[[MultiAgentScrollState, KeyEvent], MultiAgentScrollState],
+        renderer: _NestedScrollRenderer,
+        *,
+        toggle_callback: Callable[[], bool] | None = None,
+        keep_frame: bool = False,
+    ) -> MultiAgentScrollState:
+        """Run raw-mode interactive navigation for nested agent scroll view."""
+
+        state = initial_state
+        active_failure: BaseException | None = None
+        lifecycle_failure: BaseException | None = None
+        try:
+            try:
+                _activate_terminal(configuration)
+            except BaseException as failure:
+                lifecycle_failure = failure
+            else:
+                self._redraw_nested_scroll_frame(state, capabilities, renderer)
+                escape_sequence: _EscapeSequenceState = None
+                while True:
+                    try:
+                        character = self._read_character(consume_typeahead=False)
+                    except (KeyboardInterrupt, EOFError):
+                        break
+
+                    configured_event = _configured_control_event(
+                        character,
+                        configuration,
+                    )
+                    if configured_event is not None:
+                        if configured_event.kind in {KeyKind.INTERRUPT, KeyKind.EOF}:
+                            break
+
+                    if escape_sequence is not None:
+                        escape_state = _LiveEditorState(escape_sequence=escape_sequence)
+                        event, reprocess = _consume_escape_character(
+                            escape_state,
+                            character,
+                        )
+                        escape_sequence = escape_state.escape_sequence
+                        if event is not None:
+                            old_collapsed = state.collapsed
+                            state = transition(state, event)
+                            if toggle_callback is not None and state.collapsed != old_collapsed:
+                                toggle_callback()
+                            self._redraw_nested_scroll_frame(state, capabilities, renderer)
+                        if not reprocess:
+                            continue
+
+                    if character == "\x1b":
+                        try:
+                            escape_input_is_ready = self._escape_continuation_is_ready(
+                                configuration,
+                                consume_typeahead=False,
+                            )
+                        except KeyboardInterrupt:
+                            break
+                        if not escape_input_is_ready:
+                            break
+                        escape_sequence = character
+                        continue
+
+                    event = _key_event(character, configuration)
+                    if event.kind in {KeyKind.ENTER, KeyKind.INTERRUPT, KeyKind.EOF}:
+                        break
+                    if event.kind is KeyKind.TEXT and event.text in {"q", "Q"}:
+                        break
+                    old_collapsed = state.collapsed
+                    state = transition(state, event)
+                    if toggle_callback is not None and state.collapsed != old_collapsed:
+                        toggle_callback()
+                    self._redraw_nested_scroll_frame(state, capabilities, renderer)
+        except BaseException as failure:
+            active_failure = failure
+        finally:
+            try:
+                _restore_terminal_or_raise(
+                    configuration, lifecycle_failure or active_failure
+                )
+            finally:
+                if keep_frame:
+                    if self._progress_rows > 0:
+                        try:
+                            self._write_raw_text("\r\n")
+                        except Exception:
+                            pass
+                        self._progress_rows = 0
+                else:
+                    try:
+                        self._clear_progress_frame()
+                    except Exception:
+                        self._progress_rows = 0
+
+        if lifecycle_failure is not None:
+            raise lifecycle_failure
+        if active_failure is not None:
+            raise active_failure
+        return state
+
+    def _redraw_nested_scroll_frame(
+        self,
+        state: MultiAgentScrollState,
+        capabilities: TerminalCapabilities,
+        renderer: _NestedScrollRenderer,
+    ) -> None:
+        """Replace the retained progress frame with an updated nested scroll view."""
+
+        if not callable(renderer):
+            raise TypeError("renderer must be callable")
+        rendered = renderer(state, capabilities)
+        if not isinstance(rendered, RenderedFrame):
+            raise TypeError("rendered frame must be a RenderedFrame")
+        if rendered.width != capabilities.width:
+            raise ValueError("rendered frame width must match terminal capabilities width")
+        lines = rendered.text.split("\n")
+        if (
+            not lines
+            or any(
+                sanitize_terminal_text(line) != line
+                or any(character in line for character in ("\r", "\x1b"))
+                or sum(display_character_width(c) for c in line) > capabilities.width
+                for line in lines
+            )
+        ):
+            raise ValueError("rendered frame must contain safe text rows within capability width")
+        if self._progress_rows > 0:
+            self._clear_progress_frame()
+        self._progress_rows = len(lines)
+        self._write_raw_text("\r" + rendered.text)
 
     async def run_live_composer(
         self,
@@ -959,7 +1350,11 @@ class RawTerminalDriver:
                 readable, _writable, _exceptional = _select.select(
                     (configuration.input_descriptor,), (), (), 0
                 )
-                if readable or self._input_latch.live_reader.has_pending_codepoint:
+                if (
+                    readable
+                    or self._input_latch.live_reader.has_pending_codepoint
+                    or bool(self._typeahead_buffer)
+                ):
                     character = self._read_character()
                     event = self._live_composer_key_event(
                         character, configuration, display
@@ -1074,13 +1469,53 @@ class RawTerminalDriver:
     async def _run_progress_frames(
         self,
         frame_renderer: Callable[[int], str],
+        *,
+        configuration: _TerminalConfiguration | None = None,
+        toggle_callback: Callable[[], bool] | None = None,
     ) -> None:
         """Animate fixed frames until the joined operation finishes."""
 
         while True:
             await asyncio.sleep(_PROGRESS_INTERVAL_SECONDS)
+            if configuration is not None and toggle_callback is not None:
+                while True:
+                    try:
+                        readable, _, _ = _select.select(
+                            (configuration.input_descriptor,), (), (), 0
+                        )
+                    except (OSError, ValueError):
+                        break
+                    except KeyboardInterrupt:
+                        raise
+                    has_pending = False
+                    if self._input_latch.mode is TerminalInputMode.LIVE:
+                        try:
+                            has_pending = self._input_latch.live_reader.has_pending_codepoint
+                        except RuntimeError:
+                            has_pending = False
+                    if not readable and not has_pending:
+                        break
+                    try:
+                        character = self._read_character(consume_typeahead=False)
+                    except (EOFError, KeyboardInterrupt):
+                        raise
+                    configured_event = _configured_control_event(
+                        character,
+                        configuration,
+                    )
+                    if configured_event is not None:
+                        if configured_event.kind is KeyKind.INTERRUPT:
+                            self._typeahead_buffer.clear()
+                            raise KeyboardInterrupt
+                        if configured_event.kind is KeyKind.EOF:
+                            self._typeahead_buffer.clear()
+                            raise EOFError
+                    if character in ("t", "T"):
+                        toggle_callback()
+                    else:
+                        self._typeahead_buffer.append(character)
             self._progress_frame = (self._progress_frame + 1) % _PROGRESS_FRAME_COUNT
-            if self._progress_rows > 1:
+            if self._progress_rows > 0:
                 self._clear_progress_frame()
             self._draw_progress_frame(frame_renderer)
 
@@ -2352,9 +2787,16 @@ class RawTerminalDriver:
                 viewport_renderer,
             )
 
-    def open_external_view(self, operation: ExternalViewOperation) -> None:
+    def open_external_view(
+        self,
+        operation: ExternalViewOperation,
+        *,
+        transient_only: bool = False,
+    ) -> None:
         """Run one injected viewer while retaining sole terminal ownership."""
 
+        if type(transient_only) is not bool:
+            raise TypeError("transient_only must be a bool")
         if not callable(operation):
             raise TypeError("operation must be callable")
         if self._progress_active:
@@ -2365,6 +2807,10 @@ class RawTerminalDriver:
             observed_capabilities = self._observe_input_capabilities()
             capabilities, configuration = self._prepare_input(observed_capabilities)
             if configuration is None:
+                if transient_only:
+                    raise ExternalViewUnavailableError(
+                        "external viewer requires an alternate screen"
+                    )
                 host = _BorrowedLineViewerHost(
                     lambda prompt: self._read_fallback_line(prompt, capabilities),
                     self._write_raw_text,
@@ -2513,7 +2959,10 @@ class RawTerminalDriver:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return "key\tescape" if not received else "key\tunknown_escape"
-            if not self._input_latch.live_reader.has_pending_codepoint:
+            if not (
+                self._input_latch.live_reader.has_pending_codepoint
+                or bool(self._typeahead_buffer)
+            ):
                 try:
                     ready, _, _ = _select.select(
                         (configuration.input_descriptor,), (), (), remaining
@@ -3523,19 +3972,29 @@ class RawTerminalDriver:
     def _escape_continuation_is_ready(
         self,
         configuration: _TerminalConfiguration,
+        *,
+        consume_typeahead: bool = True,
     ) -> bool:
         """Prefer decoded suffixes before the bounded descriptor wait."""
 
+        if consume_typeahead and self._typeahead_buffer:
+            return True
         reader = self._input_latch.live_reader
         if reader.has_pending_codepoint:
             return True
         try:
             return _escape_input_is_ready(configuration.input_descriptor)
         except KeyboardInterrupt:
+            self._typeahead_buffer.clear()
             self._input_latch.reset_after_interrupt()
             raise
 
-    def _read_character(self, *, before_read: Callable[[], None] | None = None) -> str:
+    def _read_character(
+        self,
+        *,
+        before_read: Callable[[], None] | None = None,
+        consume_typeahead: bool = True,
+    ) -> str:
         """Read one decoded code point from the borrowed active input stream.
 
         Physical EOF raises ``EOFError``. Invalid stream return shapes raise
@@ -3543,11 +4002,14 @@ class RawTerminalDriver:
         state and propagate the collaborator failure.
         """
 
+        if consume_typeahead and self._typeahead_buffer:
+            return self._typeahead_buffer.popleft()
         try:
             character = self._input_latch.live_reader.read_character(
                 before_read=before_read,
             )
         except KeyboardInterrupt:
+            self._typeahead_buffer.clear()
             self._input_latch.reset_after_interrupt()
             raise
         if character == "":
@@ -4278,6 +4740,8 @@ def _escape_event(sequence: str) -> KeyEvent | None:
         "\x1b[4~": KeyKind.END,
         "\x1b[8~": KeyKind.END,
         "\x1b[3~": KeyKind.DELETE,
+        "\x1b[5~": KeyKind.PAGE_UP,
+        "\x1b[6~": KeyKind.PAGE_DOWN,
         "\x1b[Z": KeyKind.SHIFT_TAB,
         "\x1b[1;2A": KeyKind.SHIFT_UP,
         "\x1b[1;2B": KeyKind.SHIFT_DOWN,

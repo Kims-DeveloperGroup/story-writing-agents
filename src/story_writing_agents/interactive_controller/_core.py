@@ -124,6 +124,7 @@ from ..interactive_terminal import (
     InteractiveError,
     InteractiveErrorCode,
     InteractiveExternalViewer,
+    ExternalViewUnavailableError,
     InteractivePickerInput,
     InteractivePromptInput,
     InteractiveSemanticOutput,
@@ -2126,6 +2127,9 @@ class InteractiveController:
         if action.kind is ActionKind.STATUS:
             self._write_runtime_status()
             return False
+        if action.kind is ActionKind.PROGRESS:
+            self._run_progress_toggle(action.argument)
+            return False
         if action.kind in {
             ActionKind.SET_LANGUAGE,
             ActionKind.SET_PERSONA,
@@ -4101,7 +4105,7 @@ class InteractiveController:
             return await asyncio.to_thread(operation)
 
         try:
-            return runner.run(self._advisory_progress.run(load()))
+            return runner.run(self._advisory_progress.run(load(), keep_frame=False))
         except AdvisoryProgressError:
             raise _ControllerAbort(
                 InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
@@ -5084,6 +5088,30 @@ class InteractiveController:
             )
         )
 
+    def _run_progress_toggle(self, argument: str | None) -> None:
+        """Toggle or set the progress frame display mode."""
+
+        if argument == "off" or (
+            argument in {None, "toggle"}
+            and not self._terminal.progress_frame_collapsed
+        ):
+            self._terminal.progress_frame_collapsed = True
+            notice = Notice(
+                "Progress frame collapsed to single-line indicator. "
+                "Use /progress on or press 't' during inspection to expand.",
+                label="progress",
+                role=SemanticRole.MUTED,
+            )
+        else:
+            self._terminal.progress_frame_collapsed = False
+            notice = Notice(
+                "Progress frame expanded. "
+                "Use /progress off or press 't' during inspection to collapse.",
+                label="progress",
+                role=SemanticRole.MUTED,
+            )
+        self._semantic_output.write_component(notice)
+
     def _apply_attached_runtime_directive(
         self,
         action: InteractiveAction,
@@ -5513,7 +5541,14 @@ class InteractiveController:
             self._present_agent_exchange_projection_failure(failure)
             return
         try:
-            self._external_viewer.open(operation)
+            self._external_viewer.open(operation, transient_only=True)
+        except ExternalViewUnavailableError:
+            self._write_notice(
+                "Agent exchanges require a terminal with transient display support.",
+                label="agent exchanges",
+                role=SemanticRole.WARNING,
+                state=ViewState.CANCELLED,
+            )
         except AgentExchangeViewerError as failure:
             self._present_agent_exchange_viewer_failure(failure)
 

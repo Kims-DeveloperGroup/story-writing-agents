@@ -168,7 +168,9 @@ class MainInputHistoryContractTests(unittest.TestCase):
                 "_progress_active",
                 "_progress_frame",
                 "_progress_renderer",
+                "_progress_rows",
                 "_termios_provider",
+                "_typeahead_buffer",
             ),
         )
         self.assertEqual(

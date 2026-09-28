@@ -293,7 +293,7 @@ async def evaluate_objective(output: Path, *, setup_only: bool = False):
               'max_calls': 0 if setup_only else 6, 'max_seconds': maximum_seconds,
               'inputs': fingerprint, 'calls': [], 'native_launches': [], 'stages': [],
               'unexecuted': ['draft_proposal', 'confirmed_draft', 'recommendation_prepare'],
-              'wire_contract': 'lead-outcome-v4', 'passed': False}
+              'wire_contract': 'lead-outcome-v5', 'passed': False}
     backend = None
     temporary = None
     temporary_root = None
@@ -334,7 +334,7 @@ async def evaluate_objective(output: Path, *, setup_only: bool = False):
                 raise RuntimeError('Authorized provider call/time budget exhausted')
             row = {'ordinal': len(ledger['calls']) + 1, 'vendor': vendor,
                    'payload_sha256': hashlib.sha256(request.stdin).hexdigest(),
-                   'contains_v4': b'lead-outcome-v4' in request.stdin,
+                   'contains_v5': b'lead-outcome-v5' in request.stdin,
                    'contains_synthesis_v3': b'lead-synthesis-v3' in request.stdin,
                    'contains_ten_lead_fields': all(field.encode() in request.stdin for field in
                     ('scope', 'authoring_scope', 'evidence_status', 'evidence_ids', 'kind',

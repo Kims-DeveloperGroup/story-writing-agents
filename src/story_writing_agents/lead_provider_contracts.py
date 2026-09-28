@@ -1,0 +1,409 @@
+"""Pure projections of the facts offered to one Lead provider invocation.
+
+These snapshots describe choices, not authority. Orchestration still owns source
+freshness, completed READ receipts, confirmation, candidate construction and state.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+
+from .agents import SPECIALIST_IDS
+from .conversations import COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES
+from .specialist_routing import (
+    ArtifactReviewDomain, AuthoringActivity, AuthoringScope,
+    required_authoring_specialists,
+)
+from .structured_output_validation import DomainValidationRule, validation_failure
+
+
+PREPARATION_INPUT_IDS = ("recommendation_request", "recommendation_decision")
+
+
+class LeadContractError(ValueError):
+    """A rejected Lead choice described only by closed, content-free rules."""
+
+    def __init__(self, rules: tuple[DomainValidationRule, ...]) -> None:
+        self.rules = rules
+        super().__init__("Lead result violates its offered constraints")
+
+
+def closed_object(properties: dict[str, object]) -> dict[str, object]:
+    return {"type": "object", "properties": properties,
+            "required": list(properties), "additionalProperties": False}
+
+
+def string_array(
+    values: tuple[str, ...] | None = None, *, minimum: int = 0,
+    maximum: int | None = None,
+) -> dict[str, object]:
+    item: dict[str, object] = {"type": "string"}
+    if values:
+        item["enum"] = list(values)
+    result: dict[str, object] = {"type": "array", "items": item, "minItems": minimum}
+    if maximum is not None:
+        result["maxItems"] = maximum
+    return result
+
+
+def alternatives(variants: list[dict[str, object]]) -> dict[str, object]:
+    return variants[0] if len(variants) == 1 else {"anyOf": variants}
+
+
+def nonempty_text_schema() -> dict[str, object]:
+    # The common provider dialect deliberately excludes minLength and pattern.
+    return {"type": "string", "description": "Nonempty UTF-8 text."}
+
+
+def canonical_scope(value: object) -> object:
+    """Normalize domain order only after retaining duplicate rejection."""
+    if type(value) is not dict or type(value.get("domains")) is not list:
+        return value
+    domains = value["domains"]
+    if any(type(item) is not str for item in domains):
+        return value
+    if len(set(domains)) != len(domains):
+        raise LeadContractError((DomainValidationRule.DOMAIN_DUPLICATE,))
+    order = [item.value for item in ArtifactReviewDomain]
+    if any(item not in order for item in domains):
+        return value
+    return {**value, "domains": sorted(domains, key=order.index)}
+
+
+def canonical_assignments(value: list[object]) -> list[object]:
+    """Preserve malformed entries for the decoder; never deduplicate roles."""
+    if any(type(item) is not dict or item.get("agent_id") not in SPECIALIST_IDS
+           for item in value):
+        return value
+    ids = [item["agent_id"] for item in value]
+    if len(set(ids)) != len(ids):
+        raise validation_failure(
+            LeadContractError((DomainValidationRule.SPECIALIST_DUPLICATE,)),
+            '$',
+            'agent_id values must be unique before canonical ordering',
+        )
+    return sorted(value, key=lambda item: SPECIALIST_IDS.index(item["agent_id"]))
+
+
+def visible_text(value: object) -> bool:
+    if type(value) is not str:
+        return False
+    try:
+        return 0 < len(value.encode("utf-8", errors="strict")) <= COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES
+    except UnicodeError:
+        return False
+
+
+@dataclass(frozen=True, slots=True)
+class LeadProviderConstraints:
+    """One immutable set of offered choices shared by schema, prompt and guard."""
+
+    input_ids: tuple[str, ...] = ()
+    reviewer_inputs: tuple[tuple[str, str], ...] = ()
+    task_revisions: tuple[tuple[str, int], ...] = ()
+    source_ids: tuple[str, ...] | None = None
+    objective_ids: tuple[str, ...] | None = None
+    allow_read_sources: bool = False
+    scope: AuthoringScope | None = None
+    preparation_kind: str | None = None
+    preparation_objective_id: str | None = None
+    preparation_targets: tuple[str, ...] = ()
+    preparation_specialists: tuple[str, ...] = ()
+    recommendation_only: bool = False
+    continuation: bool = False
+
+    def __post_init__(self) -> None:
+        for values in (self.input_ids, self.task_revisions, self.reviewer_inputs,
+                       self.preparation_targets, self.preparation_specialists):
+            if type(values) is not tuple:
+                raise TypeError("Lead constraint collections must be immutable tuples")
+        for values in (self.source_ids, self.objective_ids):
+            if values is not None and type(values) is not tuple:
+                raise TypeError("Lead constraint offers must be immutable tuples")
+        if self.scope is not None and type(self.scope) is not AuthoringScope:
+            raise TypeError("Lead constraint scope must be an AuthoringScope")
+
+    def prompt_facts(self) -> dict[str, object]:
+        return {
+            "required_input_ids": [item for item in self.input_ids
+                                   if not self.preparation_kind or item not in PREPARATION_INPUT_IDS],
+            "mandatory_reviewer_inputs": [
+                {"agent_id": agent, "input_id": alias} for agent, alias in self.reviewer_inputs
+            ],
+            "confirmed_scope": None if self.scope is None else {
+                "activity": self.scope.activity.value,
+                "target_paths": list(self.scope.target_paths),
+                "domains": [item.value for item in self.scope.domains],
+                "task": f"{self.scope.task_id}@{self.scope.task_revision}",
+            },
+            "preparation": None if self.preparation_kind is None else {
+                "kind": self.preparation_kind,
+                "objective_id": self.preparation_objective_id,
+                "target_paths": list(self.preparation_targets),
+                "specialist_ids": list(self.preparation_specialists),
+                "recommendation_only": self.recommendation_only,
+            },
+            "objective_steps": {"question": "clarify", "consultation": "consult", "artifact": "prepare"},
+            "specialist_order": list(SPECIALIST_IDS),
+            "domain_order": [item.value for item in ArtifactReviewDomain],
+            "source_membership": (
+                "Use only the offered source aliases or evidence IDs from completed authorized READs. "
+                "Consultation and continuation assignments must cover every disclosed input; each core-document reviewer must "
+                "receive its own source. Do not invent or omit source aliases."
+            ),
+            "offered_source_ids": None if self.source_ids is None else list(self.source_ids),
+            "offered_objective_ids": None if self.objective_ids is None else list(self.objective_ids),
+            "runtime_input_ids": list(PREPARATION_INPUT_IDS) if self.preparation_kind else [],
+            "runtime_input_rule": "Runtime appends only its recommendation request/decision aliases after exact confirmation.",
+        }
+
+    def scope_schema(self) -> dict[str, object]:
+        scope = self.scope
+        tokens = tuple(f"{task}@{revision}" for task, revision in self.task_revisions)
+        task: dict[str, object] = {"type": "string"}
+        if tokens:
+            task["enum"] = list(tokens)
+        return closed_object({
+            "activity": {"type": "string", "enum": ([scope.activity.value] if scope else
+                          [item.value for item in AuthoringActivity])},
+            "target_paths": string_array(
+                scope.target_paths if scope else None,
+                minimum=len(scope.target_paths) if scope else 0,
+                maximum=len(scope.target_paths) if scope else None,
+            ),
+            "domains": string_array(
+                tuple(item.value for item in scope.domains) if scope else
+                tuple(item.value for item in ArtifactReviewDomain),
+                minimum=len(scope.domains) if scope else 0,
+                maximum=len(scope.domains) if scope else len(ArtifactReviewDomain),
+            ),
+            "task": task,
+        })
+
+    def assignment_schema(self) -> dict[str, object]:
+        required = () if self.scope is None else required_authoring_specialists(self.scope)
+        mode = "review" if self.scope and self.scope.activity is AuthoringActivity.REVIEW else "draft"
+        agents = self.preparation_specialists or tuple(SPECIALIST_IDS)
+        return alternatives([closed_object({
+            "agent_id": {"type": "string", "enum": [agent]},
+            "instruction": nonempty_text_schema(),
+            "input_ids": string_array(
+                None if self.allow_read_sources else self.input_ids,
+                minimum=1, maximum=None if self.allow_read_sources else len(self.input_ids) or None,
+            ),
+            "mode": {"type": "string", "enum": [mode] if agent in required else ["draft", "review"]},
+        }) for agent in agents])
+
+    def objective_schema(self, step: str | None, *, cancel: bool = False) -> dict[str, object]:
+        if self.preparation_kind:
+            if self.preparation_objective_id is not None:
+                return closed_object({"action": {"type": "string", "enum": ["continue"]},
+                    "objective_id": {"type": "string", "enum": [self.preparation_objective_id]},
+                    "next_step": {"type": "string", "enum": [step]}})
+            return closed_object({"action": {"type": "string", "enum": ["start"]},
+                "target_paths": string_array(self.preparation_targets, minimum=len(self.preparation_targets),
+                                             maximum=len(self.preparation_targets)),
+                "next_step": {"type": "string", "enum": [step]}})
+        variants = [closed_object({"action": {"type": "string", "enum": ["start"]},
+            "target_paths": string_array(minimum=1), "next_step": {"type": "string", "enum": [step]}})]
+        if self.objective_ids is None or self.objective_ids:
+            identity: dict[str, object] = {"type": "string"}
+            if self.objective_ids:
+                identity["enum"] = list(self.objective_ids)
+            variants.append(closed_object({"action": {"type": "string", "enum": ["continue"]},
+                "objective_id": identity, "next_step": {"type": "string", "enum": [step]}}))
+            if cancel:
+                variants.append(closed_object({"action": {"type": "string", "enum": ["cancel"]},
+                                               "objective_id": identity}))
+        return alternatives(variants)
+
+    def recommendation_schema(self) -> dict[str, object]:
+        sources = None if self.allow_read_sources else self.source_ids
+        common = {"instruction": nonempty_text_schema(),
+                  "source_ids": string_array(sources, minimum=1, maximum=len(sources) if sources else None)}
+        objectives: list[dict[str, object]] = [{}]
+        if self.objective_ids is None or self.objective_ids:
+            identity: dict[str, object] = {"type": "string"}
+            if self.objective_ids:
+                identity["enum"] = list(self.objective_ids)
+            objectives.append({"objective_id": identity})
+        variants = []
+        for objective in objectives:
+            variants.extend([
+                closed_object({**common, **objective, "kind": {"type": "string", "enum": ["prepare_artifact"]},
+                               "target_paths": string_array(minimum=1)}),
+                closed_object({**common, **objective, "kind": {"type": "string", "enum": ["prepare_consultation"]},
+                               "specialist_ids": string_array(tuple(SPECIALIST_IDS), minimum=1, maximum=len(SPECIALIST_IDS))}),
+            ])
+        return alternatives(variants)
+
+    def diagnose(self, answer: str, *, read_ids: tuple[str, ...] = (),
+                 read_reviewers: tuple[tuple[str, str], ...] = ()) -> tuple[DomainValidationRule, ...]:
+        try:
+            value = json.loads(answer)
+        except (TypeError, ValueError):
+            return (DomainValidationRule.MALFORMED_RESULT,)
+        return self.rules(value, read_ids=read_ids, read_reviewers=read_reviewers)
+
+    def rules(self, value: object, *, read_ids: tuple[str, ...] = (),
+                 read_reviewers: tuple[tuple[str, str], ...] = ()) -> tuple[DomainValidationRule, ...]:
+        if not self.allow_read_sources:
+            read_ids = ()
+            read_reviewers = ()
+        R = DomainValidationRule
+        if type(value) is not dict:
+            return (R.RESULT_OBJECT_REQUIRED,)
+        rules: list[DomainValidationRule] = []
+        raw_scope = value.get("authoring_scope")
+        message = value.get("message")
+        if not visible_text(message) or (type(raw_scope) is dict and type(message) is str
+                                        and (not message.strip() or "\x00" in message)):
+            rules.append(R.MESSAGE_REQUIRED)
+        if type(raw_scope) is dict:
+            domains = raw_scope.get("domains")
+            if type(domains) is list and all(type(item) is str for item in domains):
+                if len(set(domains)) != len(domains):
+                    rules.append(R.DOMAIN_DUPLICATE)
+            paths = raw_scope.get("target_paths")
+            if type(paths) is list and all(type(item) is str for item in paths) and len(set(paths)) != len(paths):
+                rules.append(R.TARGET_DUPLICATE)
+            if self.scope and (raw_scope.get("activity") != self.scope.activity.value
+                or paths != list(self.scope.target_paths)
+                or type(domains) is not list
+                or sorted(domains, key=str) != sorted(item.value for item in self.scope.domains)
+                or raw_scope.get("task") not in {f"{task}@{revision}" for task, revision in self.task_revisions}):
+                rules.append(R.PREPARATION_SCOPE)
+        proposal = value.get("next_intent" if self.continuation else "proposal")
+        if type(proposal) is dict:
+            if self.continuation and not visible_text(proposal.get("purpose")):
+                rules.append(R.PURPOSE_REQUIRED)
+            assignments = proposal.get("assignments")
+            if type(assignments) is list:
+                roles = [item.get("agent_id") for item in assignments if type(item) is dict]
+                if all(type(item) is str for item in roles) and len(set(roles)) != len(roles):
+                    rules.append(R.SPECIALIST_DUPLICATE)
+                selected: set[str] = set()
+                by_role: dict[str, set[str]] = {}
+                required = set((*self.input_ids, *read_ids))
+                if self.preparation_kind:
+                    required.difference_update(PREPARATION_INPUT_IDS)
+                for item in assignments:
+                    if type(item) is not dict:
+                        continue
+                    instruction = item.get("instruction")
+                    if not visible_text(instruction) or (
+                        item.get("mode") == "review" and type(instruction) is str
+                        and (not instruction.strip() or "\x00" in instruction)
+                    ):
+                        rules.append(R.INSTRUCTION_REQUIRED)
+                    aliases = item.get("input_ids")
+                    if type(aliases) is not list or not aliases or any(type(alias) is not str for alias in aliases):
+                        rules.append(R.ASSIGNMENT_INPUTS_REQUIRED)
+                        continue
+                    if len(set(aliases)) != len(aliases):
+                        rules.append(R.INPUT_DUPLICATE)
+                    if not set(aliases).issubset((*self.input_ids, *read_ids)):
+                        rules.append(R.INPUT_NOT_OFFERED)
+                    selected.update(aliases)
+                    if type(item.get("agent_id")) is str:
+                        by_role[item["agent_id"]] = set(aliases)
+                if not required.issubset(selected):
+                    rules.append(R.CONTINUATION_INPUT_COVERAGE if self.continuation else R.INPUT_COVERAGE)
+                if any(alias not in by_role.get(agent, set()) for agent, alias in (*self.reviewer_inputs, *read_reviewers)):
+                    rules.append(R.REVIEWER_INPUT)
+                scope = self.scope
+                if scope is None and type(raw_scope) is dict:
+                    domains = raw_scope.get("domains", [])
+                    paths = raw_scope.get("target_paths", [])
+                    try:
+                        scope = AuthoringScope(AuthoringActivity(raw_scope["activity"]), tuple(paths),
+                            tuple(domain for domain in ArtifactReviewDomain if domain.value in domains),
+                            "Provider constraint projection", "constraint", 1)
+                    except (KeyError, TypeError, ValueError):
+                        scope = None
+                if scope:
+                    required_roles = required_authoring_specialists(scope)
+                    if not set(required_roles).issubset(roles):
+                        rules.append(R.SPECIALIST_REQUIRED)
+                    expected_mode = "review" if scope.activity is AuthoringActivity.REVIEW else "draft"
+                    if any(type(item) is dict and item.get("agent_id") in required_roles
+                           and item.get("mode") != expected_mode for item in assignments):
+                        rules.append(R.ASSIGNMENT_MODE)
+                if self.preparation_specialists and tuple(role for role in SPECIALIST_IDS if role in roles) != self.preparation_specialists:
+                    rules.append(R.PREPARATION_SPECIALISTS)
+        action = value.get("recommended_action")
+        if type(action) is dict:
+            roles = action.get("specialist_ids")
+            if type(roles) is list and all(type(role) is str for role in roles):
+                if not roles or len(set(roles)) != len(roles) or any(role not in SPECIALIST_IDS for role in roles):
+                    rules.append(R.RECOMMENDATION_SPECIALISTS)
+                if type(raw_scope) is dict:
+                    try:
+                        selected_scope = AuthoringScope(
+                            AuthoringActivity(raw_scope["activity"]), tuple(raw_scope["target_paths"]),
+                            tuple(domain for domain in ArtifactReviewDomain if domain.value in raw_scope["domains"]),
+                            "Provider constraint projection", "constraint", 1,
+                        )
+                        if not set(required_authoring_specialists(selected_scope)).issubset(roles):
+                            rules.append(R.RECOMMENDATION_SPECIALISTS)
+                    except (KeyError, TypeError, ValueError):
+                        pass
+            paths = action.get("target_paths")
+            if type(paths) is list and all(type(path) is str for path in paths):
+                if not paths or len(set(paths)) != len(paths):
+                    rules.append(R.RECOMMENDATION_TARGETS)
+            if not visible_text(action.get("instruction")):
+                rules.append(R.RECOMMENDATION_INSTRUCTION)
+            sources = action.get("source_ids")
+            if type(sources) is list and all(type(item) is str for item in sources):
+                if not sources or len(set(sources)) != len(sources):
+                    rules.append(R.RECOMMENDATION_SOURCES)
+                if self.source_ids is not None and not set(sources).issubset((*self.source_ids, *read_ids)):
+                    rules.append(R.SOURCE_NOT_OFFERED)
+            if self.objective_ids is not None and "objective_id" in action and action["objective_id"] not in self.objective_ids:
+                rules.append(R.RECOMMENDATION_OBJECTIVE_NOT_OFFERED)
+        artifact = value.get("artifact_intent")
+        nested = artifact if type(artifact) is dict else proposal
+        objective = nested.get("objective_intent") if type(nested) is dict else value.get("objective_intent")
+        if type(objective) is dict:
+            targets = objective.get("target_paths")
+            if objective.get("action") == "start" and type(targets) is list and all(type(path) is str for path in targets):
+                if not targets or len(set(targets)) != len(targets):
+                    rules.append(R.ARTIFACT_OBJECTIVE_TARGETS if type(artifact) is dict else
+                                 R.PROPOSAL_OBJECTIVE_TARGETS if type(proposal) is dict else R.OBJECTIVE_TARGETS)
+            if self.objective_ids is not None and "objective_id" in objective and objective["objective_id"] not in self.objective_ids:
+                rules.append(R.OBJECTIVE_NOT_OFFERED)
+            expected_step = "prepare" if type(artifact) is dict else "consult" if type(proposal) is dict else "clarify"
+            if objective.get("action") == "cancel":
+                if type(artifact) is dict or type(proposal) is dict or value.get("kind") == "question":
+                    rules.append(R.OBJECTIVE_BRANCH)
+            elif (objective.get("next_step") != expected_step
+                  or (expected_step == "clarify" and value.get("kind") != "question")):
+                rules.append(R.OBJECTIVE_BRANCH)
+        if self.preparation_kind and not self.recommendation_only and value.get("kind") != "question":
+            expected_field = "artifact_intent" if self.preparation_kind == "prepare_artifact" else "proposal"
+            if value.get("kind") != "proposal" or type(value.get(expected_field)) is not dict:
+                rules.append(R.PREPARATION_KIND)
+            needs_objective = expected_field == "artifact_intent" or self.preparation_objective_id is not None
+            if needs_objective:
+                expected_action = "start" if self.preparation_objective_id is None else "continue"
+                if (type(objective) is not dict or objective.get("action") != expected_action
+                    or (self.preparation_objective_id is not None and objective.get("objective_id") != self.preparation_objective_id)
+                    or (self.preparation_objective_id is None and objective.get("target_paths") != list(self.preparation_targets))):
+                    rules.append(R.PREPARATION_OBJECTIVE)
+            elif objective is not None:
+                rules.append(R.PREPARATION_OBJECTIVE)
+        if self.continuation:
+            continuation_rules = {
+                R.INSTRUCTION_REQUIRED: R.CONTINUATION_INSTRUCTION_REQUIRED,
+                R.SPECIALIST_DUPLICATE: R.CONTINUATION_SPECIALIST_DUPLICATE,
+                R.ASSIGNMENT_INPUTS_REQUIRED: R.CONTINUATION_ASSIGNMENT_INPUTS_REQUIRED,
+                R.INPUT_DUPLICATE: R.CONTINUATION_INPUT_DUPLICATE,
+                R.INPUT_NOT_OFFERED: R.CONTINUATION_INPUT_NOT_OFFERED,
+                R.REVIEWER_INPUT: R.CONTINUATION_REVIEWER_INPUT,
+                R.SPECIALIST_REQUIRED: R.CONTINUATION_SPECIALIST_REQUIRED,
+                R.ASSIGNMENT_MODE: R.CONTINUATION_ASSIGNMENT_MODE
+            }
+            rules = [continuation_rules.get(rule, rule) for rule in rules]
+        return tuple(dict.fromkeys(rules))

@@ -323,8 +323,9 @@ The projection states are `awaiting_confirmation`, `confirmed`, `running`,
 `request_decision`, `start_confirmed_phase`, `wait_for_phase`,
 `request_next_phase`, `inspect_failure`, `operator_recovery`,
 `continue_deadlock`, or `none`.
-`publication_allowed` is always false. A terminal deadlock reports
-`next_action=continue_deadlock`.
+`publication_allowed` is always false. A terminal SYNTHESIS deadlock reports
+`next_action=continue_deadlock`; a REPAIR or FINALIZATION fallback deadlock
+reports `next_action=inspect_failure`.
 
 The normal phase graph is DRAFT → AUDIT → SYNTHESIS. Lead synthesis selects
 REPAIR → REAUDIT → SYNTHESIS, FINALIZATION, or deadlock. Every phase is a new
@@ -332,6 +333,24 @@ request and confirmation. Audits invoke all three specialists against the same
 revision; the lead synthesizes and finalizes but does not vote. Finalization is
 a read-only handoff to a separately confirmed artifact Apply, followed later
 by a separately confirmed Git Commit.
+
+Each rejected structured phase result receives one bounded repair. If that
+repair is exhausted, DRAFT records `failed` with no candidate. REPAIR,
+SYNTHESIS, and FINALIZATION record `deadlocked`, retain the trusted input
+candidate, select no next phase, and still forbid publication. Only the
+SYNTHESIS case is a valid continuation source; REPAIR and FINALIZATION direct
+the caller to failure inspection. The returned provider result retains the
+content-free `ReplyTrace` with `origin=runtime_fallback` and `action=none`.
+
+Direct `ConsensusProviderResult.validation_details` contains the ordered safe
+chunks for that provider invocation. When any provider result has findings, the
+terminal `ConsensusPhaseResult.validation_details_by_provider` persists one
+tuple per returned provider result in invocation order; a provider without
+findings has an empty tuple at its position. Running checkpoints carry none.
+Read the terminal event through `load_workflow()` when inspecting these details
+after restart. Older result events without the optional field decode as an
+empty tuple. The details contain schema paths and fixed type or rule findings,
+not raw provider values or publication authority.
 
 `interrupt_consensus()` acts only on a running request. `resume_consensus()` is
 an inspection operation: it never resumes/replays a provider call or recreates
@@ -508,6 +527,8 @@ LeadTurnResult(
     artifact_application_request: ArtifactApplicationRequestPayload | None = None,
     story_commit_request: StoryCommitRequestPayload | None = None,
     recommendation_request: LeadRecommendationRequestPayload | None = None,
+    trace: ReplyTrace | None = None,
+    validation_details: tuple[str, ...] = (),
 )
 ```
 
@@ -518,9 +539,34 @@ has `recommendation_request` and `submit_recommendation_decision`. Its
 `state`, `proposal`, `confirmation_request_id`, `artifact_proposal`,
 `artifact_application_request`, and `story_commit_request` are all `None`;
 `evidence` equals the request's basis evidence. These decision controls are
-mutually exclusive. The trailing field defaults to `None`, preserving callers
-that omit it. Historical judgments and runtime recovery notices can still have
+mutually exclusive. `trace` defaults to `None`, preserving callers that omit it.
+Historical judgments and runtime recovery notices can still have
 kind `recommendation` without a new action; follow their state-specific action.
+
+`validation_details` is an ordered tuple of bounded, content-safe diagnostic
+chunks from rejected structured provider attempts. A successful repair can
+retain `Original response` findings; an exhausted repair can retain both
+`Original response` and `Repair response` findings. Empty means no validation
+findings. These details describe schema paths, expected versus actual JSON
+types, and fixed rules without provider values or unknown member names; they
+grant no confirmation or replay authority.
+
+Domain findings name the rejected property and the required constraint or
+relationship at the first violated invariant. They come from the validator that
+rejects the reply and retain their nested property paths through decoder wrappers.
+The same findings accompany that physical call in captured exchange outcomes.
+
+Ordinary reports include every independently detectable schema finding. A
+report that exceeds the diagnostic cap keeps up to 2,048 findings in order and
+ends with the fixed `$: additional validation issues omitted` notice. Display
+chunks remain below 32,000 UTF-8 bytes each.
+
+Durable validation messages may carry optional
+`CollaborationMessagePayload.validation_invocation_id` and
+`validation_call_id` alongside their detail chunk. Runtime correlates those
+IDs with submitted provider-call facts to restore execution diagnostics in
+physical-call order after restart, including concurrent specialist work. Older
+messages without the optional IDs remain readable.
 
 A proposal result contains the complete runtime-built
 `CollaborationProposal`, state `awaiting_confirmation`, a fresh confirmation
@@ -542,75 +588,81 @@ redisclosed, with `next_action=submit_commit_decision`. It defaults to `None`,
 preserving existing construction that omits it. These requests still need
 their respective structured decisions; neither is consultation authority.
 
-A fresh provider judgment also returns exact durable `evidence`. It contains
-the provider-declared `scope` (`story_specific` or `workflow_meta`), declared
-status (`not_applicable`, `verified`, `missing`, `empty`, `incomplete`, or
-`conflicting`), and ordered content-free receipts. Proposal evidence is
+A fresh provider judgment also returns exact durable `evidence`. Runtime derives
+its scope, status (`not_applicable`, `verified`, `missing`, `empty`, `incomplete`,
+or `conflicting`), and ordered content-free receipts from the compact semantic
+scope plus invocation-local authorization facts. Proposal evidence is
 identical to `proposal.basis.evidence`. Runtime-generated workflow recovery and evidence-rejection notices can use
 `evidence=None`; local recommendation rejection or failure closure can instead
 return workflow-meta `not_applicable` evidence with no receipts.
 
-The provider's `lead-outcome-v4` result is one strict JSON object with exactly
-ten fields: `scope`, `evidence_status`, `evidence_ids`, `kind`, `message`,
-`proposal`, `artifact_intent`, `objective_intent`, `recommended_action`, and `authoring_scope`:
+Fresh Lead and specialist replies also expose a content-free `trace`. Its
+`role` and `action` identify the reply route; `context_sources` names classes
+such as `current_input`, `session_state`, `core_status`, `search_results`, and
+`read:writing_artifact`; `recovered_fields` identifies the structured reply
+only when repair or fallback was needed; and `origin` is `provider`,
+`recovered`, or `runtime_fallback`. The runtime constructs this value after
+provider validation. It is persisted with visible collaboration replies and
+therefore survives reopen. A runtime fallback always reports `action=none` and
+grants no confirmation, Apply, Commit, or other user authority.
+
+The provider's `lead-outcome-v5` result remains provider-enforced Structured
+Output, but each closed variant contains only semantic fields. A direct answer is:
 
 ```json
 {
-  "scope": "workflow_meta",
+  "message": "Reject records the decision without starting specialist work.",
   "authoring_scope": {
-    "schema_version": 1,
     "activity": "workflow",
     "target_paths": [],
     "domains": [],
-    "interpretation": "Explain the Reject control.",
-    "task_id": "task_demo",
-    "task_revision": 1
-  },
-  "evidence_status": "not_applicable",
-  "evidence_ids": [],
-  "kind": "answer",
-  "message": "Reject records the decision without starting specialist work.",
-  "proposal": null,
-  "artifact_intent": null,
-  "objective_intent": null,
-  "recommended_action": null
+    "task": "task_demo@1"
+  }
 }
 ```
 
 The synthetic workflow example assumes `task_demo`/`1` was offered by runtime.
-Every live authoring scope must select an exact offered task/revision. Direct
-workflow/status and clarification are allowed; substantive story work requires
-a proposal covering all affected domains, which the Lead can first recommend
-preparing. See the complete
+Every provider-produced direct Lead result requires `message` and
+`authoring_scope`, and every live scope must select an exact offered
+task/revision. The default direct answer omits `kind`; questions and critiques
+add it. A missing scope receives one bounded structured repair and then a
+runtime-owned visible no-action fallback if repair also fails. Runtime never
+infers a workflow scope, and the fallback is not a variant of the closed
+Structured Output provider schema. Direct workflow/status and clarification
+are allowed; substantive story work requires a proposal covering all affected
+domains, which the Lead can first recommend preparing. See the complete
 [scope and routing contract](../guides/lead-agent.md#how-specialist-routing-works).
 
-For a fresh `kind=recommendation`, `recommended_action` is non-null and
-`objective_intent`, `proposal`, and `artifact_intent` are null. Other kinds
-require `recommended_action=null`. A typed action has exactly these fields:
+For a fresh `kind=recommendation`, `recommended_action` is the one additional
+field. Unused intents are omitted. A preparation action has only its semantic
+selector fields:
 
 ```json
 {
   "kind": "prepare_artifact",
-  "purpose": "Prepare the agreed outline for review.",
   "instruction": "Prepare the agreed outline replacement.",
-  "expected_result": "One exact replacement candidate and its required reviewers.",
   "source_ids": ["current_response"],
-  "target_paths": ["core_documents/global_outline.md"],
-  "specialist_ids": [],
-  "objective_id": null
+  "target_paths": ["core_documents/global_outline.md"]
 }
 ```
 
 This is an action excerpt, not a complete Lead result. `prepare_artifact`
 requires exact canonical targets and no specialists; `prepare_consultation`
-requires canonical specialists and no target paths. Purpose, instruction,
-expected result, and source selection must be nonempty. An optional objective
+requires canonical specialists and no target paths. Instruction and source
+selection must be nonempty. An optional objective
 must be an offered open objective owned by this conversation; artifact targets
 must match it. Drafting a recommendation makes no objective transition.
 `current_response` is a provider alias for the complete visible recommendation
 message; runtime resolves it to its event ID and exact UTF-8 digest before
 persisting the request. Other source IDs must be runtime offered. Neither
 aliases nor remembered drafts grant artifact evidence or confirmation authority.
+
+Provider contracts describe required nonempty collections and branch-specific
+objective steps. Frozen preparation contracts also bind the confirmed scope and
+objective. Runtime still checks source completeness, mandatory reviewers, current
+objective ownership, and freshness. Recommendation sources may include authorized
+READ-created aliases, so membership is checked against the current evidence as
+well as the initial offers. Schema-valid output does not itself grant authority.
 
 For `kind=proposal`, exactly one of `proposal` or `artifact_intent` is non-null.
 Artifact intent contains `operations` and `additional_review_domains`.
@@ -644,8 +696,8 @@ does not permit substantive direct story authoring:
 All other combinations fail closed. Runtime validates structural facts; it
 does not use NLP to infer scope, status, relevance, or semantic consistency.
 Evidence IDs must be current, unique, and in runtime order. A SEARCH hit that
-was not READ, a READ omitted from final `used_handles`, a truncated or non-
-writing zero-hit search, a prior-invocation ID, or an invented ID is invalid.
+was not READ, a truncated or non-writing zero-hit search, a prior-invocation
+ID, or an invented ID is invalid. Runtime attaches completed READ receipts.
 
 Duplicate/unknown/private fields, a nonobject, an unknown kind, a non-null
 proposal or artifact intent on a direct outcome, both proposal forms at once,
@@ -777,25 +829,26 @@ and [recovery](../operations/recovery-and-limitations.md#recommendation-preparat
 
 ### Contextual authoring objectives
 
-`objective_intent` is required in every front-channel result and is null for
-fresh recommendations. `null` makes no objective transition. The three non-null
-shapes are:
+`objective_intent` appears only when a front-channel result transitions an
+objective. Omission makes no objective transition. The three shapes are:
 
 ```json
-{"action":"start","request":"Prepare the agreed outline.","target_paths":["core_documents/global_outline.md"],"next_step":"clarify","draft_source_event_ids":[]}
+{"action":"start","target_paths":["core_documents/global_outline.md"],"next_step":"clarify"}
 ```
 
 ```json
-{"action":"continue","objective_id":"<offered-open-owner-objective-id>","next_step":"prepare","draft_source_event_ids":["<offered-draft-event-id>"]}
+{"action":"continue","objective_id":"<offered-open-owner-objective-id>","next_step":"prepare"}
 ```
 
 ```json
 {"action":"cancel","objective_id":"<offered-open-owner-objective-id>"}
 ```
 
-`start` requires a nonempty exact canonical target scope and a visible request;
-runtime assigns the objective ID and origin event. If the target is unresolved,
-the Lead asks a question with `objective_intent=null` first. `continue` and
+`start` requires a nonempty exact canonical target scope. Runtime assigns the
+objective ID and freezes the exact originating user event and its complete
+message as the request; the provider cannot supply or paraphrase that fact. If
+the target is unresolved, the Lead asks a question without `objective_intent`
+first. `continue` and
 `cancel` can name only an `OPEN` objective owned by the current conversation.
 They cannot replace its origin request or target paths. Complete same-session
 history exposes these facts across conversation switches without transferring
@@ -842,14 +895,15 @@ makes it `CANCELLED`; Commit is independent of objective completion. See the
 An artifact objective first created by structured recommendation Confirm uses
 `ArtifactObjectiveFactsV2`/`ArtifactObjectivePayloadV2`, preserving the exact
 request and decision event origin. Ordinary authoring retains v1 user-event
-origin. Confirm can continue an existing v1 objective without changing its
+origin and the exact originating user-event content as its request. Confirm can
+continue an existing v1 objective without changing its
 immutable facts or codec. The preparation execution origin is separate from
 objective provenance; there is no synthetic user message.
 
 The public objective values are additive exports of
 `story_writing_agents.conversations`; the package-root facade is unchanged.
-Retained workspace policies receive a runtime v4 overlay without file rewrites.
-Specialist and synthesis schemas remain separate from `lead-outcome-v4`.
+Retained workspace policies receive the current runtime overlay without file rewrites.
+Specialist and synthesis schemas remain separate from `lead-outcome-v5`.
 
 `LeadProviderOutcome` preserves its Python positional order:
 
@@ -862,9 +916,9 @@ LeadProviderOutcome(
 ```
 
 `objective_intent` remains the eighth positional slot and `recommended_action`
-the ninth. Optional `authoring_scope` is keyword-only. The Python defaults
-support retained values, while fresh provider output must include all ten
-strict JSON fields. JSON member order does not define positional
+the ninth. Optional `authoring_scope` is keyword-only. These Python values are
+richer than the provider contract because runtime adds durable metadata after
+validation. JSON member order does not define positional
 Python arguments.
 
 ### `LeadStepDecision`
@@ -1019,16 +1073,19 @@ cancels and joins siblings, persists knowable results, and re-raises.
 For artifact review, runtime derives the canonically ordered reviewers from the
 candidate's mandatory and additional domains. Every reviewer receives the
 same strict serialized candidate and the same disclosed evidence; no reviewer
-can rewrite it. After every reviewer succeeds, the lead synthesis must preserve
-all reply attribution and unresolved non-supporting inputs and must add:
+can rewrite it. After every reviewer succeeds, the provider Lead synthesis
+returns only:
 
 ```text
 decision: propose | revise | reject
-rationale: nonempty visible text
-user_impact: nonempty visible text
-limitations: nonempty visible text
-next_intent: null
+message: nonempty visible text
 ```
+
+Runtime preserves all reply attribution and unresolved non-supporting inputs,
+uses `message` as `rationale`, adds the fixed no-change `user_impact`, and sets
+`limitations` to `No additional limitations were reported.` when there are no
+unresolved IDs. Otherwise it reports `Unresolved reviewer inputs remain: `
+followed by the exact unresolved input IDs.
 
 `propose` produces `ArtifactReviewedProposal` and artifact state `reviewed`.
 `revise` produces `revision_required`; `reject` produces `rejected`. Partial

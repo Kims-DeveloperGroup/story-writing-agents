@@ -222,6 +222,18 @@ both providers and open the same native authentication picker. A completed new
 authentication may fill a missing workspace default; cancellation keeps any
 existing default and explicit routes unchanged.
 
+First-start onboarding is separate from that global command. Initial
+authentication establishes access only. If `default_backend` is still absent,
+Story opens a standard **Default provider** picker before the lobby. The
+newly authenticated or sole authenticated provider—or Codex when both
+authenticate—is only highlighted as a recommendation; nothing is preselected.
+Choose either enabled provider. Choosing unauthenticated Antigravity runs the
+same native bare-`agy` sign-in and retries the picker if authentication does not
+succeed. Only an authenticated choice reaches the guarded absent-only save.
+Cancel, interrupt, or EOF exits before that save or runtime construction. The
+saved choice is inherited by agents without their own route, whose Provider
+setting remains editable, and later shells skip this onboarding picker.
+
 For a persistent route, use global `/settings`, choose Agents, choose an agent,
 and select Antigravity. If needed, native authentication runs as a subordinate
 Provider-editor action and returns to Provider. The route and any missing
@@ -236,7 +248,8 @@ After that full-path Apply Changes is confirmed, Apply-time authentication may
 rebase a missing workspace default only in the pending candidate. It becomes
 durable only when conversation-storage readiness, parity, and the final guarded
 settings write complete. This does not change startup authentication or
-explicit global `/auth`, which retain immediate absent-default durability.
+the separate first-start default choice, or explicit global `/auth`, which
+retains its established immediate absent-default behavior.
 Direct JSON editing is also supported; this excerpt routes only the plot
 architect and leaves omitted agents to inherit the workspace default:
 
@@ -355,10 +368,10 @@ For each turn, the runtime launches `agy` directly without shell evaluation. It:
   retained ID with `--conversation <id>`; it never registers the canonical
   story workspace root as an Antigravity project;
 - passes the exact confidential story request JSON as one `--print` argument,
-  selects `--input-format text --output-format json`, and sends empty stdin;
+  selects `--input-format text --output-format json` (or `--output-format stream-json` when an active stream sink is bound for capable advisory progress), and sends empty stdin;
 - enables the CLI sandbox, selects plan mode, and disables slash commands;
 - does not pass an approval-bypass or unrestricted-execution option; and
-- drains stdout and stderr, validates one JSON envelope with a safe conversation
+- drains stdout and stderr, validates one JSON envelope (extracting the terminal result from stream-json events when streaming) with a safe conversation
   ID, root-object structured output, and an exact rendered-schema echo, then
   applies the shared runtime correlation and semantic checks. Native `SUCCESS`
   is the normal path; only the [bounded recovery](#recover-a-completed-native-error)
@@ -387,7 +400,7 @@ body as hostile plaintext and follow the inspection workflow in
 [Privacy](../operations/privacy-and-provider.md#rejected-provider-response-artifacts).
 
 Separately, `debug_logs/agent_exchanges/` can retain completed Antigravity or
-Codex failure stdout, stderr, and exit status before its fixed
+Codex failure error, status, stderr, and exit status before its fixed
 `provider_failure` outcome. A recovered Antigravity native `ERROR`, or a
 timeout/truncation warning accepted
 with exact current-call completion proof, retains the same private diagnostic
@@ -425,18 +438,19 @@ adapter-owned structure (the root and fingerprint are sanitized):
   sessions/novel/lead_orchestrator/<definition-sha256>/workspace
 ```
 
-The provider-state directory is its sibling `provider`. A fresh Lead call is
-equivalent to this shell-free argument vector; wrapping is only for
-readability:
+The provider-state directory is its sibling `provider`. A fresh non-streaming
+or fallback Lead call is equivalent to this shell-free argument vector (interactive
+turns on capable raw terminals select `--output-format stream-json`); wrapping is
+only for readability:
 
 ```text
 cwd=/workspace/agent_states/orchestrator_state/provider_sessions/.antigravity/sessions/novel/lead_orchestrator/<definition-sha256>/workspace
 agy --gemini_dir=<runtime-root>/provider \
   --input-format text --output-format json \
-  --json-schema '<exact Antigravity-rendered wire-v7 schema>' \
+  --json-schema '<exact Antigravity-rendered wire-v8 schema>' \
   --agent lead_orchestrator --sandbox --mode plan \
   --disable-slash-commands --print-timeout 900s --new-project \
-  --print '<exact confidential wire-v7 payload JSON, one argument>'
+  --print '<exact confidential wire-v8 payload JSON, one argument>'
 ```
 
 On a compatible later call, the adapter keeps `--agent lead_orchestrator` and
@@ -452,7 +466,8 @@ CLI 1.1.27: raw text stdin was ignored in probes with an empty `--print` argumen
 `-`, or a constant print value. The response schema still requires the descriptive
 typed result even though the input uses compact runtime field names.
 
-A successful native response is exactly one UTF-8 JSON object. This sanitized
+A successful native response is exactly one UTF-8 JSON object (or in streaming mode,
+line-delimited stream-json events ending in one terminal `result` object). This sanitized
 shape is deliberately non-executable: `json_schema` stands for the complete
 object supplied on argv, whose canonical bytes must match exactly.
 
@@ -461,47 +476,38 @@ object supplied on argv, whose canonical bytes must match exactly.
   "status": "SUCCESS",
   "conversation_id": "agy-c-1",
   "structured_output": {
-    "correlation": "<correlation-1>",
     "action": {
       "kind": "answer",
       "result": {
-        "scope": "workflow_meta",
+        "message": "<sanitized reply>",
         "authoring_scope": {
-          "schema_version": 1,
           "activity": "workflow",
           "target_paths": [],
           "domains": [],
-          "interpretation": "Answer the workflow question without story authoring.",
-          "task_id": "task_demo",
-          "task_revision": 1
-        },
-        "evidence_status": "not_applicable",
-        "evidence_ids": [],
-        "kind": "answer",
-        "message": "<sanitized reply>",
-        "artifact_intent": null,
-        "proposal": null,
-        "objective_intent": null,
-        "recommended_action": null
-      },
-      "used_handles": []
+          "task": "task_demo@1"
+        }
+      }
     }
   },
-  "json_schema": {"<documentation-placeholder>": "exact Antigravity-rendered wire-v7 schema object"},
+  "json_schema": {"<documentation-placeholder>": "exact Antigravity-rendered wire-v8 schema object"},
   "usage": {"input_tokens": 100, "output_tokens": 20, "cache_read_tokens": 0}
 }
 ```
 
-The example shows all ten fields of a `lead-outcome-v4` Lead ANSWER. The
-illustrative fresh workflow task `task_demo` at revision `1` must be offered by
-the current invocation; other calls require their selected result type.
-`recommended_action` is null for this answer. Fresh recommendations require
-one typed preparation action and null objective intent, then offer
+The example shows the minimal fields of a `lead-outcome-v5` Lead ANSWER using
+an illustrative task offered by runtime. Every provider-produced direct Lead
+result requires `message` and compact `authoring_scope`; questions and critiques
+add `kind`, while the default answer omits it. Missing scope receives one
+bounded structured repair and then a runtime-owned visible no-action fallback
+if repair also fails; runtime never infers a workflow scope. The fallback is
+not a variant of the closed native Structured Output schema. Other calls
+require only the semantic fields for their selected result type. Fresh
+recommendations require one typed preparation action, then offer
 Confirm/Reject/Revise. Confirm prepares an exact proposal or asks a material
 question; specialist execution/review, Apply, and Commit need separate
 decisions. Ordinary contextual approval can supersede an unconfirmed
-recommendation as a new instruction. `objective_intent` is null here;
-contextual authoring can instead select `start`, `continue`, or `cancel`
+recommendation as a new instruction. Contextual authoring can select `start`,
+`continue`, or `cancel`
 under the [runtime contract](../reference/runtime-api.md#contextual-authoring-objectives).
 Story rejects invalid UTF-8, duplicate fields, non-finite numbers, additional
 JSON objects, and trailing non-whitespace data. It requires a safe
@@ -512,15 +518,13 @@ completed-error recovery below. It never falls back to a string-valued
 `response` field.
 Usage comes only from the terminal object's recognized exact nonnegative
 integer counters; absent or invalid counters remain unavailable. The complete
-closed SEARCH, READ, and ten-field Lead ANSWER branches are shown in
+closed SEARCH, READ, and minimal Lead ANSWER branches are shown in
 [What providers receive](lead-agent.md#what-providers-receive).
 
-Retained workspace Lead policies receive the runtime v4 overlay without being
-rewritten. Ordinary synthesis uses `lead-synthesis-v3` with nine fields,
-including `authoring_scope` and nullable `recommended_action`; the action is
-exclusive with `next_intent`. Specialist replies use `specialist-reply-v2`,
-artifact-review synthesis uses `artifact-review-synthesis-v2`, and contextual
-transport remains wire v7. Historical durable codecs stay readable. A known
+Lead policies use the v5 overlay. Ordinary synthesis uses the minimal
+`lead-synthesis-v3` contract. Specialist replies use `specialist-reply-v2`,
+artifact-review synthesis uses `artifact-review-synthesis-v3`, and contextual
+transport remains wire v8. A known
 read-only Lead failure after reference reads can expose `retry_lead_turn` once
 the exact attempt and reference accounting close. Its authoring objective
 stays open; explicit new input uses fresh evidence. Uncertain cleanup remains
@@ -578,10 +582,10 @@ alone never establishes domain acceptance.
 ### Shared structured-output contract
 
 Codex and Antigravity share provider-neutral result constraints and payload
-semantics. Typed wire v7 has a closed required root object with
-`correlation` and one closed `action`: SEARCH, READ, or ANSWER. ANSWER embeds
-the invocation-specific result object directly; there is no JSON-in-string
-result layer.
+semantics. Typed wire v8 has a closed required root object with one `action`:
+SEARCH, READ, or ANSWER. Runtime derives correlation and READ usage. ANSWER
+embeds the invocation-specific result object directly; there is no JSON-in-
+string result layer.
 
 Antigravity locally renders two equivalent constraints for its native
 function-schema conversion: `{"type":"null","enum":[null]}` becomes
@@ -603,7 +607,7 @@ bound. Shared accounting definitions and the exact payload remain unchanged.
 
 Antigravity's staged prompt also directs `finish` to receive the complete
 schema-selected outer object. For contextual calls, the specialist assessment
-belongs in `action.result` inside `correlation` and `action`. This rendering
+belongs in `action.result` inside `action`. This rendering
 changes no common prompt file, existing workspace prompt, or Codex adapter or
 transport.
 
@@ -778,7 +782,7 @@ The current routes are:
 | L05-MIXED | Configured Codex Lead, Antigravity Pro High plot specialist, and Sonnet character specialist. |
 | L06A-QUESTION | Flash: fresh workflow-only clarification. |
 | L06C-RECOMMENDATION | Flash: finished supplied outline, substantive Plot `REVIEW` scope, and an exact pending `prepare_consultation` recommendation for `plot_architect`. No preparation decision, consultation proposal, specialist execution, Apply, or Commit. |
-| L06B-CRITIQUE | Flash: critique unsafe workflow instructions about skipping confirmation. Whole-outline and ranged-manuscript reference preludes supply context; no story judgment is requested. |
+| L06B-CRITIQUE | Flash: critique unsafe workflow instructions about skipping confirmation. Locally loaded whole-outline and ranged-manuscript references supply context; no story judgment is requested. |
 | L07-SEARCH-READ | Flash: fresh workflow-only literal scheduling lookup and citation through SEARCH→READ→ANSWER, without story interpretation. |
 | L08-DECISIONS | Flash: finished inline outline review; exact Reject/Revise, stale/forged decisions, and ordinary `Yes`. |
 | L09-SECOND-ROUND | Pro High: finished inline outline with chronology ambiguity, reviewed in two actual rounds with separate confirmation and the same task/candidate. |

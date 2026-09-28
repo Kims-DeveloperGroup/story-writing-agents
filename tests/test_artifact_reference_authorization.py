@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import os
 import pickle
-import tempfile
 import threading
 import unittest
 from contextlib import contextmanager
@@ -47,7 +46,7 @@ from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
 
-from tests.helpers import initialize_test_workspace
+from tests.helpers import pristine_initialized_workspace
 
 
 _CORE_PATH = "core_documents/global_outline.md"
@@ -139,10 +138,7 @@ def _snapshot(
 
 class ReferenceRepositoryTestCase(unittest.TestCase):
     def setUp(self) -> None:
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
-        initialize_test_workspace(self.root)
+        self.root = pristine_initialized_workspace(self).root
         self.repository = WritingArtifactRepository(self.root)
         self.manuscript_bytes = b"alpha\r\nbeta\ngamma\rfour\xe2\x80\xa8five"
         self.core_bytes = b"core-one\ncore-two\n"
@@ -249,7 +245,7 @@ class ReferenceAuthorizationValueTests(unittest.TestCase):
         self.assertTrue(
             (supported | transient).isdisjoint(story_writing_agents.__all__)
         )
-        self.assertEqual(len(story_writing_agents.__all__), 104)
+        self.assertEqual(len(story_writing_agents.__all__), 106)
 
     def test_correlation_requires_safe_ids_positive_ordinals_and_attempts(self) -> None:
         valid = _correlation(
@@ -1004,10 +1000,7 @@ class ReferenceDriftAndLifetimeTests(ReferenceRepositoryTestCase):
             ReferenceOperationState.TERMINATED,
         )
 
-        second_temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(second_temporary.cleanup)
-        second = Path(second_temporary.name)
-        initialize_test_workspace(second)
+        second = pristine_initialized_workspace(self).root
         repository = WritingArtifactRepository(second)
         repository.commit_consensus(
             output_path="part-01/seed.md",

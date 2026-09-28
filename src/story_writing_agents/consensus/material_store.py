@@ -29,6 +29,8 @@ MAX_CONSENSUS_MATERIAL_BYTES = 16 * 1024 * 1024
 _DIRECTORY_PARTS = tuple(CONSENSUS_MATERIAL_DIRECTORY.split("/"))
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _LOCATOR = re.compile(r"candidate:([0-9a-f]{64})")
+_LOCK_NAME = ".lock"
+_LOCK_BOOTSTRAP_ATTEMPTS = 8
 
 
 class ConsensusMaterialStoreError(WorkspaceFormatError):
@@ -230,27 +232,67 @@ class ConsensusMaterialStore:
     @contextlib.contextmanager
     def _locked(self, shard: int) -> Iterator[None]:
         assert fcntl is not None
+        lock = self._open_lock(shard)
         try:
-            lock = os.open(
-                ".lock",
-                os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
-                0o600,
-                dir_fd=shard,
-            )
-        except OSError as exc:
-            raise ConsensusMaterialStoreSecurityError(
-                "candidate material lock is unsafe"
-            ) from exc
-        try:
-            observed = os.fstat(lock)
-            if not stat.S_ISREG(observed.st_mode) or observed.st_nlink != 1:
+            self._verify_lock_identity(shard, lock)
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+            except OSError as exc:
                 raise ConsensusMaterialStoreSecurityError(
-                    "candidate material lock identity is unsafe"
-                )
-            fcntl.flock(lock, fcntl.LOCK_EX)
+                    "candidate material lock is unsafe"
+                ) from exc
+            self._verify_lock_identity(shard, lock)
             yield
+            self._verify_lock_identity(shard, lock)
         finally:
             os.close(lock)
+
+    @staticmethod
+    def _open_lock(shard: int) -> int:
+        flags = os.O_RDWR | os.O_NOFOLLOW
+        for _attempt in range(_LOCK_BOOTSTRAP_ATTEMPTS):
+            try:
+                return os.open(_LOCK_NAME, flags, dir_fd=shard)
+            except OSError as exc:
+                if exc.errno != errno.ENOENT:
+                    raise ConsensusMaterialStoreSecurityError(
+                        "candidate material lock is unsafe"
+                    ) from exc
+            try:
+                return os.open(
+                    _LOCK_NAME,
+                    flags | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=shard,
+                )
+            except OSError as exc:
+                if exc.errno != errno.EEXIST:
+                    raise ConsensusMaterialStoreSecurityError(
+                        "candidate material lock is unsafe"
+                    ) from exc
+        raise ConsensusMaterialStoreSecurityError(
+            "candidate material lock bootstrap did not converge"
+        )
+
+    @staticmethod
+    def _verify_lock_identity(shard: int, lock: int) -> None:
+        try:
+            opened = os.fstat(lock)
+            named = os.stat(_LOCK_NAME, dir_fd=shard, follow_symlinks=False)
+        except OSError as exc:
+            raise ConsensusMaterialStoreSecurityError(
+                "candidate material lock identity is unsafe"
+            ) from exc
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or not stat.S_ISREG(named.st_mode)
+            or named.st_nlink != 1
+            or (named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino)
+        ):
+            raise ConsensusMaterialStoreSecurityError(
+                "candidate material lock identity is unsafe"
+            )
 
     @staticmethod
     def _read_if_exists(shard: int, digest: str) -> bytes | None:

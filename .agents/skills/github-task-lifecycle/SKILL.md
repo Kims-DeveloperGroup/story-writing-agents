@@ -1,91 +1,91 @@
 ---
 name: github-task-lifecycle
 description: >-
-  GitHub-tracked work: supplies/guards planning,linking,branching,PR,integration,cleanup
-  commands; excludes untracked/story-runtime work.
+  Guard normal GitHub-tracked planning, linking, delivery, integration, and cleanup; excludes
+  explicit Project-stage/full-workflow invocation and story-runtime work.
 ---
 
-[GITHUB_WORKFLOW.md](../../../GITHUB_WORKFLOW.md): authorization/metadata;
-[AGENTS.md](../../../AGENTS.md): routing/verification.
+Follow [GITHUB_WORKFLOW.md](../../../GITHUB_WORKFLOW.md). Before reader-facing records, read
+[the authoring guide](references/issue-pr-authoring.md) and the relevant raw template.
 
-Before creating or updating reader-facing records through any client, read the
-[authoring guide](references/issue-pr-authoring.md) and relevant template source.
+This is the default, narrow-authority workflow. Read-only inspection is allowed. Record the
+planning gate before writes: pending permits only authorized Issue/Project planning writes;
+blocked is read-only, and neither permits branch/worktree creation or tracked-file edits.
+Create or update an Issue, Project item, relationship, branch, commit, push, PR, review request,
+merge, closure, branch deletion, or worktree removal only when that step is authorized. Never
+infer later delivery authority from implementation authority.
 
-Implementation authorizes only policy-defined planning/Development-linked branch
-creation. Separately authorize every push/stage/commit/PR/merge/closure/deletion/cleanup.
-Preflight repository/`gh`-project-scope/Project-fields/milestones/Iterations/dependencies/
-worktrees; stop on missing/mismatch. Mutate/verify once; preserve successes; repair gaps.
+For explicit stage or end-to-end invocation, the root uses the corresponding Project skill
+under the canonical [authority rules](../../../GITHUB_WORKFLOW.md#authority).
+`$project-implement` may prepare its own missing planning records and continue without a prior
+`$project-plan` invocation or separate plan approval; it still stops before PR/review. Ordinary
+planning stays read-only without planning-write authority. No skill overrides Codex Plan Mode.
 
-Search all Issue-states; create/reuse root; descendants require general-sibling-gate. Resolve IDs. Use
-one-Iteration-per-Requirement-release; leaves-inherit; root-tracks-current-`Must`;
-completed-releases-retain-theirs; creation needs schema authorization. Create fields/native-relations; re-read
-complete graph/metadata and unblocked `Ready` leaf.
+## Plan and link
 
-|Rule|Procedure|
-|---|---|
-|Requirement|Set-organization-Issue-Requirement-`Must`/`Recommended`/`Optional`;record-basis;existing-only-at-new-phase/Iteration;unset-blocks-`Ready`;necessary-dependencies-`Must`;never-agent-downgrade|
-|Release-plan|Classify-all-known-leaves;one-implementation/delivery-unit=current-Issue/no-sole-child-or-wrapper;create/verify-only-known-at-least-2-direct-independently-complete-necessary-slice/release-siblings;subdivide-only-into-at-least-2-independent-children-else-enlarge/update-own-scope;no-phase/metadata/branch-PR/scope-mirror-placeholders;single-release=current/root-Issue;numbered-release-children-only-if-at-least-2-releases-required;one-unit-release-implements-directly;feature-children-only-if-at-least-2-independent-slices;require-each-implementation-leaf-Size;load=sum(unfinished-leaf-points)<=capacity;verify-integrity/topology|
-|Resize|Preserve-all-`Must`;select-`Recommended`-by-accepted-user-order;defer-`Optional`-first,then-nonfitting-`Recommended`-to-`Backlog`;clear-Iteration/wave;record-reason/reconsideration;pause-only-with-approval/partial-state/branch-PR-disposition/recoverability;split-complete-slices-or-record-indivisible-exception|
-|Bases/order|Release/standalone=approved-main;feature-leaf=current-release;dependencies-wait;ordinary-child-parent-excludes-release-PRs|
-|Local-branch|Omit-`--track`/`-b`|
-|Release-PR|After-first-feature-leaf:create-authorized-draft-targeting-`main`;after-all-leaves:sync-main/run-final-evidence/Refs-to-Closes/set-`In review`/merge/close-release|
-|Umbrella|Normally-planning-only/administrative-close-after-`Must`/core-verification;distinct-diff=own-Development-linked-branch/PR-target-`main`,start-after-all-`Must`-release-PRs/core-integration,may-close-root;other-tiers-linked/nonblocking|
-|Sync|Fresh-fetch;reconfirm-head/base-before-sync/merge|
-|Failure|Block-siblings;use-authorized-revert-PR/follow-up-child|
-|Transition|Re-read-draft/Development/Project-status/closure/linked-PRs|
+The detailed plan belongs in the owning Issue's `## Implementation plan` section. Follow the
+canonical [planning and implementation boundary](../../../GITHUB_WORKFLOW.md#planning-and-implementation-boundary);
+keep the summary brief, verify readiness before implementation, and preserve appropriate
+status when resuming.
 
-```bash
-issue_url="$(gh issue create --repo "$repository" --title "$title" --body-file "$body" --label "$type" --label "$area")"
-item_id="$(gh project item-add "$project_number" --owner "$organization" --url "$issue_url" --format json --jq .id)"
-gh project item-edit --id "$item_id" --project-id "$project_id" --field-id "$field_id" --single-select-option-id "$option_id"
-gh project item-edit --id "$item_id" --project-id "$project_id" --field-id "$iteration_field_id" --iteration-id "$iteration_id"
-gh api --method POST "repos/$repository/issues/$parent/sub_issues" -F sub_issue_id="$child_id"
-gh api --method POST "repos/$repository/issues/$child/dependencies/blocked_by" -F issue_id="$blocker_id"
-```
+1. Search open and closed Issues; reuse the owning item when possible.
+2. For nontrivial work, verify the Issue body and native Requirement field, native
+   hierarchy/dependencies, Project #1 membership, Project Size/Iteration/Status, milestone,
+   labels, owner, and accepted base. Follow canonical
+   [planning metadata](../../../GITHUB_WORKFLOW.md#planning-metadata) for field ownership.
+3. Keep one delivery unit on one Issue. Create children only as a known set of at least two
+   independently useful, necessary siblings.
+4. Before first implementation, move an unblocked executable leaf to `Ready`; implementation
+   moves it to `In progress`. Preserve the appropriate current status when resuming.
+5. Create `issue-<number>-<slug>` from the accepted base through the Issue Development link,
+   then add one sibling worktree. Verify repository, branch, HEAD, ancestry, and porcelain.
 
-Record parent branch/start-SHA; name `issue-<n>-<slug>`; use sibling-worktree; preserve
-primary changes. Children need clean/current/GitHub-present parent commits. Legacy
-traceability requires authorized linked PR; stop if unlinked. Keep one worktree/branch; never recreate/
-replace/rebase/force-update/reset/checkout/clean/revert to match.
+Use native sub-Issue and dependency relations. Preserve successful IDs after a partial
+failure; repair missing state without duplication. New scope repeats the planning gate.
 
-```bash
-gh api graphql -f query='mutation($r:ID!,$i:ID!,$o:GitObjectID!,$n:String!){createLinkedBranch(input:{repositoryId:$r,issueId:$i,oid:$o,name:$n}){linkedBranch{ref{name target{oid}}}}}' -F r="$repo_id" -F i="$issue_id" -F o="$base_oid" -f n="$branch"
-git fetch origin "$branch"
-git worktree add --track -b "$branch" "$worktree" "origin/$branch"
-pwd -P
-git rev-parse --show-toplevel
-git branch --show-current
-git rev-parse HEAD
-git merge-base HEAD "$base_oid"
-git merge-base --is-ancestor "$base_oid" HEAD
-git status --porcelain=v1 -z --untracked-files=all | od -An -tx1
-git status --porcelain=v1 -z --untracked-files=all | shasum -a 256
-```
+## Deliver
 
-Match handoff capability/identity/ancestry/targets and porcelain bytes/hash/paths. Before
-other task reads/writes, verify Development and Project `Linked pull requests`:
+Follow [COMMIT_POLICY.md](../../../COMMIT_POLICY.md) and, when applicable,
+[DEPENDENCY_POLICY.md](../../../DEPENDENCY_POLICY.md). Do not reset, clean, rebase, force-push,
+or overwrite unrelated changes.
 
-```bash
-gh api graphql -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){linkedBranches(first:20){nodes{ref{name}}}}}}' -F o="$organization" -F r="$repository_name" -F n="$issue"
-gh project item-list "$project_number" --owner "$organization" --limit 100 --format json --jq '.items[]|select(.content.number=='"$issue"')|.["linked pull requests"]'
-```
+Create a draft PR when useful and mark it ready only after its description, scope, affected
+verification, docs, diff, base, and Development/Project links are current. Use `Refs #N` for
+partial work and `Closes #N` only for a completing PR to `main`.
 
-Release accepts only authorized leaf squashes at current tip and approved-main sync; fixes
-use leaves. Sync release into leaf; run affected checks. Follow commit policy; squash
-coherently identifies Issue/PR. Record SHAs; fast-forward clean parent `--ff-only`; inspect/verify.
-Final release merge verifies SHA/closure/`Done`/milestone.
+At ready-for-review, follow [review routing and closure](../../../GITHUB_WORKFLOW.md#asynchronous-review-and-ci):
+record the rationale, choose one provider selector, and request through the managed workflow
+while affected CI starts. Reconcile numbered rounds before requesting another. Medium
+feedback is optional through round 2; round 3 onward accepts only confirmed High/Critical
+defects. Stop at verified closure without requiring another clean AI review. Preserve review
+history across head/base changes and provider switches; never routinely request both providers.
+Mutating automation requires `workflow:managed`. Recheck current base/head, final-diff
+inspection, blocker dispositions, approvals, checks, and mergeability before manual GitHub
+squash merge. Do not enable auto-merge or merge queue. Include the owning Issue in the squash
+commit message.
 
-```bash
-gh pr create --draft --base "$base" --head "$branch" --body "Refs #$issue"
-gh pr ready "$pr"
-gh pr merge "$child_pr" --squash
-gh pr merge "$release_pr" --merge
-gh issue close "$issue" --repo "$repository"
-git worktree remove "$worktree"
-git worktree list --porcelain
-test ! -e "$worktree"
-```
+## Verify and finish
 
-Follow [completion](../../../GITHUB_WORKFLOW.md#completion-and-exceptions) and
-[cleanup](../../../GITHUB_WORKFLOW.md#worktree-disposition-and-cleanup) rules. Never auto-merge/
-close/clean or force-remove.
+Runtime code changes use `PYTHONPATH=src python -m tests.runner run` with exact IDs and JSON
+evidence. Runtime and test changes require full CI under TEST_POLICY.md.
+Policy/docs/templates/skills/development-agent configuration/module-index-only changes use
+static checks and diff review only.
+
+Confirmed Actions non-execution runs the same selected CI locally without another confirmation;
+explicit Copilot budget exhaustion falls back to Codex after non-delivery reconciliation.
+Use the canonical [fallback](../../../GITHUB_WORKFLOW.md#actions-non-execution-fallback) for
+source identity, complete evidence, direct root review requests/manual closure, and preserved
+numbered history. Local evidence never rewrites hosted failures or waives enforced checks and
+approvals. Unknown request outcomes remain outstanding and prevent another provider request.
+
+After merge, verify the merged SHA, review closure, current-head checks, Issue closure,
+Project `Done`, milestone disposition, Development links, and remote branch state. Before cleanup,
+record worktree/branch/HEAD/porcelain, integration, recoverability, and authority. Remove only
+clean integrated worktrees without force, delete branches separately, and verify absence.
+
+For PR review comments, follow [review comments](../../../GITHUB_WORKFLOW.md#review-comments):
+verify each finding against the current diff, reply with the applied change and verification or
+rejection rationale, then resolve the thread. Recheck outdated or drifted threads; do not
+resolve findings that still need work.
+
+Report all mutations, failures, preserved state, current head/base, and the next owner/action.

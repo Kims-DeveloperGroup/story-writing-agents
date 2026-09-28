@@ -6,7 +6,6 @@ import asyncio
 import hashlib
 import inspect
 import json
-import tempfile
 import unittest
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -96,7 +95,8 @@ from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
 
-from tests.helpers import initialize_test_workspace
+from tests.helpers import pristine_initialized_workspace
+from tests.test_agent_context_accounting import _expanded_context_payload, _shared_context_payload
 
 
 _PRIVATE_INPUT = "PRIVATE_CURRENT_INPUT_한🙂"
@@ -165,11 +165,11 @@ def _material(
     return ContextMaterial(entry, encoded)
 
 
-def _materials() -> tuple[ContextMaterial, ...]:
+def _materials(current_input: object = _PRIVATE_INPUT) -> tuple[ContextMaterial, ...]:
     return (
         _material(
             "current-input",
-            _PRIVATE_INPUT,
+            current_input if type(current_input) is str else json.dumps(current_input, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
             source_kind=ContextSourceKind.RUNTIME_INPUT,
             channel=ContextSemanticChannel.CURRENT_INPUT,
             priority=ContextPriority.P0_REQUIRED,
@@ -201,13 +201,12 @@ def _answer(
     content: str = _PRIVATE_ANSWER,
     used_handles: tuple[str, ...] = (),
 ) -> str:
+    del call, used_handles
     return json.dumps(
         {
-            "correlation": _correlation(call),
             "action": {
                 "kind": "answer",
                 "result": {"content": content},
-                "used_handles": list(used_handles),
             },
         },
         ensure_ascii=False,
@@ -221,10 +220,8 @@ def _search(
 ) -> str:
     return json.dumps(
         {
-            "correlation": _correlation(call),
             "action": {
                 "kind": "search",
-                "path_prefix": None,
                 "queries": [
                     {"text": "needle", "source_kinds": ["writing_artifact"]}
                 ],
@@ -244,7 +241,6 @@ def _read_search_hit(
     provider.used_handles = (handle,)
     return json.dumps(
         {
-            "correlation": _correlation(call),
             "action": {"kind": "read", "handles": [handle]},
         },
         separators=(",", ":"),
@@ -267,7 +263,6 @@ def _lead_answer(
 ) -> str:
     return json.dumps(
         {
-            "correlation": _correlation(call),
             "action": {
                 "kind": "answer",
                 "result": {
@@ -275,7 +270,6 @@ def _lead_answer(
                     "message": "Visible lead answer.",
                     "proposal": None,
                 },
-                "used_handles": [],
             },
         },
         separators=(",", ":"),
@@ -290,7 +284,6 @@ def _lead_answer_with_read(
     assert isinstance(framed, list) and framed[0] == "r"
     return json.dumps(
         {
-            "correlation": _correlation(call),
             "action": {
                 "kind": "answer",
                 "result": {
@@ -298,7 +291,6 @@ def _lead_answer_with_read(
                     "message": "Visible grounded lead answer.",
                     "proposal": None,
                 },
-                "used_handles": list(provider.used_handles),
             },
         },
         separators=(",", ":"),
@@ -347,7 +339,6 @@ class _ScriptedProvider:
         provider_id: str = "codex",
         definition_fingerprint: str = _DEFINITION_DIGEST,
         usage: ProviderUsage | None = None,
-        reference_usage: ProviderUsage | None = None,
         reference_operation_id: str | None = None,
     ) -> None:
         self.provider_id = provider_id
@@ -355,7 +346,6 @@ class _ScriptedProvider:
         self.reference_operation_id = reference_operation_id
         self.responses = list(responses)
         self.usage = usage
-        self.reference_usage = reference_usage
         self.calls: list[ContextProviderCallRequest] = []
         self.application_bytes: list[bytes] = []
         self.threads: dict[tuple[object, str], str] = {}
@@ -473,39 +463,9 @@ class _ScriptedProvider:
         self,
         request: ContextReferencePreludeRequest,
     ) -> ContextReferencePreludeResult:
-        schema = {"type": "object"}
-        payload = {"references": [{"content": "PRIVATE_REFERENCE_BODY"}]}
-        payload_json, accounted = account_provider_payload(
-            schema,
-            payload,
-            call_kind=ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
-            component_paths={
-                ("references",): ContextComponentKind.MANDATORY_REFERENCE_DESCRIPTOR,
-                ("references", 0, "content"): (
-                    ContextComponentKind.MANDATORY_REFERENCE_CONTENT
-                ),
-            },
-            mandatory_reference_paths=(("references", 0, "content"),),
-        )
-        accounting = ProviderCallAccounting(
-            accounted,
-            state=ProviderCallState.SUBMITTED,
-            actual_transport_utf8_bytes=len(payload_json),
-            usage=self.reference_usage,
-        )
-        key = self._key(request.scope, request.policy_fingerprint)
-        current = self.threads.get(key)
-        if current != request.expected_thread_id:
-            raise AssertionError("reference continuation mismatch")
-        thread_id = current
-        if thread_id is None:
-            thread_id = f"thread-{self._next_thread}"
-            self._next_thread += 1
-        self.threads[key] = thread_id
+        del request
         return ContextReferencePreludeResult(
             ({"content": "PRIVATE_REFERENCE_BODY", "ordinal": 1},),
-            thread_id,
-            accounting,
         )
 
     def complete_references(self, _scope: object, _policy: str) -> None:
@@ -529,9 +489,7 @@ class _ScriptedProvider:
 
 class ContextExecutionTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        temporary = tempfile.TemporaryDirectory(prefix="context-execution-")
-        self.addCleanup(temporary.cleanup)
-        self.workspace = initialize_test_workspace(temporary.name)
+        self.workspace = pristine_initialized_workspace(self)
         self.service = AgentContextService(self.workspace)
         self.repository = WritingArtifactRepository(self.workspace.root)
 
@@ -597,6 +555,7 @@ class ContextExecutionTestCase(unittest.IsolatedAsyncioTestCase):
         service: AgentContextService | None = None,
         authorities: dict[str, object] | None = None,
         answer_validator: Callable[[str, object], object] | None = None,
+        answer_diagnostic: Callable[[str], object] | None = None,
         event_sink: ContextExecutionEventSink | None = None,
         progress_sink: Callable[[ContextActionProgressEvent], None] | None = None,
         phase: str | None = None,
@@ -612,6 +571,7 @@ class ContextExecutionTestCase(unittest.IsolatedAsyncioTestCase):
             actual_request,
             provider,
             answer_validator=answer_validator,  # type: ignore[arg-type]
+            answer_diagnostic=answer_diagnostic,  # type: ignore[arg-type]
             event_sink=event_sink,
             progress_sink=progress_sink,
             phase=phase,
@@ -813,78 +773,30 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
                     ContextExecutionErrorCode.INVALID_VALUE,
                 )
 
-    def test_composite_policy_fingerprint_covers_wire_planning_and_every_limit(
-        self,
-    ) -> None:
+    def test_composite_policy_fingerprint_covers_wire_planning_and_every_limit(self) -> None:
         action_names = tuple(field.name for field in fields(ContextActionPolicy))
         source_names = tuple(field.name for field in fields(ContextSourcePolicy))
-        self.assertEqual(
-            action_names,
-            service_module._ACTION_POLICY_FINGERPRINT_FIELDS,
-        )
-        self.assertEqual(
-            source_names,
-            service_module._SOURCE_POLICY_FINGERPRINT_FIELDS,
-        )
+        self.assertEqual(action_names, service_module._ACTION_POLICY_FINGERPRINT_FIELDS)
+        self.assertEqual(source_names, service_module._SOURCE_POLICY_FINGERPRINT_FIELDS)
         self.assertEqual((len(action_names), len(source_names)), (19, 7))
-        baseline = service_module._execution_policy_fingerprint(
-            DEFAULT_CONTEXT_PLANNING_POLICY,
-            CONTEXT_ACTION_POLICY,
-            CONTEXT_SOURCE_POLICY,
-        )
-        self.assertEqual(
-            baseline,
-            "sha256:d8cfd92e6949dbb817dfb7253cff1865642493d46078fa1e042a64ef81740a18",
-        )
-
-        variants = {
-            service_module._execution_policy_fingerprint(
-                replace(DEFAULT_CONTEXT_PLANNING_POLICY, max_delta_depth=15),
-                CONTEXT_ACTION_POLICY,
-                CONTEXT_SOURCE_POLICY,
-            )
-        }
-        action_values = {
-            name: getattr(CONTEXT_ACTION_POLICY, name) for name in action_names
-        }
-        for name in action_names:
-            candidate = dict(action_values)
-            candidate[name] += 1
-            variants.add(
-                service_module._execution_policy_fingerprint(
-                    DEFAULT_CONTEXT_PLANNING_POLICY,
-                    SimpleNamespace(**candidate),  # type: ignore[arg-type]
-                    CONTEXT_SOURCE_POLICY,
-                )
-            )
-        source_values = {
-            name: getattr(CONTEXT_SOURCE_POLICY, name) for name in source_names
-        }
-        for name in source_names:
-            candidate = dict(source_values)
-            candidate[name] += 1
-            variants.add(
-                service_module._execution_policy_fingerprint(
-                    DEFAULT_CONTEXT_PLANNING_POLICY,
-                    CONTEXT_ACTION_POLICY,
-                    SimpleNamespace(**candidate),  # type: ignore[arg-type]
-                )
-            )
-        with mock.patch.object(
-            service_module,
-            "_CONTEXT_WIRE_VERSION",
-            "agent-context-wire-v4-test",
-        ):
-            variants.add(
-                service_module._execution_policy_fingerprint(
-                    DEFAULT_CONTEXT_PLANNING_POLICY,
-                    CONTEXT_ACTION_POLICY,
-                    CONTEXT_SOURCE_POLICY,
-                )
-            )
+        fingerprint = service_module._execution_policy_fingerprint
+        policy, actions, sources = DEFAULT_CONTEXT_PLANNING_POLICY, CONTEXT_ACTION_POLICY, CONTEXT_SOURCE_POLICY
+        baseline = fingerprint(policy, actions, sources)
+        self.assertEqual(service_module._CONTEXT_WIRE_VERSION, "agent-context-wire-v8")
+        with mock.patch.object(service_module, "_CONTEXT_WIRE_VERSION", "agent-context-wire-v7"):
+            self.assertEqual(fingerprint(policy, actions, sources),
+                             "sha256:d8cfd92e6949dbb817dfb7253cff1865642493d46078fa1e042a64ef81740a18")
+        variants = {fingerprint(replace(policy, max_delta_depth=15), actions, sources)}
+        for fields_, original, is_action in ((action_names, actions, True), (source_names, sources, False)):
+            values = {name: getattr(original, name) for name in fields_}
+            for name in fields_:
+                changed = SimpleNamespace(**{**values, name: values[name] + 1})
+                variants.add(fingerprint(policy, changed if is_action else actions,
+                                         sources if is_action else changed))
+        with mock.patch.object(service_module, "_CONTEXT_WIRE_VERSION", "agent-context-wire-v4-test"):
+            variants.add(fingerprint(policy, actions, sources))
         self.assertNotIn(baseline, variants)
         self.assertEqual(len(variants), 28)
-
 
 class ContextExecutionLifecycleTests(ContextExecutionTestCase):
     async def test_search_and_read_emit_exact_content_free_transient_progress(self) -> None:
@@ -956,7 +868,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             (2, 1, 0),
         )
 
-    async def test_reference_prelude_is_subordinate_to_lead_physical_limit(
+    async def test_local_reference_load_does_not_consume_lead_physical_limit(
         self,
     ) -> None:
         reference = MandatoryReferenceReservation(
@@ -974,7 +886,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         request = self.request(
             invocation_kind=ContextInvocationKind.LEAD,
             result_contract=_LEAD_RESULT_CONTRACT,
-            physical_call_limit=2,
+            physical_call_limit=1,
             reference_operation_id="reference-operation",
             mandatory_references=(reference,),
         )
@@ -985,7 +897,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
 
         result = await self.invoke(provider, request)
 
-        self.assertEqual(len(result.provider_calls), 2)
+        self.assertEqual(len(result.provider_calls), 1)
         self.assertEqual(len(provider.calls), 1)
         self.assertEqual(provider.calls[0].payload["q"][1], "a")
         self.assertEqual(provider.calls[0].payload["q"][3][0], 0)
@@ -993,7 +905,8 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
     async def test_no_action_reserves_before_provider_and_commits_exact_call(
         self,
     ) -> None:
-        request = self.request()
+        current = {**_shared_context_payload()["i"], "input": _PRIVATE_INPUT}
+        request = self.request(materials=_materials(current))
         provider = _ScriptedProvider(
             (_answer,),
             usage=ProviderUsage(input_tokens=0, output_tokens=3),
@@ -1013,7 +926,8 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.assertEqual(len(provider.calls), 1)
         self.assertEqual(hook_calls, 1)
         self.assertEqual(provider.finalizers[0].calls, [("accepted", None)])
-        self.assertEqual(set(provider.calls[0].payload), {"c", "q", "i"})
+        self.assertEqual(set(provider.calls[0].payload), {"c", "q", "i", "context_objects", "context_encoding"})
+        self.assertEqual(_expanded_context_payload(provider.calls[0].payload)["i"], current)
         self.assertEqual(provider.calls[0].payload["q"][0], "conversation")
         self.assertIsNone(provider.calls[0].expected_thread_id)
         self.assertEqual(result.provider_calls[0].accounting.usage, provider.usage)
@@ -1078,14 +992,11 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             ),
         )
         schemas = tuple(canonical_provider_json(call.schema) for call in provider.calls)
-        self.assertEqual(len(set(schemas)), 3)
+        self.assertEqual(len(set(schemas)), 2)
         for call in provider.calls:
             outer = call.schema
             self.assertIs(outer["additionalProperties"], False)
-            self.assertEqual(
-                outer["properties"]["correlation"]["enum"],
-                [_correlation(call)],
-            )
+            self.assertEqual(set(outer["properties"]), {"action"})
             action = outer["properties"]["action"]
             variants = action.get("anyOf", [action])
             answer = next(
@@ -1093,10 +1004,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
                 for variant in variants
                 if variant["properties"]["kind"].get("enum") == ["answer"]
             )
-            self.assertEqual(
-                answer["properties"]["used_handles"]["maxItems"],
-                CONTEXT_ACTION_POLICY.max_cumulative_handles,
-            )
+            self.assertEqual(set(answer["properties"]), {"kind", "result"})
         self.assertTrue(all(len(_correlation(call)) == 43 for call in provider.calls))
         self.assertEqual(len({_correlation(call) for call in provider.calls}), 3)
         self.assertEqual(
@@ -1127,28 +1035,30 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             provider.currentness_observations,
         )
 
-    async def test_compatible_ready_is_delta_and_provider_history_loss_bootstraps(
-        self,
-    ) -> None:
-        provider = _ScriptedProvider((_answer, _answer, _answer))
-        first = await self.invoke(
-            provider,
-            self.request(operation_id="operation-1", result_correlation_id="result-1"),
-        )
-        second = await self.invoke(
-            provider,
-            self.request(operation_id="operation-2", result_correlation_id="result-2"),
-        )
+    async def test_compatible_ready_is_delta_and_provider_history_loss_bootstraps(self) -> None:
+        provider = _ScriptedProvider((_answer,) * 4)
+        current = _shared_context_payload()["i"]
+        def request(index):
+            return self.request(operation_id=f"operation-{index}", result_correlation_id=f"result-{index}",
+                                materials=_materials(current))
+        with mock.patch.object(service_module, "_CONTEXT_WIRE_VERSION", "agent-context-wire-v7"):
+            old_service = AgentContextService(self.workspace)
+        first = await self.invoke(provider, request(1), service=old_service)
+        second = await self.invoke(provider, request(2))
         self.assertIs(first.projection_accounting.mode, ContextDeliveryMode.BOOTSTRAP)
-        self.assertIs(second.projection_accounting.mode, ContextDeliveryMode.DELTA)
-        self.assertEqual(provider.calls[1].expected_thread_id, first.provider_thread_id)
+        self.assertIs(second.projection_accounting.mode, ContextDeliveryMode.BOOTSTRAP)
+        self.assertIsNone(provider.calls[1].expected_thread_id)
+        self.assertNotEqual(first.provider_thread_id, second.provider_thread_id)
+        third = await self.invoke(provider, request(3))
+        self.assertIs(third.projection_accounting.mode, ContextDeliveryMode.DELTA)
+        self.assertEqual(provider.calls[2].expected_thread_id, second.provider_thread_id)
         provider.threads.clear()
-        third = await self.invoke(
-            provider,
-            self.request(operation_id="operation-3", result_correlation_id="result-3"),
-        )
-        self.assertIs(third.projection_accounting.mode, ContextDeliveryMode.BOOTSTRAP)
-        self.assertIsNone(provider.calls[2].expected_thread_id)
+        fourth = await self.invoke(provider, request(4))
+        self.assertIs(fourth.projection_accounting.mode, ContextDeliveryMode.BOOTSTRAP)
+        self.assertIsNone(provider.calls[3].expected_thread_id)
+        for call in provider.calls:
+            self.assertEqual(list(call.payload["context_objects"]), ["o1"])
+            self.assertEqual(_expanded_context_payload(call.payload)["i"], current)
 
     async def test_explicit_bootstrap_retires_reinspects_and_replaces_active_thread(
         self,
@@ -1315,7 +1225,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         )
         self.assertIs(result.projection_accounting.mode, ContextDeliveryMode.BOOTSTRAP)
 
-    async def test_reference_prelude_is_separate_and_preserves_authorization(
+    async def test_reference_load_is_local_and_preserves_authorization(
         self,
     ) -> None:
         reference = MandatoryReferenceReservation(
@@ -1339,10 +1249,10 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             reference_operation_id="reference-operation",
         )
         result = await self.invoke(provider, request)
-        self.assertEqual(len(result.provider_calls), 2)
+        self.assertEqual(len(result.provider_calls), 1)
         self.assertIs(
             result.provider_calls[0].accounting.payload.call_kind,
-            ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
+            ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL,
         )
         self.assertEqual(result.authorization.mandatory_references, (reference,))
         self.assertEqual(provider.completed_references, 1)
@@ -1525,7 +1435,6 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
         ) -> str:
             return json.dumps(
                 {
-                    "correlation": _correlation(call),
                     "action": {
                         "kind": "read",
                         "handles": list(private_values),
@@ -1589,7 +1498,7 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
         )
         self.assertIsNone(inspection.record.ready_checkpoint)
 
-    async def test_correlation_mismatch_rejects_normally_and_during_redecode(
+    async def test_removed_correlation_field_is_rejected_without_disclosure(
         self,
     ) -> None:
         private_correlation = "PRIVATE critique prose\x1b]unsafe\x07"
@@ -1615,10 +1524,7 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
                 (_search, _read_search_hit, _search, _read_search_hit, mismatch),
             ),
         )
-        expected = (
-            "contextual provider response is invalid: `correlation` does not match the "
-            "current request correlation token"
-        )
+        expected = "contextual provider action is malformed"
         for label, responses in cases:
             with self.subTest(label=label):
                 request = self.request(
@@ -1664,7 +1570,7 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
                     [
                         (
                             "rejected",
-                            ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH,
+                            ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
                         )
                     ],
                 )
@@ -1691,7 +1597,17 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
         def invalid_output(
             call: ContextProviderCallRequest, provider: _ScriptedProvider
         ) -> str:
-            return _answer(call, provider, used_handles=(forged,))
+            del call, provider
+            return json.dumps(
+                {
+                    "action": {
+                        "kind": "answer",
+                        "result": {"content": _PRIVATE_ANSWER},
+                        "used_handles": [forged],
+                    }
+                },
+                separators=(",", ":"),
+            )
 
         request = self.request(session_id="session-output")
         provider = _ScriptedProvider((invalid_output,))
@@ -2065,7 +1981,7 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
         ]
         self.assertEqual(terminal_indexes, [len(events) - 1])
 
-    async def test_reference_prelude_usage_is_aggregated_only_when_every_call_exact(
+    async def test_local_reference_load_does_not_change_provider_usage(
         self,
     ) -> None:
         reference = MandatoryReferenceReservation(
@@ -2080,15 +1996,9 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
             _digest(b"reference"),
             9,
         )
-        for label, reference_usage, answer_usage, expected in (
-            (
-                "exact",
-                ProviderUsage(input_tokens=11),
-                ProviderUsage(input_tokens=13),
-                24,
-            ),
-            ("missing-reference", None, ProviderUsage(input_tokens=13), None),
-            ("missing-answer", ProviderUsage(input_tokens=11), None, None),
+        for label, answer_usage, expected in (
+            ("exact", ProviderUsage(input_tokens=13), 13),
+            ("missing-answer", None, None),
         ):
             with self.subTest(label=label):
                 request = self.request(
@@ -2101,7 +2011,6 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
                 provider = _ScriptedProvider(
                     (_answer,),
                     reference_operation_id=f"reference-{label}",
-                    reference_usage=reference_usage,
                     usage=answer_usage,
                 )
                 events: list[ContextExecutionEvent] = []
@@ -2314,157 +2223,7 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
             self.inspect(provider, request).record.state, ContextLedgerRecordState.READY
         )
 
-    async def test_generation_loss_blocks_deferred_and_invalidates_committed_checkpoint(
-        self,
-    ) -> None:
-        failure = RuntimeError("synthetic execution-workspace generation loss")
 
-        deferred_provider = _ScriptedProvider((_answer,))
-        deferred_lost = False
-
-        def require_deferred_current() -> None:
-            if deferred_lost:
-                raise failure
-
-        deferred_provider.currentness_hook = require_deferred_current
-        deferred_request = self.request(
-            operation_id="deferred-generation-loss",
-            result_correlation_id="deferred-generation-loss-result",
-        )
-        continuation = self.service.session_continuation(
-            deferred_request.session_id,
-            deferred_request.agent_id,
-        )
-        with self.assertRaises(RuntimeError) as caught:
-            async with continuation:
-                result = await self.service.invoke(
-                    deferred_request,
-                    deferred_provider,
-                    continuation=continuation,
-                    session_history=SessionHistorySnapshot(
-                        deferred_request.session_id,
-                        (),
-                    ),
-                    publication_validator=lambda: True,
-                    **self.authorities(deferred_request),
-                )
-                self.assertTrue(result.checkpoint_pending)
-                deferred_lost = True
-        self.assertIs(caught.exception, failure)
-        deferred_inspection = ContextLedger(self.workspace).inspect(
-            ContextLedgerKey(
-                continuation.identity.checkpoint_scope(),
-                deferred_provider.provider_id,
-            )
-        )
-        self.assertIs(
-            deferred_inspection.record.state,
-            ContextLedgerRecordState.TAINTED,
-        )
-        self.assertIsNone(deferred_inspection.record.ready_checkpoint)
-        self.assertEqual(
-            deferred_provider.finalizers[0].calls,
-            [
-                (
-                    "post_response_runtime_failure",
-                    ContextProviderTerminalCode.CONTEXT_RUNTIME_FAILED,
-                )
-            ],
-        )
-
-        committed_provider = _ScriptedProvider((_answer,))
-        committed_lost = False
-
-        def require_committed_current() -> None:
-            if committed_lost:
-                raise failure
-
-        committed_provider.currentness_hook = require_committed_current
-        committed_request = self.request(
-            operation_id="committed-generation-loss",
-            result_correlation_id="committed-generation-loss-result",
-        )
-        original_commit = ContextLedger.commit_attempt
-
-        def lose_after_commit(
-            ledger: ContextLedger,
-            *args: object,
-            **kwargs: object,
-        ):
-            nonlocal committed_lost
-            commit = original_commit(ledger, *args, **kwargs)
-            committed_lost = True
-            return commit
-
-        with mock.patch.object(
-            ContextLedger,
-            "commit_attempt",
-            autospec=True,
-            side_effect=lose_after_commit,
-        ), self.assertRaises(RuntimeError) as caught:
-            await self.invoke(committed_provider, committed_request)
-        self.assertIs(caught.exception, failure)
-        committed_inspection = self.inspect(committed_provider, committed_request)
-        self.assertIs(
-            committed_inspection.record.state,
-            ContextLedgerRecordState.STALE,
-        )
-        self.assertIsNone(committed_inspection.record.ready_checkpoint)
-        self.assertEqual(
-            committed_provider.finalizers[0].calls,
-            [
-                (
-                    "post_response_runtime_failure",
-                    ContextProviderTerminalCode.CONTEXT_RUNTIME_FAILED,
-                )
-            ],
-        )
-
-    async def test_deferred_fallback_retains_auto_minted_provider_until_abort(
-        self,
-    ) -> None:
-        provider = _ScriptedProvider((_answer,))
-        request = self.request(
-            operation_id="deferred-fallback",
-            result_correlation_id="deferred-fallback-result",
-        )
-        continuation = self.service.session_continuation(
-            request.session_id,
-            request.agent_id,
-        )
-
-        async with continuation:
-            result = await self.service.invoke(
-                request,
-                provider,
-                continuation=continuation,
-                session_history=SessionHistorySnapshot(request.session_id, ()),
-                publication_validator=lambda: False,
-                **self.authorities(request),
-            )
-            self.assertTrue(result.checkpoint_pending)
-            self.assertEqual(provider.invocation_depth, 1)
-            self.assertEqual(provider.invocation_exits, 0)
-
-        self.assertEqual(provider.invocation_depth, 0)
-        self.assertEqual(provider.invocation_exits, 1)
-        inspection = ContextLedger(self.workspace).inspect(
-            ContextLedgerKey(
-                continuation.identity.checkpoint_scope(),
-                provider.provider_id,
-            )
-        )
-        self.assertIs(inspection.record.state, ContextLedgerRecordState.TAINTED)
-        self.assertIsNone(inspection.record.ready_checkpoint)
-        self.assertEqual(
-            provider.finalizers[0].calls,
-            [
-                (
-                    "post_response_runtime_failure",
-                    ContextProviderTerminalCode.CONTEXT_RUNTIME_FAILED,
-                )
-            ],
-        )
 
     async def test_authoritative_failure_remains_primary_when_terminal_sink_fails(
         self,
@@ -2490,6 +2249,7 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
     async def test_failure_markers_cover_budget_action_source_answer_and_cancel(
         self,
     ) -> None:
+        answer_failure = RuntimeError("PRIVATE_ANSWER")
         budget_service = AgentContextService(
             self.workspace,
             planning_policy=ContextPlanningPolicy(
@@ -2532,7 +2292,7 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
                     result_correlation_id="answer",
                 ),
                 lambda _answer, _authorization: (_ for _ in ()).throw(
-                    RuntimeError("PRIVATE_ANSWER")
+                    answer_failure
                 ),
                 ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED,
             ),
@@ -2552,14 +2312,23 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
         for label, service, provider, request, validator, marker in cases:
             with self.subTest(label=label):
                 events: list[ContextExecutionEvent] = []
-                with self.assertRaises(BaseException):
+                with mock.patch.object(_RecordingFinalizer, "set_validation_details",
+                                       side_effect=RuntimeError("PRIVATE_DETAIL_SINK"), create=True) as retained, \
+                        self.assertRaises(BaseException) as caught:
                     await self.invoke(
                         provider,
                         request,
                         service=service,
                         answer_validator=validator,
+                        answer_diagnostic=lambda _answer: ("PRIVATE_CALLBACK_DIAGNOSTIC",),
                         event_sink=events.append,
                     )
+                if label == "answer":
+                    self.assertIs(caught.exception, answer_failure)
+                    self.assertNotIn("PRIVATE_CALLBACK_DIAGNOSTIC", repr(retained.call_args_list))
+                    retained.assert_called()
+                    self.assertEqual(provider.finalizers[0].calls,
+                                     [("rejected", ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED)])
                 kinds = [event.kind for event in events]
                 self.assertIn(marker, kinds)
                 self.assertEqual(

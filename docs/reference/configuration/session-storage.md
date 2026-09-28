@@ -476,8 +476,8 @@ and a closed nested outcome vocabulary. `session_id` and `scope_id` match
 correlation identity. Automatic capture generates
 `exchange_<32 lowercase hexadecimal characters>` and shares it across the
 request, optional response, and terminal attempt. All records also preserve the
-exact supplied session, scope kind/ID, agent, and provider; a reference prelude
-inherits its outer conversation/debate scope. The store itself does not infer
+exact supplied session, scope kind/ID, agent, and provider. Local reference
+loading creates no provider exchange. The store itself does not infer
 or enforce record grouping, outcome transitions, provider behavior, or a
 required `no_response` body.
 
@@ -518,11 +518,11 @@ The request fields are exactly `call_kind`, `payload`, `prior_thread_id`, and
 `response_text`, `thread_id`, and nullable `usage`; non-null usage has exactly
 `cached_input_tokens`, `input_tokens`, and `output_tokens`. These four response
 fields remain unchanged when no diagnostic is supplied. An optional
-`response_diagnostic` adds the completed native process's integer `exit_code`
-and `stdout`/`stderr` stream objects. Each stream has exactly `encoding` and
-`data`: `utf-8` with strict decoded text, or `base64` when the original bytes
-are not valid UTF-8. Both encodings preserve the original stream bytes before
-the storage prefix bound is applied.
+`response_diagnostic` preserves nullable `error` and `status`, the completed native
+process's integer `exit_code`, and a `stderr` stream object. The stream has
+exactly `encoding` and `data`: `utf-8` with strict decoded text, or `base64`
+when the original bytes are not valid UTF-8. The encoding preserves the
+original stream bytes before the storage prefix bound is applied.
 
 A recovered Antigravity native `ERROR` includes that diagnostic alongside its
 returned response fields. A completed Antigravity failure instead uses exactly
@@ -532,9 +532,10 @@ returned response fields. A completed Antigravity failure instead uses exactly
 {
   "provider_failure": true,
   "response_diagnostic": {
+    "error": null,
     "exit_code": 1,
-    "stderr": {"data": "/w==", "encoding": "base64"},
-    "stdout": {"data": "", "encoding": "utf-8"}
+    "status": null,
+    "stderr": {"data": "/w==", "encoding": "base64"}
   }
 }
 ```

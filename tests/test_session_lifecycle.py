@@ -8,7 +8,6 @@ import inspect
 import json
 import multiprocessing
 import os
-import re
 import socket
 import stat
 import subprocess
@@ -197,72 +196,8 @@ def _resolve_import_from_base(
     return ".".join(base_parts)
 
 
-def _internal_module_graph(
-    repository_root: Path,
-    source_paths: set[str],
-) -> dict[str, set[str]]:
-    """Build unique direct internal edges without importing production code."""
-
-    modules_by_path = {
-        path: _module_name_from_source_path(path) for path in source_paths
-    }
-    module_names = set(modules_by_path.values())
-    if len(module_names) != len(modules_by_path):
-        raise AssertionError("multiple indexed paths resolve to one module")
-    graph = {module: set() for module in module_names}
-    for source_path, source_module in sorted(modules_by_path.items()):
-        tree = ast.parse(
-            (repository_root / source_path).read_text(encoding="utf-8"),
-            filename=source_path,
-        )
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                targets = (alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom):
-                targets = (
-                    _resolve_import_from_base(
-                        source_module,
-                        source_path,
-                        node,
-                    ),
-                )
-            else:
-                continue
-            graph[source_module].update(
-                target for target in targets if target in module_names
-            )
-    return graph
 
 
-def _first_directed_cycle(graph: dict[str, set[str]]) -> tuple[str, ...] | None:
-    """Return the deterministic first directed cycle, including its closure."""
-
-    state: dict[str, int] = {}
-    stack: list[str] = []
-    positions: dict[str, int] = {}
-
-    def visit(module: str) -> tuple[str, ...] | None:
-        state[module] = 1
-        positions[module] = len(stack)
-        stack.append(module)
-        for dependency in sorted(graph[module]):
-            if state.get(dependency, 0) == 0:
-                cycle = visit(dependency)
-                if cycle is not None:
-                    return cycle
-            elif state[dependency] == 1:
-                return tuple(stack[positions[dependency] :] + [dependency])
-        stack.pop()
-        positions.pop(module)
-        state[module] = 2
-        return None
-
-    for module in sorted(graph):
-        if state.get(module, 0) == 0:
-            cycle = visit(module)
-            if cycle is not None:
-                return cycle
-    return None
 
 
 def _debug_records(workspace: Any) -> list[dict[str, Any]]:
@@ -367,7 +302,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             ],
         )
         self.assertIs(story_writing_agents.SessionLifecycleState, SessionLifecycleState)
-        self.assertEqual(len(story_writing_agents.__all__), 104)
+        self.assertEqual(len(story_writing_agents.__all__), 106)
 
         expected = {
             "get_session_lifecycle": ("self", "session_id"),
@@ -566,7 +501,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             ]
         )
         source_files = tuple(source_root.rglob("*.py"))
-        self.assertEqual(len(source_files), 143)
+        self.assertEqual(len(source_files), 147)
         self.assertTrue(
             {
                 source_root / "artifact_proposals.py",
@@ -598,54 +533,6 @@ class SessionLifecycleContractTests(unittest.TestCase):
         )
         self.assertNotIn(source_root / "conversations.py", source_files)
         self.assertNotIn(source_root / "workspace.py", source_files)
-        index = (source_root.parents[1] / "PYTHON_MODULE_INDEX.md").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("Importable production units indexed: 143.", index)
-        self.assertIn("Direct internal dependency edges indexed: 586.", index)
-        self.assertIn("all-import AST graph has 588 edges", index)
-        self.assertIn("Its two annotation-only edges are", index)
-        self.assertIn("Directed internal dependency cycles indexed: 0.", index)
-        headings = tuple(re.findall(r"^### `([^`]+)`$", index, flags=re.MULTILINE))
-        expected_modules: set[str] = set()
-        for path in source_files:
-            relative = path.relative_to(source_root).with_suffix("")
-            parts = relative.parts
-            if parts[-1] == "__init__":
-                parts = parts[:-1]
-            expected_modules.add(".".join(("story_writing_agents", *parts)))
-        self.assertEqual(len(headings), 143)
-        self.assertEqual(len(set(headings)), 143)
-        self.assertEqual(set(headings), expected_modules)
-        self.assertIn("facade contains exactly 158 exports", index)
-        self.assertIn("context and events owners contain 30 and 120 respectively", index)
-        self.assertIn("Exactly 30 owning-module names in `__all__`", index)
-        self.assertIn("Exactly 120 owning-module names in `__all__`", index)
-        self.assertIn(
-            "`artifact_proposals` owner contains exactly 16 exports",
-            index,
-        )
-        self.assertIn(
-            "project-root facade retains only its immutable conversation-",
-            index,
-        )
-        self.assertIn("exports no schema-v2 collaboration name", index)
-        self.assertIn("Exactly 63 names in `__all__`", index)
-        for module_name in (
-            "story_writing_agents.conversations",
-            "story_writing_agents.conversations.catalog",
-            "story_writing_agents.conversations.context",
-            "story_writing_agents.conversations.events",
-            "story_writing_agents.artifact_proposals",
-            "story_writing_agents.conversation_storage.filesystem",
-            "story_writing_agents.workspace",
-            "story_writing_agents.workspace.core",
-            "story_writing_agents.workspace.initialization",
-            "story_writing_agents.workspace.schema",
-            "story_writing_agents.writing_artifacts.change_sets",
-            "story_writing_agents.writing_artifacts.relationship_policy",
-        ):
-            self.assertIn(f"### `{module_name}`", index)
         environment = dict(os.environ, PYTHONPATH=str(source_root.parent))
         result = subprocess.run(
             [

@@ -48,6 +48,7 @@ from ..writing_artifacts.filesystem_sources import (
 )
 from ..writing_artifacts.catalog import CORE_ARTIFACT_PATHS
 from ..writing_artifacts.references import (
+    MAX_VIEWER_UTF8_BYTES,
     ArtifactContentSnapshot,
     reference_source_kind,
 )
@@ -853,9 +854,15 @@ class WritingArtifactSourceAdapter:
             descriptors: list[ContextSourceDescriptor] = []
             inventory_bytes = 0
             retry = False
-            for path in paths:
+            offset = 0
+            while offset < len(paths):
+                remaining_bytes = policy.max_inventory_body_utf8_bytes - inventory_bytes
+                width = min(4, max(1, remaining_bytes // MAX_VIEWER_UTF8_BYTES))
+                group = paths[offset:offset + width]
                 try:
-                    descriptor = self._capture(path, policy).descriptor
+                    snapshots = self._capture_inventory_group(
+                        group, policy, inventory_bytes
+                    )
                 except ContextSourceError as error:
                     if attempt == 0 and error.code in {
                         ContextSourceErrorCode.SOURCE_DRIFT,
@@ -864,15 +871,51 @@ class WritingArtifactSourceAdapter:
                         retry = True
                         break
                     raise
-                inventory_bytes += descriptor.utf8_bytes
-                if inventory_bytes > policy.max_inventory_body_utf8_bytes:
-                    raise _source_error(ContextSourceErrorCode.INVENTORY_LIMIT_EXCEEDED)
-                descriptors.append(descriptor)
+                group_descriptors = tuple(snapshot.descriptor for snapshot in snapshots)
+                del snapshots
+                for descriptor in group_descriptors:
+                    inventory_bytes += descriptor.utf8_bytes
+                    if inventory_bytes > policy.max_inventory_body_utf8_bytes:
+                        raise _source_error(ContextSourceErrorCode.INVENTORY_LIMIT_EXCEEDED)
+                    descriptors.append(descriptor)
+                offset += len(group)
             if retry:
                 continue
             if paths == self._list_paths(policy):
                 return tuple(descriptors)
         raise _source_error(ContextSourceErrorCode.SOURCE_DRIFT)
+
+    def _capture_inventory_group(
+        self,
+        paths: tuple[str, ...],
+        policy: ContextSourcePolicy,
+        inventory_bytes: int,
+    ) -> tuple[ContextSourceSnapshot, ...]:
+        """Compare one bounded group, retaining ordered inventory failure semantics."""
+
+        capture_error = ContextSourceErrorCode.SOURCE_DRIFT
+        try:
+            for locator in paths:
+                self._validate_locator(locator)
+                if self._allowed_paths is not None and locator not in self._allowed_paths:
+                    raise _source_error(ContextSourceErrorCode.AUTHORITY_MISMATCH)
+            for _attempt in range(2):
+                first = self._capture_source_group_once(paths, policy)
+                second = self._capture_source_group_once(paths, policy)
+                if first == second:
+                    return second
+                del first, second
+        except ContextSourceError as error:
+            capture_error = error.code
+
+        # An earlier source or aggregate limit must win over a later batch error.
+        # Diagnostics never turn the failed group into an accepted inventory.
+        for locator in paths:
+            descriptor = self._capture(locator, policy).descriptor
+            inventory_bytes += descriptor.utf8_bytes
+            if inventory_bytes > policy.max_inventory_body_utf8_bytes:
+                raise _source_error(ContextSourceErrorCode.INVENTORY_LIMIT_EXCEEDED)
+        raise _source_error(capture_error)
 
     def canonical_core_statuses(
         self,
@@ -900,10 +943,14 @@ class WritingArtifactSourceAdapter:
             paths: tuple[str, ...],
         ) -> tuple[ContextSourceStatusReceipt, ...]:
             present_paths = frozenset(paths)
+            snapshots = self._capture_core_sources(present_paths, policy)
+            self._require_absent_cores(
+                tuple(path for path in CORE_ARTIFACT_PATHS if path not in present_paths),
+                policy,
+            )
             receipts: list[ContextSourceStatusReceipt] = []
             for ordinal, locator in enumerate(CORE_ARTIFACT_PATHS, start=1):
                 if locator not in present_paths:
-                    self._require_absent_core(locator, policy)
                     receipts.append(
                         ContextSourceStatusReceipt(
                             evidence_id=f"status_{ordinal}",
@@ -918,7 +965,7 @@ class WritingArtifactSourceAdapter:
                         )
                     )
                     continue
-                snapshot = self._capture(locator, policy)
+                snapshot = snapshots[locator]
                 descriptor = snapshot.descriptor
                 receipts.append(
                     ContextSourceStatusReceipt(
@@ -956,6 +1003,85 @@ class WritingArtifactSourceAdapter:
             if first_paths == second_paths == final_paths and first == second:
                 return second
         raise _source_error(ContextSourceErrorCode.SOURCE_DRIFT)
+
+    def _capture_core_sources(
+        self,
+        present_paths: frozenset[str],
+        policy: ContextSourcePolicy,
+    ) -> dict[str, ContextSourceSnapshot]:
+        """Double-capture only the four fixed core sources through one owner batch."""
+
+        core_paths = tuple(path for path in CORE_ARTIFACT_PATHS if path in present_paths)
+        if not core_paths:
+            return {}
+        capture_error = ContextSourceErrorCode.SOURCE_DRIFT
+        try:
+            for _attempt in range(2):
+                first = self._capture_source_group_once(core_paths, policy)
+                second = self._capture_source_group_once(core_paths, policy)
+                if first == second:
+                    return dict(zip(core_paths, second))
+                del first, second
+        except ContextSourceError as error:
+            capture_error = error.code
+
+        # Diagnose in the original core order, including absence guards. A failed
+        # batch is never accepted even if these fresh individual captures succeed.
+        for locator in CORE_ARTIFACT_PATHS:
+            if locator in present_paths:
+                self._capture(locator, policy)
+            else:
+                self._require_absent_core(locator, policy)
+        raise _source_error(capture_error)
+
+    def _capture_source_group_once(
+        self,
+        paths: tuple[str, ...],
+        policy: ContextSourcePolicy,
+    ) -> tuple[ContextSourceSnapshot, ...]:
+        """Convert at most four exact ordered source snapshots without new authority."""
+
+        if not paths or len(paths) > 4 or len(set(paths)) != len(paths):
+            raise _source_error(ContextSourceErrorCode.SOURCE_DRIFT)
+        snapshots = self._read_artifact_snapshots(paths)
+        observed_paths = tuple(snapshot.path for snapshot in snapshots)
+        if observed_paths != paths:
+            if observed_paths == tuple(
+                path for path in paths if path in observed_paths
+            ):
+                raise _source_error(ContextSourceErrorCode.SOURCE_MISSING)
+            raise _source_error(ContextSourceErrorCode.SOURCE_DRIFT)
+        return tuple(
+            self._snapshot_from_capture(locator, policy, snapshot)
+            for locator, snapshot in zip(paths, snapshots)
+        )
+
+    def _require_absent_cores(
+        self,
+        locators: tuple[str, ...],
+        policy: ContextSourcePolicy,
+    ) -> None:
+        """Prove a fixed core subset absent through one guarded owner operation."""
+        if not locators:
+            return
+        failure: ContextSourceErrorCode | None = None
+        absent = False
+        try:
+            absent = self._repository.are_sources_absent(
+                locators, max_bytes=policy.max_source_utf8_bytes
+            )
+        except ArtifactSourceInvalidUtf8Error:
+            failure = ContextSourceErrorCode.SOURCE_INVALID_UTF8
+        except ArtifactSourceNulError:
+            failure = ContextSourceErrorCode.SOURCE_NUL
+        except WorkspaceSecurityError:
+            failure = ContextSourceErrorCode.SOURCE_UNSAFE
+        except WorkspaceFormatError:
+            failure = ContextSourceErrorCode.SOURCE_UNAVAILABLE
+        if failure is not None:
+            raise _source_error(failure)
+        if absent is not True:
+            raise _source_error(ContextSourceErrorCode.SOURCE_DRIFT)
 
     def _require_absent_core(
         self,
@@ -1013,15 +1139,14 @@ class WritingArtifactSourceAdapter:
             raise _source_error(ContextSourceErrorCode.AUTHORITY_MISMATCH)
         return locator
 
-    def _capture_once(
+    def _read_artifact_snapshots(
         self,
-        locator: str,
-        policy: ContextSourcePolicy,
-    ) -> ContextSourceSnapshot:
+        paths: tuple[str, ...],
+    ) -> tuple[ArtifactContentSnapshot, ...]:
         snapshots: tuple[ArtifactContentSnapshot, ...] | None = None
         capture_error: ContextSourceErrorCode | None = None
         try:
-            snapshots = self._repository.read_current((locator,))
+            snapshots = self._repository.read_current(paths)
         except FileNotFoundError:
             capture_error = ContextSourceErrorCode.SOURCE_MISSING
         except ArtifactSourceInvalidUtf8Error:
@@ -1034,11 +1159,28 @@ class WritingArtifactSourceAdapter:
             capture_error = ContextSourceErrorCode.SOURCE_UNAVAILABLE
         if capture_error is not None:
             raise _source_error(capture_error)
+        if snapshots is None:
+            raise _source_error(ContextSourceErrorCode.SOURCE_DRIFT)
+        return snapshots
+
+    def _capture_once(
+        self,
+        locator: str,
+        policy: ContextSourcePolicy,
+    ) -> ContextSourceSnapshot:
+        snapshots = self._read_artifact_snapshots((locator,))
         if snapshots == ():
             raise _source_error(ContextSourceErrorCode.SOURCE_MISSING)
-        if snapshots is None or len(snapshots) != 1:
+        if len(snapshots) != 1:
             raise _source_error(ContextSourceErrorCode.SOURCE_DRIFT)
-        captured = snapshots[0]
+        return self._snapshot_from_capture(locator, policy, snapshots[0])
+
+    def _snapshot_from_capture(
+        self,
+        locator: str,
+        policy: ContextSourcePolicy,
+        captured: ArtifactContentSnapshot,
+    ) -> ContextSourceSnapshot:
         if captured.path != locator:
             raise _source_error(ContextSourceErrorCode.SOURCE_DRIFT)
         if len(captured.content) > policy.max_source_utf8_bytes:
@@ -1572,7 +1714,7 @@ class ActiveDebateSourceAdapter:
             message: DebateMessage | None = None
             try:
                 if type(raw) is dict:
-                    message = DebateMessage(**raw)
+                    message = DebateMessage.from_dict(raw)
             except (TypeError, ValueError):
                 pass
             if message is None:

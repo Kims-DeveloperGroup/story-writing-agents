@@ -1081,6 +1081,8 @@ class PureControlFoundationTests(unittest.TestCase):
         for kind in (
             KeyKind.UP,
             KeyKind.DOWN,
+            KeyKind.PAGE_UP,
+            KeyKind.PAGE_DOWN,
             KeyKind.SHIFT_UP,
             KeyKind.SHIFT_DOWN,
             KeyKind.TAB,
@@ -2026,21 +2028,40 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         self,
     ) -> None:
         driver, output = self._progress_driver()
+        fourth_frame_drawn = asyncio.Event()
+        real_sleep = asyncio.sleep
+
+        async def controlled_progress_sleep(_delay: float) -> None:
+            """Yield scheduling without retaining the production frame delay."""
+
+            await real_sleep(0)
+
+        def observed_renderer(frame: int) -> str:
+            if frame == 3:
+                fourth_frame_drawn.set()
+            return render_advisory_progress_frame(frame)
 
         async def operation() -> str:
-            await asyncio.sleep(0.38)
+            await fourth_frame_drawn.wait()
             driver.write_text("answer\n")
             return "done"
 
-        with mock.patch.object(
-            RawTerminalDriver,
-            "capabilities",
-            autospec=True,
-            return_value=capability(CapabilityProfile.ANSI),
+        with (
+            mock.patch.object(
+                RawTerminalDriver,
+                "capabilities",
+                autospec=True,
+                return_value=capability(CapabilityProfile.ANSI),
+            ),
+            mock.patch.object(
+                _driver.asyncio,
+                "sleep",
+                side_effect=controlled_progress_sleep,
+            ),
         ):
             result = asyncio.run(
                 driver.run_advisory_progress(
-                    operation(), render_advisory_progress_frame
+                    operation(), observed_renderer
                 )
             )
         rendered = output.getvalue()
@@ -2124,7 +2145,6 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         )
 
         async def operation_failure() -> str:
-            await asyncio.sleep(0.09)
             raise ValueError("operation failed")
 
         with capable, mock.patch.object(
@@ -2141,7 +2161,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         self.assertFalse(driver._progress_active)
 
         async def slow_operation() -> str:
-            await asyncio.sleep(0.3)
+            await asyncio.Event().wait()
             return "never reached"
 
         def broken_renderer(frame: int) -> str:
@@ -2149,13 +2169,27 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                 raise RuntimeError("tick failed")
             return "◐"
 
-        with capable, self.assertRaises(AdvisoryProgressError):
+        real_sleep = asyncio.sleep
+
+        async def controlled_progress_sleep(_delay: float) -> None:
+            """Reach the worker failure deterministically without wall-clock pacing."""
+
+            await real_sleep(0)
+
+        with (
+            capable,
+            mock.patch.object(
+                _driver.asyncio,
+                "sleep",
+                side_effect=controlled_progress_sleep,
+            ),
+            self.assertRaises(AdvisoryProgressError),
+        ):
             asyncio.run(driver.run_advisory_progress(slow_operation(), broken_renderer))
         self.assertFalse(driver._progress_active)
         self.assertIsNone(driver._progress_renderer)
 
         async def quick_operation() -> str:
-            await asyncio.sleep(0.09)
             return "done"
 
         with capable, mock.patch.object(
@@ -2186,7 +2220,6 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         )
 
         async def write_failure() -> str:
-            await asyncio.sleep(0.09)
             failing_driver.write_text("answer\n")
             return "unreachable"
 
@@ -3409,9 +3442,13 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
         terminal_root = package_root / "interactive_terminal"
         expected_dependencies = {
             "__init__.py": {"._advisory_progress", "._core"},
-            "_advisory_progress.py": {"..agent_context.actions", "..agent_context.progress"},
+            "_advisory_progress.py": {
+                "..agent_context.actions",
+                "..agent_context.progress",
+            },
             "_collaboration_view.py": {
                 "..conversations",
+                "..reply_trace",
                 "..specialist_routing",
                 "..writing_artifacts",
                 "._model",
@@ -3441,6 +3478,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
                 "..agent_context.progress",
                 "..agents",
                 "..conversations",
+                "..errors",
                 "..interactive_commands",
                 "._collaboration_view",
                 "._advisory_progress",

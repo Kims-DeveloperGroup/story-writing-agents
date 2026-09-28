@@ -51,26 +51,36 @@ card. A specialist card retains its exact request. Before an action, the card
 says `Preparing context`; once an action is known, it shows the indexed
 `SEARCH` or `READ` and whether it is running or completed.
 
-A SEARCH start displays every exact literal query as `Searching for: "..."`
+A SEARCH start displays its active literal query as `Searching for: "..."`
 and the exact requested resource/source-kind values (`runtime_input`,
 `agent_definition`, `writing_artifact`, `conversation`, `active_debate`, or
 `own_agent_state`). Its `Scope` includes those kinds and an optional safe
 workspace-relative artifact prefix after `under`. Completion replaces the
-start details with each safe relative result locator, its exact line or record
-range when bounded, and its UTF-8 byte count. It says `Found: no matches` when
-empty and `Results: truncated` when the bounded result set was truncated.
+start details with bounded result locators: sets of up to two entries display
+each safe relative result locator with its exact line or record range when
+bounded and its UTF-8 byte count, while larger sets summarize the count and
+latest locator. It says `Found: no matches` when empty and `Results: truncated`
+when the bounded result set was truncated.
 
 A READ start displays every selected safe relative locator and its exact whole,
 line, or record boundary. Completion retains those locators and ranges and adds
-the exact UTF-8 byte count for each retrieved selection. The frame never
-includes source snippets or excerpts, provider answers, absolute paths,
-credentials, or hidden reasoning.
+the exact UTF-8 byte count for each retrieved selection. SEARCH and READ cards never
+include source snippets or excerpts, provider answers, absolute paths,
+credentials, or hidden reasoning. During provider generation, active capable terminals may
+display transient status notices and a bounded rolling preview of streamed output;
+frame retention upon turn completion is mode-dependent as detailed below.
 
 The raw driver redraws the whole multiline frame in ANSI-capable and plain
-`NO_COLOR` modes and clears it before persistent output. Ordinary line-input,
-non-TTY, `TERM=dumb`, non-POSIX, and uncertain-capability paths await the same
-operation silently. Native authentication temporarily owns the terminal during
-recovery, but the same monotonic timer resumes afterward rather than restarting.
+`NO_COLOR` modes. When `/progress on` (expanded mode) is active during an agent
+turn, the frame remains visible upon turn completion as an interactive nested
+scroll view allowing inspection before proceeding. When `/progress off` (collapsed
+mode) is set, transient progress frames are cleared cleanly upon completion
+before persistent output. Non-turn background operations (such as startup storage
+activation, auth probes, and picker preparation) are always cleared upon completion.
+Ordinary line-input, non-TTY, `TERM=dumb`, non-POSIX, and uncertain-capability paths
+await the same operation silently. Native authentication temporarily owns the
+terminal during recovery, but the same monotonic timer resumes afterward rather
+than restarting.
 
 Intermediate SEARCH/READ cards are transient. After confirmed specialist work,
 persistent specialist panels follow proposal order. A successful panel includes
@@ -138,9 +148,9 @@ Optional conversation RAG is also a separate discovery layer.
 
 Detailed progress is transient presentation, not secure erasure. Terminal
 capture, a multiplexer, a remote terminal, accessibility tooling, or emulator
-scrollback may retain exact search queries and safe relative locators/ranges.
+scrollback may retain exact search queries, safe relative locators/ranges, and rolling streamed output previews.
 Treat such captured output as story metadata even though source bodies and
-provider answers are excluded.
+persisted records are excluded from progress frames.
 
 See [Agent-context design](../design/agent-context.md) and
 [privacy](../operations/privacy-and-provider.md#agent-context-progress-privacy).

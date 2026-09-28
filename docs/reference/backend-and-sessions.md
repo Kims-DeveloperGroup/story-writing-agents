@@ -74,20 +74,44 @@ server-side default. Provider reply prose and self-identification are never
 execution evidence.
 
 Runtime-built provider-managed definitions use the agent-context service and
-typed wire v7. Package-internal `story_session_context` remains capture and
+typed wire v8. Package-internal `story_session_context` remains capture and
 direct-request compatibility input; it is not the current built-in provider
-envelope. A content-free explicit-reference prelude remains separate, and
-context continuations carry only the new authorized observation. See
-[Agent-context design](../design/agent-context.md#typed-provider-wire-v7).
+envelope. Explicit writing-artifact references are authorized and loaded
+locally before the substantive provider call, and context continuations carry
+only the new authorized observation. See
+[Agent-context design](../design/agent-context.md#typed-provider-wire-v8).
 
 Both adapters receive the same provider-neutral `ProviderInvocation`, including
 byte-identical canonical schema and payload semantics. Codex receives the
 schema through `--output-schema <schema-file>`. Antigravity receives the same
 schema through `--json-schema <canonical-json>` and must return a root-object
 `structured_output` plus an exact `json_schema` echo. Those transport checks do
-not replace the shared runtime's validation of wire-v7 correlation, issued
+not replace the shared runtime's validation of runtime-owned correlation, issued
 handles, evidence IDs, Lead outcome matrix, input aliases, artifact authority,
 or confirmation.
+
+For FINALIZE, runtime supplies the current reviewed proposal identity through the
+optional keyword-only `AgentRequest.expected_reviewed_proposal` pair. When present,
+the schema requires that exact ID and digest. Existing callers may omit the pair;
+digest-format validation and the runtime's final stale-identity check still apply.
+The pair describes expected output and grants no publication or Apply authority.
+
+Successful `AgentReply`, `ConversationReply`, and retrieval replies carry a
+runtime-derived `ReplyTrace`. It reports only the role, normalized action,
+content-source labels, recovered field labels, and whether the reply came from
+the provider, the one repair call, or the safe runtime fallback. The trace is
+not requested from the provider and never contains prompt, reply, reference,
+or story bytes. Missing or invalid semantic output still receives one bounded
+repair; a second rejection returns a visible `action=none` fallback so the
+conversation remains usable without inferring authority.
+
+Direct Python `AgentReply` and `ConversationReply` values also expose
+`validation_details: tuple[str, ...]`. The ordered, bounded chunks describe
+trusted JSON paths, expected and actual types, or fixed rules for rejected
+structured replies; successful repair retains the original attempt's details,
+and exhausted repair retains both attempts' details. The tuple is empty when
+there are no findings. It contains no raw response values or unknown property
+names and grants no action authority.
 
 For Antigravity, runtime installs the selected definition at
 `.agents/agents/<agent-id>/agent.md` beneath the isolated
@@ -96,7 +120,7 @@ Fresh history uses `--new-project`; compatible history resumes the exact
 `--conversation` ID and its associated project. Runtime never passes
 `--project` or makes the canonical story root the Antigravity project. The exact
 request is one `--print` argument with empty stdin and
-`--input-format text --output-format json`. Its single JSON result must report
+`--input-format text --output-format json` (or `--output-format stream-json` when an active stream sink is bound for capable advisory progress). Its single JSON result (or terminal result extracted from stream-json events) must report
 `SUCCESS` and a safe `conversation_id` matching the retained ID on resume.
 Duplicate fields, non-finite numbers, trailing data, missing or non-object
 structured output, and a different schema echo fail transport validation;
@@ -251,8 +275,7 @@ of non-execution; there is no native automatic-retry guarantee.
 `WritingArtifactRepository.begin_reference_invocation()` and remains private;
 the provider-neutral request and action values are documented in
 [Agent contracts](agent-contracts.md#explicit-reference-read-contracts).
-Omitting the argument preserves the exact established payload, schema, provider
-call count, and repository-I/O-free path.
+Omitting the argument preserves the ordinary payload and provider call count.
 
 Before provider work, every referenced call validates the coordinator's exact
 content-free request type and synchronous methods. It also validates the bound
@@ -262,15 +285,12 @@ canonical role and these request correlations:
 | --- | --- |
 | `invoke()` | `agent_id` equals the request and bound definition; `phase` equals the debate phase value; `round_number` equals the request round. |
 | `converse()` | `agent_id` equals the request and bound definition; `phase="conversation"`; `round_number=None`. |
-| `converse_with_retrieval()` | `agent_id` equals the request and bound definition; `phase="conversation_retrieval"`; `round_number=None`. Retrieval action indices remain a separate `1..5` sequence. |
+| `converse_with_retrieval()` | `agent_id` equals the request and bound definition; `phase="conversation_retrieval"`; `round_number=None`. Accepted retrieval action indices advance separately from physical attempts; a structured repair repeats the current index. |
 
-The backend then holds the same provider-thread lock across a content-free
-prelude and the substantive work. The first provider result must be one
-`read_writing_artifacts` action that exactly echoes the full correlation and
-ordered path/range batch. A request-specific schema plus decoder and equality
-check rejects result-first, partial, reordered, duplicate, broadened, foreign,
-or malformed actions before selected content is returned. The private
-capability never enters the provider request.
+The backend loads the exact authorized path/range batch locally before the
+substantive provider call. Coordinator validation rejects partial, reordered,
+duplicate, broadened, foreign, or malformed requests before selected content is
+returned. The private capability never enters the provider request.
 
 After the exact action, selected strict-UTF-8 text appears once under
 `untrusted_writing_artifact_context` in the immediately following substantive
@@ -280,15 +300,23 @@ canonical roles follow this backend path; their prompt prose is not the
 enforcement mechanism. The full state and trust mapping is in
 [Canonical writing artifacts](writing-artifacts.md#provider-enforced-invocation-sequence).
 
-| One logical invocation | Without references | With references |
-| --- | ---: | ---: |
-| Direct conversation | 1 provider call | 2: prelude + reply |
-| One agent in one debate phase | 1 provider call | 2: prelude + phase reply |
-| Retrieval turn | 1–5 provider calls | 2–6: prelude + unchanged 1–5 retrieval loop |
+That acceptance sequence applies to provider and successfully repaired replies.
+If structured repair is exhausted, the safe local fallback remains visible but
+the reference invocation and operation terminate with `provider_failure`; they
+record neither `result_received` nor `accepted`.
 
-The backend performs no automatic retry. Cancellation, provider or workflow
-failure, drift, and invalid action/correlation terminate the same one-use
-coordinator with a content-free outcome. After provider state has advanced,
+| One logical structured invocation | Without references | With references |
+| --- | ---: | ---: |
+| Direct conversation | 1 initial call plus at most 1 repair | Unchanged; references add no provider call |
+| One agent in one debate phase | 1 initial call plus at most 1 repair | Unchanged; references add no provider call |
+| Retrieval turn | 1–5 total physical calls, including repairs | Unchanged 1–5-call total |
+
+The backend performs no automatic top-level retry or replay. One rejected
+structured value can receive one bounded repair; retrieval repairs consume the
+same five-physical-call budget as ordinary retrieval actions, and the last call
+is answer-only. Cancellation, provider or workflow failure, drift, and invalid
+action/correlation terminate the same one-use coordinator with a content-free
+outcome. After provider state has advanced,
 the compatible thread is tainted where required so a later call cannot assume
 clean continuation. An explicit retry or replacement needs a new top-level
 operation with a fresh capture, correlation, coordinator, capability, and
@@ -412,9 +440,8 @@ no viewer dependency or static import.
 One successful capture lifecycle uses a fresh
 `exchange_<32 lowercase hexadecimal characters>` identity and preserves the
 exact supplied session, canonical agent, provider, and one conversation or
-debate kind/ID across its records. A writing-artifact reference prelude is a
-separate physical call with its own exchange ID, but it inherits the same outer
-conversation/debate correlation as the substantive call.
+debate kind/ID across its records. Local writing-artifact reference loading
+creates no separate provider exchange.
 
 The nested canonical content shapes are:
 
@@ -430,9 +457,11 @@ The request shape has exactly `call_kind`, `payload`, `prior_thread_id`, and
 `input_tokens`, `output_tokens`, and `cached_input_tokens`. A narrowly recovered
 Antigravity result also has `response_diagnostic`. A provider failure response
 has `provider_failure: true` and an optional `response_diagnostic`. That
-diagnostic contains integer `exit_code` plus `stdout` and `stderr` objects whose
-exact completed bytes use `utf-8` or `base64` encoding. The outcome shape has
-exactly `code` and `outcome`. These JSON values are stored in the outer
+diagnostic contains nullable `error` and `status`, integer `exit_code`, and a
+`stderr` object whose exact completed bytes use `utf-8` or `base64` encoding.
+The outcome contains `code` and `outcome`; a rejected provider reply can also
+include optional `validation_details` with trusted property paths and validation
+rules for that physical call. These JSON values are stored in the outer
 schema-v1 record's string `content`, subject to the 262,144-byte complete-code-
 point prefix. Full UTF-8 byte and Python Unicode-code-point counts plus SHA-256
 describe the complete capture input, so a truncated record is not the complete
@@ -489,8 +518,8 @@ The request append is attempted before invocation. A valid raw
 decode/domain validation, the separate rejected-response artifact, and thread
 persistence. A provider invocation failure or timeout instead attempts a
 failure response even when no native diagnostic is available, then its terminal
-outcome. Completed Codex and Antigravity failures can attach native stdout,
-stderr, and exit status;
+outcome. Completed Codex and Antigravity failures can attach native error,
+status, stderr, and exit status;
 native login bytes never enter this lifecycle. Exactly one terminal append is
 attempted when the relevant backend/context owner knows the outcome. Capture
 state advances before append; all capture failures are suppressed and never

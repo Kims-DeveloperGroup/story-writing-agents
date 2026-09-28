@@ -302,7 +302,7 @@ class ArtifactRelationshipSurfaceTests(RelationshipTestCase):
                 )
                 self.assertNotIn(name, story_writing_agents.__all__)
                 self.assertFalse(hasattr(story_writing_agents, name))
-        self.assertEqual(len(story_writing_agents.__all__), 104)
+        self.assertEqual(len(story_writing_agents.__all__), 106)
         self.assertEqual(
             tuple(code.value for code in ArtifactRelationshipErrorCode),
             tuple(code.value for code in _ERROR_MESSAGES),
@@ -1664,7 +1664,7 @@ assert tuple(relationship_policy.__all__) == tuple(sys.argv[2].split(','))
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
-    def test_ast_graph_counts_cycles_and_module_index_match_accepted_brief(
+    def test_ast_graph_counts_and_cycles_match_accepted_brief(
         self,
     ) -> None:
         modules: dict[str, Path] = {}
@@ -1725,8 +1725,8 @@ assert tuple(relationship_policy.__all__) == tuple(sys.argv[2].split(','))
                     resolved = resolve(target)
                     if resolved is not None and resolved != module:
                         edges.add((module, resolved))
-        self.assertEqual(len(modules), 143)
-        self.assertEqual(len(edges), 586)
+        self.assertEqual(len(modules), 147)
+        self.assertEqual(len(edges), 616)
         relationship_name = "story_writing_agents.writing_artifacts.relationship_policy"
         self.assertEqual(
             {target for source, target in edges if source == relationship_name},
@@ -1760,14 +1760,6 @@ assert tuple(relationship_policy.__all__) == tuple(sys.argv[2].split(','))
 
         for module in modules:
             visit(module)
-        index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8")
-        self.assertIn("Importable production units indexed: 143.", index)
-        self.assertIn("Direct internal dependency edges indexed: 586.", index)
-        self.assertIn("Directed internal dependency cycles indexed: 0.", index)
-        self.assertIn(
-            "### `story_writing_agents.writing_artifacts.relationship_policy`",
-            index,
-        )
 
 
 if __name__ == "__main__":

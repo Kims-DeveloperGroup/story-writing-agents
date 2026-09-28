@@ -187,7 +187,7 @@ class ConversationStorageTransferSurfaceTests(unittest.TestCase):
             self.assertFalse(hasattr(storage_package, old_name))
             self.assertFalse(hasattr(story_writing_agents, old_name))
         self.assertEqual(len(storage_package.__all__), 63)
-        self.assertEqual(len(story_writing_agents.__all__), 104)
+        self.assertEqual(len(story_writing_agents.__all__), 106)
 
         report = ConversationStorageTransferReport(
             operation=ConversationStorageTransferOperation.TRANSFER,

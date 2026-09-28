@@ -1174,8 +1174,11 @@ are evidence, not a vote.
 
 Only `propose` produces an immutable `ArtifactReviewedProposal`. That value
 contains visible rationale, user impact, limitations, every review, unresolved
-inputs, and exact candidate/history identity, while requiring all of these to
-remain false:
+inputs, and exact candidate/history identity. The provider supplies only its
+review decision and message; runtime uses the message as rationale, adds the
+no-change impact, and reports no additional limitations when unresolved inputs
+are empty or lists the exact unresolved reviewer input IDs otherwise. The value
+requires all of these to remain false:
 
 ```text
 artifact_write_occurred = false
@@ -1348,6 +1351,12 @@ own ordered history:
 | `accepted` | Another full revalidation succeeded after the recorded result. | The exact invocation evidence chain was accepted before the backend returned its reply. The result's optional operation ID lets Python callers inspect the content-free history. |
 | `terminated` | A fixed coded failure ended the invocation. | No accepted reply exists for the attempt. A retry needs a fresh correlation, coordinator, and one-use capability; it cannot reuse this evidence. |
 
+When structured repair exhaustion selects a safe runtime fallback, the backend
+terminates the invocation and reference operation with `provider_failure` from
+their current nonterminal states. It records neither `result_received` nor
+`accepted`. The local fallback reply may still be visible, but its
+`origin=runtime_fallback` trace does not change that reference history.
+
 Guarded runtime preparation parses the indicators first. For a nonempty
 reference batch it then acquires and validates one non-inheritable, duplicated
 session-root descriptor before the repository can create `CAPTURED`
@@ -1450,8 +1459,14 @@ models. An internal caller first captures a nonempty batch and calls
    backend decodes the selected strict-UTF-8 bytes and adds them once, in the
    same order, under `untrusted_writing_artifact_context` on the immediately
    following substantive payload.
-5. A structurally valid result advances through `result_received`, final
-   repository revalidation, and `accepted` before the backend returns it.
+5. A structurally valid provider or repaired result advances through
+   `result_received`, final repository revalidation, and `accepted` before the
+   backend returns it.
+
+If the bounded structured repair is exhausted instead, the backend returns its
+safe local fallback only after terminating the invocation and operation with
+`provider_failure`; the fallback path skips both `result_received` and
+`accepted`.
 
 The selected content is not copied into the task, user text, candidate,
 blackboard messages, conversation history, retrieval observations, durable
@@ -1581,6 +1596,12 @@ unsupported extensions, `}`, invalid/oversize paths, case or normalization
 aliases, symlinks, hard-linked files, special files, internal state, and outside
 paths are excluded. These source rules do not relax the stricter publication
 identity in [Exact output paths](#exact-output-paths).
+
+Host code can use `WritingArtifactRepository.are_sources_absent(paths, max_bytes=...)`
+to check a nonempty, ordered, unique subset of the four core paths in one guarded
+source operation. It returns `True` only when every requested path is physically
+missing, and `False` at the first readable file. It preserves strict source-read
+limits and errors; an unsafe entry excluded from discovery does not prove absence.
 
 | State | Source behavior | Publication behavior |
 | --- | --- | --- |

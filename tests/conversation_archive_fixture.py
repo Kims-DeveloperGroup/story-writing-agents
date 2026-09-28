@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -21,7 +20,7 @@ from story_writing_agents.conversation_storage import (
 )
 
 from tests.collaboration_contract_fixture import contract_batches, store_batch
-from tests.helpers import initialize_test_workspace
+from tests.helpers import pristine_initialized_workspace
 
 
 CREATED_AT = "2026-01-01T00:00:00+00:00"
@@ -189,11 +188,9 @@ def representative_archive() -> ConversationArchive:
 
 
 def initialized_workspace(test_case: unittest.TestCase) -> Workspace:
-    """Return a temporary initialized workspace owned by one test case."""
+    """Return an independent already-ready workspace owned by one test case."""
 
-    temporary = tempfile.TemporaryDirectory()
-    test_case.addCleanup(temporary.cleanup)
-    return initialize_test_workspace(temporary.name)
+    return pristine_initialized_workspace(test_case)
 
 
 def workspace_snapshot(root: Path) -> dict[str, bytes | None]:

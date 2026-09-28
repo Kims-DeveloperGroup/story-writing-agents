@@ -32,6 +32,7 @@ from story_writing_agents.models import (
     AgentReplyNextPhase,
 )
 from story_writing_agents.orchestrator import StoryRuntime
+from story_writing_agents.reply_trace import ReplyTrace, ReplyTraceOrigin
 
 from tests.test_collaboration_events import _reviewed_artifact_proposal
 
@@ -83,6 +84,29 @@ def _reply_digest(reply: AgentReply) -> str:
 
 
 class ConsensusRuntimeCorrelationTests(unittest.TestCase):
+    def test_provider_trace_survives_consensus_mapping(self) -> None:
+        invocation = _invocation(ConsensusPhase.DRAFT, EXECUTION_SPECIALIST, 1)
+        trace = ReplyTrace(
+            EXECUTION_SPECIALIST,
+            "candidate",
+            ("current_input", "debate_history"),
+            (),
+            ReplyTraceOrigin.PROVIDER,
+        )
+        content = "new candidate"
+        reply = replace(AgentReply.candidate("r0", content), trace=trace)
+        authored = candidate_material_handle(
+            hashlib.sha256(content.encode()).hexdigest()
+        )
+
+        result = StoryRuntime.map_consensus_provider_reply(
+            invocation,
+            reply,
+            authored_material=authored,
+        )
+
+        self.assertEqual(result.trace, trace)
+
     def test_all_six_routes_map_exact_typed_results(self) -> None:
         candidate_text = "new candidate"
         authored = candidate_material_handle(
@@ -203,48 +227,65 @@ class ConsensusRuntimeCorrelationTests(unittest.TestCase):
                         authored_material=material,
                     )
 
+    def test_runtime_fallback_maps_draft_failure_and_later_deadlocks(self) -> None:
+        fallback = AgentReply.deadlock("r0", "provider response rejected twice")
+
+        draft = StoryRuntime.map_consensus_provider_reply(
+            _invocation(ConsensusPhase.DRAFT, EXECUTION_SPECIALIST, 1),
+            fallback,
+        )
+        self.assertIs(draft.kind, ConsensusPhaseOutputKind.FAILURE)
+        self.assertIsNone(draft.candidate_material)
+
+        for phase, agent_id in (
+            (ConsensusPhase.REPAIR, EXECUTION_SPECIALIST),
+            (ConsensusPhase.SYNTHESIS, LEAD_ORCHESTRATOR),
+            (ConsensusPhase.FINALIZATION, LEAD_ORCHESTRATOR),
+        ):
+            with self.subTest(phase=phase):
+                result = StoryRuntime.map_consensus_provider_reply(
+                    _invocation(phase, agent_id, 1),
+                    fallback,
+                )
+                self.assertIs(result.kind, ConsensusPhaseOutputKind.DEADLOCK)
+                self.assertIs(result.candidate_material, _CANDIDATE)
+                self.assertTrue(result.deadlocked)
+                self.assertIsNone(fallback.reviewed_proposal_id)
+                self.assertIsNone(fallback.reviewed_proposal_digest)
+
+        with self.assertRaisesRegex(ValueError, "cannot retain authored material"):
+            StoryRuntime.map_consensus_provider_reply(
+                _invocation(ConsensusPhase.REPAIR, EXECUTION_SPECIALIST, 1),
+                fallback,
+                authored_material=_CANDIDATE,
+            )
+
     def test_finalization_handoff_exposes_review_only_lineage(self) -> None:
         reviewed = _reviewed_artifact_proposal()
         invocation = _invocation(ConsensusPhase.FINALIZATION, LEAD_ORCHESTRATOR, 1)
-        reply = AgentReply.finalization(
-            "r0", reviewed.proposal_id, reviewed.proposal_digest
-        )
+        reply = AgentReply.finalization("r0", reviewed.proposal_id, reviewed.proposal_digest)
         result = StoryRuntime.map_consensus_provider_reply(invocation, reply)
-        projection = SimpleNamespace(
-            current_artifact_state=ArtifactProposalState.REVIEWED,
-            current_reviewed_artifact_proposal=reviewed,
-            current_artifact_application_request=None,
-            current_artifact_application_result=None,
-        )
+        projection = SimpleNamespace(current_artifact_state=ArtifactProposalState.REVIEWED,
+            current_reviewed_artifact_proposal=reviewed, current_artifact_application_request=None,
+            current_artifact_application_result=None)
         event_store = mock.Mock()
         event_store.read_context.return_value = projection
-        runtime = SimpleNamespace(
-            conversation_storage_services=SimpleNamespace(event_store=event_store)
-        )
-
-        handoff = StoryRuntime.consensus_artifact_review_handoff(
-            runtime, invocation, reply, result
-        )
+        runtime = SimpleNamespace(conversation_storage_services=SimpleNamespace(event_store=event_store))
+        handoff = StoryRuntime.consensus_artifact_review_handoff(runtime, invocation, reply, result)
         self.assertIs(handoff.reviewed_proposal, reviewed)
         self.assertFalse(handoff.reviewed_proposal.artifact_write_occurred)
         self.assertFalse(handoff.reviewed_proposal.apply_authority_granted)
         self.assertFalse(handoff.reviewed_proposal.git_action_occurred)
         event_store.read_context.assert_called_once_with("session_a", "conversation_a")
-
-        with self.assertRaises(ValueError):
-            StoryRuntime.consensus_artifact_review_handoff(
-                runtime,
-                invocation,
-                AgentReply.finalization(
-                    "r0", "different-proposal", "sha256:" + "f" * 64
-                ),
-                result,
-            )
+        for proposal_id, digest in (("different-proposal", reviewed.proposal_digest),
+                                    (reviewed.proposal_id, "sha256:" + "f" * 64)):
+            stale = AgentReply.finalization("r0", proposal_id, digest)
+            stale_result = StoryRuntime.map_consensus_provider_reply(invocation, stale)
+            with self.assertRaises(ValueError):
+                StoryRuntime.consensus_artifact_review_handoff(runtime, invocation, stale, stale_result)
         projection.current_artifact_application_request = object()
         with self.assertRaises(ValueError):
-            StoryRuntime.consensus_artifact_review_handoff(
-                runtime, invocation, reply, result
-            )
+            StoryRuntime.consensus_artifact_review_handoff(runtime, invocation, reply, result)
 
 
 if __name__ == "__main__":

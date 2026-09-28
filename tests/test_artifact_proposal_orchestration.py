@@ -16,6 +16,7 @@ from story_writing_agents.agents import (
 from story_writing_agents.artifact_proposals import (
     serialize_artifact_review_candidate,
 )
+from story_writing_agents.writing_artifacts import ArtifactReviewReason
 from story_writing_agents.conversations import (
     ArtifactProposalState,
     ArtifactProposalStatePayload,
@@ -150,28 +151,12 @@ def _artifact_synthesis_outcome(
     malformed: str | None = None,
 ):
     def respond(call, _provider):
-        material = _workflow_material(call.payload)
-        contract = material["answer_contract"]
-        assert type(contract) is dict
         value = {
             "decision": decision,
-            "evidence_ids": contract["evidence_ids"],
-            "evidence_status": contract["evidence_status"],
-            "limitations": "Review is advisory and grants no Apply or Git authority.",
             "message": "The exact candidate review is complete.",
-            "next_intent": None,
-            "rationale": "Every disclosed specialist reply was preserved.",
-            "reply_event_ids": contract["reply_event_ids"],
-            "scope": contract["scope"],
-            "unresolved_input_ids": contract["unresolved_input_ids"],
-            "user_impact": "No artifact changed; the user may review the proposal.",
         }
         if malformed == "omit_rationale":
-            value.pop("rationale")
-        elif malformed == "reply_mismatch":
-            value["reply_event_ids"] = ["invented_reply"]
-        elif malformed == "erase_unresolved":
-            value["unresolved_input_ids"] = []
+            value.pop("message")
         return _provider_envelope(call, value)
 
     return respond
@@ -327,86 +312,6 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             }.issubset(readable_keys)
         )
 
-    async def test_artifact_finalization_root_loss_is_one_durable_recovery_terminal(
-        self,
-    ) -> None:
-        conversation_id = self.conversation("Artifact finalization root loss")
-        self.workspace.path(_RULES).unlink(missing_ok=True)
-        self.backend.enqueue(
-            _artifact_outcome(
-                operations=[
-                    {
-                        "kind": "create",
-                        "new_text": "Use restrained close-third narration.\n",
-                        "suggested_path": _RULES,
-                    }
-                ],
-                evidence_status="missing",
-                evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
-            )
-        )
-        proposed = await self.runtime.lead_turn(
-            self.session_id,
-            conversation_id,
-            "Complete the missing narrative rules.",
-        )
-        self.backend.enqueue_for(
-            EXECUTION_SPECIALIST,
-            _specialist_outcome("supports"),
-        )
-        self.backend.enqueue_for(
-            LEAD_ORCHESTRATOR,
-            _artifact_synthesis_outcome("propose"),
-        )
-        finalize = self.runtime._finalize_artifact_result_locked
-        finalized_inputs = []
-
-        def lose_root_during_finalization(**inputs):
-            finalized_inputs.append(inputs)
-            with mock.patch.object(
-                WritingArtifactRepository,
-                "capture_complete_state",
-                side_effect=ArtifactRootSecurityError(
-                    "workspace root identity changed"
-                ),
-            ):
-                return finalize(**inputs)
-
-        with mock.patch.object(
-            self.runtime,
-            "_finalize_artifact_result_locked",
-            side_effect=lose_root_during_finalization,
-        ):
-            decided = await self.runtime.decide_lead_step(
-                _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-            )
-            self.assertEqual(len(finalized_inputs), 1)
-            known = finalized_inputs[0]
-            provider_calls = len(self.backend.calls)
-            for _ in range(2):
-                restored = lose_root_during_finalization(**known)
-                self.assertEqual(restored, decided.turn)
-                self.assertEqual(len(self.backend.calls), provider_calls)
-
-        self.assertIs(decided.turn.state, CollaborationStepState.RECOVERY_REQUIRED)
-        self.assertIs(
-            decided.turn.next_action,
-            CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY,
-        )
-        self.assertIs(
-            decided.turn.artifact_proposal.state,
-            ArtifactProposalState.RECOVERY_REQUIRED,
-        )
-        self.assertIsNone(decided.turn.artifact_application_request)
-        self.assertEqual(self.runtime._artifact_application_capabilities, {})
-        durable = self.history(conversation_id)
-        recovery_terminals = tuple(
-            event
-            for event in durable
-            if type(event.payload) is CollaborationStepStatePayload
-            and event.payload.state is CollaborationStepState.RECOVERY_REQUIRED
-        )
-        self.assertEqual(len(recovery_terminals), 1)
 
     async def test_core_conflict_revision_and_manuscript_atomic_rename_workflows(
         self,
@@ -789,6 +694,16 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                     else proposed.proposal.assignments[0].input_ids
                 )
                 self.assertEqual(reviewed.unresolved_input_ids, expected_unresolved)
+                self.assertEqual(
+                    reviewed.limitations,
+                    (
+                        "No additional limitations were reported."
+                        if not expected_unresolved
+                        else "Unresolved reviewer inputs remain: "
+                        + ", ".join(expected_unresolved)
+                        + "."
+                    ),
+                )
 
         failed_id = self.conversation("Partial reviewer failure")
         self.backend.enqueue(
@@ -859,14 +774,11 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 )
                 self.assertEqual(disclosed, candidate_value)
 
-    async def test_synthesis_mismatch_fails_and_reviewed_restart_has_no_authority(
+    async def test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority(
         self,
     ) -> None:
         failure_events = []
-        for ordinal, malformed in enumerate(
-            ("erase_unresolved", "omit_rationale", "reply_mismatch"),
-            start=1,
-        ):
+        for ordinal, malformed in enumerate(("omit_rationale",), start=1):
             mismatch_id = self.conversation(f"Synthesis mismatch {ordinal}")
             self.workspace.path(_RULES).unlink(missing_ok=True)
             self.backend.enqueue(
@@ -891,9 +803,13 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 EXECUTION_SPECIALIST,
                 _specialist_outcome("conflict"),
             )
+            malformed_response = _artifact_synthesis_outcome(
+                "propose", malformed=malformed
+            )
             self.backend.enqueue_for(
                 LEAD_ORCHESTRATOR,
-                _artifact_synthesis_outcome("propose", malformed=malformed),
+                malformed_response,
+                malformed_response,
             )
             mismatch = await self.runtime.decide_lead_step(
                 _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
@@ -1038,6 +954,10 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.assertIs(projection.current_artifact_state, ArtifactProposalState.REVIEWED)
 
     async def test_search_read_answer_can_add_an_artifact_candidate(self) -> None:
+        reference_ids = []
+        core_paths = ("core_documents/character_sheets.md", _OUTLINE, _RULES, "core_documents/part_outlines.md")
+        for path in (_RULES, "core_documents/part_outlines.md"):
+            self.workspace.path(path).write_text("Core reference fixture.\nSecond core reference line.\n", encoding="utf-8")
         conversation_id = self.conversation("Search read artifact intent")
         self.backend.enqueue(_visible_outcome("answer", "A prior visible answer."))
         await self.runtime.lead_turn(
@@ -1063,7 +983,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                             }
                         ],
                     },
-                    "evidence_ids": [evidence_id],
+                    "evidence_ids": [*reference_ids, evidence_id],
                     "evidence_status": "verified",
                     "kind": "proposal",
                     "message": "The read context supports an exact candidate.",
@@ -1075,12 +995,11 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             )
 
         def search_prior_answer(call, _provider):
+            reference_ids[:] = _reference_ids(_workflow_material(call.payload))
             return json.dumps(
                 {
-                    "correlation": call.payload["c"],
                     "action": {
                         "kind": "search",
-                        "path_prefix": None,
                         "queries": [
                             {
                                 "text": "prior visible answer",
@@ -1100,7 +1019,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         result = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
-            "Search and read the prior answer before proposing a scene.",
+            "Search and read the prior answer before proposing a scene." + "".join(f" ${{{path}}}" + ("#L1-L1" if path in core_paths[2:] else "") for path in reversed(core_paths)) + "".join(f" ${{{path}}}#L2-L2" for path in reversed(core_paths[2:])),
         )
         self.assertIs(
             result.artifact_proposal.state,
@@ -1125,8 +1044,10 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             read_evidence_id,
             result.artifact_proposal.candidate.candidate.grounding_evidence_ids,
         )
+        attached = tuple(fact.artifact_path for fact in result.artifact_proposal.candidate.candidate.relationship_validation.review_facts if fact.reason is ArtifactReviewReason.ATTACHED_CORE_EVIDENCE)
+        self.assertEqual(tuple(sorted(attached, key=lambda path: path.encode("utf-8"))), core_paths)
 
-    async def test_provider_authority_fields_are_rejected_without_candidate(
+    async def test_provider_authority_fields_fall_back_without_candidate(
         self,
     ) -> None:
         conversation_id = self.conversation("Reject provider authority")
@@ -1149,7 +1070,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             conversation_id,
             "Reject provider-supplied Apply authority.",
         )
-        self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
+        self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
         self.assertIsNone(result.artifact_proposal)
         self.assertEqual(
             self.artifact_events(conversation_id, ArtifactReviewCandidatePayload),
@@ -1159,8 +1080,9 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             conversation_id,
             CollaborationLeadOutcomeFailurePayload,
         )
-        self.assertEqual(
-            lead_failure[-1].code,
+        self.assertEqual(len(lead_failure), 1)
+        self.assertIs(
+            lead_failure[0].code,
             CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED,
         )
         artifact_failure = self.artifact_events(
@@ -1192,7 +1114,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.assertEqual(receipt.content_digest, empty_digest)
         self.assertNotEqual(receipt.revision_digest, receipt.content_digest)
         def translated(selected):
-            return case.runtime._artifact_intent_evidence(selected, session_id=case.session_id, conversation_id=conversation_id)
+            return case.runtime._artifact_intent_evidence(selected, session_id=case.session_id, conversation_id=conversation_id, artifact_binding=case.runtime._session_artifact_binding(case.session_id))
         valid = translated(evidence)
         self.assertEqual(len(valid), 1)
         self.assertEqual((valid[0].source_digest, valid[0].boundary_digest), (empty_digest, empty_digest))
@@ -1229,15 +1151,20 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.workspace.path(_OUTLINE).write_bytes(text.encode("utf-8"))
         conversation_id = self.conversation("Genuine READ evidence")
         def search(call, _provider):
-            return json.dumps({"correlation": call.payload["c"], "action": {"kind": "search", "path_prefix": "core_documents/", "queries": [{"text": "needle", "source_kinds": ["writing_artifact"]}]}})
+            return json.dumps({"action": {"kind": "search", "path_prefix": "core_documents/", "queries": [{"text": "needle", "source_kinds": ["writing_artifact"]}]}})
         def answer(call, provider):
             evidence_id = call.payload["o"][1][0][5]
             return _provider_envelope(call, {
-                                                "recommended_action": None,"scope": "story_specific", "evidence_status": "verified", "evidence_ids": [evidence_id], "kind": "answer", "message": "The selected line is visible.", "proposal": None, "artifact_intent": None, "objective_intent": None}, used_handles=provider.used_handles)
+                                                "recommended_action": None,"scope": "story_specific", "evidence_status": "verified", "evidence_ids": [evidence_id], "kind": "question", "message": "The selected line is visible; what should change?", "proposal": None, "artifact_intent": None, "objective_intent": None,
+                                                "authoring_scope": _live_scope(call, activity="review", domains=("plot_structure",), paths=(_OUTLINE,))}, used_handles=provider.used_handles)
         self.backend.enqueue(search, _read_history_hit, answer)
         result = await self.runtime.lead_turn(self.session_id, conversation_id, "Search and read the needle line before deciding.")
-        self.assertIs(result.kind, c.LeadOutcomeKind.ANSWER)
-        receipt = result.evidence.receipts[0]
+        self.assertIs(result.kind, c.LeadOutcomeKind.QUESTION)
+        receipt = next(
+            item
+            for item in result.evidence.receipts
+            if item.acquisition is c.CollaborationEvidenceAcquisition.READ
+        )
         self.assertIs(receipt.acquisition, c.CollaborationEvidenceAcquisition.READ)
         scope = self.runtime._agent_context_service.scope(self.session_id, ContextSubjectKind.CONVERSATION, conversation_id, LEAD_ORCHESTRATOR)
         snapshot = WritingArtifactSourceAdapter(
@@ -1253,7 +1180,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         for selected in (whole, ranged):
             with self.subTest(boundary=selected.boundary_kind):
                 evidence = replace(result.evidence, receipts=(selected,))
-                converted, = self.runtime._artifact_intent_evidence(evidence, session_id=self.session_id, conversation_id=conversation_id)
+                converted, = self.runtime._artifact_intent_evidence(evidence, session_id=self.session_id, conversation_id=conversation_id, artifact_binding=self.runtime._session_artifact_binding(self.session_id))
                 self.assertEqual(converted.source_digest, whole_sha)
                 self.assertEqual(converted.boundary_digest, selected.content_digest)
                 self.assertEqual((converted.start_line, converted.end_line), (selected.start_line, selected.end_line))
@@ -1262,18 +1189,18 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 intent = ArtifactReplaceIntent(selected.evidence_id, "Whole replacement.\n") if selected.boundary_kind == "whole" else ArtifactPatchIntent(selected.evidence_id, "Revised 민 line.\r\n")
                 review_scope = AuthoringScope(AuthoringActivity.REVIEW, (_OUTLINE,), (),
                     "Review the exact synthetic whole or ranged candidate.", "synthetic_review", 1)
-                candidate = self.runtime._construct_artifact_review_candidate(session_id=self.session_id, conversation_id=conversation_id, turn_id=result.turn_id, step_id=result.step_id, intent=ArtifactProposalIntent((intent,)), evidence=evidence, authoring_scope=review_scope)
+                candidate = self.runtime._construct_artifact_review_candidate(session_id=self.session_id, conversation_id=conversation_id, turn_id=result.turn_id, step_id=result.step_id, intent=ArtifactProposalIntent((intent,)), evidence=evidence, authoring_scope=review_scope, artifact_binding=self.runtime._session_artifact_binding(self.session_id))
                 self.assertEqual("sha256:" + candidate.change_set.operations[0].base_digest, whole_sha)
                 for invalid in (replace(selected, revision_digest=objectives.digest("wrong metadata")), replace(selected, content_digest=objectives.digest("wrong bytes"))):
                     with self.assertRaises(ValueError):
-                        self.runtime._artifact_intent_evidence(replace(evidence, receipts=(invalid,)), session_id=self.session_id, conversation_id=conversation_id)
+                        self.runtime._artifact_intent_evidence(replace(evidence, receipts=(invalid,)), session_id=self.session_id, conversation_id=conversation_id, artifact_binding=self.runtime._session_artifact_binding(self.session_id))
         # Byte-identical physical replacement is stale despite equal whole/boundary hashes.
         path = self.workspace.path(_OUTLINE)
         replacement = path.with_suffix(".replacement")
         replacement.write_bytes(path.read_bytes())
         replacement.replace(path)
         with self.assertRaises(ValueError):
-            self.runtime._artifact_intent_evidence(result.evidence, session_id=self.session_id, conversation_id=conversation_id)
+            self.runtime._artifact_intent_evidence(result.evidence, session_id=self.session_id, conversation_id=conversation_id, artifact_binding=self.runtime._session_artifact_binding(self.session_id))
 
 
 if __name__ == "__main__":

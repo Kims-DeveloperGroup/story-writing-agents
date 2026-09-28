@@ -175,7 +175,7 @@ class InteractiveAuthCoordinator:
         async def probe() -> object:
             """Keep terminal animation responsive while the probe blocks."""
 
-            return await self._progress.run(asyncio.to_thread(operation))
+            return await self._progress.run(asyncio.to_thread(operation), keep_frame=False)
 
         with asyncio.Runner() as runner:
             return cast(_AuthProbeT, runner.run(probe()))
@@ -223,35 +223,89 @@ class InteractiveAuthCoordinator:
         else:
             _require_snapshot(snapshot)
         _require_optional_provider(selected_provider)
-        choices = self.choices(
+        return self._run_provider_picker(
             snapshot,
+            presentation=presentation,
+            highlighted_provider=selected_provider,
             selected_provider=selected_provider,
-        )
-        selected_id = (
-            selected_provider
-            if selected_provider is not None
-            and next(
-                choice for choice in choices if choice.identity == selected_provider
-            ).enabled
-            else None
-        )
-        outcome = self._picker.read_picker(
-            Prompt(
+            prompt=Prompt(
                 "Provider authentication",
                 instruction=(
                     "Choose a provider. The picker cancel action returns without "
                     "signing in."
                 ),
             ),
-            choices,
-            presentation=presentation,
-            highlighted_id=selected_id,
-            selected_id=selected_id,
             notice=Notice(
                 "Statuses come only from the native provider commands.",
                 label="authentication",
                 role=SemanticRole.INFO,
             ),
+        )
+
+    def select_default(
+        self,
+        snapshot: ProviderAuthSnapshot,
+        *,
+        selected_provider: str | None = None,
+    ) -> InteractiveAuthResult:
+        """Select and authenticate a missing workspace default provider."""
+
+        _require_snapshot(snapshot)
+        _require_optional_provider(selected_provider)
+        return self._run_provider_picker(
+            snapshot,
+            presentation=InputPresentation.STANDARD,
+            highlighted_provider=selected_provider,
+            selected_provider=None,
+            prompt=Prompt(
+                "Default provider",
+                instruction=(
+                    "Choose the workspace default provider. Story saves this "
+                    "choice for later shells; selecting an unauthenticated "
+                    "provider starts native sign-in."
+                ),
+            ),
+            notice=Notice(
+                (
+                    "Agents without their own provider setting inherit this "
+                    "workspace default."
+                ),
+                label="default provider",
+                role=SemanticRole.INFO,
+            ),
+        )
+
+    def _run_provider_picker(
+        self,
+        snapshot: ProviderAuthSnapshot,
+        *,
+        presentation: InputPresentation,
+        highlighted_provider: str | None,
+        selected_provider: str | None,
+        prompt: Prompt,
+        notice: Notice,
+    ) -> InteractiveAuthResult:
+        """Run one provider picker with caller-owned purpose and selection state."""
+
+        choices = self.choices(snapshot, selected_provider=selected_provider)
+        enabled_identities = {
+            choice.identity for choice in choices if choice.enabled
+        }
+        highlighted_id = (
+            highlighted_provider
+            if highlighted_provider in enabled_identities
+            else None
+        )
+        selected_id = (
+            selected_provider if selected_provider in enabled_identities else None
+        )
+        outcome = self._picker.read_picker(
+            prompt,
+            choices,
+            presentation=presentation,
+            highlighted_id=highlighted_id,
+            selected_id=selected_id,
+            notice=notice,
             state=ViewState.OPEN,
             transient=True,
         )

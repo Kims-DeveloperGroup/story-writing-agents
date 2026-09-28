@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import configparser
+from contextlib import nullcontext
 import email.parser
 import importlib.util
 import io
@@ -344,8 +345,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 143)
-        self.assertEqual(len(edges), 586)
+        self.assertEqual(len(modules), 147)
+        self.assertEqual(len(edges), 616)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
@@ -358,7 +359,9 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.errors",
             },
             "story_writing_agents.conversations.events": {
+                "story_writing_agents.reply_trace",
                 "story_writing_agents.specialist_routing",
+                "story_writing_agents.structured_output_validation",
                 "story_writing_agents.agents",
                 "story_writing_agents.artifact_proposals",
                 "story_writing_agents.errors",
@@ -366,7 +369,9 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.writing_artifacts",
             },
             "story_writing_agents.conversations.context": {
+                "story_writing_agents.reply_trace",
                 "story_writing_agents.specialist_routing",
+                "story_writing_agents.structured_output_validation",
                 "story_writing_agents.conversations.events",
                 "story_writing_agents.errors",
                 "story_writing_agents.git.story_commit_contracts",
@@ -475,11 +480,9 @@ class RagModuleBoundaryTests(unittest.TestCase):
             },
         }
         for source, expected in git_dependencies.items():
-            with self.subTest(git_source=source):
-                self.assertEqual(
-                    {target for edge_source, target in edges if edge_source == source},
-                    expected,
-                )
+            context = nullcontext() if source.endswith((".story_commit_candidates", ".story_commits")) else self.subTest(git_source=source)
+            with context:
+                self.assertEqual({target for edge_source, target in edges if edge_source == source}, expected, source)
         changed_storage_dependencies = {
             "story_writing_agents.conversation_storage.composition": {
                 "story_writing_agents.conversation_search",
@@ -653,7 +656,10 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 for source, target in edges
                 if source == "story_writing_agents.agent_context"
             },
-            {"story_writing_agents.agent_context.accounting"},
+            {
+                "story_writing_agents.agent_context.accounting",
+                "story_writing_agents.agent_context.progress",
+            },
         )
         self.assertEqual(
             {
@@ -686,6 +692,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             {
                 "story_writing_agents.agent_context.manifest",
                 "story_writing_agents.agent_context.planning",
+                "story_writing_agents.structured_output_validation",
             },
         )
         self.assertEqual(
@@ -722,11 +729,13 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.agent_context.manifest",
                 "story_writing_agents.agent_context.planning",
                 "story_writing_agents.agent_context.progress",
+                "story_writing_agents.agent_context.request_compaction",
                 "story_writing_agents.agent_context.sources",
                 "story_writing_agents.conversations.session_context",
                 "story_writing_agents.errors",
                 "story_writing_agents.provider_auth_recovery",
                 "story_writing_agents.provider_execution_workspace",
+                "story_writing_agents.structured_output_validation",
                 "story_writing_agents.workspace",
             },
         )
@@ -822,11 +831,13 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.conversations",
                 "story_writing_agents.errors",
                 "story_writing_agents.models",
+                "story_writing_agents.reply_trace",
+                "story_writing_agents.structured_output_validation",
             },
         )
 
     def test_supported_module_surfaces_do_not_expand_the_root_facade(self) -> None:
-        self.assertEqual(len(story_writing_agents.__all__), 104)
+        self.assertEqual(len(story_writing_agents.__all__), 106)
         rag_names = set().union(
             conversation_rag.__all__,
             conversation_rag_cli.__all__,
@@ -1181,7 +1192,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.workspace as workspace
                 import story_writing_agents.workspace.core as workspace_core
                 from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
-                assert len(story_writing_agents.__all__) == 104
+                assert len(story_writing_agents.__all__) == 106
                 assert len(conversations.__all__) == 158
                 assert len(conversation_events.__all__) == 120
                 assert len(conversation_context.__all__) == 30
@@ -1427,7 +1438,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.conversations.catalog as catalog
                 import story_writing_agents.conversations.context as context
                 import story_writing_agents.conversations.events as events
-                assert len(story_writing_agents.__all__) == 104
+                assert len(story_writing_agents.__all__) == 106
                 assert len(conversations.__all__) == 158
                 assert len(events.__all__) == 120
                 assert len(context.__all__) == 30

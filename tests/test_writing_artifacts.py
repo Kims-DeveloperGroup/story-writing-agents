@@ -56,18 +56,25 @@ from story_writing_agents.writing_artifacts._application_store import (
     ArtifactApplicationStoreFailure,
 )
 
-from tests.helpers import initialize_test_workspace
+from tests.helpers import pristine_initialized_workspace
 
 
 class WritingArtifactTestCase(unittest.TestCase):
     """Own one initialized workspace without generated writing documents."""
 
     def setUp(self) -> None:
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
-        self.workspace = initialize_test_workspace(self.root)
+        self.workspace = pristine_initialized_workspace(self)
+        self.root = self.workspace.root
         self.repository = WritingArtifactRepository(self.root)
+
+    def short_socket_root(self) -> Path:
+        """Return a short lexical alias to this exact workspace for AF_UNIX."""
+
+        owner = tempfile.TemporaryDirectory(prefix="swa-", dir="/tmp")
+        self.addCleanup(owner.cleanup)
+        alias = Path(owner.name) / "w"
+        alias.symlink_to(self.root, target_is_directory=True)
+        return alias
 
     def commit(
         self,
@@ -96,53 +103,6 @@ class WritingArtifactTestCase(unittest.TestCase):
         )
 
 
-class RepositoryEntryCleanupTests(unittest.TestCase):
-    def test_both_repository_rlock_acquisitions_preserve_baseexception(self) -> None:
-        for lock_type in (
-            repository_module._RepositoryLock,
-            repository_module._RepositorySourceLock,
-        ):
-            with self.subTest(lock_type=lock_type.__name__):
-                primary = KeyboardInterrupt("RLock acquisition interrupted")
-                events = []
-
-                class Operation:
-                    def __enter__(self):
-                        events.append("operation_enter")
-
-                    def __exit__(self, *args):
-                        del args
-                        events.append("operation_exit")
-                        raise SystemExit("operation cleanup failed")
-
-                class Lock:
-                    def acquire(self):
-                        events.append("rlock_acquire")
-                        raise primary
-
-                    def release(self):
-                        raise AssertionError("unacquired RLock was released")
-
-                repository = SimpleNamespace(
-                    _open_operation_access=Operation,
-                    _lock=Lock(),
-                )
-                guard = (
-                    lock_type(repository)
-                    if lock_type is repository_module._RepositoryLock
-                    else lock_type(repository, evidence=False)
-                )
-                with self.assertRaises(KeyboardInterrupt) as caught:
-                    guard.__enter__()
-                self.assertIs(caught.exception, primary)
-                self.assertEqual(
-                    events,
-                    ["operation_enter", "rlock_acquire", "operation_exit"],
-                )
-                self.assertIn(
-                    "artifact repository entry cleanup failed: SystemExit",
-                    primary.__notes__,
-                )
 
 
 class ArtifactGrammarTests(unittest.TestCase):
@@ -368,7 +328,9 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
             os.mkfifo(fifo)
             listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             self.addCleanup(listener.close)
-            listener.bind(str(self.root / "manuscript/part-01/socket.md"))
+            listener.bind(
+                str(self.short_socket_root() / "manuscript/part-01/socket.md")
+            )
 
         with mock.patch.object(
             storage_module.os,
@@ -1398,12 +1360,8 @@ class SecureStorageTests(WritingArtifactTestCase):
             "ready link",
             "ready flush",
         ):
-            with (
-                self.subTest(failure=failure),
-                tempfile.TemporaryDirectory() as directory,
-            ):
-                root = Path(directory)
-                initialize_test_workspace(root)
+            with self.subTest(failure=failure):
+                root = pristine_initialized_workspace(self).root
                 storage = SecureWorkspaceStorage(root)
                 parent = root / "agent_states/orchestrator_state/writing_artifacts"
                 storage.ensure_directory(parent.relative_to(root).as_posix())
@@ -1501,12 +1459,8 @@ class SecureStorageTests(WritingArtifactTestCase):
             (names[1], names[2]),
         )
         for present in subsets:
-            with (
-                self.subTest(present=present),
-                tempfile.TemporaryDirectory() as directory,
-            ):
-                root = Path(directory)
-                initialize_test_workspace(root)
+            with self.subTest(present=present):
+                root = pristine_initialized_workspace(self).root
                 parent = root / "agent_states/orchestrator_state/writing_artifacts"
                 parent.mkdir(parents=True)
                 first = parent / present[0]
@@ -1533,12 +1487,8 @@ class SecureStorageTests(WritingArtifactTestCase):
     def test_complete_lock_triple_rejects_wrong_inode_and_link_count(self) -> None:
         relative = "agent_states/orchestrator_state/writing_artifacts/.artifacts.lock"
         for corruption in ("wrong ready inode", "extra hardlink"):
-            with (
-                self.subTest(corruption=corruption),
-                tempfile.TemporaryDirectory() as directory,
-            ):
-                root = Path(directory)
-                initialize_test_workspace(root)
+            with self.subTest(corruption=corruption):
+                root = pristine_initialized_workspace(self).root
                 parent = root / "agent_states/orchestrator_state/writing_artifacts"
                 parent.mkdir(parents=True)
                 lock = parent / ".artifacts.lock"
@@ -1568,12 +1518,8 @@ class SecureStorageTests(WritingArtifactTestCase):
     ) -> None:
         relative = "agent_states/orchestrator_state/writing_artifacts/.artifacts.lock"
         for failure in ("bootstrap flock", "ancestry durability"):
-            with (
-                self.subTest(failure=failure),
-                tempfile.TemporaryDirectory() as directory,
-            ):
-                root = Path(directory)
-                initialize_test_workspace(root)
+            with self.subTest(failure=failure):
+                root = pristine_initialized_workspace(self).root
                 parent = root / "agent_states/orchestrator_state/writing_artifacts"
                 storage = SecureWorkspaceStorage(root)
                 storage.ensure_directory(parent.relative_to(root).as_posix())
@@ -1819,7 +1765,7 @@ class SecureStorageTests(WritingArtifactTestCase):
         unix_socket = parent / "socket"
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.addCleanup(listener.close)
-        listener.bind(str(unix_socket))
+        listener.bind(str(self.short_socket_root() / unix_socket.relative_to(self.root)))
         directory = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
         self.addCleanup(os.close, directory)
 

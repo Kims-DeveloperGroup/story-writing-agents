@@ -117,22 +117,21 @@ class PromptAssemblerTests(unittest.TestCase):
             "untrusted evidence",
             "SEARCH finds a locator and READ obtains",
             "Return only the one invocation-specific structured result",
-            '"kind": "answer | question | critique | recommendation | proposal"',
+            '"kind": "question | critique | recommendation | proposal (omit for a default answer)"',
             "no surrounding prose",
             "hidden reasoning",
             "For `lead_synthesis`",
-            '"reply_event_ids": ["every runtime-supplied reply event ID, in order"]',
-            '"unresolved_input_ids": ["unresolved original input IDs, in input order"]',
-            "`continue_lineage` proposal",
-            "Round two always sets `next_intent` to null",
+            '"message": "nonempty user-visible synthesis"',
+            "The runtime restores proposal identity",
+            "Round two omits `next_intent`",
             "does not make those decisions for the user",
             "own user confirmation",
         )
         for phrase in required:
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, normalized_prompt)
-        self.assertIn("set `proposal` to `null`", normalized_prompt)
-        self.assertIn('"relation": "new_step | revise_pending"', normalized_prompt)
+        self.assertIn("Omit unused fields instead of writing `null`", normalized_prompt)
+        self.assertIn("Runtime derives schema versions", normalized_prompt)
 
     def test_all_specialist_prompts_share_the_exact_bounded_assessment_contract(
         self,
@@ -150,8 +149,8 @@ class PromptAssemblerTests(unittest.TestCase):
                     "provides a scoped assessment for the lead",
                     "Return exactly one JSON object",
                     '"assessment": "drafted | supports | concern | conflict | insufficient_evidence"',
-                    '"assignment_id": "runtime-supplied assignment ID"',
-                    '"input_ids": ["runtime-supplied input IDs in exact order"]',
+                    '"message": "nonempty visible assessment"',
+                    "runtime attaches the supplied assignment ID, mode, and ordered input IDs",
                 ):
                     self.assertIn(phrase, normalized)
 
@@ -165,10 +164,24 @@ class PromptAssemblerTests(unittest.TestCase):
         changed = {agent: PromptAssembler(self.workspace).build_definition(session_id="overlay", agent_id=agent).system_prompt_file.content for agent in ROSTER}
         lead = changed[LEAD_ORCHESTRATOR]
         self.assertIn(retained.strip(), lead)
-        self.assertIn(b"Runtime Lead contract overlay (lead-outcome-v4)", lead)
+        self.assertIn(b"Runtime Lead contract overlay (lead-outcome-v5)", lead)
+        overlay = lead[lead.index(b"Runtime Lead contract overlay (lead-outcome-v5)"):]
+        self.assertIn(
+            b"context action envelope retains its required outer kind",
+            overlay,
+        )
+        self.assertIn(b"Inside the final action.result", overlay)
+        self.assertIn(
+            b"default direct-answer variant omits the inner kind",
+            overlay,
+        )
+        self.assertNotIn(
+            b"Every front-channel result includes kind, message, and authoring_scope.",
+            lead,
+        )
         self.assertIn(b"objective_intent", lead)
         self.assertIn(b"recommended_action", lead)
-        self.assertIn(b"objective_intent=null", lead)
+        self.assertIn(b"omits objective_intent", lead)
         self.assertIn(b"current_response selects this exact visible recommendation", lead)
         self.assertIn(b"one preparation only", lead)
         self.assertIn(b"before its fresh Confirm", lead)
@@ -271,10 +284,12 @@ class PromptAssemblerTests(unittest.TestCase):
     ) -> None:
         request_fields = fields(AgentRequest)
         self.assertEqual(
-            tuple(field.name for field in request_fields[-2:]),
+            tuple(field.name for field in request_fields if not field.kw_only)[-2:],
             ("conversation_context", "story_session_context"),
         )
-        self.assertTrue(all(field.default is None for field in request_fields[-2:]))
+        self.assertEqual(tuple(field.name for field in request_fields if field.kw_only),
+                         ("expected_reviewed_proposal",))
+        self.assertTrue(all(field.default is None for field in request_fields[-3:]))
         context = ConversationContextWindow(
             events=(),
             total_complete_turns=0,
@@ -302,6 +317,7 @@ class PromptAssemblerTests(unittest.TestCase):
             ConversationContextWindow,
         )
         self.assertIsNone(request.story_session_context)
+        self.assertIsNone(request.expected_reviewed_proposal)
 
         definition = self.assembler.build_definition(
             session_id="prompt_session",
@@ -322,6 +338,7 @@ class PromptAssemblerTests(unittest.TestCase):
             definition=definition,
         )
         self.assertIsNotNone(enveloped.story_session_context)
+        self.assertIsNone(enveloped.expected_reviewed_proposal)
         assert enveloped.story_session_context is not None
         self.assertEqual(
             enveloped.story_session_context.focused_context.conversation_id,

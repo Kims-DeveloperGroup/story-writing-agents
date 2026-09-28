@@ -79,11 +79,11 @@ change the stable definition fingerprint. Role-prompt and persona references
 remain content-backed at definition construction.
 
 The runtime appends a deterministic Lead contract overlay to the retained
-common and Lead policy snapshots. It specifies the current ten-field
-`lead-outcome-v4` contract and contextual objectives without rewriting an
+common and Lead policy snapshots. It specifies the current minimal
+`lead-outcome-v5` variants and contextual objectives without rewriting an
 existing workspace's policies. Fresh checked-in and embedded Lead defaults
-already describe v4. The overlay preserves the separate `lead_synthesis`
-result schema. Ordinary synthesis has a nullable `recommended_action`;
+already describe v5. The overlay preserves the separate `lead_synthesis`
+result schema. Ordinary synthesis has an optional `recommended_action`;
 specialist replies and artifact-review synthesis retain their own schemas.
 
 <a id="explicit-reference-read-contracts"></a>
@@ -133,22 +133,22 @@ lead invocation with the direct story-artifact inputs and all typed replies.
 
 ## Typed context action contract
 
-Every built-in contextual physical call supplies one generated wire-v7 JSON
-Schema. The schema's root is a closed required object with exactly
-`correlation` and `action`. `correlation` is restricted to the exact current
-input token. `action` is one or more of these closed variants, narrowed to the
+Every built-in contextual physical call supplies one generated wire-v8 JSON
+Schema. The schema's root is a closed required object with only `action`.
+Runtime derives the invocation correlation and action index locally. `action`
+is one or more of these closed variants, narrowed to the
 actions and bounds valid for that physical call:
 
 ```json
-{"correlation":"<exact-token>","action":{"kind":"search","path_prefix":"manuscript/part-01/","queries":[{"text":"opening causality","source_kinds":["writing_artifact"]}]}}
+{"action":{"kind":"search","path_prefix":"manuscript/part-01/","queries":[{"text":"opening causality","source_kinds":["writing_artifact"]}]}}
 ```
 
 ```json
-{"correlation":"<exact-token>","action":{"kind":"read","handles":["<issued-handle>"]}}
+{"action":{"kind":"read","handles":["<issued-handle>"]}}
 ```
 
 ```json
-{"correlation":"<exact-token>","action":{"kind":"answer","result":{"scope":"workflow_meta","authoring_scope":{"schema_version":1,"activity":"workflow","target_paths":[],"domains":[],"interpretation":"Answer the workflow question.","task_id":"task_demo","task_revision":1},"evidence_status":"not_applicable","evidence_ids":[],"kind":"answer","message":"Hello. What would you like to work on?","artifact_intent":null,"proposal":null,"objective_intent":null,"recommended_action":null},"used_handles":[]}}
+{"action":{"kind":"answer","result":{"message":"Hello. What would you like to work on?","authoring_scope":{"activity":"workflow","target_paths":[],"domains":[],"task":"task_demo@1"}}}}
 ```
 
 SEARCH has required `kind`, nullable `path_prefix`, and nonempty typed
@@ -161,17 +161,19 @@ canonical collection containing `writing_artifact` alone. The documented
 common provider-schema subset types and enums members; it does not claim JSON
 Schema enforces uniqueness or canonical order.
 READ has required `kind` and nonempty typed `handles`. ANSWER has required
-`kind`, the exact invocation-specific object in `result`, and typed
-`used_handles`. The Lead front-channel result in the example is the complete
-`lead-outcome-v4` value: it always has exactly ten fields, `scope`,
-`evidence_status`, `evidence_ids`, `kind`, `message`, `proposal`,
-`artifact_intent`, `objective_intent`, `recommended_action`, and
-`authoring_scope`, including explicit nulls for unused intents.
+`kind` and the exact invocation-specific object in `result`. The Lead front-
+channel example is a complete `lead-outcome-v5` direct-answer variant using an
+illustrative offered task: every provider-produced direct result requires
+`message` and compact `authoring_scope`. Questions and critiques add `kind`;
+the default answer omits it. Intent-bearing variants add their one semantic
+intent field. Runtime never infers a missing scope as `workflow`; it derives
+READ usage, evidence, IDs, revisions, interpretation, and other bookkeeping
+from the invocation and durable history.
 
-No action or result object is encoded as JSON text. Runtime still checks the closed schema, exact
-correlation, issued handles, result-domain contract, and current source
+No action or result object is encoded as JSON text. Runtime still checks the closed schema,
+issued handles, result-domain contract, and current source
 authority after a provider returns the object. See
-[Agent-context design](../design/agent-context.md#typed-provider-wire-v7).
+[Agent-context design](../design/agent-context.md#typed-provider-wire-v8).
 
 ## Lead judgment and evidence contracts
 
@@ -227,11 +229,13 @@ is not replay authority.
 `ArtifactObjectiveCandidateBinding`, `ArtifactObjectivePayload`,
 `ArtifactObjectivePayloadV2`, `ArtifactObjective`, and `artifact_objective_context()`.
 
-The provider's `objective_intent` is null or a strict `start`, `continue`, or
-`cancel` intent. A start fixes the visible authoring request and exact target
-paths; continuation/cancellation names an offered `OPEN` objective owned by
-the current conversation. `clarify` requires a question, `consult` an ordinary
-consultation proposal, and `prepare` an artifact-intent proposal. PREPARE
+The provider omits `objective_intent` or supplies a strict `start`, `continue`,
+or `cancel` intent. A start selects exact target paths; runtime freezes the
+exact originating user-event content as the visible request rather than
+accepting a provider request field. Continuation/cancellation names an offered
+`OPEN` objective owned by the current conversation. `clarify` requires a
+question, `consult` an ordinary consultation proposal, and `prepare` an
+artifact-intent proposal. PREPARE
 cannot become advice during bounded result correction. The exact field shapes
 are in the [runtime API](runtime-api.md#contextual-authoring-objectives).
 
@@ -255,8 +259,8 @@ facade: `decide_lead_recommendation()` returns `LeadTurnResult` with a trailing
 optional `recommendation_request` for a pending recommendation.
 
 A fresh front-channel recommendation requires one `prepare_artifact` or
-`prepare_consultation` action and `objective_intent=null`. Other kinds require
-`recommended_action=null`. Runtime replaces source aliases with exact event or
+`prepare_consultation` action and omits `objective_intent`. Other kinds omit
+`recommended_action`. Runtime replaces source aliases with exact event or
 input identities and discloses the action, basis, impact, and call reservation.
 The request requires substantive scope; consultation preparation includes every
 affected specialist. Its optional Python `authoring_scope` is keyword-only and
@@ -269,9 +273,10 @@ Confirm authorizes one preparation only. Review/execution, Apply, and Commit
 retain separate decisions. Ordinary contextual approval is a new instruction
 and can supersede the unconfirmed recommendation without a fabricated Confirm.
 
-A new Confirm-origin objective uses v2 request/decision provenance. Continuing
-an existing objective preserves its immutable v1 or v2 facts independently of
-the preparation execution origin. See the
+A new Confirm-origin objective uses v2 request/decision provenance. An ordinary
+v1 objective preserves the exact originating user-event payload as its request,
+not a provider-authored paraphrase. Continuing an existing objective preserves
+its immutable v1 or v2 facts independently of the preparation execution origin. See the
 [exact API](runtime-api.md#leadrecommendationdecision) and
 [versioned history](collaboration-history.md#recommendation-preparation-events).
 
@@ -307,12 +312,14 @@ nonempty candidate inputs and criteria. The conversations facade owns the exact
 `authoring_scope_to_dict`/`authoring_scope_from_dict` and
 `review_basis_to_dict`/`review_basis_from_dict` durable codecs.
 
-The strict provider contracts are `lead-outcome-v4`, `specialist-reply-v2`,
-`lead-synthesis-v3`, and `artifact-review-synthesis-v2`. Lead outcomes require
-scope; synthesis repeats the proposal's exact `authoring_scope`. Existing
-schema-v2 durable history retains optional omitted routing fields for historical
-compatibility; live output may not omit them. An old unscoped pending proposal
-needs fresh scope and confirmation, not reinterpretation as current authority.
+The strict provider contracts are `lead-outcome-v5`, `specialist-reply-v2`,
+`lead-synthesis-v3`, and `artifact-review-synthesis-v3`. Provider schemas contain
+only semantic choices. Runtime reconstructs attribution and routing metadata and
+never infers missing authority selectors. The provider schemas remain closed
+Structured Outputs. A missing Lead `authoring_scope`, like another structured-
+result rejection, receives one bounded repair call; a second rejection becomes
+a runtime-owned visible safe answer with no action. That fallback is not a
+provider-schema variant and never supplies an inferred `workflow` scope.
 
 ## Specialist reply and lead synthesis
 
@@ -426,9 +433,11 @@ ArtifactReviewFailurePayload
 ArtifactProposalResult
 ```
 
-The artifact synthesis repeats exact candidate/consultation/attempt identity,
-preserves every reply event and unresolved non-supporting input, and adds
-visible `rationale`, `user_impact`, and `limitations`. Only `decision=propose`
+The artifact synthesis repeats exact candidate/consultation/attempt identity
+and preserves every reply event and unresolved non-supporting input. The
+provider supplies only `decision` and `message`; runtime uses that message as
+the visible rationale, adds the no-change user impact, and reports either no
+additional limitations or the exact unresolved reviewer input IDs. Only `decision=propose`
 creates `ArtifactReviewedProposal`. That immutable value closes over the exact
 candidate, every disclosed review, evidence and synthesis identities, and the
 review tail, while requiring `artifact_write_occurred=false`,
@@ -466,18 +475,21 @@ compatibility value. It must match the request's session and agent. The current
 built-in runtime translates authoritative capture into typed contextual wire
 v7; it does not send this object as the provider envelope. Direct noncontextual
 callers may still use the established request field. The context types are not
-package-root exports; see [Agent-context design](../design/agent-context.md#typed-provider-wire-v7).
+package-root exports; see [Agent-context design](../design/agent-context.md#typed-provider-wire-v8).
 
 ```python
 DebateMessage(sender: str, phase: str, round: int, revision: str,
-              kind: str, content: str, timestamp: str)
+              kind: str, content: str, timestamp: str,
+              trace: ReplyTrace | None = None)
 AgentStateEntry(agent_id: str, session_id: str, debate_id: str, phase: str,
                 round: int, revision: str, kind: str, content: str,
                 timestamp: str)
 ```
 
 Both are frozen and provide `to_dict()`; agent-state content is capped at 4096
-characters per entry.
+characters per entry. An untraced debate message omits `trace` from its encoded
+object. A traced message encodes the exact trace object, and `from_dict()`
+restores it as a typed `ReplyTrace`.
 
 ## One advisory conversation turn
 
@@ -505,7 +517,7 @@ their two trailing context fields default to `None`, and their reply adds
 ordered validated sources without changing the one-step pair.
 When present, story-session capture must match the request session, agent, and
 any focused conversation identity. Current built-in execution converts it to
-typed contextual wire v7; omitting it retains direct-request compatibility. An
+typed contextual wire v8; omitting it retains direct-request compatibility. An
 omitted `rag_context` means there was no attempted RAG envelope.
 See [Conversation transcripts](conversation-transcripts.md) for windows and
 [Bounded retrieval](conversation-retrieval.md) for actions and persistence.

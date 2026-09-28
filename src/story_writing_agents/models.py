@@ -5,6 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from .structured_output_validation import (
+    validation_failure,
+    validation_call,
+)
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -16,6 +20,8 @@ from .conversations import (
     validate_conversation_context_window,
 )
 from .errors import SessionIdError, WorkspaceFormatError
+from .reply_trace import ReplyTrace
+from .structured_output_validation import validate_details
 
 
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
@@ -286,9 +292,42 @@ class DebateMessage:
     kind: str
     content: str
     timestamp: str
+    trace: ReplyTrace | None = None
+    validation_details: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.trace is not None and type(self.trace) is not ReplyTrace:
+            raise TypeError("debate message trace must be ReplyTrace or None")
+        validate_details(self.validation_details)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        value = asdict(self)
+        if self.trace is None:
+            value.pop("trace")
+        else:
+            value["trace"] = self.trace.to_dict()
+        if not self.validation_details:
+            value.pop("validation_details")
+        else:
+            value["validation_details"] = list(self.validation_details)
+        return value
+
+    @classmethod
+    def from_dict(cls, value: object) -> DebateMessage:
+        """Decode one stored public blackboard entry and optional trace."""
+
+        if type(value) is not dict:
+            raise TypeError("debate message must be an object")
+        item = dict(value)
+        raw_trace = item.get("trace")
+        if raw_trace is not None:
+            item["trace"] = ReplyTrace.from_dict(raw_trace)
+        if "validation_details" in item:
+            raw_details = item["validation_details"]
+            if type(raw_details) is not list:
+                raise TypeError("debate validation details must be a list")
+            item["validation_details"] = tuple(raw_details)
+        return cls(**item)
 
 
 @dataclass(frozen=True, slots=True)
@@ -720,9 +759,15 @@ class AgentRequest:
     conversation_context: ConversationContextWindow | None = None
     story_session_context: StorySessionContext | None = None
 
+    expected_reviewed_proposal: tuple[str, str] | None = field(default=None, kw_only=True)
+
     def __post_init__(self) -> None:
         """Validate optional context without changing legacy request fields."""
 
+        if self.expected_reviewed_proposal is not None:
+            if self.phase is not Phase.FINALIZE:
+                raise ValueError("expected reviewed identity is allowed only for finalization")
+            validate_reviewed_proposal_identity(self.expected_reviewed_proposal)
         if self.conversation_context is not None:
             object.__setattr__(
                 self,
@@ -816,6 +861,8 @@ class ConversationReply:
     conversation_id: str
     turn_id: str
     content: str
+    trace: ReplyTrace | None = None
+    validation_details: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_conversation_identifier(self.session_id, label="session ID")
@@ -828,6 +875,9 @@ class ConversationReply:
             self.content,
             label="conversation reply content",
         )
+        if self.trace is not None and type(self.trace) is not ReplyTrace:
+            raise TypeError("conversation reply trace must be ReplyTrace or None")
+        validate_details(self.validation_details)
 
 
 @dataclass(frozen=True, slots=True)
@@ -841,6 +891,8 @@ class ConversationResult:
     content: str
     context: ConversationContextWindow
     reference_operation_id: str | None = None
+    trace: ReplyTrace | None = None
+    validation_details: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate IDs/content and install a canonical pre-turn context.
@@ -877,6 +929,9 @@ class ConversationResult:
             ),
         )
         _validate_reference_operation_identifier(self.reference_operation_id)
+        if self.trace is not None and type(self.trace) is not ReplyTrace:
+            raise TypeError("conversation result trace must be ReplyTrace or None")
+        validate_details(self.validation_details)
 
 
 @dataclass(frozen=True, slots=True)
@@ -896,66 +951,80 @@ class AgentReply:
     deadlocked: bool = False
     reviewed_proposal_id: str | None = None
     reviewed_proposal_digest: str | None = None
+    trace: ReplyTrace | None = None
+    validation_details: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.kind) is not AgentReplyKind:
-            raise TypeError("agent reply kind is invalid")
+            raise validation_failure(
+                TypeError('agent reply kind is invalid'),
+                '$.kind',
+                'expected a supported agent reply kind',
+            )
+        if self.trace is not None and type(self.trace) is not ReplyTrace:
+            raise TypeError("agent reply trace must be ReplyTrace or None")
+        validate_details(self.validation_details)
         if type(self.deadlocked) is not bool:
-            raise TypeError("agent reply deadlock marker is invalid")
-        review_identity_absent = (
-            self.reviewed_proposal_id is None
-            and self.reviewed_proposal_digest is None
-        )
+            raise validation_failure(
+                TypeError('agent reply deadlock marker is invalid'),
+                '$.deadlocked',
+                'expected a boolean',
+            )
+
+        def require(condition: object, path: str, rule: str) -> None:
+            if not condition:
+                raise validation_failure(ValueError('agent reply fields do not match its kind'), path, rule)
+
+        def without_review_identity() -> None:
+            require(self.reviewed_proposal_id is None, "$.reviewed_proposal_id", "allowed only for finalization")
+            require(self.reviewed_proposal_digest is None, "$.reviewed_proposal_digest", "allowed only for finalization")
+
         if self.kind is AgentReplyKind.CANDIDATE:
-            valid = (
-                bool(self.content)
-                and self.verdict is None
-                and self.next_phase is None
-                and not self.deadlocked
-                and review_identity_absent
-            )
+            require(bool(self.content), "$.content", "expected nonempty text")
+            require(self.verdict is None, "$.verdict", "allowed only for an audit reply")
+            require(self.next_phase is None, "$.next_phase", "allowed only for synthesis")
+            require(not self.deadlocked, "$.deadlocked", "candidate replies cannot mark deadlock")
+            without_review_identity()
         elif self.kind is AgentReplyKind.AUDIT:
-            valid = (
-                type(self.verdict) is Verdict
-                and self.next_phase is None
-                and not self.deadlocked
-                and (self.verdict is Verdict.APPROVE or bool(self.content))
-                and review_identity_absent
-            )
+            require(type(self.verdict) is Verdict, "$.verdict", "expected approve or conflict")
+            require(self.next_phase is None, "$.next_phase", "allowed only for synthesis")
+            require(not self.deadlocked, "$.deadlocked", "audit replies cannot mark deadlock")
+            require(self.verdict is Verdict.APPROVE or bool(self.content), "$.content", "verdict conflict requires nonempty text")
+            without_review_identity()
         elif self.kind is AgentReplyKind.SYNTHESIS:
-            valid = (
-                bool(self.content)
-                and self.verdict is None
-                and type(self.next_phase) is AgentReplyNextPhase
-                and not self.deadlocked
-                and review_identity_absent
-            )
+            require(bool(self.content), "$.content", "expected nonempty text")
+            require(self.verdict is None, "$.verdict", "allowed only for an audit reply")
+            require(type(self.next_phase) is AgentReplyNextPhase, "$.next_phase", "expected repair or finalization")
+            require(not self.deadlocked, "$.deadlocked", "synthesis with next_phase cannot also mark deadlock")
+            without_review_identity()
         elif self.kind is AgentReplyKind.DEADLOCK:
-            valid = (
-                bool(self.content)
-                and self.verdict is None
-                and self.next_phase is None
-                and self.deadlocked
-                and review_identity_absent
-            )
+            require(bool(self.content), "$.content", "expected nonempty text")
+            require(self.verdict is None, "$.verdict", "allowed only for an audit reply")
+            require(self.next_phase is None, "$.next_phase", "deadlock cannot also choose a next phase")
+            require(self.deadlocked, "$.deadlocked", "deadlock replies require a true deadlock marker")
+            without_review_identity()
         else:
-            valid = (
-                not self.content
-                and self.verdict is None
-                and self.next_phase is None
-                and not self.deadlocked
-                and type(self.reviewed_proposal_id) is str
-                and bool(self.reviewed_proposal_id)
-                and _TAGGED_SHA256.fullmatch(
-                    self.reviewed_proposal_digest or ""
+            require(not self.content, "$.content", "finalization cannot carry new content")
+            require(self.verdict is None, "$.verdict", "allowed only for an audit reply")
+            require(self.next_phase is None, "$.next_phase", "finalization cannot choose a next phase")
+            require(not self.deadlocked, "$.deadlocked", "finalization cannot mark deadlock")
+            require(type(self.reviewed_proposal_id) is str, "$.reviewed_proposal_id", "expected text")
+            require(bool(self.reviewed_proposal_id), "$.reviewed_proposal_id", "expected nonempty text")
+            try:
+                digest_matches = _TAGGED_SHA256.fullmatch(self.reviewed_proposal_digest or "")
+            except TypeError as failure:
+                raise validation_failure(
+                    failure,
+                    '$.reviewed_proposal_digest',
+                    'expected sha256: followed by 64 lowercase hexadecimal characters',
                 )
-            )
-        if not valid:
-            raise ValueError("agent reply fields do not match its kind")
+            require(digest_matches, "$.reviewed_proposal_digest", "expected sha256: followed by 64 lowercase hexadecimal characters")
         if self.kind is AgentReplyKind.FINALIZATION:
-            _validate_conversation_identifier(
+            validation_call(
+                '$.reviewed_proposal_id',
+                _validate_conversation_identifier,
                 self.reviewed_proposal_id,
-                label="reviewed proposal ID",
+                label='reviewed proposal ID',
             )
     @classmethod
     def candidate(cls, revision_id: str, content: str) -> AgentReply:
@@ -1065,6 +1134,20 @@ class DebateResult:
         return result
 
 
+def validate_reviewed_proposal_identity(value: tuple[str, str]) -> None:
+    """Validate an expected identity's format, without granting review authority."""
+    if type(value) is not tuple or len(value) != 2:
+        raise ValueError("expected reviewed identity must be an exact ID/digest pair")
+    if type(value[0]) is not str:
+        raise ValueError("reviewed proposal ID must be exact text")
+    try:
+        _validate_conversation_identifier(value[0], label="reviewed proposal ID")
+    except SessionIdError:
+        raise ValueError("reviewed proposal ID must be a canonical identifier") from None
+    if type(value[1]) is not str or _TAGGED_SHA256.fullmatch(value[1]) is None:
+        raise ValueError("reviewed proposal digest must be tagged lowercase SHA-256")
+
+
 def _validate_conversation_identifier(value: str, *, label: str) -> str:
     """Return a safe conversation identifier or raise ``SessionIdError``.
 
@@ -1072,8 +1155,10 @@ def _validate_conversation_identifier(value: str, *, label: str) -> str:
     """
 
     if not isinstance(value, str) or _SAFE_IDENTIFIER.fullmatch(value) is None:
-        raise SessionIdError(
-            f"{label} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,63}}"
+        raise validation_failure(
+            SessionIdError(f'{label} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,63}}'),
+            '$',
+            'expected identifier matching [A-Za-z0-9][A-Za-z0-9_-]{0,63}',
         )
     return value
 

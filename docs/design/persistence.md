@@ -612,8 +612,8 @@ Capture is ordered around provider behavior, not as one storage transaction:
 A provider failure before a result has request plus outcome and no response. A
 cancellation may close before or after a response. Context SEARCH/READ calls
 are accepted after completion-observer delivery, ANSWER is accepted after the
-checkpoint commit but before the later checkpoint observer, and a successful
-reference prelude is accepted in the backend before its result is returned.
+checkpoint commit but before the later checkpoint observer. Local reference
+loading has no provider-call record.
 These are append-only historical facts: a later failure does not rewrite an
 already accepted call.
 
@@ -946,8 +946,12 @@ writing-artifact catalog, completion, or picker namespace.
 
 The blackboard retains input, candidates, audits, proposals, visible errors,
 finalization metadata, and commit record. Result JSON is a projection and omits
-its duplicated message list. Agent history remains owner-isolated and bounded,
-though provider output in visible fields may still be sensitive.
+its duplicated message list. An untraced blackboard row omits `trace`; a traced
+row stores the exact trace object and reopens with a typed `ReplyTrace`. The
+reader accepts only the closed base-message shape or that shape plus a valid
+trace object, and reports unknown or malformed fields against their exact JSONL
+line. Agent history remains owner-isolated and bounded, though provider output
+in visible fields may still be sensitive.
 
 Terminal result creation and lifecycle transition finish before terminal
 progress. Artifact application is a separate recoverable transaction and still

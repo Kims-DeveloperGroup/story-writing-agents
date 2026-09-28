@@ -129,9 +129,13 @@ routing policy in memory, and fingerprints the effective composition. It does
 not rewrite the files or relax session readiness and prompt validation. See
 [Agent contracts](../reference/agent-contracts.md#bound-definition).
 
-Provider authentication at lobby startup is also nonpersistent. If no default
-provider has been saved, the authenticated choice is held in memory for that
-process; only an explicit Settings save may change `config/system_defaults.json`.
+Provider authentication at lobby startup first establishes access. When
+`default_backend` is absent, a separate **Default provider** picker follows;
+its highlight is only a recommendation, and guarded settings persistence saves
+only the user's explicit authenticated choice. Cancel, interrupt, or EOF does
+not persist a choice, while an existing default skips the picker. Story leaves
+provider credentials to the provider, and explicit `--backend` mappings remain
+temporary, nonpersistent launch overrides.
 
 Initialization itself emits no debug-log event. A successful root has no
 initialization journal or other untracked initializer residue.

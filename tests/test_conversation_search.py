@@ -497,7 +497,7 @@ class ConversationSearchPackageBoundaryTests(unittest.TestCase):
                     + str(root / "src")
                     + "'); import story_writing_agents as root; "
                     "import story_writing_agents.conversation_search as search; "
-                    "assert len(root.__all__) == 104; assert len(search.__all__) == 18; "
+                    "assert len(root.__all__) == 106; assert len(search.__all__) == 18; "
                     "assert not hasattr(root, 'ConversationMemoryService'); "
                     "assert 'sqlite3' not in sys.modules"
                 ),

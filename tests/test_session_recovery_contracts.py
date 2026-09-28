@@ -844,7 +844,7 @@ class SessionRecoveryCompatibilityTests(unittest.TestCase):
 
 
 class SessionRecoveryBoundaryTests(unittest.TestCase):
-    def test_clean_import_exact_dependencies_and_module_index_match_accepted_delta(self) -> None:
+    def test_clean_import_and_exact_dependencies_match_accepted_delta(self) -> None:
         source = (_SOURCE_ROOT / "session_recovery" / "contracts.py").read_text()
         tree = ast.parse(source)
         imports = set()
@@ -867,12 +867,9 @@ class SessionRecoveryBoundaryTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         modules, edges = _module_graph()
-        self.assertEqual((len(modules), len(edges)), (143, 586))
+        self.assertEqual((len(modules), len(edges)), (147, 616))
         self.assertFalse(_has_cycle(modules, edges))
-        index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text()
-        self.assertIn("Importable production units indexed: 143.", index)
-        self.assertIn("Direct internal dependency edges indexed: 586.", index)
-        self.assertIn("session_recovery.contracts", index)
+
 
 
 def _module_graph() -> tuple[set[str], set[tuple[str, str]]]:

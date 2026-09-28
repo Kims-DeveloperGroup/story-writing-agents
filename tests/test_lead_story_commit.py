@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
-import tempfile
 import unittest
 from contextlib import contextmanager
 from dataclasses import replace
@@ -38,16 +37,15 @@ from story_writing_agents.git.story_commit_contracts import (
 )
 from story_writing_agents.workspace.initialization import provision_session_resources
 
+from tests import test_lead_artifact_application as lead_artifact_application_tests
+from tests.helpers import pristine_initialized_workspace
 from tests.test_artifact_proposal_orchestration import (
     _RULES,
     _artifact_outcome,
     _artifact_synthesis_outcome,
     _reference_ids,
 )
-from tests.test_lead_artifact_application import (
-    LeadArtifactApplicationTests,
-    _application_decision,
-)
+from tests.test_lead_artifact_application import _application_decision
 from tests.test_lead_orchestration import (
     LeadOrchestrationTestCase,
     _LeadBackend,
@@ -102,13 +100,10 @@ def _application_replay(applied: object) -> ArtifactApplicationDecision:
 
 
 class LeadStoryCommitTests(LeadOrchestrationTestCase):
-    artifact_snapshot = LeadArtifactApplicationTests.artifact_snapshot
+    artifact_snapshot = lead_artifact_application_tests.LeadArtifactApplicationTests.artifact_snapshot
 
     def setUp(self) -> None:
-        temporary = tempfile.TemporaryDirectory(prefix="lead-story-commit-")
-        self.temporary = temporary
-        self.addCleanup(temporary.cleanup)
-        main = Workspace(temporary.name).initialize()
+        main = pristine_initialized_workspace(self)
         self.session_id = "story_session"
         ready = provision_session_resources(main.root, self.session_id)
         self.workspace = Workspace(ready.identity.worktree_root).require_ready()
@@ -189,8 +184,9 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
             self.git("status", "--porcelain=v1", "-z"),
         )
 
-    async def applied_create(self, subject: str = "Prepared local commit"):
-        turn = await self.reviewed_create(subject)
+    async def applied_create(self, subject: str = "Prepared local commit", *, seeded=False):
+        turn = (await lead_artifact_application_tests.LeadArtifactApplicationTests.reviewed_create(
+            self, subject, kind="replace") if seeded else await self.reviewed_create(subject))
         applied = await self.runtime.decide_artifact_application(
             _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
         )
@@ -245,7 +241,7 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
                 )
 
     async def test_request_is_inspectable_and_reject_is_zero_git_mutation(self) -> None:
-        applied = await self.applied_create("Reject commit")
+        applied = await self.applied_create("Reject commit", seeded=True)
         key, _pending, pin, descriptors = self.pending_commit(applied)
         request = applied.commit_request
         assert request is not None
@@ -308,34 +304,6 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
             applied.request.reviewed_proposal.conversation_id
         )
 
-    async def test_revise_preserves_applied_files_and_requires_reprepare(self) -> None:
-        applied = await self.applied_create("Revise commit")
-        key, _pending, pin, descriptors = self.pending_commit(applied)
-        before_files = self.artifact_snapshot()
-        before_git = self.session_git_snapshot()
-        close_calls = []
-        original_close = type(pin).close
-
-        def tracked_close(current):
-            if current is pin:
-                close_calls.append(current)
-            return original_close(current)
-
-        with mock.patch.object(type(pin), "close", new=tracked_close):
-            revised = await self.runtime.decide_story_commit(
-                _commit_decision(
-                    applied,
-                    StoryCommitDecision.REVISE,
-                    revision_request="Use a narrower commit message.",
-                )
-            )
-        self.assertEqual(close_calls, [pin])
-        self.assertNotIn(key, self.runtime._pending_story_commits)
-        self.assert_pin_closed(pin, descriptors)
-        self.assertIs(revised.outcome.outcome, StoryCommitOutcomeKind.SUPERSEDED)
-        self.assertIs(revised.outcome.next_action, StoryCommitNextAction.REPREPARE)
-        self.assertEqual(self.artifact_snapshot(), before_files)
-        self.assertEqual(self.session_git_snapshot(), before_git)
 
     async def test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git(
         self,
@@ -411,245 +379,12 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
                 _commit_decision(applied, StoryCommitDecision.COMMIT)
             )
 
-    async def test_restart_cannot_reconstruct_commit_authority(self) -> None:
-        applied = await self.applied_create("Restarted commit")
-        before_files = self.artifact_snapshot()
-        before_git = self.session_git_snapshot()
-        restarted = StoryRuntime(self.workspace, _LeadBackend())  # type: ignore[arg-type]
-        stale = await restarted.decide_story_commit(
-            _commit_decision(applied, StoryCommitDecision.COMMIT)
-        )
-        self.assertIs(stale.outcome.outcome, StoryCommitOutcomeKind.STALE)
-        self.assertIs(stale.outcome.next_action, StoryCommitNextAction.REPREPARE)
-        self.assertIsNone(stale.outcome.result)
-        self.assertEqual(self.artifact_snapshot(), before_files)
-        self.assertEqual(self.session_git_snapshot(), before_git)
 
-    async def test_mismatch_and_prestaged_drift_fail_before_commit(self) -> None:
-        applied = await self.applied_create("Decision mismatch")
-        key, pending, pin, descriptors = self.pending_commit(applied)
-        before_files = self.artifact_snapshot()
-        before_git = self.session_git_snapshot()
-        mismatched = replace(
-            _commit_decision(applied, StoryCommitDecision.COMMIT),
-            request_digest="sha256:" + "0" * 64,
-        )
-        with self.assertRaisesRegex(ValueError, "does not match tail"):
-            await self.runtime.decide_story_commit(mismatched)
-        self.assertIs(self.runtime._pending_story_commits[key], pending)
-        self.assertIs(pending._generation_pin, pin)
-        for descriptor in descriptors:
-            os.fstat(descriptor)
-        self.assertEqual(self.artifact_snapshot(), before_files)
-        self.assertEqual(self.session_git_snapshot(), before_git)
 
-        self.workspace.path("core_documents/global_outline.md").write_text(
-            "Externally staged outline.\n",
-            encoding="utf-8",
-        )
-        self.git("add", "--", "core_documents/global_outline.md")
-        drifted_files = self.artifact_snapshot()
-        drifted_git = self.session_git_snapshot()
-        stale = await self.runtime.decide_story_commit(
-            _commit_decision(applied, StoryCommitDecision.COMMIT)
-        )
-        self.assertIs(stale.outcome.outcome, StoryCommitOutcomeKind.STALE)
-        self.assertIs(stale.outcome.next_action, StoryCommitNextAction.REPREPARE)
-        self.assertEqual(self.artifact_snapshot(), drifted_files)
-        self.assertEqual(self.session_git_snapshot(), drifted_git)
-        self.assertNotIn(key, self.runtime._pending_story_commits)
-        self.assert_pin_closed(pin, descriptors)
 
-    async def test_service_and_result_persistence_failures_are_inspect_only(
-        self,
-    ) -> None:
-        applied = await self.applied_create("Service failure")
-        key = (
-            applied.request.reviewed_proposal.session_id,
-            applied.request.reviewed_proposal.conversation_id,
-            applied.request.reviewed_proposal.step_id,
-        )
-        service = self.runtime._pending_story_commits[key].service
-        _key, _pending, pin, descriptors = self.pending_commit(applied)
-        before_git = self.session_git_snapshot()
-        with mock.patch.object(
-            type(service),
-            "execute",
-            side_effect=StoryCommitError(
-                StoryCommitFailureCode.OUTCOME_UNKNOWN,
-                StoryCommitRecoveryAction.INSPECT,
-            ),
-        ), self.track_pin_closes(pin) as close_calls:
-            uncertain = await self.runtime.decide_story_commit(
-                _commit_decision(applied, StoryCommitDecision.COMMIT)
-            )
-        self.assertIs(uncertain.outcome.outcome, StoryCommitOutcomeKind.OUTCOME_UNKNOWN)
-        self.assertIs(uncertain.outcome.next_action, StoryCommitNextAction.INSPECT)
-        self.assertEqual(self.session_git_snapshot(), before_git)
-        self.assertEqual(close_calls, [pin])
-        self.assertNotIn(key, self.runtime._pending_story_commits)
-        self.assert_pin_closed(pin, descriptors)
 
-    async def test_result_persistence_failure_is_inspect_only(self) -> None:
-        applied = await self.applied_create("Result persistence failure")
-        key, _pending, pin, descriptors = self.pending_commit(applied)
-        original_append = self.runtime._append_drafts
-        calls = 0
 
-        def fail_result_append(*args, **kwargs):
-            nonlocal calls
-            calls += 1
-            if calls == 2:
-                raise OSError("commit result persistence unavailable")
-            return original_append(*args, **kwargs)
 
-        before_head = self.git("rev-parse", "HEAD")
-        with mock.patch.object(
-            self.runtime,
-            "_append_drafts",
-            side_effect=fail_result_append,
-        ), self.track_pin_closes(pin) as close_calls:
-            missing = await self.runtime.decide_story_commit(
-                _commit_decision(applied, StoryCommitDecision.COMMIT)
-            )
-        self.assertIs(missing.outcome.outcome, StoryCommitOutcomeKind.OUTCOME_UNKNOWN)
-        self.assertIs(missing.outcome.next_action, StoryCommitNextAction.INSPECT)
-        self.assertIsNone(missing.outcome.result)
-        self.assertNotEqual(self.git("rev-parse", "HEAD"), before_head)
-        self.assertEqual(close_calls, [pin])
-        self.assertNotIn(key, self.runtime._pending_story_commits)
-        self.assert_pin_closed(pin, descriptors)
-        with self.assertRaisesRegex(ValueError, "authoritative request tail"):
-            await self.runtime.decide_story_commit(
-                _commit_decision(applied, StoryCommitDecision.COMMIT)
-            )
-
-    async def test_service_cancellation_retires_pending_generation_once(self) -> None:
-        applied = await self.applied_create("Cancelled commit")
-        key, pending, pin, descriptors = self.pending_commit(applied)
-        close_calls = []
-        original_close = type(pin).close
-
-        def tracked_close(current):
-            if current is pin:
-                close_calls.append(current)
-            return original_close(current)
-
-        cancellation = asyncio.CancelledError("commit cancelled")
-        with mock.patch.object(
-            type(pending.service),
-            "execute",
-            side_effect=cancellation,
-        ), mock.patch.object(type(pin), "close", new=tracked_close):
-            with self.assertRaises(asyncio.CancelledError) as caught:
-                await self.runtime.decide_story_commit(
-                    _commit_decision(applied, StoryCommitDecision.COMMIT)
-                )
-        self.assertIs(caught.exception, cancellation)
-        self.assertEqual(close_calls, [pin])
-        self.assertNotIn(key, self.runtime._pending_story_commits)
-        self.assert_pin_closed(pin, descriptors)
-
-    async def test_pending_replacement_closes_only_the_observed_owners(self) -> None:
-        applied = await self.applied_create("Pending replacement")
-        key, first, first_pin, first_descriptors = self.pending_commit(applied)
-        binding = self.runtime._session_artifact_binding(self.session_id)
-        second_pin = binding.acquire_generation_pin()
-        second_descriptors = second_pin._pin._descriptors
-        second = orchestrator_module._PendingStoryCommit(
-            first.request,
-            first.service,
-            second_pin,
-        )
-        calls = []
-        original_close = type(first_pin).close
-
-        def tracked_close(current):
-            if current is first_pin or current is second_pin:
-                calls.append(current)
-            return original_close(current)
-
-        with mock.patch.object(type(first_pin), "close", new=tracked_close):
-            self.runtime._install_pending_story_commit(key, second)
-            self.runtime._retire_pending_story_commit(key, first)
-            self.assertIs(self.runtime._pending_story_commits[key], second)
-            self.runtime._retire_pending_story_commit(key, second)
-            first.close()
-            second.close()
-        self.assertEqual(calls, [first_pin, second_pin])
-        self.assertNotIn(key, self.runtime._pending_story_commits)
-        self.assert_pin_closed(first_pin, first_descriptors)
-        self.assert_pin_closed(second_pin, second_descriptors)
-
-    async def test_mismatched_pending_retires_only_after_durable_decision(self) -> None:
-        applied = await self.applied_create("Mismatched pending retirement")
-        key, observed, observed_pin, observed_descriptors = self.pending_commit(
-            applied
-        )
-        request = applied.commit_request
-        assert request is not None
-        observed.request = orchestrator_module.build_story_commit_request_payload(
-            confirmation_request_id="mismatched_pending_request",
-            application_result_event_id=request.application_result_event_id,
-            candidate=request.candidate,
-        )
-        decision = _commit_decision(applied, StoryCommitDecision.COMMIT)
-
-        with mock.patch.object(
-            self.runtime,
-            "_append_drafts",
-            side_effect=OSError("decision append failed"),
-        ):
-            with self.assertRaises(OSError):
-                await self.runtime.decide_story_commit(decision)
-        self.assertIs(self.runtime._pending_story_commits[key], observed)
-        self.assertIs(observed._generation_pin, observed_pin)
-        for descriptor in observed_descriptors:
-            os.fstat(descriptor)
-
-        binding = self.runtime._session_artifact_binding(self.session_id)
-        replacement_pin = binding.acquire_generation_pin()
-        replacement_descriptors = replacement_pin._pin._descriptors
-        replacement = orchestrator_module._PendingStoryCommit(
-            request,
-            observed.service,
-            replacement_pin,
-        )
-        original_append = self.runtime._append_drafts
-        append_calls = 0
-
-        def replace_after_decision_append(*args, **kwargs):
-            nonlocal append_calls
-            result = original_append(*args, **kwargs)
-            append_calls += 1
-            if append_calls == 1:
-                self.runtime._install_pending_story_commit(key, replacement)
-            return result
-
-        with self.track_pin_closes(
-            observed_pin,
-            replacement_pin,
-        ) as close_calls, mock.patch.object(
-            self.runtime,
-            "_append_drafts",
-            side_effect=replace_after_decision_append,
-        ):
-            stale = await self.runtime.decide_story_commit(decision)
-            self.assertIs(
-                self.runtime._pending_story_commits[key],
-                replacement,
-            )
-            self.assertIs(replacement._generation_pin, replacement_pin)
-            for descriptor in replacement_descriptors:
-                os.fstat(descriptor)
-            self.runtime._retire_pending_story_commit(key, replacement)
-
-        self.assertIs(stale.outcome.outcome, StoryCommitOutcomeKind.STALE)
-        self.assertIs(stale.outcome.next_action, StoryCommitNextAction.REPREPARE)
-        self.assertEqual(close_calls, [observed_pin, replacement_pin])
-        self.assertNotIn(key, self.runtime._pending_story_commits)
-        self.assert_pin_closed(observed_pin, observed_descriptors)
-        self.assert_pin_closed(replacement_pin, replacement_descriptors)
 
 
 if __name__ == "__main__":

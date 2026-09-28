@@ -47,6 +47,7 @@ from .authorization import (
     build_authorized_references,
 )
 from .catalog import (
+    CORE_ARTIFACT_PATHS,
     ArtifactCatalog,
     ArtifactCatalogEntry,
     manuscript_artifact_path,
@@ -231,6 +232,32 @@ class WritingArtifactRepository:
             raise ValueError("max_bytes must be None or a positive integer")
         with self._locked_sources():
             return self._sources.read_text(path, max_bytes=max_bytes)
+
+    def are_sources_absent(
+        self, paths: tuple[str, ...], *, max_bytes: int | None = None
+    ) -> bool:
+        """Prove exact absence of an ordered subset of canonical core sources."""
+        if type(paths) is not tuple:
+            raise TypeError("artifact paths must be a tuple")
+        if (
+            not paths
+            or len(paths) > len(CORE_ARTIFACT_PATHS)
+            or any(type(path) is not str or path not in CORE_ARTIFACT_PATHS for path in paths)
+            or len(set(paths)) != len(paths)
+        ):
+            raise ValueError("artifact paths must be a nonempty unique core subset")
+        if max_bytes is not None and (
+            type(max_bytes) is not int or max_bytes <= 0
+        ):
+            raise ValueError("max_bytes must be None or a positive integer")
+        with self._locked_sources():
+            for path in paths:
+                try:
+                    self._sources.read_text(path, max_bytes=max_bytes)
+                except FileNotFoundError:
+                    continue
+                return False
+            return True
 
     def capture_reference_authorization(
         self,

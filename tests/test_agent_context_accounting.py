@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import copy
+import json
 import math
 import unittest
 from pathlib import Path
@@ -32,7 +34,43 @@ from story_writing_agents.provider_adapter import (
     provider_failure_accounting,
     record_provider_failure_accounting,
 )
+from story_writing_agents.agent_context.request_compaction import compact_context_payload
 
+def _shared_context_payload(event=None):
+    if event is None:
+        event = {"instruction": "Retain this exact request 한🙂\n" * 40,
+                 "values": [True, 1, 1.0, None], "nested": {"context_ref": "literal-user-data"}}
+    return {"i": {"input": "CURRENT_한🙂", "artifact_objectives": dict(reversed(event.items())),
+                  "structured_recommendation_execution": {
+                      "request": event, "decision": event, "start": event,
+                      "selected_inputs": [{"conversation_event": event}]}},
+            "h": {"conversations": [{"records": [{"details": event}], "artifact_objectives": event}]}}
+
+def _expanded_context_payload(payload):
+    if "context_objects" not in payload:
+        return payload
+    result = copy.deepcopy(dict(payload))
+    table = result.pop("context_objects")
+    result.pop("context_encoding")
+    def resolve(owner, key):
+        value = owner.get(key)
+        if type(value) is dict and set(value) == {"context_ref"}:
+            owner[key] = copy.deepcopy(table[value["context_ref"]])
+    current, history = result.get("i"), result.get("h")
+    if type(current) is dict:
+        resolve(current, "artifact_objectives")
+        execution = current.get("structured_recommendation_execution")
+        if type(execution) is dict:
+            for key in ("request", "decision", "start"):
+                resolve(execution, key)
+            for item in execution.get("selected_inputs", []):
+                resolve(item, "conversation_event")
+    if type(history) is dict:
+        for conversation in history.get("conversations", []):
+            resolve(conversation, "artifact_objectives")
+            for record in conversation.get("records", []):
+                resolve(record, "details")
+    return result
 
 class CanonicalProviderJsonTests(unittest.TestCase):
     """Verify the exact strict application/provider JSON boundary."""
@@ -55,11 +93,41 @@ class CanonicalProviderJsonTests(unittest.TestCase):
     def test_tuples_shared_values_and_scalars_match_the_canonical_shape(self) -> None:
         shared = ["same"]
         self.assertEqual(
-            canonical_provider_json(
-                {"tuple": (0, -2, 1.5), "left": shared, "right": shared}
-            ),
+            canonical_provider_json({"tuple": (0, -2, 1.5), "left": shared, "right": shared}),
             b'{"tuple":[0,-2,1.5],"left":["same"],"right":["same"]}',
         )
+        payload = _shared_context_payload()
+        payload["unrelated"] = {"context_ref": "o1"}
+        before = copy.deepcopy(payload)
+        paths = {("i",): ContextComponentKind.CURRENT_INPUT,
+                 ("h",): ContextComponentKind.CONVERSATION_CONTEXT}
+        compact, _ = compact_context_payload(payload, paths)
+        self.assertEqual(payload, before)
+        self.assertEqual(_expanded_context_payload(compact), before)
+        self.assertEqual(compact["context_encoding"]["format"], "shared-objects-v1")
+        self.assertEqual(list(compact["context_objects"]), ["o1"])
+        self.assertEqual(canonical_provider_json(compact).count(b'"context_ref":"o1"'), 8)
+        self.assertLess(len(canonical_provider_json(compact)), len(canonical_provider_json(before)))
+        values = [{"body": "한🙂" * 100, "scalar": value} for value in (True, 1, 1.0, [1, 2], [2, 1])]
+        typed = {"h": {"conversations": [{"records": [{"details": value} for value in values * 2]}]}}
+        encoded, _ = compact_context_payload(typed, paths)
+        self.assertEqual(len(encoded["context_objects"]), 5)
+        self.assertEqual(json.dumps(_expanded_context_payload(encoded), sort_keys=True),
+                         json.dumps(typed, sort_keys=True))
+        collisions = ({"context_objects": {}}, {"context_encoding": {}})
+        noops = [{**payload, **collision} for collision in collisions]
+        marker = copy.deepcopy(payload)
+        marker["i"]["artifact_objectives"] = {"context_ref": "user data"}
+        noops += [marker, _shared_context_payload({"body": "x" * 244})]
+        noops += [{"i": {"structured_recommendation_execution": {"request": value, "decision": value}}}
+                  for value in ({"small": "x"}, {"body": "x" * 256})]
+        noops += [{"i": {"structured_recommendation_execution": {"request": values[0]}}}]
+        for original in noops:
+            result, result_paths = compact_context_payload(original, paths)
+            self.assertEqual(canonical_provider_json(result), canonical_provider_json(original))
+            self.assertEqual(result_paths, paths)
+        boundary, _ = compact_context_payload(_shared_context_payload({"body": "x" * 245}), paths)
+        self.assertIn("context_objects", boundary)
 
     def test_strict_failures_have_one_content_free_diagnostic(self) -> None:
         cyclic: list[object] = ["PRIVATE_CYCLE_VALUE"]
@@ -97,152 +165,75 @@ class ProviderPayloadAccountingTests(unittest.TestCase):
         return {component.kind: component for component in accounting.components}
 
     def test_ascii_and_unicode_components_partition_schema_and_payload(self) -> None:
-        schema = {
-            "type": "object",
-            "properties": {"content": {"type": "string"}},
-        }
-        payload = {
-            "operation": "conversation",
-            "content": "질문 🙂",
-            "context": [{"content": "prior"}],
-        }
+        schema = {"type": "object", "properties": {"content": {"type": "string"}}}
+        payload = _shared_context_payload()
+        history_only = {"content": "Prior history 한🙂" * 70}
+        payload["h"]["conversations"][0]["records"] += [{"details": history_only}] * 2
+        request = ("i", "structured_recommendation_execution", "request")
+        decision = ("i", "structured_recommendation_execution", "decision")
+        mandatory = (*request, "instruction")
+        paths = {("i",): ContextComponentKind.CURRENT_INPUT,
+                 ("h",): ContextComponentKind.CONVERSATION_CONTEXT,
+                 mandatory: ContextComponentKind.MANDATORY_REFERENCE_CONTENT,
+                 (*decision, "nested"): ContextComponentKind.ROLE_SYSTEM_PROMPT}
+        compact, compact_paths = compact_context_payload(payload, paths, (mandatory,))
+        execution = compact["i"]["structured_recommendation_execution"]
+        original = payload["i"]["structured_recommendation_execution"]
+        self.assertEqual((execution["request"], execution["decision"]),
+                         (original["request"], original["decision"]))
+        self.assertEqual(_expanded_context_payload(compact), payload)
+        self.assertEqual(compact_paths[mandatory], paths[mandatory])
+        for alias, value in compact["context_objects"].items():
+            expected = (ContextComponentKind.CONVERSATION_CONTEXT if value == history_only
+                        else ContextComponentKind.CURRENT_INPUT)
+            self.assertEqual(compact_paths[("context_objects", alias)], expected)
         payload_json, accounting = account_provider_payload(
-            schema,
-            payload,
-            call_kind=ProviderCallKind.CONVERSATION,
-            component_paths={
-                ("content",): ContextComponentKind.CURRENT_INPUT,
-                ("context",): ContextComponentKind.CONVERSATION_CONTEXT,
-            },
-        )
+            schema, compact, call_kind=ProviderCallKind.CONVERSATION,
+            component_paths=compact_paths, mandatory_reference_paths=(mandatory,))
         components = self._components(accounting)
-        self.assertEqual(payload_json, canonical_provider_json(payload))
-        self.assertEqual(
-            accounting.schema_utf8_bytes,
-            len(canonical_provider_json(schema)),
-        )
+        self.assertEqual(payload_json, canonical_provider_json(compact))
+        self.assertEqual(accounting.schema_utf8_bytes, len(canonical_provider_json(schema)))
         self.assertEqual(accounting.payload_utf8_bytes, len(payload_json))
-        self.assertEqual(
-            sum(item.serialized_utf8_bytes for item in accounting.components),
-            accounting.serialized_input_utf8_bytes,
-        )
-        self.assertEqual(
-            set(components),
-            {
-                ContextComponentKind.OUTPUT_SCHEMA,
-                ContextComponentKind.CONTROL,
-                ContextComponentKind.CURRENT_INPUT,
-                ContextComponentKind.CONVERSATION_CONTEXT,
-            },
-        )
-        self.assertEqual(accounting.raw_mandatory_reference_utf8_bytes, 0)
+        self.assertEqual(sum(item.serialized_utf8_bytes for item in accounting.components),
+                         accounting.serialized_input_utf8_bytes)
+        self.assertEqual(set(components), {ContextComponentKind.OUTPUT_SCHEMA, ContextComponentKind.CONTROL,
+                         ContextComponentKind.CURRENT_INPUT, ContextComponentKind.CONVERSATION_CONTEXT,
+                         ContextComponentKind.MANDATORY_REFERENCE_CONTENT, ContextComponentKind.ROLE_SYSTEM_PROMPT})
+        self.assertEqual(accounting.raw_mandatory_reference_utf8_bytes,
+                         len(original["request"]["instruction"].encode("utf-8")))
 
-    def test_whole_range_and_multiple_reference_bodies_exclude_only_raw_bytes(
-        self,
-    ) -> None:
+    def test_whole_range_and_multiple_reference_bodies_exclude_only_raw_bytes(self) -> None:
         schema = {"type": "object"}
+        def reference(path, content, line_range=None):
+            return {"reference": {"path": path, "line_range": line_range}, "content": content}
         reference_cases = (
-            (
-                "whole",
-                [
-                    {
-                        "reference": {
-                            "path": "core_documents/global_outline.md",
-                            "line_range": None,
-                        },
-                        "content": "whole line\n",
-                    }
-                ],
-            ),
-            (
-                "range",
-                [
-                    {
-                        "reference": {
-                            "path": "core_documents/character_sheets.md",
-                            "line_range": {"start": 2, "end": 2},
-                        },
-                        "content": "범위 🙂\n",
-                    }
-                ],
-            ),
-            (
-                "multiple",
-                [
-                    {
-                        "reference": {
-                            "path": "core_documents/global_outline.md",
-                            "line_range": None,
-                        },
-                        "content": 'quote " slash \\ newline\n',
-                    },
-                    {
-                        "reference": {
-                            "path": "manuscript/part-01/scene.md",
-                            "line_range": {"start": 1, "end": 2},
-                        },
-                        "content": "한🙂\nsecond\n",
-                    },
-                ],
-            ),
+            ("whole", [reference("core_documents/global_outline.md", "whole line\n")]),
+            ("range", [reference("core_documents/character_sheets.md", "범위 🙂\n", {"start": 2, "end": 2})]),
+            ("multiple", [reference("core_documents/global_outline.md", 'quote " slash \\ newline\n'),
+                          reference("manuscript/part-01/scene.md", "한🙂\nsecond\n", {"start": 1, "end": 2})]),
         )
         for label, references in reference_cases:
             with self.subTest(case=label):
-                payload = {
-                    "operation": "conversation",
-                    "untrusted_writing_artifact_context": references,
-                }
-                component_paths = {
-                    ("untrusted_writing_artifact_context",): (
-                        ContextComponentKind.MANDATORY_REFERENCE_DESCRIPTOR
-                    )
-                }
-                raw_paths = []
-                for index in range(len(references)):
-                    path = (
-                        "untrusted_writing_artifact_context",
-                        index,
-                        "content",
-                    )
-                    component_paths[path] = (
-                        ContextComponentKind.MANDATORY_REFERENCE_CONTENT
-                    )
-                    raw_paths.append(path)
+                payload = {"operation": "conversation", "untrusted_writing_artifact_context": references}
+                component_paths = {("untrusted_writing_artifact_context",):
+                                   ContextComponentKind.MANDATORY_REFERENCE_DESCRIPTOR}
+                raw_paths = tuple(("untrusted_writing_artifact_context", index, "content")
+                                  for index in range(len(references)))
+                component_paths.update({path: ContextComponentKind.MANDATORY_REFERENCE_CONTENT for path in raw_paths})
                 payload_json, accounting = account_provider_payload(
-                    schema,
-                    payload,
-                    call_kind=ProviderCallKind.CONVERSATION,
-                    component_paths=component_paths,
-                    mandatory_reference_paths=tuple(raw_paths),
-                )
-                raw_bytes = sum(
-                    len(item["content"].encode("utf-8")) for item in references
-                )
+                    schema, payload, call_kind=ProviderCallKind.CONVERSATION,
+                    component_paths=component_paths, mandatory_reference_paths=raw_paths)
+                raw_bytes = sum(len(item["content"].encode("utf-8")) for item in references)
                 components = self._components(accounting)
-                content_component = components[
-                    ContextComponentKind.MANDATORY_REFERENCE_CONTENT
-                ]
-                descriptor_component = components[
-                    ContextComponentKind.MANDATORY_REFERENCE_DESCRIPTOR
-                ]
-                self.assertEqual(
-                    accounting.raw_mandatory_reference_utf8_bytes,
-                    raw_bytes,
-                )
-                self.assertEqual(
-                    content_component.raw_mandatory_reference_utf8_bytes,
-                    raw_bytes,
-                )
-                self.assertGreater(
-                    content_component.serialized_utf8_bytes,
-                    raw_bytes,
-                )
+                content_component = components[ContextComponentKind.MANDATORY_REFERENCE_CONTENT]
+                descriptor_component = components[ContextComponentKind.MANDATORY_REFERENCE_DESCRIPTOR]
+                self.assertEqual(accounting.raw_mandatory_reference_utf8_bytes, raw_bytes)
+                self.assertEqual(content_component.raw_mandatory_reference_utf8_bytes, raw_bytes)
+                self.assertGreater(content_component.serialized_utf8_bytes, raw_bytes)
                 self.assertGreater(descriptor_component.serialized_utf8_bytes, 0)
                 self.assertIn(b"line_range", payload_json)
-                self.assertEqual(
-                    sum(item.serialized_utf8_bytes for item in accounting.components),
-                    len(canonical_provider_json(schema)) + len(payload_json),
-                )
+                self.assertEqual(sum(item.serialized_utf8_bytes for item in accounting.components),
+                                 accounting.serialized_input_utf8_bytes)
 
     def test_call_totals_keep_reference_envelopes_and_escaping_counted(self) -> None:
         binding = (
@@ -444,12 +435,18 @@ class AgentContextBoundaryTests(unittest.TestCase):
                 "ProviderCallState",
                 "ProviderJsonEncodingError",
                 "ProviderPayloadAccounting",
+                "ProviderStreamEvent",
+                "ProviderStreamEventKind",
+                "ProviderStreamSink",
                 "ProviderUsage",
                 "account_provider_payload",
+                "active_provider_stream_sink",
+                "bind_provider_stream_sink",
                 "canonical_provider_json",
+                "reset_provider_stream_sink",
             ),
         )
-        self.assertEqual(len(story_writing_agents.__all__), 104)
+        self.assertEqual(len(story_writing_agents.__all__), 106)
         self.assertEqual(len(writing_artifacts.__all__), 78)
         self.assertTrue(
             set(agent_context.__all__).isdisjoint(story_writing_agents.__all__)
@@ -483,8 +480,11 @@ class AgentContextBoundaryTests(unittest.TestCase):
             for node in ast.walk(facade_tree)
             if isinstance(node, ast.ImportFrom) and node.level
         ]
-        self.assertEqual(len(relative_imports), 1)
-        self.assertEqual(relative_imports[0].module, "accounting")
+        self.assertEqual(len(relative_imports), 2)
+        self.assertEqual(
+            {node.module for node in relative_imports},
+            {"accounting", "progress"},
+        )
 
 
 if __name__ == "__main__":

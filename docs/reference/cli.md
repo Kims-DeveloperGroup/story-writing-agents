@@ -371,6 +371,7 @@ input. See [Lead recovery](../guides/lead-agent.md#submitted-lead-outcome-unavai
 | Sessions | `/session list \| create NAME \| resume [NAME] \| pause` |
 | Conversations | `/conversation new [SUBJECT] \| list [--all] [QUERY] \| resume [ID] \| subject SUBJECT \| archive [ID]` |
 | Inspection | `/search QUERY`; `/transcript [ID [COUNT] [--from SEQUENCE]]`; `/inspect [DEBATE\|last]`; `/exchanges`; `/history [COUNT]`; `/status` |
+| Display | `/progress [on\|off\|toggle]` (alias `/toggle`) |
 | Help/exit | `/help [COMMAND]` (alias `/?`); `/quit` |
 
 `/search` and `/transcript` require an attachment. Conversation mutations also

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import inspect
 import uuid
 from collections.abc import Awaitable, Callable
@@ -13,6 +14,7 @@ from ..conversations import (
     ArtifactApplicationDecisionResult,
     CollaborationConfirmationDecision,
     CollaborationEvent,
+    CollaborationNextAction,
     CollaborationStepState,
     LeadDecisionResult,
     LeadRecommendationDecision,
@@ -31,6 +33,8 @@ from ..interactive_terminal import (
     InteractivePickerInput,
     InteractivePromptInput,
     InteractiveSemanticOutput,
+    Message,
+    MessagePresentation,
     Notice,
     Prompt,
     ReferenceInputScope,
@@ -39,11 +43,15 @@ from ..interactive_terminal import (
 )
 from ..interactive_terminal._collaboration_view import (
     project_artifact_application_decision_result,
+    project_lead_error_result,
     project_lead_turn_result,
     project_specialist_results,
     project_story_commit_decision_result,
 )
-from ..errors import ProviderAuthenticationRequiredError
+from ..errors import (
+    BackendProtocolError,
+    ProviderAuthenticationRequiredError,
+)
 from ..orchestrator import RuntimeSession
 from ..provider_auth_recovery import ProviderAuthRecovery
 
@@ -167,6 +175,9 @@ class InteractiveLeadAdapter:
     def submit(self, conversation_id: str, text: str) -> bool:
         """Run one literal lead turn; return true only for call-local EOF."""
 
+        self._semantic_output.write_accepted_input(
+            Message("User", text, presentation=MessagePresentation.CHAT_BLOCK)
+        )
         try:
             turn = self._run_turn(
                 self._session.lead_turn(
@@ -177,11 +188,38 @@ class InteractiveLeadAdapter:
             )
             return self._present_and_decide(turn)
         except ProviderAuthenticationRequiredError:
+            error_message = (
+                "Authentication recovery could not safely continue this request."
+            )
+            advice = "Inspect /history and /exchanges before continuing, or run /auth."
+            self._semantic_output.write_component(
+                project_lead_error_result(error_message, advice=advice)
+            )
             self._semantic_output.write_component(
                 Notice(
-                    "Authentication recovery could not safely continue this request. "
-                    "Inspect /history and /exchanges before continuing.",
+                    f"{error_message} {advice}",
                     label="authentication required",
+                    role=SemanticRole.ERROR,
+                    state=ViewState.ERROR,
+                )
+            )
+            self._write_elapsed()
+            return False
+        except BackendProtocolError as exc:
+            last_error = getattr(self._progress, "last_error_message", None)
+            exc_text = str(exc).strip()
+            if last_error and last_error not in exc_text:
+                error_message = f"{exc_text}\n{last_error}"
+            else:
+                error_message = exc_text or "Provider request failed."
+            self._semantic_output.write_component(
+                project_lead_error_result(error_message)
+            )
+            self._semantic_output.write_component(
+                Notice(
+                    f"Provider request failed: {error_message}. "
+                    "Inspect /history and /exchanges before continuing.",
+                    label="provider failure",
                     role=SemanticRole.ERROR,
                     state=ViewState.ERROR,
                 )
@@ -207,6 +245,13 @@ class InteractiveLeadAdapter:
             for panel in self._pending_specialist_panels:
                 self._semantic_output.write_component(panel)
             self._pending_specialist_panels = ()
+            if turn.next_action is CollaborationNextAction.RETRY_LEAD_TURN:
+                diagnostic_hint = "Inspect /history and /exchanges before continuing."
+                if diagnostic_hint not in turn.message:
+                    turn = dataclasses.replace(
+                        turn,
+                        message=f"{turn.message}\n\n{diagnostic_hint}",
+                    )
             self._semantic_output.write_component(project_lead_turn_result(turn))
             self._write_elapsed()
             if turn.state in {
@@ -514,30 +559,48 @@ class InteractiveLeadAdapter:
     def _run_operation(self, operation: Awaitable[object]) -> object:
         """Keep the operation pending while progress yields terminal ownership."""
 
+        bound_sink = getattr(self._progress, "bound_stream_sink", None)
         if self._recover_authentication is None:
+            if bound_sink is not None:
+                with bound_sink():
+                    return self._runner.run(self._progress.run(operation))
             return self._runner.run(self._progress.run(operation))
         recovery = ProviderAuthRecovery()
 
+        bound_sink = getattr(self._progress, "bound_stream_sink", None)
+
         async def scoped_operation() -> object:
             with recovery.scope():
+                if bound_sink is not None:
+                    with bound_sink():
+                        return await operation
                 return await operation
 
-        task = self._runner.get_loop().create_task(scoped_operation())
+        if bound_sink is not None:
+            with bound_sink():
+                task = self._runner.get_loop().create_task(scoped_operation())
+        else:
+            task = self._runner.get_loop().create_task(scoped_operation())
 
-        async def wait_for_operation_or_auth() -> None:
+        async def wait_for_operation_or_auth() -> object:
             ready = asyncio.create_task(recovery.wait_ready())
             try:
                 await asyncio.wait((task, ready), return_when=asyncio.FIRST_COMPLETED)
             finally:
                 ready.cancel()
                 await asyncio.gather(ready, return_exceptions=True)
+            if task.done():
+                return task.result()
+            return None
 
         async def join_operation() -> None:
             await asyncio.gather(task, return_exceptions=True)
 
         try:
             while True:
-                self._runner.run(self._progress.run(wait_for_operation_or_auth()))
+                outcome = self._runner.run(
+                    self._progress.run(wait_for_operation_or_auth())
+                )
                 if task.done():
                     return task.result()
                 key = recovery.next_request()

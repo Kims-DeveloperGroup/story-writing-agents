@@ -28,7 +28,12 @@ from .contracts import (
     GitManifestEntry,
     GitOperationError,
 )
-from .process import GitProcessFailure, GitProcessResult, GitProcessRunner
+from .process import (
+    GitProcessFailure,
+    GitProcessResult,
+    GitProcessRunner,
+    _MAX_STDOUT_BYTES,
+)
 from .repository_lock import (
     GitRepositoryLease,
     GitRepositoryLockFailure,
@@ -778,14 +783,19 @@ class _Repository:
                 GitSessionResourceState.RECOVERY_REQUIRED,
                 GitSessionRecoveryAction.OPERATOR_RECOVERY,
             )
-        parents = _lines(
-            self._required(
-                ("show", "-s", "--format=%P", baseline), read_only=True
-            ).stdout
-        )
-        message = self._required(
-            ("show", "-s", "--format=%B", baseline), read_only=True
-        ).stdout.rstrip(b"\n")
+        commit_header = self._required(
+            ("show", "-s", "--format=%P%x00%B", baseline), read_only=True
+        ).stdout
+        parent_bytes, separator, message_bytes = commit_header.partition(b"\x00")
+        if not separator:
+            raise _resource_error(
+                GitSessionFailureCode.RECOVERY_REQUIRED,
+                GitSessionOperationKind.INSPECT,
+                GitSessionResourceState.RECOVERY_REQUIRED,
+                GitSessionRecoveryAction.OPERATOR_RECOVERY,
+            )
+        parents = _lines(parent_bytes)
+        message = message_bytes.rstrip(b"\n")
         if (
             parents not in {(), ("",)}
             or message != GIT_BASELINE_COMMIT_MESSAGE.encode()
@@ -858,41 +868,108 @@ class _Repository:
         return hashlib.sha256(status + b"\0" + content_delta).hexdigest()
 
     def _tree_digests(self, commit: str) -> dict[str, str]:
-        result = self._required(("ls-tree", "-r", "-z", commit), read_only=True)
-        values: dict[str, str] = {}
-        for row in result.stdout.split(b"\x00"):
-            if not row:
-                continue
-            try:
-                header, raw_path = row.split(b"\t", 1)
-                mode, kind, object_id = header.split(b" ")
-            except ValueError:
-                raise _resource_error(
-                    GitSessionFailureCode.RECOVERY_REQUIRED,
-                    GitSessionOperationKind.INSPECT,
-                    GitSessionResourceState.RECOVERY_REQUIRED,
-                    GitSessionRecoveryAction.OPERATOR_RECOVERY,
-                ) from None
-            if mode != b"100644" or kind != b"blob":
-                raise _resource_error(
-                    GitSessionFailureCode.RECOVERY_REQUIRED,
-                    GitSessionOperationKind.INSPECT,
-                    GitSessionResourceState.RECOVERY_REQUIRED,
-                    GitSessionRecoveryAction.OPERATOR_RECOVERY,
-                )
-            path = _utf8(raw_path)
-            blob = self._required(
-                ("cat-file", "blob", object_id.decode("ascii")), read_only=True
+        """Read one fresh exact tree through a bounded immutable-object batch."""
+
+        failure: GitSessionResourceError | None = None
+        try:
+            tree = self._required(
+                ("ls-tree", "-r", "-l", "-z", commit), read_only=True
             ).stdout
-            values[path] = hashlib.sha256(blob).hexdigest()
-            if len(values) > 65_536:
-                raise _resource_error(
-                    GitSessionFailureCode.RECOVERY_REQUIRED,
-                    GitSessionOperationKind.INSPECT,
-                    GitSessionResourceState.RECOVERY_REQUIRED,
-                    GitSessionRecoveryAction.OPERATOR_RECOVERY,
-                )
-        return values
+            if type(tree) is not bytes or (tree and not tree.endswith(b"\x00")):
+                raise ValueError
+            if not tree:
+                return {}
+            entries: list[tuple[str, bytes, int]] = []
+            paths: set[str] = set()
+            for row in tree[:-1].split(b"\x00"):
+                header, raw_path = row.split(b"\t", 1)
+                mode, kind, raw_object_id, padded_size = header.split(b" ", 3)
+                object_id = _object_id(raw_object_id).encode("ascii")
+                path = _utf8(raw_path)
+                raw_size = padded_size.lstrip(b" ")
+                if (
+                    not raw_size.isdigit()
+                    or len(raw_size) > len(str(_MAX_STDOUT_BYTES))
+                ):
+                    raise ValueError
+                size = int(raw_size)
+                if (
+                    mode != b"100644"
+                    or kind != b"blob"
+                    or object_id != raw_object_id
+                    or padded_size != str(size).rjust(7).encode("ascii")
+                    or size > _MAX_STDOUT_BYTES
+                    or path in paths
+                    or len(entries) >= 65_536
+                ):
+                    raise ValueError
+                paths.add(path)
+                entries.append((path, object_id, size))
+            values: dict[str, str] = {}
+
+            def read_batch(batch: list[tuple[str, bytes, int]]) -> None:
+                output = self._required(
+                    ("cat-file", "--batch"),
+                    stdin=b"".join(object_id + b"\n" for _, object_id, _ in batch),
+                    read_only=True,
+                ).stdout
+                if type(output) is not bytes:
+                    raise ValueError
+                offset = 0
+                for path, object_id, size in batch:
+                    header_end = output.find(b"\n", offset)
+                    if header_end < 0:
+                        raise ValueError
+                    observed_id, kind, raw_size = output[offset:header_end].split(b" ")
+                    if (
+                        observed_id != object_id
+                        or kind != b"blob"
+                        or raw_size != str(size).encode("ascii")
+                    ):
+                        raise ValueError
+                    body_start = header_end + 1
+                    body_end = body_start + size
+                    if body_end >= len(output) or output[body_end] != 10:
+                        raise ValueError
+                    values[path] = hashlib.sha256(
+                        memoryview(output)[body_start:body_end]
+                    ).hexdigest()
+                    offset = body_end + 1
+                if offset != len(output):
+                    raise ValueError
+
+            batch: list[tuple[str, bytes, int]] = []
+            batch_bytes = 0
+            for entry in entries:
+                path, object_id, size = entry
+                response_bytes = len(object_id) + len(b" blob ") + len(str(size)) + size + 2
+                if batch and batch_bytes + response_bytes > _MAX_STDOUT_BYTES:
+                    read_batch(batch)
+                    batch = []
+                    batch_bytes = 0
+                if response_bytes > _MAX_STDOUT_BYTES:
+                    blob = self._required(
+                        ("cat-file", "blob", object_id.decode("ascii")), read_only=True
+                    ).stdout
+                    if type(blob) is not bytes or len(blob) != size:
+                        raise ValueError
+                    values[path] = hashlib.sha256(blob).hexdigest()
+                else:
+                    batch.append(entry)
+                    batch_bytes += response_bytes
+            if batch:
+                read_batch(batch)
+            return values
+        except GitSessionResourceError as exc:
+            failure = _clear_resource_error(exc)
+        except (ValueError, UnicodeError):
+            failure = _resource_error(
+                GitSessionFailureCode.RECOVERY_REQUIRED,
+                GitSessionOperationKind.INSPECT,
+                GitSessionResourceState.RECOVERY_REQUIRED,
+                GitSessionRecoveryAction.OPERATOR_RECOVERY,
+            )
+        raise failure
 
     def _facts(self) -> _Facts:
         branches: dict[str, str] = {}
@@ -1371,20 +1448,18 @@ class _Repository:
         journal: GitSessionProvisioningJournal | None,
     ) -> bool:
         try:
-            tree = _object_id(
-                self._required(
-                    ("show", "-s", "--format=%T", seed), read_only=True
-                ).stdout
-            )
-            empty = _object_id(
-                self._required(
-                    ("hash-object", "-t", "tree", "--stdin"), read_only=True
-                ).stdout
+            if _OBJECT_ID.fullmatch(seed) is None:
+                return False
+            empty_tree_object = b"tree 0\x00"
+            empty = (
+                hashlib.sha1(empty_tree_object).hexdigest()
+                if len(seed) == 40
+                else hashlib.sha256(empty_tree_object).hexdigest()
             )
             payload = self._required(
                 ("cat-file", "commit", seed), read_only=True
             ).stdout
-            if tree != empty or not _valid_seed_payload(
+            if not _valid_seed_payload(
                 payload,
                 identity=identity,
                 empty_tree=empty,

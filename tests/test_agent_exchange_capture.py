@@ -26,9 +26,13 @@ from story_writing_agents.agent_exchanges.capture import (
     AgentExchangeTerminalCode,
     WorkspaceAgentExchangeCapture,
 )
+from story_writing_agents.backend import _ContextExchangeFinalizer
+from story_writing_agents.agent_context.service import ContextProviderTerminalCode
 from story_writing_agents.agents import ROSTER
 from story_writing_agents.provider_adapter import ProviderInvocation, ProviderResult, ProviderResponseDiagnostic, ProviderInvocationError
 from story_writing_agents.workspace import Workspace
+from story_writing_agents.agent_context.request_compaction import compact_context_payload
+from tests.test_agent_context_accounting import _shared_context_payload
 
 
 _EXCHANGE_ID = re.compile(r"exchange_[0-9a-f]{32}")
@@ -162,7 +166,8 @@ class AgentExchangeCaptureContractTests(unittest.TestCase):
             self.assertEqual(tuple(Path(temporary).iterdir()), before)
 
         store = _RecordingStore()
-        lifecycle = _begin(store)
+        payload, _ = compact_context_payload(_shared_context_payload(), {})
+        lifecycle = _begin(store, invocation=_invocation(payload=payload))
         self.assertTrue(lifecycle.enabled)
         self.assertRegex(lifecycle.exchange_id or "", _EXCHANGE_ID)
         self.assertEqual(len(store.records), 1)
@@ -190,10 +195,7 @@ class AgentExchangeCaptureContractTests(unittest.TestCase):
             json.loads(request.content),
             {
                 "call_kind": "debate",
-                "payload": {
-                    "answer": "PRIVATE_REQUEST_한🙂",
-                    "enabled": True,
-                },
+                "payload": payload,
                 "prior_thread_id": "prior_thread",
                 "schema": {"required": ["answer"], "type": "object"},
             },
@@ -274,14 +276,11 @@ class AgentExchangeCaptureContractTests(unittest.TestCase):
 
 class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
     def test_all_response_terminal_outcomes_are_exact_and_share_identity(self) -> None:
+        validation_detail = "$.action.result.message: expected nonempty text"
         cases = (
             ("accepted", None, "accepted", "accepted"),
-            (
-                "rejected",
-                AgentExchangeTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
-                "rejected",
-                "malformed_structured_response",
-            ),
+            ("rejected", AgentExchangeTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+             "rejected", "malformed_structured_response"),
             (
                 "rejected",
                 AgentExchangeTerminalCode.RESPONSE_CORRELATION_MISMATCH,
@@ -294,18 +293,10 @@ class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
                 "rejected",
                 "response_semantic_rejected",
             ),
-            (
-                "rejected",
-                AgentExchangeTerminalCode.ACTION_EXHAUSTED,
-                "rejected",
-                "action_exhausted",
-            ),
-            (
-                "rejected",
-                AgentExchangeTerminalCode.ANSWER_VALIDATION_FAILED,
-                "rejected",
-                "answer_validation_failed",
-            ),
+            ("rejected", AgentExchangeTerminalCode.ACTION_EXHAUSTED,
+             "rejected", "action_exhausted"),
+            ("rejected", AgentExchangeTerminalCode.ANSWER_VALIDATION_FAILED,
+             "rejected", "answer_validation_failed"),
             (
                 "post_response_runtime_failure",
                 AgentExchangeTerminalCode.THREAD_PERSISTENCE_FAILED,
@@ -331,7 +322,12 @@ class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
                 lifecycle = _begin(store)
                 lifecycle.record_response(_result())
                 method = getattr(lifecycle, method_name)
-                method() if code is None else method(code)
+                if code is AgentExchangeTerminalCode.ANSWER_VALIDATION_FAILED:
+                    finalizer = _ContextExchangeFinalizer(lifecycle)
+                    finalizer.set_validation_details((validation_detail,))
+                    finalizer.rejected(ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED)
+                else:
+                    method() if code is None else method(code)
                 self.assertEqual(
                     [record.request_type for record in store.records],
                     [
@@ -346,7 +342,10 @@ class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     _decoded(store.records)[2],
-                    {"code": expected_code, "outcome": outcome},
+                    {"code": expected_code, "outcome": outcome} | (
+                        {"validation_details": [validation_detail]}
+                        if code is AgentExchangeTerminalCode.ANSWER_VALIDATION_FAILED else {}
+                    ),
                 )
 
     def test_no_response_failures_and_cancellation_matrix_are_exact(self) -> None:
@@ -524,12 +523,67 @@ class ProviderDiagnosticCaptureTests(unittest.TestCase):
         self.assertTrue(response['provider_failure'])
         self.assertEqual(set(response), {'provider_failure', 'response_diagnostic'})
         raw = response['response_diagnostic']
-        self.assertEqual(base64.b64decode(raw['stdout']['data']), diagnostic.stdout)
-        self.assertEqual(raw['stdout']['encoding'], 'base64')
+        self.assertEqual(set(raw), {'error', 'exit_code', 'status', 'stderr'})
+        self.assertIsNone(raw['error'])
+        self.assertIsNone(raw['status'])
         self.assertEqual(raw['stderr'], {'encoding': 'utf-8', 'data': diagnostic.stderr.decode()})
         self.assertEqual(raw['exit_code'], 9)
         self.assertEqual(_decoded(store.records)[2], {'code': 'provider_invocation_failed', 'outcome': 'provider_failure'})
         self.assertEqual(len({r.exchange_id for r in store.records}), 1)
+
+    def test_failure_response_preserves_only_error_status_exit_code_and_stderr(self):
+        store = _RecordingStore()
+        lifecycle = _begin(store)
+        stdout = json.dumps({
+            "event": "result",
+            "result": {
+                "conversation_id": "thread-123",
+                "status": "ERROR",
+                "error": "Server overloaded",
+                "json_schema": {"huge": "schema" * 500},
+            },
+        }).encode("utf-8")
+        diagnostic = ProviderResponseDiagnostic(stdout, b"error log", 1)
+        lifecycle.provider_failure(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, response_diagnostic=diagnostic)
+        response = _decoded(store.records)[1]
+        raw = response['response_diagnostic']
+        self.assertEqual(raw, {
+            "error": "Server overloaded",
+            "exit_code": 1,
+            "status": "ERROR",
+            "stderr": {"data": "error log", "encoding": "utf-8"},
+        })
+
+    def test_failure_response_handles_nonfinite_json_and_codex_jsonl(self):
+        # Non-finite JSON values fall back to None without failing serialization
+        store = _RecordingStore()
+        lifecycle = _begin(store)
+        diagnostic = ProviderResponseDiagnostic(b'{"status": NaN, "error": Infinity}', b"err", 1)
+        lifecycle.provider_failure(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, response_diagnostic=diagnostic)
+        response = _decoded(store.records)[1]
+        self.assertEqual(response['response_diagnostic'], {
+            "error": None,
+            "exit_code": 1,
+            "status": None,
+            "stderr": {"data": "err", "encoding": "utf-8"},
+        })
+
+        # Codex JSONL multi-line event streams extract terminal error events
+        store = _RecordingStore()
+        lifecycle = _begin(store)
+        jsonl_stdout = (
+            b'{"type":"thread.started","thread_id":"t1"}\n'
+            b'{"type":"turn.failed","error":{"message":"Quota exceeded","code":429},"status":"failed"}\n'
+        )
+        diagnostic = ProviderResponseDiagnostic(jsonl_stdout, b"codex-err", 1)
+        lifecycle.provider_failure(AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, response_diagnostic=diagnostic)
+        response = _decoded(store.records)[1]
+        self.assertEqual(response['response_diagnostic'], {
+            "error": {"code": 429, "message": "Quota exceeded"},
+            "exit_code": 1,
+            "status": "failed",
+            "stderr": {"data": "codex-err", "encoding": "utf-8"},
+        })
 
     def test_recovered_success_records_diagnostic_and_none_default_is_unchanged(self):
         for diagnostic in (None, self.diagnostic()):

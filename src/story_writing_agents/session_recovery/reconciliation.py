@@ -476,7 +476,16 @@ class SessionRecoveryReconciler:
             return history_b
         resources_b = self._read_resources(session_id, conversation, tail, True)
         if isinstance(resources_b, SessionRecoveryResult):
+            return resources_b
+        if resources_b.state is not GitSessionResourceState.READY:
             return _owner_recovery(
+                session_id,
+                conversation,
+                tail,
+                SessionRecoveryOwner.SESSION_RESOURCES,
+            )
+        if resources_a != resources_b:
+            return _owner_outcome(
                 session_id,
                 conversation,
                 tail,
@@ -520,13 +529,6 @@ class SessionRecoveryReconciler:
 
         if history_a != history_b:
             return _owner_outcome(session_id, conversation, tail, SessionRecoveryOwner.COLLABORATION_HISTORY)
-        if resources_a != resources_b:
-            return _owner_recovery(
-                session_id,
-                conversation,
-                tail,
-                SessionRecoveryOwner.SESSION_RESOURCES,
-            )
         try:
             with artifact_binding.open_ready_resources() as access:
                 if access.resources != resources_b:

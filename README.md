@@ -22,7 +22,7 @@ inspection and the Python lead front channel.
 | Address the Lead by ordinary focused shell input or Python; confirm a one-to-three-specialist consultation; receive typed replies and synthesis. | Treat conversation text such as `Yes` as confirmation. |
 | Ask the lead to form an exact create/patch/replace/rename/delete candidate; confirm its disclosed specialist review; inspect an immutable reviewed proposal. | Treat proposal or review confirmation as write or Git authority. |
 | Separately confirm Apply for an exact reviewed artifact candidate, then separately confirm Commit for one exact local session-branch commit. | Push, merge, or otherwise publish the local Git commit remotely. |
-| Use the Python API to submit a prompt or complete draft, inspect and separately confirm every consensus phase, interrupt active work, inspect durable state after restart, and continue an exact deadlock in place or as a linked workflow without copying its candidate. | Start or advance consensus from the installed shell, treat finalization as artifact publication, or reuse confirmation authority after restart. |
+| Use the Python API to submit a prompt or complete draft, inspect and separately confirm every consensus phase, interrupt active work, inspect durable state after restart, and continue an exact synthesis deadlock in place or as a linked workflow without copying its candidate. | Start or advance consensus from the installed shell, treat finalization as artifact publication, or reuse confirmation authority after restart. |
 | Use schema-v2 collaboration contracts, stores, archive/transfer, readable projection, search, and paging APIs. | Bypass the runtime with a removed direct-run method. |
 | Run a disposable management/storage smoke or verify an existing workspace without changing it. | Use smoke as evidence of provider behavior or story quality. |
 
@@ -70,8 +70,9 @@ instructions and returns a new recommendation for fresh confirmation.
 The lead interprets short follow-ups such as “Use that draft” from the session
 context. Ordinary approval is a new authoring instruction and can supersede an
 unconfirmed recommendation. With a clear target and current evidence, it can
-prepare the exact candidate for separately confirmed review. Runtime retains the authoring
-objective in its originating conversation across discussion, consultation,
+prepare the exact candidate for separately confirmed review. Runtime retains
+the authoring objective and its exact originating user request in that
+conversation across discussion, consultation,
 conversation switches, and restart. Only a matching successful Apply result
 (`applied` or `unchanged`) satisfies it; review, prose approval, and Commit do
 not. An explicit objective cancellation closes it without writing.
@@ -93,10 +94,13 @@ While a Lead or confirmed specialist request is active, capable terminals show
 a transient shared `HH:MM:SS` working bar and per-agent context cards. SEARCH
 cards may display exact query text, requested resource kinds and scope, and safe
 workspace-relative locators/ranges; READ cards show selected locators and exact
-boundaries. They never display source excerpts, provider answers, absolute
-paths, or hidden reasoning. Final specialist request/answer/status panels
+boundaries. SEARCH and READ cards never display source excerpts, provider answers, absolute
+paths, or hidden reasoning. During provider generation, active terminals may
+display transient status indicators and a bounded rolling preview of streamed output
+whose retention is mode-dependent (/progress on retains the frame for interactive inspection,
+while /progress off clears it before final output). Final specialist request/answer/status panels
 precede the Lead result and elapsed time. Terminal capture or scrollback may
-retain the transient query and locator text.
+retain the transient query, locator, or preview text.
 
 See [Collaborate with the Lead Agent](docs/guides/lead-agent-collaboration.md)
 for responsibilities, authority limits, concrete story workflows,
@@ -121,10 +125,23 @@ installation includes the isolated read-only JSONL viewer used by
 `/exchanges`. Optional local conversation RAG requires the reviewed `rag`
 extra before it can be enabled; installation alone never enables it.
 
-The interactive shell performs its configured native provider authentication
-gate and exposes `/auth` and provider settings. Ordinary focused lead input and
-confirmed collaboration can invoke the configured provider; management and
-inspection commands retain their documented provider-free behavior.
+The interactive shell first performs its configured native provider
+authentication gate. When the workspace has no `default_backend`, a separate
+**Default provider** picker then opens before the lobby. A newly authenticated
+or sole authenticated provider—or Codex when both authenticate—is highlighted
+only as a recommendation; nothing is preselected. Choose either enabled
+provider to save it as the workspace default. Choosing an unauthenticated
+provider starts its existing native sign-in first. Cancelling, interrupting, or
+ending this picker exits before saving a default or entering the lobby.
+
+Later shells skip this first-start choice, and agents that inherit the saved
+default keep an editable Provider setting. Only an explicit `--backend` mapping
+is a one-run launch override: its Provider setting is read-only in that shell
+and it never rewrites configuration. Existing defaults and explicit per-agent
+routes are preserved. The shell also exposes `/auth` and provider settings.
+Ordinary focused lead input and confirmed collaboration can invoke the
+configured provider; management and inspection commands retain their
+documented provider-free behavior.
 
 ## Quick start
 
@@ -270,7 +287,7 @@ decision methods consume only their own exact structured controls. Both
 facades also expose a phase-confirmed consensus API:
 submit prompt/draft input, inspect, decide or confirm the exact phase,
 explicitly request its successor, interrupt, and resume inspection. There is
-also an explicit deadlock-continuation call that binds the source result,
+also an explicit synthesis-deadlock continuation call that binds the source result,
 unresolved critique material, operator ruling, and added repair-round budget;
 it prepares a fresh REPAIR confirmation and never copies candidate text. There
 is no public unconfirmed specialist dispatch, direct artifact-publication
@@ -461,11 +478,87 @@ The Python package is under `src/story_writing_agents/`; tests are under
 `tests/`; role prompts are under `config/agents/`; and
 [PYTHON_MODULE_INDEX.md](PYTHON_MODULE_INDEX.md) is the production-module map.
 
-Run the complete standard-library suite with:
+Run tests from the repository root in the same Python 3.11+ development
+environment used to install the project. The canonical runner uses only the
+standard library and records the exact selected IDs, results, timings, policy,
+and environment in JSON. Tests are expected to use local fakes and subprocesses,
+not live provider calls; do not supply provider credentials or treat live
+provider behavior as suite evidence.
+
+For fast feedback on runtime-code changes, run the fast lane:
 
 ```bash
-python -m unittest discover -s tests -v
+report_dir="$(mktemp -d "${TMPDIR:-/tmp}/story-tests.XXXXXXXXXX")"
+chmod 700 "$report_dir"
+PYTHONPATH=src python -m tests.runner run --tier fast --json "$report_dir/fast.json"
 ```
+
+Run the relevant test modules with exact `--module` selectors (or `--id` for
+individual tests), then record the selected IDs, result, and head SHA in the PR.
+The implementer chooses modules from the changed behavior; CI does not infer them
+from source paths:
+
+```bash
+report_dir="$(mktemp -d "${TMPDIR:-/tmp}/story-tests.XXXXXXXXXX")"
+chmod 700 "$report_dir"
+PYTHONPATH=src python -m tests.runner run \
+  --module tests.test_artifact_proposals \
+  --module tests.test_artifact_proposal_orchestration \
+  --json "$report_dir/affected.json"
+```
+
+For runtime or test changes, CI requires two complementary full-suite shards.
+For a local full-suite run, use the same commands. Start no more than these
+two test processes concurrently, preserve both reports, and then reconcile
+them:
+
+```bash
+report_dir="$(mktemp -d "${TMPDIR:-/tmp}/story-tests.XXXXXXXXXX")"
+chmod 700 "$report_dir"
+PYTHONPATH=src python -m tests.runner run --shard 1/2 --json "$report_dir/shard-1.json" &
+shard_one_pid=$!
+PYTHONPATH=src python -m tests.runner run --shard 2/2 --json "$report_dir/shard-2.json" &
+shard_two_pid=$!
+shard_status=0
+wait "$shard_one_pid" || shard_status=1
+wait "$shard_two_pid" || shard_status=1
+test "$shard_status" -eq 0
+PYTHONPATH=src python -m tests.runner reconcile \
+  "$report_dir/shard-1.json" \
+  "$report_dir/shard-2.json" \
+  --json "$report_dir/reconciliation.json"
+PYTHONPATH=src python -m tests.suite_budget --base-ref main \
+  --report "$report_dir/shard-1.json" \
+  --report "$report_dir/shard-2.json"
+```
+
+Each example creates a fresh, unpredictable, owner-only report directory. Keep
+every report filename absent before its command runs: runner JSON output uses
+exclusive creation, and reconciliation accepts only owner-controlled regular
+files as shard inputs.
+
+An unknown or empty selector is a visible configuration error and exits
+nonzero instead of silently passing. A failing or interrupted report records
+started results and `unexecuted_ids`; preserve that evidence, correct the
+cause, and rerun only failed, unexecuted, or otherwise invalidated IDs with
+repeated `--id` options while diagnosing. These partial reruns cannot be
+combined into a complete shard report, so final reconciled evidence currently
+requires a fresh complete run of the affected shard. Append-only resumable
+evidence is separate Issue #659 and is not implemented here. Reconciliation
+exits nonzero for failed, incomplete, overlapping, or non-exhaustive shard
+reports.
+
+The versioned timing weights in
+`tests/fixtures/test_timing_weights_v1.json` record their measurement
+provenance. Observed terminal class timings are used where available; unlisted
+classes use the manifest's deterministic fallback, so the weights are a
+partitioning input rather than proof of current performance.
+
+The frozen suite scope and measured limits are in [TEST_POLICY.md](TEST_POLICY.md):
+1,080 seconds sequential equivalent and 540 seconds per shard. The checked-in
+budget contains exact canonical IDs and per-ID subtest caps; the CI gate compares
+it with the base commit and current Python 3.11 reports. Class timing weights
+only balance the two shards; they do not prove the run is under budget.
 
 <a id="contribution-guidelines"></a>
 

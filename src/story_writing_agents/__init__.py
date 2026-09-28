@@ -111,6 +111,7 @@ from .models import (
     Verdict,
 )
 from .orchestrator import RuntimeSession, StoryRuntime
+from .reply_trace import ReplyTrace, ReplyTraceOrigin
 from .session_lifecycle import (
     SessionAccessState,
     SessionDurableState,
@@ -203,6 +204,8 @@ __all__ = [
     "PromptFileReference",
     "ProgressObserverError",
     "ROSTER",
+    "ReplyTrace",
+    "ReplyTraceOrigin",
     "RuntimeDirective",
     "RuntimeSession",
     "SPECIALIST_IDS",

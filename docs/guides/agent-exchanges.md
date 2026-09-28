@@ -216,13 +216,9 @@ Escape dismisses help, then search, then a transient status; with nothing left
 to dismiss it closes. This main-view behavior begins after a prompt has
 finished or been cancelled; draft Escape preserves the committed view.
 Ctrl-C applies the same cancel behavior in the main view and closes the view
-during a draft. EOF always closes; `q` closes from the main view. In
-ordinary-line fallback,
-use `g LINE`, `/ QUERY`, `j`/`down`, `k`/`up`, `pgdn`, `pgup`, `n`, `N`,
-`m`, `h`, `c`, and `q`/`quit`. `/ correlation token mismatch` searches that
-whole phrase; the space after `/` is required in line mode. `// QUERY` is an
-optional full-text alias with the same separator requirement. The viewer
-interprets these complete literal lines; Story adds no prompt of its own.
+during a draft. EOF always closes; `q` closes from the main view. A terminal
+without alternate-screen support receives a content-free notice; `/exchanges`
+does not print viewer frames into ordinary scrollback.
 
 ### Where color is used
 
@@ -253,21 +249,34 @@ Automatic capture attempts one sequence for each physical provider call:
 The shared `exchange_id` correlates these records. The request content is the
 canonical provider-neutral invocation projection. A response contains the raw
 valid `ProviderResult` projection: `response_text`, `thread_id`, nullable usage,
-and nullable actual transport bytes. The outcome contains only a closed outcome
-and fixed code, never arbitrary exception prose.
+and nullable actual transport bytes. The outcome contains a closed outcome and
+fixed code. Rejected provider replies can also include `validation_details`:
+bounded descriptions of the rejected JSON
+property and its expected type, allowed values, or validation rule. Cross-property
+rules name the required relationship. These descriptions come from trusted
+validators and omit provider values, unknown member names, and arbitrary exception
+prose. Each original or repair call has its own outcome and findings; older records
+without this optional field remain readable.
+
+The request's `payload` can contain request-local `context_objects` and
+`context_ref` markers that share repeated runtime context. Read the matching
+table in that same request to resolve a marker; earlier exchanges are not needed.
+The log captures the compact payload actually submitted, together with its
+complete response schema. Historical records remain readable without migration.
+See [request sharing](../design/agent-context.md#typed-provider-wire-v8).
 
 A completed result that structured or semantic validation rejects therefore
 normally appears as adjacent request, response, and `rejected` outcome records.
 A provider invocation failure or timeout normally has a response containing
 `{"provider_failure":true}` followed by a `provider_failure` outcome. When a
 Codex or Antigravity process completed, that response can also carry a private
-`response_diagnostic` with exact stdout, stderr, and exit status. This response
+`response_diagnostic` with error, status, exit status, and stderr. This response
 is diagnostic and is never a valid `ProviderResult`. Cancellation uses its
 separate `cancelled` terminal and receives no provider-failure response marker.
 A cancellation or fail-open append failure can produce a shorter sequence.
 
-The exchange channel can capture completed provider stdout and stderr only
-through that typed response diagnostic. Those exact invocation streams receive
+The exchange channel can capture completed provider stderr and error details only
+through that typed response diagnostic. Those invocation streams receive
 no semantic redaction and can contain provider-emitted OAuth URLs or status,
 credentials, tokens, story content, or other secrets. Capture does not
 independently inspect the environment, browser, or credential store. It never
@@ -361,8 +370,8 @@ Simple mode is not redaction, authorization, or access control. Request payloads
 and provider response text can contain story content or secrets. Verbose can
 display every outer field, and full-text search includes all retained keys
 and values, including bounded decoded nested content. Protect the workspace,
-process memory, terminal infrastructure,
-fallback scrollback, copied frames, backups, and redirected output as plaintext
+process memory, terminal infrastructure, copied frames, backups, and
+redirected output as plaintext
 provider-call data. The capable view uses one alternate screen, but terminal or
 remote-session software can retain its own copies.
 

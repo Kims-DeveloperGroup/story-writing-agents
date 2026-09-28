@@ -39,12 +39,14 @@ from ..conversations import (
     CollaborationStepState,
     CollaborationStepStatePayload,
     CollaborationTerminalOutcomePayload,
+    CollaborationNextAction,
     LeadTurnResult,
     StoryCommitDecisionPayload,
     StoryCommitDecisionResult,
     StoryCommitRequestPayload,
     StoryCommitResultPayload,
 )
+from ..reply_trace import ReplyTrace
 from ..specialist_routing import AuthoringScope
 from ..writing_artifacts import (
     ArtifactCreateOperation,
@@ -147,10 +149,21 @@ def project_lead_turn_result(result: LeadTurnResult) -> Panel:
 
     if type(result) is not LeadTurnResult:
         raise TypeError("result must be a LeadTurnResult")
+    role = (
+        SemanticRole.ERROR
+        if result.next_action is CollaborationNextAction.RETRY_LEAD_TURN
+        else SemanticRole.AGENT
+    )
     items: list[Section | Field | Notice | Message | Record | ListView] = [
         Field("Outcome", result.kind.value),
-        _message("Lead", result.message, role=SemanticRole.AGENT),
+        _message("Lead", result.message, role=role),
+        *_reply_trace_items(result.trace),
     ]
+    items.extend(
+        Notice(line, label="validation", role=SemanticRole.ERROR)
+        for detail in result.validation_details
+        for line in detail.split("\n")
+    )
     if result.proposal is not None:
         items.extend(_proposal_items(result.proposal))
     if result.evidence is not None:
@@ -188,6 +201,23 @@ def project_lead_turn_result(result: LeadTurnResult) -> Panel:
     if result.recommendation_request is not None:
         items.extend(_payload_items(result.recommendation_request, {}, {}, {}))
     return Panel("Lead", tuple(items), state=_event_state(result))
+
+
+def project_lead_error_result(
+    error_message: str,
+    *,
+    advice: str = "Inspect /history and /exchanges before continuing.",
+) -> Panel:
+    """Project one visible error result when a lead turn fails before validation."""
+
+    if type(error_message) is not str or not error_message.strip():
+        raise ValueError("error_message must be nonempty text")
+    items = (
+        Field("Outcome", "failed"),
+        _message("Lead", error_message.strip(), role=SemanticRole.ERROR),
+        Field("Next action", advice),
+    )
+    return Panel("Lead", items, state=ViewState.ERROR)
 
 
 def project_specialist_results(
@@ -315,6 +345,7 @@ def project_specialist_results(
                         reply.message,
                         role=SemanticRole.AGENT,
                     ),
+                    *_reply_trace_items(reply.trace),
                 )
             )
         else:
@@ -473,13 +504,29 @@ def _payload_items(
     if type(payload) is LeadRecommendationResultPayload:
         return (Field("Preparation", payload.state.value), _message("Result", payload.message))
     if type(payload) is CollaborationMessagePayload:
-        return (_message("Message", payload.content),)
+        if payload.validation_details:
+            return (
+                *((_message("Message", payload.content),)
+                  if (len(payload.validation_details) != 1
+                      or payload.content != payload.validation_details[0]) else ()),
+                *(
+                    Notice(line, label="validation", role=SemanticRole.ERROR)
+                    for detail in payload.validation_details
+                    for line in detail.split("\n")
+                ),
+                *_reply_trace_items(payload.trace),
+            )
+        return (
+            _message("Message", payload.content),
+            *_reply_trace_items(payload.trace),
+        )
     if type(payload) is CollaborationLeadJudgmentPayload:
         return (
             *_authoring_scope_items(payload.authoring_scope),
             Field("Outcome", payload.kind.value),
             _message("Lead", payload.message, role=SemanticRole.AGENT),
             *_evidence_items(payload.evidence),
+            *_reply_trace_items(payload.trace),
         )
     if type(payload) is CollaborationProposal:
         return _proposal_items(payload)
@@ -498,6 +545,7 @@ def _payload_items(
             Field("Mode", "legacy" if payload.mode is None else payload.mode.value),
             Field("Inputs read", _joined(payload.input_ids)),
             _message("Specialist reply", payload.message, role=SemanticRole.AGENT),
+            *_reply_trace_items(payload.trace),
         ]
         if payload.assessment.value == "conflict":
             items.extend(
@@ -528,6 +576,7 @@ def _payload_items(
             Field("Unresolved inputs", _joined(payload.unresolved_input_ids)),
             _message("Lead synthesis", payload.message, role=SemanticRole.AGENT),
             *_evidence_items(payload.evidence),
+            *_reply_trace_items(payload.trace),
         )
     if type(payload) is CollaborationStepStatePayload:
         fields: list[Field | Notice] = [
@@ -595,6 +644,11 @@ def _payload_items(
             Field("Invocation kind", payload.invocation_kind.value),
             Field("Call kind", payload.call_kind.value),
             Field("State", payload.state.value),
+            *(
+                Notice(line, label="validation", role=SemanticRole.ERROR)
+                for detail in payload.validation_details
+                for line in detail.split("\n")
+            ),
         )
     if type(payload) is CollaborationLeadOutcomeFailurePayload:
         return (
@@ -918,6 +972,8 @@ def _event_state(payload: object) -> ViewState:
     state = getattr(payload, "state", None)
     if state in {CollaborationStepState.FAILED, CollaborationStepState.OUTCOME_UNKNOWN, CollaborationStepState.RECOVERY_REQUIRED}:
         return ViewState.ERROR
+    if getattr(payload, "next_action", None) is CollaborationNextAction.RETRY_LEAD_TURN:
+        return ViewState.ERROR
     if state is CollaborationStepState.INTERRUPTED or isinstance(payload, CollaborationInterruptionPayload):
         return ViewState.CANCELLED
     if state in {CollaborationStepState.COMPLETED, CollaborationStepState.CONFIRMED}:
@@ -936,6 +992,23 @@ def _message(
         content,
         role=role,
         presentation=MessagePresentation.CHAT_BLOCK,
+    )
+
+
+def _reply_trace_items(trace: ReplyTrace | None) -> tuple[Section, ...]:
+    if trace is None:
+        return ()
+    return (
+        Section(
+            "Reply construction",
+            (
+                Field("Role", trace.role),
+                Field("Action", trace.action),
+                Field("Context", _joined(trace.context_sources)),
+                Field("Recovered fields", _joined(trace.recovered_fields)),
+                Field("Origin", trace.origin.value),
+            ),
+        ),
     )
 
 
@@ -967,6 +1040,7 @@ __all__ = (
     "collaboration_view_context",
     "project_artifact_application_decision_result",
     "project_collaboration_event",
+    "project_lead_error_result",
     "project_lead_turn_result",
     "project_specialist_results",
     "project_story_commit_decision_result",

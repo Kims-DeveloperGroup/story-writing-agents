@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import threading
 from enum import StrEnum
 from uuid import uuid4
@@ -133,7 +134,7 @@ def _response_content(result: ProviderResult) -> str:
 def _response_diagnostic(
     diagnostic: ProviderResponseDiagnostic,
 ) -> dict[str, object]:
-    """Keep exact native bytes with an explicit reversible stream encoding."""
+    """Preserve only error, status, exit_code, and stderr from completed process diagnostics."""
 
     if type(diagnostic) is not ProviderResponseDiagnostic:
         raise TypeError("provider response diagnostic has an invalid type")
@@ -147,9 +148,61 @@ def _response_diagnostic(
                 "data": base64.b64encode(value).decode("ascii"),
             }
 
+    def parse_dict(text: str) -> dict[str, object] | None:
+        def reject_constant(_value: str) -> None:
+            raise ValueError("nonfinite JSON value")
+
+        def finite_float(value: str) -> float:
+            number = float(value)
+            if not math.isfinite(number):
+                raise ValueError("nonfinite JSON value")
+            return number
+
+        try:
+            value = json.loads(
+                text,
+                parse_constant=reject_constant,
+                parse_float=finite_float,
+            )
+            return value if isinstance(value, dict) else None
+        except Exception:
+            return None
+
+    error: object = None
+    status: object = None
+    if diagnostic.stdout:
+        decoded_text = diagnostic.stdout.decode("utf-8", "replace")
+        parsed = parse_dict(decoded_text)
+        if parsed is None:
+            # Check JSONL event streams (e.g. Codex) for terminal error events
+            for line in decoded_text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                event = parse_dict(line)
+                if event and event.get("type") in {"error", "turn.failed"}:
+                    parsed = event
+                    break
+
+        if isinstance(parsed, dict):
+            target = (
+                parsed.get("result")
+                if isinstance(parsed.get("result"), dict)
+                else parsed
+            )
+            if "error" in target:
+                error = target["error"]
+            elif "error" in parsed:
+                error = parsed["error"]
+            if "status" in target:
+                status = target["status"]
+            elif "status" in parsed:
+                status = parsed["status"]
+
     return {
+        "error": error,
         "exit_code": diagnostic.exit_code,
-        "stdout": stream(diagnostic.stdout),
+        "status": status,
         "stderr": stream(diagnostic.stderr),
     }
 
@@ -157,10 +210,14 @@ def _response_diagnostic(
 def _terminal_content(
     outcome: AgentExchangeOutcome,
     code: AgentExchangeTerminalCode,
+    validation_details: tuple[str, ...] = (),
 ) -> str:
-    """Serialize one closed terminal outcome without arbitrary diagnostics."""
+    """Serialize one closed outcome with optional trusted validation findings."""
 
-    return _canonical_json({"code": code.value, "outcome": outcome.value})
+    content: dict[str, object] = {"code": code.value, "outcome": outcome.value}
+    if validation_details:
+        content["validation_details"] = list(validation_details)
+    return _canonical_json(content)
 
 
 class AgentExchangeCaptureLifecycle:
@@ -279,6 +336,7 @@ class AgentExchangeCaptureLifecycle:
         code: AgentExchangeTerminalCode,
         *,
         response_required: bool,
+        validation_details: tuple[str, ...] = (),
     ) -> None:
         try:
             if type(code) is not AgentExchangeTerminalCode:
@@ -294,7 +352,7 @@ class AgentExchangeCaptureLifecycle:
                 self._state = _CaptureState.TERMINAL_ATTEMPTED
                 self._record(
                     AgentExchangeRequestType.OUTCOME,
-                    _terminal_content(outcome, code),
+                    _terminal_content(outcome, code, validation_details),
                 )
         except BaseException:
             pass
@@ -308,7 +366,9 @@ class AgentExchangeCaptureLifecycle:
             response_required=True,
         )
 
-    def rejected(self, code: AgentExchangeTerminalCode) -> None:
+    def rejected(
+        self, code: AgentExchangeTerminalCode, *, validation_details: tuple[str, ...] = (),
+    ) -> None:
         """Attempt one closed response-rejection terminal."""
 
         if type(code) is not AgentExchangeTerminalCode or code not in _REJECTED_CODES:
@@ -317,6 +377,7 @@ class AgentExchangeCaptureLifecycle:
             AgentExchangeOutcome.REJECTED,
             code,
             response_required=True,
+            validation_details=validation_details,
         )
 
     def provider_failure(

@@ -98,7 +98,7 @@ class GitLinkedWorktreeReadContractTests(unittest.TestCase):
         self.assertNotIn("GitStatus", story_writing_agents.__all__)
         self.assertNotIn("GitLogMetadata", story_writing_agents.__all__)
         self.assertEqual(len(git_facade.__all__), 24)
-        self.assertEqual(len(story_writing_agents.__all__), 104)
+        self.assertEqual(len(story_writing_agents.__all__), 106)
         self.assertEqual(len(tuple(GitOperationKind)), 7)
 
         tree = ast.parse(_ADAPTER_SOURCE.read_text())
@@ -108,10 +108,6 @@ class GitLinkedWorktreeReadContractTests(unittest.TestCase):
             if isinstance(node, ast.ImportFrom) and node.level == 1
         }
         self.assertEqual(dependencies, {"contracts", "process"})
-        index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text()
-        self.assertIn("Importable production units indexed: 143.", index)
-        self.assertIn("Direct internal dependency edges indexed: 586.", index)
-        self.assertIn("Directed internal dependency cycles indexed: 0.", index)
 
     def test_status_and_log_guard_external_identity_before_body_and_after_success(
         self,

@@ -5,9 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
-import tempfile
 from dataclasses import replace
-from pathlib import Path
 from unittest import mock
 
 from story_writing_agents import StoryRuntime, Workspace
@@ -19,6 +17,7 @@ from tests import test_lead_orchestration as lead
 from tests import test_artifact_proposal_orchestration as artifact
 from tests import test_lead_artifact_application as application
 from tests import test_lead_story_commit as commit
+from tests.helpers import pristine_initialized_workspace
 
 OUTLINE = "core_documents/global_outline.md"
 DRAFT = "1. A lantern vanishes.\n2. 민 finds its keeper.\n3. The lantern returns.\n[A641 synthetic]\n"
@@ -45,9 +44,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
     """Shared setup only; importing it does not duplicate concrete test IDs."""
 
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="artifact-objective-")
-        self.addCleanup(temporary.cleanup)
-        main = Workspace(Path(temporary.name) / "main").initialize()
+        main = pristine_initialized_workspace(self)
         self.control_workspace = main
         self.session_id = "story_session"
         ready = provision_session_resources(main.root, self.session_id)
@@ -159,7 +156,9 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
             objective_intent=intent)
         def prepare_current_task(call, provider):
             value = json.loads(response(call, provider))
-            value["action"]["result"]["authoring_scope"] = self.scope(call, intent=intent)
+            value["action"]["result"]["authoring_scope"] = lead._compact_scope(
+                self.scope(call, intent=intent)
+            )
             return json.dumps(value)
         self.backend.enqueue(prepare_current_task)
         prompt = f"Prepare the next revision using ${{{OUTLINE}}}." if attached else "네, 그 초안 그대로 문서로 준비해 줘."
@@ -270,7 +269,11 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         await self.prepare(conversation_id, select=False)
         self.assertEqual(self.objective(conversation_id).draft_sources, selected)
         objective_id = self.objective(conversation_id).facts.objective_id
-        self.backend.enqueue(self.question(intent={"action": "cancel", "objective_id": objective_id}))
+        self.backend.enqueue(lambda call, _provider: lead._provider_envelope(call, {
+            "kind": "answer", "message": "Objective cancelled.",
+            "objective_intent": {"action": "cancel", "objective_id": objective_id},
+            "authoring_scope": lead._live_scope(call),
+        }))
         await self.runtime.lead_turn(self.session_id, conversation_id, "Cancel this writing objective.")
         self.assertIs(self.objective(conversation_id).state, c.ArtifactObjectiveState.CANCELLED)
         before = self.objective(conversation_id)
@@ -321,7 +324,10 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         readable = c.project_collaboration_readable_history(before)
         objective_record = next(item for item in readable if isinstance(item.payload, c.ArtifactObjectivePayload))
         self.assertEqual({field.key: field.text for field in objective_record.fields}, {
-            c.CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_REQUEST: "Prepare the approved synthetic outline.",
+            c.CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_REQUEST: (
+                "Draft core_documents/global_outline.md from this brief: a lantern "
+                "vanishes, its keeper is found, and it returns."
+            ),
             c.CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_ACTION: "start",
             c.CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_NEXT_STEP: "consult",
         })

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Protocol
 
 from ..agents import EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR
+from ..reply_trace import ReplyTrace
+from ..structured_output_validation import validate_details
 from .contracts import (
     CONSENSUS_AUDITORS,
     ConsensusAudit,
@@ -93,6 +95,8 @@ class ConsensusProviderResult:
     audit_verdict: ConsensusAuditVerdict | None = None
     next_phase: ConsensusPhase | None = None
     conflict_material: ConsensusMaterialHandle | None = None
+    trace: ReplyTrace | None = None
+    validation_details: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.kind) is not ConsensusPhaseOutputKind:
@@ -109,6 +113,9 @@ class ConsensusProviderResult:
             or not self.conflict_material.locator.startswith("candidate:")
         ):
             raise TypeError("consensus provider conflict material is invalid")
+        if self.trace is not None and type(self.trace) is not ReplyTrace:
+            raise TypeError("consensus provider trace must be ReplyTrace or None")
+        validate_details(self.validation_details)
         if self.kind in {
             ConsensusPhaseOutputKind.AUDIT,
             ConsensusPhaseOutputKind.CONFLICT,
@@ -303,6 +310,7 @@ class ConsensusExecutionCoordinator:
 
         invocations: list[ConsensusPhaseInvocation] = []
         outputs: list[ConsensusProviderResult] = []
+        reports: list[tuple[str, ...]] = []
         try:
             result = await self._invoke_phase(
                 request,
@@ -311,6 +319,7 @@ class ConsensusExecutionCoordinator:
                 terminal_id,
                 invocations,
                 outputs,
+                reports,
             )
         except ConsensusProviderOutcomeUnknown:
             result = self._result(
@@ -340,6 +349,8 @@ class ConsensusExecutionCoordinator:
                 prior_result_event_id=running_id,
             )
 
+        if any(reports):
+            result = replace(result, validation_details_by_provider=tuple(reports))
         terminal_event = ConsensusEvent(terminal_id, terminal_sequence, result)
         try:
             self._append(terminal_event)
@@ -371,6 +382,7 @@ class ConsensusExecutionCoordinator:
         terminal_event_id: str,
         invocations: list[ConsensusPhaseInvocation],
         outputs: list[ConsensusProviderResult],
+        reports: list[tuple[str, ...]],
     ) -> ConsensusPhaseResult:
         agents = (
             CONSENSUS_AUDITORS
@@ -395,6 +407,7 @@ class ConsensusExecutionCoordinator:
             output = await self._invoke(invocation)
             if type(output) is not ConsensusProviderResult:
                 raise TypeError("consensus provider result is invalid")
+            reports.append(output.validation_details)
             _validate_provider_result(request, output)
             outputs.append(output)
             if output.kind is ConsensusPhaseOutputKind.FAILURE:
@@ -432,7 +445,7 @@ class ConsensusExecutionCoordinator:
         output = outputs[0]
         state = (
             ConsensusPhaseState.DEADLOCKED
-            if request.phase is ConsensusPhase.SYNTHESIS and output.deadlocked
+            if output.deadlocked
             else ConsensusPhaseState.COMPLETED
         )
         return ConsensusPhaseResult(
@@ -511,8 +524,14 @@ def _validate_provider_result(
         )
     elif request.phase is ConsensusPhase.REPAIR:
         valid = (
-            result.kind is ConsensusPhaseOutputKind.CANDIDATE
-            and result.candidate_material != request.candidate_material
+            (
+                result.kind is ConsensusPhaseOutputKind.CANDIDATE
+                and result.candidate_material != request.candidate_material
+            )
+            or (
+                result.kind is ConsensusPhaseOutputKind.DEADLOCK
+                and result.candidate_material == request.candidate_material
+            )
         )
     elif request.phase is ConsensusPhase.SYNTHESIS:
         valid = result.candidate_material == request.candidate_material and (
@@ -524,7 +543,11 @@ def _validate_provider_result(
         )
     else:
         valid = (
-            result.kind is ConsensusPhaseOutputKind.FINALIZATION
+            result.kind
+            in {
+                ConsensusPhaseOutputKind.FINALIZATION,
+                ConsensusPhaseOutputKind.DEADLOCK,
+            }
             and result.candidate_material == request.candidate_material
         )
     if not valid:
