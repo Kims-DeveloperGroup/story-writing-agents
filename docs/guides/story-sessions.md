@@ -89,6 +89,11 @@ worktree status.
 | Other `outcome_unknown` / `inspect_owner_outcome` | None | Preserve evidence and inspect the named owner without entering. |
 | `recovery_required` / `operator_recovery` | None | Stop automated mutation and perform explicit operator recovery. |
 
+Within `applied_not_committed`, a durable matching Commit request exposes
+its exact structured decision. A successful Apply with no proven request
+exposes typed re-preparation instead; uncertain publication requires
+inspection. Do not treat ordinary text as Commit approval.
+
 For ordinary active progress the outer `owner` is null and `failure_code` is
 `none`; the nested result names the workflow owner and its exact next action.
 An exact zero-event conversation is active `ready`, owned by the Lead, with

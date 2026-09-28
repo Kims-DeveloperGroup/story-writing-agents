@@ -12,8 +12,16 @@ from unittest import mock
 from story_writing_agents import StoryRuntime
 from story_writing_agents import orchestrator as orchestrator_module
 from story_writing_agents.git.story_commits import StoryCommitService
-from story_writing_agents.conversations import ArtifactApplicationDecision, ArtifactApplicationDecisionKind, ArtifactApplicationNextAction, ArtifactApplicationOutcomeKind, CollaborationNextAction, CollaborationSideEffect, StoryCommitDecisionRequest, StoryCommitNextAction, StoryCommitOutcomeKind, project_collaboration_history
-from story_writing_agents.git.story_commit_contracts import StoryCommitDecision
+from story_writing_agents.conversations import (
+    ArtifactApplicationDecision, ArtifactApplicationDecisionKind,
+    ArtifactApplicationNextAction, ArtifactApplicationOutcomeKind,
+    ArtifactApplicationResultPayload, CollaborationNextAction,
+    CollaborationSideEffect, StoryCommitDecisionRequest, StoryCommitNextAction,
+    StoryCommitOutcomeKind, StoryCommitRequestPayload, project_collaboration_history,
+)
+from story_writing_agents.git.story_commit_contracts import (
+    StoryCommitDecision, StoryCommitError, StoryCommitFailureCode,
+)
 from story_writing_agents.writing_artifacts import (
     ArtifactApplicationError,
     ArtifactApplicationErrorCode,
@@ -315,6 +323,16 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.assertEqual(self.git_snapshot(), relationship_git)
 
     async def test_application_and_result_persistence_failures_map_safely(self) -> None:
+        self.workspace.path(_RULES).unlink(missing_ok=True)
+        subprocess.run(
+            ["git", "add", "-A", "--", "core_documents", "manuscript"],
+            cwd=self.workspace.root, check=True,
+        )
+        subprocess.run(
+            ["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+             "commit", "-m", "Seed Apply failure baseline"],
+            cwd=self.workspace.root, check=True, stdout=subprocess.DEVNULL,
+        )
         for code, expected, next_action in (
             (
                 ArtifactApplicationErrorCode.RECOVERY_REQUIRED,
@@ -346,21 +364,148 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
                 self.assertEqual(self.artifact_snapshot(), before)
                 self.assertEqual(self.git_snapshot(), git_before)
 
-        turn = await self.reviewed_create("Result persistence failure")
-        original_append = self.runtime._append_drafts
-        calls = 0
+        turn = await self.reviewed_create("Commit preparation failure")
+        git_before = self.git_snapshot()
+        with mock.patch.object(
+            StoryCommitService, "prepare",
+            side_effect=StoryCommitError(StoryCommitFailureCode.CANDIDATE_DRIFT),
+        ):
+            prepared = await self.runtime.decide_artifact_application(
+                _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
+            )
+        self.assertIs(prepared.outcome.outcome, ArtifactApplicationOutcomeKind.APPLIED)
+        self.assertIs(
+            prepared.outcome.next_action, ArtifactApplicationNextAction.REPREPARE_COMMIT_REQUEST,
+        )
+        self.assertIsNone(prepared.commit_request)
+        self.assertEqual(self.git_snapshot(), git_before)
+        prepared_events = self.history(turn.conversation_id)
+        self.assertIs(type(prepared_events[-1].payload), ArtifactApplicationResultPayload)
+        self.assertFalse(
+            any(type(event.payload) is StoryCommitRequestPayload for event in prepared_events)
+        )
+        restarted_backend = _LeadBackend()
+        restarted = StoryRuntime(self.control_workspace, restarted_backend)  # type: ignore[arg-type]
+        redisclosed = await restarted.lead_turn(
+            self.session_id, turn.conversation_id, "Commit it now.",
+        )
+        self.assertIs(redisclosed.next_action, CollaborationNextAction.REPREPARE_COMMIT_REQUEST)
+        reprepare = redisclosed.story_commit_preparation_request
+        assert reprepare is not None
+        self.assertEqual(
+            (reprepare.application_result_event_id, reprepare.tail_event_id),
+            (prepared_events[-1].event_id,) * 2,
+        )
+        self.assertEqual(
+            (reprepare.application_id, reprepare.application_request_digest),
+            (prepared.outcome.application_id, prepared.outcome.application_request_digest),
+        )
+        self.assertEqual(restarted_backend.calls, [])
+        self.assertEqual(self.git_snapshot(), git_before)
+        renewed = await restarted.reprepare_story_commit(reprepare)
+        self.assertEqual(renewed.application_result_event_id, prepared_events[-1].event_id)
+        self.assertIs(type(self.history(turn.conversation_id)[-1].payload), StoryCommitRequestPayload)
+        with self.assertRaises(ValueError):
+            await restarted.reprepare_story_commit(reprepare)
+        rejected = await restarted.decide_story_commit(
+            StoryCommitDecisionRequest(
+                session_id=self.session_id, conversation_id=turn.conversation_id,
+                step_id=turn.step_id,
+                confirmation_request_id=renewed.confirmation_request_id,
+                application_result_event_id=renewed.application_result_event_id,
+                candidate_id=renewed.candidate.candidate_id,
+                request_digest=renewed.request_digest,
+                confirmation_id="reprepared_commit_reject",
+                kind=StoryCommitDecision.REJECT,
+            )
+        )
+        self.assertIs(rejected.outcome.outcome, StoryCommitOutcomeKind.REJECTED)
+        self.assertEqual(self.git_snapshot(), git_before)
 
-        def fail_result_append(*args, **kwargs):
-            nonlocal calls
-            calls += 1
-            if calls == 2:
-                raise OSError("result persistence unavailable")
-            return original_append(*args, **kwargs)
+        turn = await self.reviewed_create("Published pair readback")
+        store = self.runtime.conversation_storage_services.event_store
+        original_batch = type(store).append_batch
+        appended_pair = False
+
+        def append_then_raise(current, batch):
+            nonlocal appended_pair
+            receipt = original_batch(current, batch)
+            if current is store and any(
+                type(event.payload) is StoryCommitRequestPayload for event in batch.events
+            ):
+                appended_pair = True
+                raise OSError("commit pair acknowledgement unavailable")
+            return receipt
+
+        git_before = self.git_snapshot()
+        with mock.patch.object(type(store), "append_batch", new=append_then_raise):
+            recovered = await self.runtime.decide_artifact_application(
+                _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
+            )
+        self.assertTrue(appended_pair)
+        self.assertIs(recovered.outcome.outcome, ArtifactApplicationOutcomeKind.APPLIED)
+        self.assertIs(
+            recovered.outcome.next_action,
+            ArtifactApplicationNextAction.REQUEST_COMMIT_CONFIRMATION,
+        )
+        self.assertIsNotNone(recovered.commit_request)
+        self.assertEqual(
+            sum(type(event.payload) is StoryCommitRequestPayload for event in self.history(turn.conversation_id)),
+            1,
+        )
+        self.assertEqual(self.git_snapshot(), git_before)
+
+        turn = await self.reviewed_create("Commit publication failure")
+        failed_pair = False
+
+        def fail_pair(current, batch):
+            nonlocal failed_pair
+            if current is store and any(
+                type(event.payload) is StoryCommitRequestPayload for event in batch.events
+            ):
+                failed_pair = True
+                raise OSError("commit request publication unavailable")
+            return original_batch(current, batch)
+        git_before = self.git_snapshot()
+        with mock.patch.object(type(store), "append_batch", new=fail_pair):
+            absent = await self.runtime.decide_artifact_application(
+                _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
+            )
+        self.assertTrue(failed_pair)
+        self.assertIs(absent.outcome.outcome, ArtifactApplicationOutcomeKind.APPLIED)
+        self.assertIs(
+            absent.outcome.next_action, ArtifactApplicationNextAction.REPREPARE_COMMIT_REQUEST,
+        )
+        self.assertIsNone(absent.commit_request)
+        self.assertEqual(self.git_snapshot(), git_before)
+        absent_events = self.history(turn.conversation_id)
+        self.assertIs(type(absent_events[-1].payload), ArtifactApplicationResultPayload)
+        self.assertFalse(
+            any(type(event.payload) is StoryCommitRequestPayload for event in absent_events)
+        )
+
+        turn = await self.reviewed_create("Result persistence failure")
+        original_read = type(store).read
+        pair_failed = False
+
+        def fail_ambiguous_pair(current, batch):
+            nonlocal pair_failed
+            if current is store and any(
+                type(event.payload) is StoryCommitRequestPayload for event in batch.events
+            ):
+                pair_failed = True
+                raise OSError("result publication unavailable")
+            return original_batch(current, batch)
+
+        def fail_readback(current, *args):
+            if current is store and pair_failed:
+                raise OSError("result readback unavailable")
+            return original_read(current, *args)
 
         git_before = self.git_snapshot()
         with mock.patch.object(
-            self.runtime, "_append_drafts", side_effect=fail_result_append
-        ):
+            type(store), "append_batch", new=fail_ambiguous_pair,
+        ), mock.patch.object(type(store), "read", new=fail_readback):
             uncertain = await self.runtime.decide_artifact_application(
                 _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
             )

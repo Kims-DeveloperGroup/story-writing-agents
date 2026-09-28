@@ -22,6 +22,7 @@ from ..conversations import (
     LeadTurnResult,
     StoryCommitDecision,
     StoryCommitDecisionRequest,
+    StoryCommitPreparationRequest,
     StoryCommitDecisionResult,
     StoryCommitRequestPayload,
 )
@@ -263,6 +264,10 @@ class InteractiveLeadAdapter:
                 return self._decide_artifact_application(turn)
             if turn.story_commit_request is not None:
                 return self._decide_story_commit(turn, turn.story_commit_request)
+            if turn.story_commit_preparation_request is not None:
+                return self._reprepare_story_commit(
+                    turn, turn.story_commit_preparation_request
+                )
             recommendation = turn.recommendation_request
             if recommendation is None and (turn.proposal is None or turn.confirmation_request_id is None):
                 return False
@@ -449,6 +454,52 @@ class InteractiveLeadAdapter:
         if result.commit_request is None:
             return False
         return self._decide_story_commit(turn, result.commit_request)
+
+    def _reprepare_story_commit(
+        self,
+        turn: LeadTurnResult,
+        preparation: StoryCommitPreparationRequest,
+    ) -> bool:
+        """Offer exact candidate preparation without granting Commit authority."""
+        outcome = self._picker.read_picker(
+            Prompt(
+                "Prepare local commit request",
+                instruction=(
+                    "Prepare a new exact request for the known Apply result. "
+                    "A separate Commit decision is still required."
+                ),
+            ),
+            (
+                Choice("prepare", "Prepare", description="Prepare one exact request."),
+                Choice("later", "Later", description="Keep the applied result pending."),
+            ),
+            highlighted_id="later",
+        )
+        if outcome.kind is ControlOutcomeKind.EOF:
+            return True
+        if outcome.kind in {ControlOutcomeKind.CANCEL, ControlOutcomeKind.INTERRUPT}:
+            self._write_unconfirmed("The local commit request remains unprepared.")
+            return False
+        if outcome.kind is not ControlOutcomeKind.COMMIT or outcome.text is None:
+            raise RuntimeError("commit preparation picker returned an invalid outcome")
+        if outcome.text == "later":
+            return False
+        if outcome.text != "prepare":
+            raise RuntimeError("commit preparation picker returned an invalid choice")
+        request = self._runner.run(
+            self._progress.run(self._session.reprepare_story_commit(preparation))
+        )
+        if type(request) is not StoryCommitRequestPayload:
+            raise TypeError("commit preparation returned an invalid request")
+        prepared_turn = dataclasses.replace(
+            turn,
+            message="The exact local Commit request is ready for a separate decision.",
+            next_action=CollaborationNextAction.SUBMIT_COMMIT_DECISION,
+            story_commit_preparation_request=None,
+            story_commit_request=request,
+        )
+        self._semantic_output.write_component(project_lead_turn_result(prepared_turn))
+        return self._decide_story_commit(prepared_turn, request)
 
     def _decide_story_commit(
         self,

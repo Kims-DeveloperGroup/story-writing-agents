@@ -1564,7 +1564,13 @@ that result, rejection, revision, staleness, or failure leaves it open. A
 terminal Commit result preserves prior objective satisfaction and cannot
 authorize the next cycle. Pending Apply and Commit requests are redisclosed
 exactly, and each new cycle requires fresh decisions. No local Commit request
-authorizes remote push or merge.
+authorizes remote push or merge. A successful Apply result alone does not
+create Commit authority: the runtime must publish its matching Commit request
+in the same durable batch. If request preparation is proven absent, use the
+typed reprepare action; if publication is uncertain, inspect the owner before
+retrying. The installed shell offers Prepare or Later for a typed reprepare
+request, then asks for a separate Commit, Reject, or Revise decision on the
+fresh exact Commit request.
 
 See the [runtime API](../reference/runtime-api.md),
 [collaboration-history reference](../reference/collaboration-history.md),

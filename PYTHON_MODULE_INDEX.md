@@ -89,7 +89,7 @@ authentication, recovery, and diagnostic behavior behind provider-neutral contra
 - `provider_auth`, `provider_auth_recovery`, `provider_catalog`, `provider_process`, `provider_execution_workspace`
 - `provider_error_artifacts`, `debug_log`, `structured_output_validation`, `lead_provider_contracts`
 
-`orchestrator` composes domain contracts, storage, consensus, Git story commits, references, and provider-neutral backends.
+`orchestrator` composes domain contracts, storage, consensus, Git story commits, references, and provider-neutral backends. Its Apply handoff prepares the Git candidate before atomically publishing the known result with one exact Commit request; proven absence publishes a reprepare result, while ambiguous publication requires inspection.
 `provider_process` owns confined streamed subprocesses; `provider_auth` owns probes; diagnostic adapters own their files.
 Concrete adapters depend on `provider_adapter`. `provider_execution_workspace` owns the internal exact-worktree capability
 borrowed from the workspace binding for Codex; launch uses its duplicated root descriptor. No Git lease spans provider work.
@@ -140,11 +140,10 @@ search/storage contracts without owning persistence.
 - `conversations.events`, `conversations.session_context`
 - `conversation_search`, `conversation_literal_search`, `conversation_retrieval`
 
-`catalog` owns catalog behavior, `events` owns schema-v2 event contracts, and
-`session_context` derives session-scoped context. Search implementations must return public
+`catalog` owns catalog behavior, `events` owns schema-v2 event contracts, and `context` projects exact Commit authority or typed reprepare from durable Apply history; `session_context` derives session-scoped context. Search implementations must return public
 search/retrieval contracts rather than expose storage internals. Conversation events and
 retrieval may carry bounded validation details associated with the physical provider call;
-older records without them remain valid.
+older records without them remain valid. The `conversations` facade exports the additive structured Commit preparation request; prose cannot authorize Commit.
 
 ### Conversation storage
 
@@ -242,6 +241,7 @@ and again after role publication. `session_role_projection` owns create-only, re
 role files and the private Git exclusion: `/.agents/` must be its final nonempty record, and
 bounded positive short writes finish on the retained descriptor before fsync and readback.
 Recovery contracts point inward; reconciliation borrows opaque Git generation authority.
+For known Apply, recovery projects either the exact extant Commit request or typed reprepare, while Commit still requires its single-use structured decision.
 Workspace readers accept optional bounded validation details and legacy entries without them.
 
 ### Interactive controller

@@ -16,7 +16,9 @@ from story_writing_agents.agents import LEAD_ORCHESTRATOR
 from story_writing_agents.conversations import (
     ArtifactApplicationDecision,
     ArtifactApplicationDecisionKind,
+    ArtifactApplicationResultPayload,
     CollaborationConfirmationDecision,
+    CollaborationNextAction,
     CollaborationSideEffect,
     StoryCommitDecisionRequest,
     StoryCommitNextAction,
@@ -245,8 +247,40 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         key, _pending, pin, descriptors = self.pending_commit(applied)
         request = applied.commit_request
         assert request is not None
+        events = self.history(applied.request.reviewed_proposal.conversation_id)
+        application_results = [
+            event for event in events if type(event.payload) is ArtifactApplicationResultPayload
+        ]
+        commit_requests = [
+            event for event in events if type(event.payload) is StoryCommitRequestPayload
+        ]
+        self.assertEqual((len(application_results), len(commit_requests)), (1, 1))
+        self.assertEqual(
+            (application_results[0].batch_id, application_results[0].event_id),
+            (
+                commit_requests[0].batch_id,
+                commit_requests[0].payload.application_result_event_id,
+            ),
+        )
+        self.assertEqual(
+            tuple(
+                (event.batch_ordinal, event.batch_size)
+                for event in (application_results[0], commit_requests[0])
+            ),
+            ((0, 2), (1, 2)),
+        )
         before_files = self.artifact_snapshot()
         before_git = self.session_git_snapshot()
+        restarted_backend = _LeadBackend()
+        restarted = StoryRuntime(self.workspace, restarted_backend)  # type: ignore[arg-type]
+        redisclosed = await restarted.lead_turn(
+            self.session_id, applied.request.reviewed_proposal.conversation_id,
+            "Commit these changes now.",
+        )
+        self.assertIs(redisclosed.next_action, CollaborationNextAction.SUBMIT_COMMIT_DECISION)
+        self.assertEqual(redisclosed.story_commit_request, request)
+        self.assertEqual(restarted_backend.calls, [])
+        self.assertEqual(self.session_git_snapshot(), before_git)
 
         self.assertEqual(
             request.choices,
