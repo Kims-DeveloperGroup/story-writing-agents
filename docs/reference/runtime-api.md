@@ -1131,7 +1131,10 @@ original Apply-result event, application ID and request digest, and current
 tail event IDs. It is available only from a typed reprepare state. It
 revalidates those durable facts, prepares a candidate, and publishes a
 new Commit request without committing; that request needs its own fresh
-structured decision. After restart, an extant old request stays visible,
+structured decision. After a structured Revise, the new candidate carries a
+durable revision ordinal in its proposed local commit message so a retired
+candidate ID is not reused; the applied artifact evidence is unchanged.
+After restart, an extant old request stays visible,
 but a decision without its process-local binding closes stale/reprepare
 before Git mutation; re-preparation then creates a fresh request. Mismatched or
 uncertain owner facts require inspection.

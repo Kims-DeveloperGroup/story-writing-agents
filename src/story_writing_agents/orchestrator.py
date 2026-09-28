@@ -4661,6 +4661,21 @@ class StoryRuntime:
             )
             if len(result_events) != 1:
                 raise ValueError("commit preparation Apply result is unavailable")
+            revision_count = sum(
+                type(event.payload) is StoryCommitDecisionPayload
+                and event.payload.application_result_event_id
+                == request.application_result_event_id
+                and event.payload.decision is StoryCommitDecision.REVISE
+                for event in events
+            )
+            proposed_message = (
+                "Apply reviewed artifact changes"
+                if revision_count == 0
+                else (
+                    "Apply reviewed artifact changes "
+                    f"(commit request revision {revision_count})"
+                )
+            )
             reviewed = application_request.reviewed_proposal
             application = application_request.application_request
             artifact_binding = self._session_artifact_binding(request.session_id)
@@ -4679,7 +4694,7 @@ class StoryRuntime:
                         change_set=application.change_set,
                         applied_state_digest=application.change_set.projected_state_digest,
                     ),
-                    proposed_message="Apply reviewed artifact changes",
+                    proposed_message=proposed_message,
                     impact_boundary=(
                         f"commit {len(application_result.result.affected_paths)} "
                         "reviewed artifact paths",

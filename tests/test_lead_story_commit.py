@@ -40,6 +40,7 @@ from story_writing_agents.git.story_commit_contracts import (
 from story_writing_agents.workspace.initialization import provision_session_resources
 
 from tests import test_lead_artifact_application as lead_artifact_application_tests
+from tests.collaboration_contract_fixture import seed_reviewed_artifact
 from tests.helpers import pristine_initialized_workspace
 from tests.test_artifact_proposal_orchestration import (
     _RULES,
@@ -137,7 +138,10 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         self.backend = _LeadBackend(vendor="fixture")
         self.runtime = StoryRuntime(self.workspace, self.backend)  # type: ignore[arg-type]
 
-    async def reviewed_create(self, subject: str = "Reviewed update"):
+    async def reviewed_create(
+        self, subject: str = "Reviewed update", *,
+        new_text: str = "Use restrained close-third narration.\n",
+    ):
         conversation_id = self.conversation(subject)
         self.backend.enqueue(
             _artifact_outcome(
@@ -145,7 +149,7 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
                     {
                         "evidence_id": _reference_ids(material)[0],
                         "kind": "replace",
-                        "new_text": "Use restrained close-third narration.\n",
+                        "new_text": new_text,
                     }
                 ],
                 evidence_status="empty",
@@ -186,9 +190,15 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
             self.git("status", "--porcelain=v1", "-z"),
         )
 
-    async def applied_create(self, subject: str = "Prepared local commit", *, seeded=False):
-        turn = (await lead_artifact_application_tests.LeadArtifactApplicationTests.reviewed_create(
-            self, subject, kind="replace") if seeded else await self.reviewed_create(subject))
+    async def applied_create(
+        self, subject: str = "Prepared local commit", *, seeded=False,
+        new_text: str = "Use restrained close-third narration.\n",
+    ):
+        turn = (
+            await seed_reviewed_artifact(
+                self, self.conversation(subject), (("replace", _RULES, new_text),),
+            ) if seeded else await self.reviewed_create(subject, new_text=new_text)
+        )
         applied = await self.runtime.decide_artifact_application(
             _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
         )
@@ -412,6 +422,52 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
             await self.runtime.decide_story_commit(
                 _commit_decision(applied, StoryCommitDecision.COMMIT)
             )
+
+        revised_apply = await self.applied_create(
+            "Revised exact commit", seeded=True,
+            new_text="Use a measured close-third voice.\n",
+        )
+        old_request = revised_apply.commit_request
+        assert old_request is not None
+        revised_head = self.git("rev-parse", "HEAD").strip()
+        revised = await self.runtime.decide_story_commit(
+            _commit_decision(
+                revised_apply, StoryCommitDecision.REVISE,
+                revision_request="Refine the local commit message.",
+            )
+        )
+        self.assertIs(revised.outcome.outcome, StoryCommitOutcomeKind.SUPERSEDED)
+        self.assertIs(revised.outcome.next_action, StoryCommitNextAction.REPREPARE)
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), revised_head)
+        redisclosed = await self.runtime.lead_turn(
+            self.session_id, revised_apply.request.reviewed_proposal.conversation_id,
+            "Commit the revision now.",
+        )
+        self.assertIs(redisclosed.next_action, CollaborationNextAction.REPREPARE_COMMIT_REQUEST)
+        preparation = redisclosed.story_commit_preparation_request
+        assert preparation is not None
+        fresh_request = await self.runtime.reprepare_story_commit(preparation)
+        self.assertNotEqual(fresh_request.candidate.candidate_id, old_request.candidate.candidate_id)
+        self.assertEqual(fresh_request.application_result_event_id, old_request.application_result_event_id)
+        with mock.patch.object(GitProcessRunner, "run", tracked_run):
+            revised_commit = await self.runtime.decide_story_commit(
+                _commit_decision(
+                    replace(revised_apply, commit_request=fresh_request),
+                    StoryCommitDecision.COMMIT, confirmation_id="revised_commit_confirmation",
+                )
+            )
+        self.assertIs(revised_commit.outcome.outcome, StoryCommitOutcomeKind.COMMITTED)
+        revised_result = revised_commit.outcome.result
+        assert revised_result is not None
+        final_head = self.git("rev-parse", "HEAD").strip()
+        self.assertNotEqual(final_head, revised_head)
+        self.assertEqual(revised_result.commit_id.encode("ascii"), final_head)
+        self.assertEqual(
+            self.git("diff-tree", "--no-commit-id", "--name-only", "-r", final_head.decode()).splitlines(),
+            [_RULES.encode()],
+        )
+        self.assertEqual(self.git("diff", "--cached", "--binary"), b"")
+        self.assertFalse(any(command[0] in forbidden for command in commands))
 
 
 
