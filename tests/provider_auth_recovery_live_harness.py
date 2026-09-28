@@ -23,6 +23,7 @@ from unittest import mock
 
 from story_writing_agents import AgentBackend, StoryRuntime, Workspace
 from story_writing_agents import antigravity_adapter, codex_adapter
+from story_writing_agents.agents import ROSTER
 from story_writing_agents.config import ConfigManager
 from story_writing_agents.conversations import (
     CollaborationConfirmationDecision, CollaborationEventKind,
@@ -147,7 +148,21 @@ class Case:
         if vendor == "antigravity":
             payload = argv[argv.index("--print") + 1].encode()
             model = argv[argv.index("--model") + 1]
-            require(argv[argv.index("--agent") + 1] == self.agent, "UNAPPROVED_SPECIALIST")
+            native_agent_id = argv[argv.index("--agent") + 1]
+            matches = tuple(
+                semantic_id
+                for semantic_id in ROSTER
+                if native_agent_id.startswith(semantic_id + "-")
+                and len(native_agent_id) == len(semantic_id) + 65
+                and all(
+                    character in "0123456789abcdef"
+                    for character in native_agent_id[len(semantic_id) + 1 :]
+                )
+            )
+            require(
+                matches == (self.agent,),
+                "UNAPPROVED_SPECIALIST",
+            )
             require(model == self.model, "UNAPPROVED_AGY_MODEL")
             schema = argv[argv.index("--json-schema") + 1].encode()
         else:
@@ -161,6 +176,8 @@ class Case:
         row = dict(sequence=len(self.calls) + 1, vendor=vendor, model=model,
                    synthetic=synthetic, reservation=number, payload_sha256=sha(payload),
                    schema_sha256=sha(schema), before_spawn=True)
+        if vendor == "antigravity":
+            row["native_agent_id"] = native_agent_id
         self.calls.append(row)
         directory = self.directory / ("attempt-%02d" % row["sequence"])
         directory.mkdir(mode=0o700)

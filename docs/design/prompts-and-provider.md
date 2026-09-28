@@ -197,7 +197,15 @@ differ from the role file alone. `behavior_policy_components` holds the ordered
 captured policies; the Lead component also includes its in-memory v4 contract
 overlay. Trailing `runtime_behavior_policy` holds the appended routing bytes.
 The fingerprint includes both. Valid customized session-worktree policy files
-are preserved; updating the runtime policy invalidates incompatible bindings.
+are preserved. Artifact-sensitive Lead, specialist, and consensus composition
+captures those canonical ordered policy bytes through the exact guarded session
+worktree. Configuration, runtime overrides, backend/route choice, and persona
+remain control-workspace authorities. Candidate-only consensus without pending
+same-process reference cleanup may still use the control-owned definition, but
+every Codex physical call nevertheless obtains its exact session execution
+capability. An artifact input or pending cleanup additionally establishes the
+session binding used for policy composition. Updating the runtime policy or
+changing the Codex session generation invalidates incompatible continuations.
 This does not make modified main-root policies admissible. Journal-free
 workspace readiness recognizes only the complete current policy set or one of
 three exact published v2 sets (pre-routing `68a0782`, contextual-objective
@@ -226,7 +234,10 @@ A direct custom `AgentDefinition` can still bind explicit
 fingerprint, staging, and provider behavior for compatibility, but it is not how
 `StoryRuntime` constructs the four built-in roles. Core publication therefore
 changes contextual source revision/delta facts instead of permanently restaging
-mutable story bytes as a new built-in definition.
+mutable story bytes as a new built-in definition. For Codex, compatibility is
+now bounded by the 512-KiB fully encoded `developer_instructions=` process
+argument ceiling. Oversized legacy custom bindings must move story material to
+host-owned context, explicit references, or SEARCH/READ sources.
 
 ## Binding resource lifecycle
 
@@ -461,27 +472,75 @@ and [privacy boundary](../operations/privacy-and-provider.md#agent-exchange-priv
 
 ## Provider process boundaries
 
-The backend launches a constrained Codex subprocess from isolated staging.
-Verified stable context reaches its temporary top-level `AGENTS.md`; request
-JSON reaches standard input. The exact per-call schema is passed by
+The backend stages verified stable Codex instructions outside story Git, reads
+that immutable snapshot before launch, and supplies it through native developer
+instructions. It does not use staging as the project. Each story call carries
+an opaque call-local capability minted only by the exact READY
+`SessionArtifactBinding`; a fixed exec helper selects the retained session-root
+descriptor as the child OS working directory, closes the transferred
+descriptor, and launches Codex with native project root `--cd .`. Request JSON
+reaches standard input. The exact per-call schema is passed by
 `--output-schema <schema-file>` and the structured last message becomes the
-provider-neutral result. OpenAI Structured Outputs requires a supported root
-object schema, required fields, closed objects, and explicitly typed array
-items; Story generates those constraints for every nested action/result node.
+provider-neutral result in a separate exact external output path. Neither
+instructions nor output are written to the session worktree. OpenAI Structured
+Outputs requires a supported root object schema, required fields, closed
+objects, and explicitly typed array items; Story generates those constraints
+for every nested action/result node.
+The staged instruction snapshot is JSON-encoded into the complete
+`developer_instructions=` configuration argument. Story measures that final
+UTF-8 argument, not the raw file, and rejects values above 512 KiB before
+provider submission without tainting an existing thread.
 See the official
 [Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
 Replies still pass Story's correlation, handle, evidence, semantic, and phase
 checks.
+On Darwin, a default-deny outer sandbox admits only the literal canonical Codex
+executable, exact transport, validated provider-native state, required system
+resources, and network access. It grants the provider no session-tree file
+reads or writes and explicitly denies session `.git`, staging, the
+control/initialization roots, siblings, traversal, and symlink escapes.
+Runtime-owned context capture,
+explicit references, and SEARCH/READ handlers deliver selected story content
+through the request or observation rather than provider filesystem access.
+The external response transport is accepted only through a no-follow read of
+one identity-stable, singly linked regular file containing strict UTF-8 and at
+most 8 MiB.
+Generation checks bracket process creation, return, host observation and
+provider-call acceptance, checkpoint commit, adapter cleanup, and contextual
+or direct execution-workspace exit. Deferred Lead publication retains the
+execution and provider contexts through the publication decision, closes and
+revalidates them before accepting the provider-call finalizer, and invalidates
+an exact checkpoint already committed if that cleanup fails. Post-submission or
+contextual exit loss rejects the result and taints the compatible generation-
+bound continuation. Direct owner-exit loss prevents an apparent success from
+returning. An active body failure remains primary.
 The exact sandbox, approval, tool, configuration, and instruction controls live
-in [Privacy and provider exposure](../operations/privacy-and-provider.md).
+in
+[Privacy and provider exposure](../operations/privacy-and-provider.md#provider-processes-and-credentials).
 
 The Antigravity adapter binds the same verified definition and request models
-to an isolated session/agent/fingerprint provider root. It installs the bound
-definition as `.agents/agents/<agent-id>/agent.md`, selects that custom main
-agent with `--agent`, and launches `agy` without a shell from the nested
-adapter-owned workspace. A fresh thread uses `--new-project`; exact resume uses
-`--conversation <id>`, whose associated project Antigravity reopens. Story
-does not register the canonical story workspace root or pass `--project`.
+to the invocation-local session-generation capability. Before launch, runtime
+prepares and independently revalidates one immutable projection plan tying the
+semantic story-agent ID, its content-qualified native selector, and the exact
+final role bytes. The selector is derived from deterministic base definition
+bytes and substituted as the role's YAML name. The adapter also recomputes the
+final file and complete component-byte accounting from the immutable bound
+definition snapshot and requires both the staged file and binding accounting to
+match before provider workspace setup. Runtime projects the final bytes as
+protected, unversioned control data at
+`.agents/agents/<native-selector>/agent.md` and supplies the same selector
+through `--agent`. The semantic ID continues to own runtime settings, state,
+and accounting.
+
+Adapter definitions and provider-native state are rooted under the canonical
+control workspace, even when a backend was constructed from a session
+worktree. Before it creates any per-invocation state directory, runtime rejects
+that state path if it overlaps the selected session root. `agy` then launches
+without a shell from the descriptor-selected exact session worktree. That CWD
+is Antigravity's native project root; there is no adapter-owned working-
+directory fallback and Story does not pass `--project`.
+A fresh thread uses `--new-project`; exact compatible generation-bound resume
+uses `--conversation <id>`.
 Story passes the exact payload as one `--print` argument with empty stdin,
 selecting `--input-format text --output-format json`. The adapter-rendered
 canonical per-call schema is passed inline with `--json-schema`. Exactly one
@@ -499,9 +558,13 @@ shared correlation, domain, evidence, and authority validation. See the
 [recovery gates](../guides/antigravity.md#recover-a-completed-native-error).
 
 This output has no `init` or step metadata to attest agent, cwd, permission
-mode, or tool behavior. The selected custom agent, isolated state/cwd,
-sandbox, plan-mode, and disabled-slash flags remain configured, without an
-approval bypass. Their presence does not prove provider capability removal;
+mode, or tool behavior. The selected custom agent, exact session CWD, external
+generation-qualified state, sandbox, plan-mode, and disabled-slash flags remain
+configured, without an approval bypass. The outer sandbox permits literal
+project traversal and the selected role file but denies direct story-file reads,
+all session writes, and `.git`; story evidence remains runtime-mediated through
+context and SEARCH/READ. These controls do not make provider output an
+attestation;
 CLI 1.1.27 warns that plan mode has no effect with slash commands disabled.
 The full payload, schema, state path, optional model/effort, and conversation
 ID are process-visible arguments. Exact setup and privacy limits are in the
@@ -544,9 +607,13 @@ payload; the content-free prelude uses its own payload and schema.
 
 Neither boundary makes a provider or executable trusted. Hashes detect change
 but do not encrypt or authorize content. Provider transcripts may be retained,
-and ending a story session keeps local thread references. Antigravity-native
-state is retained on backend close; a tainted thread or changed definition
-starts a fresh provider conversation without deleting prior provider data.
+and ending a story session keeps local thread references. The schema-v2
+provider-session manifest can retain a legacy base record and multiple
+fingerprint-qualified generations. A generation-qualified load or taint
+addresses only its exact qualified key and never falls back to the base key;
+ordinary thread updates do not prune older records. Antigravity-native state
+is retained on backend close; a tainted thread or changed definition starts a
+fresh provider conversation without deleting prior provider data.
 
 Exact models are in [Agent contracts](../reference/agent-contracts.md); privacy
 implications are in [Privacy and provider exposure](../operations/privacy-and-provider.md),

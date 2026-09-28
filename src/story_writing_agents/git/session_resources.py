@@ -6,9 +6,11 @@ import hashlib
 import os
 import re
 import stat
+import threading
 import time
 import uuid
 from contextlib import contextmanager
+from dataclasses import dataclass, field as dataclass_field
 from pathlib import Path
 from typing import Iterator
 
@@ -26,11 +28,17 @@ from .contracts import (
     GitManifestEntry,
     GitOperationError,
 )
-from .process import GitProcessFailure, GitProcessResult, GitProcessRunner
+from .process import (
+    GitProcessFailure,
+    GitProcessResult,
+    GitProcessRunner,
+    _MAX_STDOUT_BYTES,
+)
 from .repository_lock import (
     GitRepositoryLease,
     GitRepositoryLockFailure,
     GitRepositoryLockFailureCode,
+    current_thread_token,
     lock_git_repository,
 )
 from .session_contracts import (
@@ -63,6 +71,395 @@ _MAX_REFS = 65_536
 _MAX_WORKTREES = 65_536
 _MAX_ADMIN_FILE_BYTES = 64 * 1024
 _ZERO_BY_LENGTH = {40: "0" * 40, 64: "0" * 64}
+
+
+_GENERATION_DESCRIPTOR_COUNT = 6
+_GenerationFileFacts = tuple[int, int, int, int, int, int, int]
+
+
+@dataclass(frozen=True, slots=True)
+class GitSessionGenerationIdentity:
+    """Content-free physical identity of one validated linked worktree."""
+
+    session: GitSessionIdentity = dataclass_field(repr=False)
+    administrative_root: Path = dataclass_field(repr=False)
+    control_root_identity: tuple[int, int]
+    common_git_identity: tuple[int, int]
+    administrative_identity: tuple[int, int]
+    worktree_identity: tuple[int, int]
+    git_indirection_facts: _GenerationFileFacts = dataclass_field(repr=False)
+    common_indirection_facts: _GenerationFileFacts = dataclass_field(repr=False)
+    git_indirection_sha256: str = dataclass_field(repr=False)
+    common_indirection_sha256: str = dataclass_field(repr=False)
+    _creator_pid: int = dataclass_field(init=False, repr=False, compare=False)
+    _creator_thread_token: object = dataclass_field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.session) is not GitSessionIdentity
+            or not isinstance(self.administrative_root, Path)
+            or not self.administrative_root.is_absolute()
+            or self.administrative_root
+            != Path(os.path.normpath(os.fspath(self.administrative_root)))
+            or any(
+                not _valid_generation_directory_identity(identity)
+                for identity in (
+                    self.control_root_identity,
+                    self.common_git_identity,
+                    self.administrative_identity,
+                    self.worktree_identity,
+                )
+            )
+            or any(
+                not _valid_generation_file_facts(facts)
+                for facts in (
+                    self.git_indirection_facts,
+                    self.common_indirection_facts,
+                )
+            )
+            or any(
+                type(digest) is not str
+                or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+                for digest in (
+                    self.git_indirection_sha256,
+                    self.common_indirection_sha256,
+                )
+            )
+        ):
+            raise TypeError("Git session generation identity is invalid")
+        object.__setattr__(self, "_creator_pid", os.getpid())
+        object.__setattr__(
+            self,
+            "_creator_thread_token",
+            current_thread_token(),
+        )
+
+    def _require_creator(self) -> None:
+        if (
+            self._creator_pid != os.getpid()
+            or self._creator_thread_token is not current_thread_token()
+        ):
+            raise _generation_error()
+
+
+class GitSessionGenerationPin:
+    """Opaque retained descriptors for one physical linked-worktree generation."""
+
+    __slots__ = (
+        "_creator_pid",
+        "_creator_thread_token",
+        "_descriptors",
+        "_identity",
+        "_lock",
+    )
+
+    def __init__(
+        self,
+        identity: GitSessionGenerationIdentity,
+        descriptors: tuple[int, ...],
+    ) -> None:
+        if (
+            type(identity) is not GitSessionGenerationIdentity
+            or type(descriptors) is not tuple
+            or len(descriptors) != _GENERATION_DESCRIPTOR_COUNT
+            or any(type(descriptor) is not int or descriptor < 0 for descriptor in descriptors)
+        ):
+            raise TypeError("Git session generation pin is invalid")
+        identity._require_creator()
+        _require_retained_generation_descriptors(identity, descriptors)
+        self._identity = identity
+        self._descriptors = descriptors
+        self._creator_pid = os.getpid()
+        self._creator_thread_token = current_thread_token()
+        self._lock = threading.Lock()
+
+    def require_current(self) -> None:
+        """Require the named topology and every retained identity to remain exact."""
+
+        if (
+            self._creator_pid != os.getpid()
+            or self._creator_thread_token is not current_thread_token()
+        ):
+            raise _generation_error()
+        identity = self._identity
+        with lock_git_repository(identity.session.main_root) as lease:
+            current, descriptors = _capture_git_session_generation(
+                lease,
+                identity.session,
+            )
+            failure: BaseException | None = None
+            try:
+                if current != identity:
+                    raise _generation_error()
+            except BaseException as exc:
+                failure = exc
+                raise
+            finally:
+                _close_generation_descriptors(descriptors, failure=failure)
+            with self._lock:
+                retained = self._descriptors
+                if not retained:
+                    raise _generation_error()
+                _require_retained_generation_descriptors(identity, retained)
+
+    def close(self) -> None:
+        """Release every retained descriptor idempotently."""
+
+        if self._creator_pid != os.getpid():
+            descriptors = self._descriptors
+            self._descriptors = ()
+            _close_generation_descriptors(descriptors)
+            return
+        with self._lock:
+            descriptors = self._descriptors
+            self._descriptors = ()
+        _close_generation_descriptors(descriptors)
+
+    def __repr__(self) -> str:
+        return "GitSessionGenerationPin(<opaque>)"
+
+    def __reduce_ex__(self, protocol: int) -> object:
+        del protocol
+        raise TypeError("Git session generation pins cannot be serialized")
+
+
+def capture_locked_git_session_generation(
+    lease: GitRepositoryLease,
+    resources: GitSessionResourceInspection,
+    *,
+    expected_worktree_identity: tuple[int, int],
+) -> GitSessionGenerationIdentity:
+    """Capture physical linked-worktree identity through an existing lease."""
+
+    if (
+        type(resources) is not GitSessionResourceInspection
+        or resources.state is not GitSessionResourceState.READY
+        or not _valid_generation_directory_identity(expected_worktree_identity)
+    ):
+        raise TypeError("ready Git session resources are required")
+    identity, descriptors = _capture_git_session_generation(
+        lease,
+        resources.identity,
+    )
+    failure: BaseException | None = None
+    try:
+        if identity.worktree_identity != expected_worktree_identity:
+            raise _generation_error()
+        return identity
+    except BaseException as exc:
+        failure = exc
+        raise
+    finally:
+        _close_generation_descriptors(descriptors, failure=failure)
+
+
+def acquire_git_session_generation_pin(
+    identity: GitSessionGenerationIdentity,
+) -> GitSessionGenerationPin:
+    """Acquire an opaque pin under one short physical-identity lock."""
+
+    if type(identity) is not GitSessionGenerationIdentity:
+        raise TypeError("Git session generation identity is invalid")
+    identity._require_creator()
+    pin: GitSessionGenerationPin | None = None
+    descriptors: tuple[int, ...] = ()
+    try:
+        with lock_git_repository(identity.session.main_root) as lease:
+            current, descriptors = _capture_git_session_generation(
+                lease,
+                identity.session,
+            )
+            if current != identity:
+                raise _generation_error()
+            pin = GitSessionGenerationPin(identity, descriptors)
+            descriptors = ()
+        return pin
+    except BaseException as failure:
+        _close_generation_descriptors(descriptors, failure=failure)
+        if pin is not None:
+            try:
+                pin.close()
+            except BaseException as cleanup_failure:
+                _add_generation_descriptor_cleanup_note(
+                    failure,
+                    cleanup_failure,
+                )
+        raise
+
+
+def acquire_locked_git_session_generation_pin(
+    lease: GitRepositoryLease,
+    resources: GitSessionResourceInspection,
+) -> GitSessionGenerationPin:
+    """Acquire one opaque generation pin through an existing live lease."""
+
+    if (
+        type(lease) is not GitRepositoryLease
+        or type(resources) is not GitSessionResourceInspection
+        or resources.state is not GitSessionResourceState.READY
+    ):
+        raise TypeError("ready locked Git session resources are required")
+    pin: GitSessionGenerationPin | None = None
+    descriptors: tuple[int, ...] = ()
+    try:
+        lease.require_active()
+        identity, descriptors = _capture_git_session_generation(
+            lease,
+            resources.identity,
+        )
+        pin = GitSessionGenerationPin(identity, descriptors)
+        descriptors = ()
+        lease.require_active()
+        return pin
+    except BaseException as failure:
+        _close_generation_descriptors(descriptors, failure=failure)
+        if pin is not None:
+            try:
+                pin.close()
+            except BaseException as cleanup_failure:
+                _add_generation_descriptor_cleanup_note(failure, cleanup_failure)
+        raise
+
+
+def require_locked_git_session_untracked_prefix(
+    lease: GitRepositoryLease,
+    resources: GitSessionResourceInspection,
+    expected_generation: GitSessionGenerationIdentity,
+    *,
+    prefix: str,
+    verify_exclusion: bool = False,
+) -> None:
+    """Require an untracked prefix and, when requested, its effective exclusion."""
+
+    if (
+        type(lease) is not GitRepositoryLease
+        or type(resources) is not GitSessionResourceInspection
+        or resources.state is not GitSessionResourceState.READY
+        or type(expected_generation) is not GitSessionGenerationIdentity
+        or resources.identity != expected_generation.session
+        or prefix != ".agents"
+        or type(verify_exclusion) is not bool
+    ):
+        raise TypeError("ready locked Git session resources are required")
+    expected_generation._require_creator()
+    before_descriptors: tuple[int, ...] = ()
+    after_descriptors: tuple[int, ...] = ()
+    before_index = -1
+    after_index = -1
+    failure: BaseException | None = None
+    try:
+        lease.require_active()
+        if lease.main_root != resources.identity.main_root:
+            raise _generation_error()
+        observed_generation, before_descriptors = _capture_git_session_generation(
+            lease,
+            resources.identity,
+        )
+        if observed_generation != expected_generation:
+            raise _generation_error()
+        before_index, index_facts = _open_session_index(
+            before_descriptors[2]
+        )
+        _require_retained_generation_descriptors(
+            expected_generation,
+            before_descriptors,
+        )
+        lease.require_active()
+        result = GitProcessRunner(resources.identity.worktree_root).run(
+            (
+                "ls-files",
+                "--cached",
+                "-z",
+                "--",
+                f":(top,literal,icase){prefix}",
+            ),
+            expected_identity=expected_generation.worktree_identity,
+            read_only=True,
+        )
+        if result.returncode != 0 or result.stdout:
+            raise _generation_error()
+        if verify_exclusion:
+            ignored = GitProcessRunner(resources.identity.worktree_root).run(
+                ("check-ignore", "--quiet", "--no-index", "--", ".agents/"),
+                expected_identity=expected_generation.worktree_identity,
+                read_only=True,
+            )
+            if ignored.returncode != 0 or ignored.stdout:
+                raise _generation_error()
+        _require_session_index(
+            before_descriptors[2],
+            before_index,
+            index_facts,
+        )
+        _require_retained_generation_descriptors(
+            expected_generation,
+            before_descriptors,
+        )
+        lease.require_active()
+        observed_after, after_descriptors = _capture_git_session_generation(
+            lease,
+            resources.identity,
+        )
+        if observed_after != expected_generation:
+            raise _generation_error()
+        after_index, after_index_facts = _open_session_index(
+            after_descriptors[2]
+        )
+        if after_index_facts != index_facts:
+            raise _generation_error()
+        _require_session_index(
+            after_descriptors[2],
+            after_index,
+            index_facts,
+        )
+        lease.require_active()
+    except (GitRepositoryLockFailure, GitSessionResourceError) as exc:
+        failure = exc
+        raise
+    except (GitProcessFailure, OSError, UnicodeError, ValueError):
+        failure = _generation_error()
+        raise failure from None
+    except BaseException as exc:
+        failure = exc
+        raise
+    finally:
+        try:
+            _close_generation_descriptors(
+                (
+                    *after_descriptors,
+                    *((after_index,) if after_index >= 0 else ()),
+                ),
+                failure=failure,
+            )
+        finally:
+            _close_generation_descriptors(
+                (
+                    *before_descriptors,
+                    *((before_index,) if before_index >= 0 else ()),
+                ),
+                failure=failure,
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class GitSessionRecoveryTopology:
+    """Exact session topology whose only deferred fact is index cleanliness."""
+
+    resources: GitSessionResourceInspection
+    main_status_sha256: str
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.resources) is not GitSessionResourceInspection
+            or self.resources.state is not GitSessionResourceState.READY
+            or type(self.main_status_sha256) is not str
+            or re.fullmatch(r"[0-9a-f]{64}", self.main_status_sha256) is None
+        ):
+            raise TypeError("recovery topology requires exact ready resources")
 
 
 def inspect_git_session_resources(
@@ -221,6 +618,48 @@ def require_ready_locked_git_session_resources(
                 result.recovery_action,
             )
         return result
+    except GitSessionResourceError as exc:
+        failure = _clear_resource_error(exc)
+    raise failure
+
+
+def require_story_commit_recovery_locked_git_session_resources(
+    lease: GitRepositoryLease,
+    manifest: GitBaselineManifest,
+    session_id: str,
+    *,
+    allowed_worktree_changes: tuple[str, ...] = (),
+) -> GitSessionRecoveryTopology:
+    """Require exact recovery topology while deferring only session-index cleanliness."""
+
+    failure: GitSessionResourceError | None = None
+    try:
+        repository, expected_manifest, identity = _locked_request(
+            lease,
+            manifest,
+            session_id,
+        )
+        baseline = repository._verify_main(
+            expected_manifest,
+            allowed_worktree_changes=allowed_worktree_changes,
+        )
+        main_status_sha256 = repository._main_status_sha256(
+            allowed_worktree_changes=allowed_worktree_changes,
+        )
+        resources = repository._classify(
+            identity,
+            baseline,
+            repository._facts(),
+            require_clean_session_index=False,
+        )
+        if resources.state is not GitSessionResourceState.READY:
+            raise _resource_error(
+                GitSessionFailureCode.RECOVERY_REQUIRED,
+                GitSessionOperationKind.REQUIRE_READY,
+                resources.state,
+                resources.recovery_action,
+            )
+        return GitSessionRecoveryTopology(resources, main_status_sha256)
     except GitSessionResourceError as exc:
         failure = _clear_resource_error(exc)
     raise failure
@@ -464,14 +903,19 @@ class _Repository:
                 GitSessionResourceState.RECOVERY_REQUIRED,
                 GitSessionRecoveryAction.OPERATOR_RECOVERY,
             )
-        parents = _lines(
-            self._required(
-                ("show", "-s", "--format=%P", baseline), read_only=True
-            ).stdout
-        )
-        message = self._required(
-            ("show", "-s", "--format=%B", baseline), read_only=True
-        ).stdout.rstrip(b"\n")
+        commit_header = self._required(
+            ("show", "-s", "--format=%P%x00%B", baseline), read_only=True
+        ).stdout
+        parent_bytes, separator, message_bytes = commit_header.partition(b"\x00")
+        if not separator:
+            raise _resource_error(
+                GitSessionFailureCode.RECOVERY_REQUIRED,
+                GitSessionOperationKind.INSPECT,
+                GitSessionResourceState.RECOVERY_REQUIRED,
+                GitSessionRecoveryAction.OPERATOR_RECOVERY,
+            )
+        parents = _lines(parent_bytes)
+        message = message_bytes.rstrip(b"\n")
         if (
             parents not in {(), ("",)}
             or message != GIT_BASELINE_COMMIT_MESSAGE.encode()
@@ -506,42 +950,146 @@ class _Repository:
             )
         return baseline
 
+    def _main_status_sha256(
+        self,
+        *,
+        allowed_worktree_changes: tuple[str, ...],
+    ) -> str:
+        """Return exact allowed main-worktree status bytes under this lease."""
+
+        status_arguments = (
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=no",
+        )
+        diff_arguments = (
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--binary",
+            "--",
+            *allowed_worktree_changes,
+        )
+        status = self._required(status_arguments, read_only=True).stdout
+        content_delta = self._required(diff_arguments, read_only=True).stdout
+        confirmed_status = self._required(status_arguments, read_only=True).stdout
+        confirmed_delta = self._required(diff_arguments, read_only=True).stdout
+        if not _status_matches_allowed_worktree_changes(
+            status,
+            allowed_worktree_changes,
+        ) or (status, content_delta) != (confirmed_status, confirmed_delta):
+            raise _resource_error(
+                GitSessionFailureCode.RECOVERY_REQUIRED,
+                GitSessionOperationKind.INSPECT,
+                GitSessionResourceState.RECOVERY_REQUIRED,
+                GitSessionRecoveryAction.OPERATOR_RECOVERY,
+            )
+        return hashlib.sha256(status + b"\0" + content_delta).hexdigest()
+
     def _tree_digests(self, commit: str) -> dict[str, str]:
-        result = self._required(("ls-tree", "-r", "-z", commit), read_only=True)
-        values: dict[str, str] = {}
-        for row in result.stdout.split(b"\x00"):
-            if not row:
-                continue
-            try:
-                header, raw_path = row.split(b"\t", 1)
-                mode, kind, object_id = header.split(b" ")
-            except ValueError:
-                raise _resource_error(
-                    GitSessionFailureCode.RECOVERY_REQUIRED,
-                    GitSessionOperationKind.INSPECT,
-                    GitSessionResourceState.RECOVERY_REQUIRED,
-                    GitSessionRecoveryAction.OPERATOR_RECOVERY,
-                ) from None
-            if mode != b"100644" or kind != b"blob":
-                raise _resource_error(
-                    GitSessionFailureCode.RECOVERY_REQUIRED,
-                    GitSessionOperationKind.INSPECT,
-                    GitSessionResourceState.RECOVERY_REQUIRED,
-                    GitSessionRecoveryAction.OPERATOR_RECOVERY,
-                )
-            path = _utf8(raw_path)
-            blob = self._required(
-                ("cat-file", "blob", object_id.decode("ascii")), read_only=True
+        """Read one fresh exact tree through a bounded immutable-object batch."""
+
+        failure: GitSessionResourceError | None = None
+        try:
+            tree = self._required(
+                ("ls-tree", "-r", "-l", "-z", commit), read_only=True
             ).stdout
-            values[path] = hashlib.sha256(blob).hexdigest()
-            if len(values) > 65_536:
-                raise _resource_error(
-                    GitSessionFailureCode.RECOVERY_REQUIRED,
-                    GitSessionOperationKind.INSPECT,
-                    GitSessionResourceState.RECOVERY_REQUIRED,
-                    GitSessionRecoveryAction.OPERATOR_RECOVERY,
-                )
-        return values
+            if type(tree) is not bytes or (tree and not tree.endswith(b"\x00")):
+                raise ValueError
+            if not tree:
+                return {}
+            entries: list[tuple[str, bytes, int]] = []
+            paths: set[str] = set()
+            for row in tree[:-1].split(b"\x00"):
+                header, raw_path = row.split(b"\t", 1)
+                mode, kind, raw_object_id, padded_size = header.split(b" ", 3)
+                object_id = _object_id(raw_object_id).encode("ascii")
+                path = _utf8(raw_path)
+                raw_size = padded_size.lstrip(b" ")
+                if (
+                    not raw_size.isdigit()
+                    or len(raw_size) > len(str(_MAX_STDOUT_BYTES))
+                ):
+                    raise ValueError
+                size = int(raw_size)
+                if (
+                    mode != b"100644"
+                    or kind != b"blob"
+                    or object_id != raw_object_id
+                    or padded_size != str(size).rjust(7).encode("ascii")
+                    or size > _MAX_STDOUT_BYTES
+                    or path in paths
+                    or len(entries) >= 65_536
+                ):
+                    raise ValueError
+                paths.add(path)
+                entries.append((path, object_id, size))
+            values: dict[str, str] = {}
+
+            def read_batch(batch: list[tuple[str, bytes, int]]) -> None:
+                output = self._required(
+                    ("cat-file", "--batch"),
+                    stdin=b"".join(object_id + b"\n" for _, object_id, _ in batch),
+                    read_only=True,
+                ).stdout
+                if type(output) is not bytes:
+                    raise ValueError
+                offset = 0
+                for path, object_id, size in batch:
+                    header_end = output.find(b"\n", offset)
+                    if header_end < 0:
+                        raise ValueError
+                    observed_id, kind, raw_size = output[offset:header_end].split(b" ")
+                    if (
+                        observed_id != object_id
+                        or kind != b"blob"
+                        or raw_size != str(size).encode("ascii")
+                    ):
+                        raise ValueError
+                    body_start = header_end + 1
+                    body_end = body_start + size
+                    if body_end >= len(output) or output[body_end] != 10:
+                        raise ValueError
+                    values[path] = hashlib.sha256(
+                        memoryview(output)[body_start:body_end]
+                    ).hexdigest()
+                    offset = body_end + 1
+                if offset != len(output):
+                    raise ValueError
+
+            batch: list[tuple[str, bytes, int]] = []
+            batch_bytes = 0
+            for entry in entries:
+                path, object_id, size = entry
+                response_bytes = len(object_id) + len(b" blob ") + len(str(size)) + size + 2
+                if batch and batch_bytes + response_bytes > _MAX_STDOUT_BYTES:
+                    read_batch(batch)
+                    batch = []
+                    batch_bytes = 0
+                if response_bytes > _MAX_STDOUT_BYTES:
+                    blob = self._required(
+                        ("cat-file", "blob", object_id.decode("ascii")), read_only=True
+                    ).stdout
+                    if type(blob) is not bytes or len(blob) != size:
+                        raise ValueError
+                    values[path] = hashlib.sha256(blob).hexdigest()
+                else:
+                    batch.append(entry)
+                    batch_bytes += response_bytes
+            if batch:
+                read_batch(batch)
+            return values
+        except GitSessionResourceError as exc:
+            failure = _clear_resource_error(exc)
+        except (ValueError, UnicodeError):
+            failure = _resource_error(
+                GitSessionFailureCode.RECOVERY_REQUIRED,
+                GitSessionOperationKind.INSPECT,
+                GitSessionResourceState.RECOVERY_REQUIRED,
+                GitSessionRecoveryAction.OPERATOR_RECOVERY,
+            )
+        raise failure
 
     def _facts(self) -> _Facts:
         branches: dict[str, str] = {}
@@ -755,6 +1303,7 @@ class _Repository:
         facts: _Facts,
         *,
         journal: GitSessionProvisioningJournal | None = None,
+        require_clean_session_index: bool = True,
     ) -> GitSessionResourceInspection:
         journal = journal or facts.journals.get(identity.session_id)
         branch = facts.branches.get(identity.branch)
@@ -799,7 +1348,10 @@ class _Repository:
                 return _recovery(identity, baseline)
             if (
                 not self._verify_worktree_indirection(identity)
-                or not self._session_index_is_clean(identity)
+                or (
+                    require_clean_session_index
+                    and not self._session_index_is_clean(identity)
+                )
             ):
                 return _recovery(identity, baseline)
         if present == (True, True, True):
@@ -1016,20 +1568,18 @@ class _Repository:
         journal: GitSessionProvisioningJournal | None,
     ) -> bool:
         try:
-            tree = _object_id(
-                self._required(
-                    ("show", "-s", "--format=%T", seed), read_only=True
-                ).stdout
-            )
-            empty = _object_id(
-                self._required(
-                    ("hash-object", "-t", "tree", "--stdin"), read_only=True
-                ).stdout
+            if _OBJECT_ID.fullmatch(seed) is None:
+                return False
+            empty_tree_object = b"tree 0\x00"
+            empty = (
+                hashlib.sha1(empty_tree_object).hexdigest()
+                if len(seed) == 40
+                else hashlib.sha256(empty_tree_object).hexdigest()
             )
             payload = self._required(
                 ("cat-file", "commit", seed), read_only=True
             ).stdout
-            if tree != empty or not _valid_seed_payload(
+            if not _valid_seed_payload(
                 payload,
                 identity=identity,
                 empty_tree=empty,
@@ -1368,6 +1918,401 @@ def _candidate_main_root(path: Path) -> Path:
     return common.parent
 
 
+def _capture_git_session_generation(
+    lease: GitRepositoryLease,
+    session: GitSessionIdentity,
+) -> tuple[GitSessionGenerationIdentity, tuple[int, ...]]:
+    if type(lease) is not GitRepositoryLease or type(session) is not GitSessionIdentity:
+        raise TypeError("Git session generation request is invalid")
+    descriptors: list[int] = []
+    try:
+        lease.require_active()
+        if lease.main_root != session.main_root:
+            raise _generation_error()
+        control_identity = lease.root_identity
+        common_identity = lease.common_identity
+        control_descriptor = _open_generation_directory(
+            session.main_root,
+            control_identity,
+        )
+        descriptors.append(control_descriptor)
+        common_descriptor = _duplicate_generation_directory(
+            lease.common_descriptor,
+            common_identity,
+        )
+        descriptors.append(common_descriptor)
+
+        worktree_identity = _bind_directory(session.worktree_root)
+        worktree_descriptor = _open_generation_directory(
+            session.worktree_root,
+            worktree_identity,
+        )
+        descriptors.append(worktree_descriptor)
+        git_descriptor, git_payload, git_facts = _open_generation_file(
+            worktree_descriptor,
+            ".git",
+        )
+        descriptors.append(git_descriptor)
+        administrative_root = _administrative_path(git_payload)
+        if (
+            administrative_root.parent != lease.common_git / "worktrees"
+            or administrative_root.name in {"", ".", ".."}
+        ):
+            raise _generation_error()
+        administrative_identity = _bind_directory(administrative_root)
+        administrative_descriptor = _open_generation_directory(
+            administrative_root,
+            administrative_identity,
+        )
+        descriptors.append(administrative_descriptor)
+        common_file_descriptor, common_payload, common_facts = (
+            _open_generation_file(administrative_descriptor, "commondir")
+        )
+        descriptors.append(common_file_descriptor)
+        common_relative = _common_git_relative_path(common_payload)
+        rebound_common = Path(
+            os.path.normpath(os.fspath(administrative_root / common_relative))
+        )
+        if rebound_common != lease.common_git:
+            raise _generation_error()
+
+        lease.require_active()
+        if (
+            _bind_directory(session.main_root) != control_identity
+            or _bind_directory(lease.common_git) != common_identity
+            or _bind_directory(administrative_root) != administrative_identity
+            or _bind_directory(session.worktree_root) != worktree_identity
+        ):
+            raise _generation_error()
+        _require_named_generation_file(
+            worktree_descriptor,
+            ".git",
+            git_descriptor,
+            git_facts,
+        )
+        _require_named_generation_file(
+            administrative_descriptor,
+            "commondir",
+            common_file_descriptor,
+            common_facts,
+        )
+        generation = GitSessionGenerationIdentity(
+            session=session,
+            administrative_root=administrative_root,
+            control_root_identity=control_identity,
+            common_git_identity=common_identity,
+            administrative_identity=administrative_identity,
+            worktree_identity=worktree_identity,
+            git_indirection_facts=git_facts,
+            common_indirection_facts=common_facts,
+            git_indirection_sha256=hashlib.sha256(git_payload).hexdigest(),
+            common_indirection_sha256=hashlib.sha256(common_payload).hexdigest(),
+        )
+        ordered = (
+            control_descriptor,
+            common_descriptor,
+            administrative_descriptor,
+            worktree_descriptor,
+            git_descriptor,
+            common_file_descriptor,
+        )
+        descriptors.clear()
+        return generation, ordered
+    except (GitRepositoryLockFailure, GitSessionResourceError) as failure:
+        _close_generation_descriptors(tuple(descriptors), failure=failure)
+        raise
+    except (OSError, UnicodeError, ValueError):
+        failure = _generation_error()
+        _close_generation_descriptors(tuple(descriptors), failure=failure)
+        raise failure from None
+    except BaseException as failure:
+        _close_generation_descriptors(tuple(descriptors), failure=failure)
+        raise
+
+
+def _open_generation_directory(path: Path, identity: tuple[int, int]) -> int:
+    descriptor = _open_bound_directory(path, identity)
+    try:
+        os.set_inheritable(descriptor, False)
+        if os.get_inheritable(descriptor):
+            raise OSError
+        return descriptor
+    except OSError:
+        failure = _generation_error()
+        _close_generation_descriptor(descriptor, failure)
+        raise failure from None
+    except BaseException as failure:
+        _close_generation_descriptor(descriptor, failure)
+        raise
+
+
+def _duplicate_generation_directory(
+    descriptor: int,
+    identity: tuple[int, int],
+) -> int:
+    duplicate = -1
+    try:
+        duplicate = os.dup(descriptor)
+        os.set_inheritable(duplicate, False)
+        observed = os.fstat(duplicate)
+        if (
+            not stat.S_ISDIR(observed.st_mode)
+            or (observed.st_dev, observed.st_ino) != identity
+            or os.get_inheritable(duplicate)
+        ):
+            raise OSError
+        return duplicate
+    except OSError:
+        failure = _generation_error()
+        _close_generation_descriptor(duplicate, failure)
+        raise failure from None
+    except BaseException as failure:
+        _close_generation_descriptor(duplicate, failure)
+        raise
+
+
+def _open_generation_file(
+    parent: int,
+    name: str,
+) -> tuple[int, bytes, _GenerationFileFacts]:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    descriptor = -1
+    try:
+        descriptor = os.open(name, flags, dir_fd=parent)
+        os.set_inheritable(descriptor, False)
+        opened = os.fstat(descriptor)
+        named = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        facts = _generation_file_facts(opened)
+        if (
+            facts != _generation_file_facts(named)
+            or not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or opened.st_size > _MAX_ADMIN_FILE_BYTES
+            or os.get_inheritable(descriptor)
+        ):
+            raise OSError
+        content = bytearray()
+        while len(content) <= _MAX_ADMIN_FILE_BYTES:
+            chunk = os.read(
+                descriptor,
+                min(8192, _MAX_ADMIN_FILE_BYTES + 1 - len(content)),
+            )
+            if not chunk:
+                break
+            content.extend(chunk)
+        if len(content) > _MAX_ADMIN_FILE_BYTES:
+            raise OSError
+        _require_named_generation_file(parent, name, descriptor, facts)
+        if len(content) != opened.st_size:
+            raise OSError
+        return descriptor, bytes(content), facts
+    except OSError:
+        failure = _generation_error()
+        _close_generation_descriptor(descriptor, failure)
+        raise failure from None
+    except BaseException as failure:
+        _close_generation_descriptor(descriptor, failure)
+        raise
+
+
+def _open_session_index(
+    administrative_descriptor: int,
+) -> tuple[int, _GenerationFileFacts]:
+    """Bind the linked worktree index through its retained administrative root."""
+
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    nonblocking = getattr(os, "O_NONBLOCK", None)
+    if (
+        type(no_follow) is not int
+        or no_follow <= 0
+        or type(nonblocking) is not int
+        or nonblocking <= 0
+    ):
+        raise OSError
+    flags = os.O_RDONLY | no_follow | nonblocking
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    descriptor = -1
+    try:
+        descriptor = os.open("index", flags, dir_fd=administrative_descriptor)
+        os.set_inheritable(descriptor, False)
+        opened = os.fstat(descriptor)
+        facts = _generation_file_facts(opened)
+        _require_session_index(
+            administrative_descriptor,
+            descriptor,
+            facts,
+        )
+        return descriptor, facts
+    except BaseException as failure:
+        _close_generation_descriptor(descriptor, failure)
+        raise
+
+
+def _require_session_index(
+    administrative_descriptor: int,
+    descriptor: int,
+    facts: _GenerationFileFacts,
+) -> None:
+    """Revalidate one retained linked-worktree index descriptor and pathname."""
+
+    opened = os.fstat(descriptor)
+    named = os.stat(
+        "index",
+        dir_fd=administrative_descriptor,
+        follow_symlinks=False,
+    )
+    if (
+        _generation_file_facts(opened) != facts
+        or _generation_file_facts(named) != facts
+        or not stat.S_ISREG(opened.st_mode)
+        or opened.st_nlink != 1
+        or opened.st_size < 0
+        or os.get_inheritable(descriptor)
+    ):
+        raise OSError
+
+
+def _require_named_generation_file(
+    parent: int,
+    name: str,
+    descriptor: int,
+    facts: _GenerationFileFacts,
+) -> None:
+    opened = os.fstat(descriptor)
+    named = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    if (
+        _generation_file_facts(opened) != facts
+        or _generation_file_facts(named) != facts
+        or not stat.S_ISREG(opened.st_mode)
+        or opened.st_nlink != 1
+        or os.get_inheritable(descriptor)
+    ):
+        raise OSError
+
+
+def _generation_file_facts(value: os.stat_result) -> _GenerationFileFacts:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_nlink,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def _valid_generation_directory_identity(value: object) -> bool:
+    return (
+        type(value) is tuple
+        and len(value) == 2
+        and all(type(part) is int and part > 0 for part in value)
+    )
+
+
+def _valid_generation_file_facts(value: object) -> bool:
+    return (
+        type(value) is tuple
+        and len(value) == 7
+        and all(type(part) is int for part in value)
+        and value[0] > 0
+        and value[1] > 0
+        and stat.S_ISREG(value[2])
+        and value[3] == 1
+        and 0 <= value[4] <= _MAX_ADMIN_FILE_BYTES
+    )
+
+
+def _require_retained_generation_descriptors(
+    identity: GitSessionGenerationIdentity,
+    descriptors: tuple[int, ...],
+) -> None:
+    if len(descriptors) != _GENERATION_DESCRIPTOR_COUNT:
+        raise _generation_error()
+    directory_expectations = (
+        (descriptors[0], identity.control_root_identity),
+        (descriptors[1], identity.common_git_identity),
+        (descriptors[2], identity.administrative_identity),
+        (descriptors[3], identity.worktree_identity),
+    )
+    try:
+        if any(
+            not stat.S_ISDIR(observed.st_mode)
+            or (observed.st_dev, observed.st_ino) != expected
+            or os.get_inheritable(descriptor)
+            for descriptor, expected in directory_expectations
+            for observed in (os.fstat(descriptor),)
+        ):
+            raise OSError
+        if (
+            _generation_file_facts(os.fstat(descriptors[4]))
+            != identity.git_indirection_facts
+            or _generation_file_facts(os.fstat(descriptors[5]))
+            != identity.common_indirection_facts
+            or os.get_inheritable(descriptors[4])
+            or os.get_inheritable(descriptors[5])
+        ):
+            raise OSError
+    except OSError:
+        raise _generation_error() from None
+
+
+def _close_generation_descriptors(
+    descriptors: tuple[int, ...],
+    *,
+    failure: BaseException | None = None,
+) -> None:
+    cleanup_failure: BaseException | None = None
+    for descriptor in reversed(descriptors):
+        try:
+            os.close(descriptor)
+        except BaseException as exc:
+            primary = failure if failure is not None else cleanup_failure
+            if primary is not None:
+                _add_generation_descriptor_cleanup_note(primary, exc)
+            elif not isinstance(exc, OSError):
+                cleanup_failure = exc
+    if cleanup_failure is not None:
+        raise cleanup_failure
+
+
+def _add_generation_descriptor_cleanup_note(
+    failure: BaseException,
+    cleanup_failure: BaseException,
+) -> None:
+    try:
+        failure.add_note(
+            "Git session generation descriptor cleanup failed: "
+            f"{type(cleanup_failure).__name__}"
+        )
+    except BaseException:
+        pass
+
+
+def _close_generation_descriptor(
+    descriptor: int,
+    failure: BaseException,
+) -> None:
+    """Close one factory-local descriptor without replacing its primary failure."""
+
+    if descriptor < 0:
+        return
+    try:
+        os.close(descriptor)
+    except BaseException as cleanup_failure:
+        _add_generation_descriptor_cleanup_note(failure, cleanup_failure)
+
+
+def _generation_error() -> GitSessionResourceError:
+    return _resource_error(
+        GitSessionFailureCode.UNSAFE_ROOT,
+        GitSessionOperationKind.INSPECT,
+        GitSessionResourceState.RECOVERY_REQUIRED,
+        GitSessionRecoveryAction.OPERATOR_RECOVERY,
+    )
+
+
 def _linked_worktree_common_git(
     root: Path,
 ) -> tuple[Path, tuple[int, int]] | None:
@@ -1468,24 +2413,31 @@ def _bind_directory(path: Path) -> tuple[int, int]:
 
 def _open_bound_directory(path: Path, identity: tuple[int, int]) -> int:
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = -1
     try:
         descriptor = os.open(path, flags)
         opened = os.fstat(descriptor)
     except OSError:
-        raise _resource_error(
-            GitSessionFailureCode.UNSAFE_ROOT,
-            GitSessionOperationKind.INSPECT,
-            GitSessionResourceState.RECOVERY_REQUIRED,
-            GitSessionRecoveryAction.OPERATOR_RECOVERY,
-        ) from None
-    if (opened.st_dev, opened.st_ino) != identity or not stat.S_ISDIR(opened.st_mode):
-        os.close(descriptor)
-        raise _resource_error(
+        failure = _resource_error(
             GitSessionFailureCode.UNSAFE_ROOT,
             GitSessionOperationKind.INSPECT,
             GitSessionResourceState.RECOVERY_REQUIRED,
             GitSessionRecoveryAction.OPERATOR_RECOVERY,
         )
+        _close_generation_descriptor(descriptor, failure)
+        raise failure from None
+    except BaseException as failure:
+        _close_generation_descriptor(descriptor, failure)
+        raise
+    if (opened.st_dev, opened.st_ino) != identity or not stat.S_ISDIR(opened.st_mode):
+        failure = _resource_error(
+            GitSessionFailureCode.UNSAFE_ROOT,
+            GitSessionOperationKind.INSPECT,
+            GitSessionResourceState.RECOVERY_REQUIRED,
+            GitSessionRecoveryAction.OPERATOR_RECOVERY,
+        )
+        _close_generation_descriptor(descriptor, failure)
+        raise failure
     return descriptor
 
 
@@ -1801,10 +2753,15 @@ def _status_matches_allowed_worktree_changes(
 
 
 __all__ = [
+    "GitSessionGenerationIdentity",
+    "GitSessionGenerationPin",
+    "acquire_git_session_generation_pin",
+    "capture_locked_git_session_generation",
     "inspect_git_session_resources",
     "inspect_locked_git_session_resources",
     "list_git_session_resources",
     "provision_git_session_resources",
+    "require_locked_git_session_untracked_prefix",
     "require_ready_git_session_resources",
     "require_ready_locked_git_session_resources",
 ]

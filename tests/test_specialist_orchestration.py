@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import unittest
+from contextlib import contextmanager
 from dataclasses import replace
 from unittest import mock
 
+from story_writing_agents.workspace import initialization as workspace_initialization
 from story_writing_agents import ReplyTraceOrigin, StoryRuntime
 from story_writing_agents.agents import (
     CHARACTER_CUSTODIAN,
@@ -42,6 +44,7 @@ from story_writing_agents.models import AgentStateEntry
 from story_writing_agents.errors import BackendProtocolError
 from story_writing_agents.structured_output_validation import failure_issues
 from story_writing_agents.specialist_routing import AuthoringScope, AuthoringActivity, ArtifactReviewDomain, ReviewBasis
+from story_writing_agents.workspace.initialization import SessionArtifactBinding
 
 from tests.test_lead_orchestration import (
     LeadOrchestrationTestCase, LeadProviderConstraints, Rule, diagnose_json_text,
@@ -54,6 +57,9 @@ from tests.test_lead_orchestration import (
     _synthesis_outcome,
     _workflow_material,
 )
+
+
+_SYNCHRONIZATION_TIMEOUT_SECONDS = 60
 
 
 def _assignments(*agent_ids: str) -> list[dict[str, object]]:
@@ -85,6 +91,23 @@ def _payloads(history, payload_type):
 
 def _events(history, kind: CollaborationEventKind):
     return tuple(event for event in history if event.kind is kind)
+
+
+@contextmanager
+def _fast_prevalidated_session_binding(runtime, session_id):
+    """Keep concurrency tests focused on the guard/await boundary."""
+
+    binding = runtime._session_artifact_binding(session_id)
+    with mock.patch.object(
+        StoryRuntime,
+        "_session_artifact_binding",
+        return_value=binding,
+    ), mock.patch.object(
+        workspace_initialization,
+        "_require_ready_locked_git_session_resources",
+        return_value=binding.resources,
+    ):
+        yield
 
 
 class _FailingEventStore:
@@ -146,15 +169,33 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         release = asyncio.Event()
         peak = 0
         active = 0
+        guard_depth = 0
+        maximum_guard_depth = 0
+        original_open = SessionArtifactBinding.open_ready_resources
+
+        @contextmanager
+        def tracked_open(binding):
+            nonlocal guard_depth, maximum_guard_depth
+            guard_depth += 1
+            maximum_guard_depth = max(maximum_guard_depth, guard_depth)
+            try:
+                with original_open(binding) as access:
+                    yield access
+            finally:
+                guard_depth -= 1
 
         async def overlapping(call, provider):
             nonlocal active, entered, peak
+            self.assertEqual(guard_depth, 0)
             entered += 1
             active += 1
             peak = max(peak, active)
             if entered == 3:
                 all_entered.set()
-            await asyncio.wait_for(release.wait(), timeout=2)
+            await asyncio.wait_for(
+                release.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
+            )
+            self.assertEqual(guard_depth, 0)
             active -= 1
             return _specialist_outcome()(call, provider)
 
@@ -166,15 +207,27 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             self.backend.enqueue_for(agent_id, overlapping)
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
 
-        task = asyncio.create_task(
-            self.runtime.decide_lead_step(
-                _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+        with _fast_prevalidated_session_binding(
+            self.runtime,
+            self.session_id,
+        ), mock.patch.object(
+            SessionArtifactBinding,
+            "open_ready_resources",
+            tracked_open,
+        ):
+            task = asyncio.create_task(
+                self.runtime.decide_lead_step(
+                    _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+                )
             )
-        )
-        await asyncio.wait_for(all_entered.wait(), timeout=2)
-        self.assertEqual(peak, 3)
-        release.set()
-        decision = await task
+            await asyncio.wait_for(
+                all_entered.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
+            )
+            self.assertEqual(peak, 3)
+            release.set()
+            decision = await task
+        self.assertEqual(guard_depth, 0)
+        self.assertEqual(maximum_guard_depth, 2)
 
         self.assertIs(decision.turn.state, CollaborationStepState.COMPLETED)
         history = self.history(conversation_id)
@@ -287,7 +340,9 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         async def sibling(call, provider):
             nonlocal sibling_finishes
             sibling_started.set()
-            await asyncio.wait_for(sibling_release.wait(), timeout=2)
+            await asyncio.wait_for(
+                sibling_release.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
+            )
             sibling_finishes += 1
             return _specialist_outcome()(call, provider)
 
@@ -297,14 +352,17 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         )
         self.backend.enqueue_for(CHARACTER_CUSTODIAN, sibling)
         self.backend.enqueue_for(EXECUTION_SPECIALIST, sibling)
-        task = asyncio.create_task(
-            self.runtime.decide_lead_step(
-                _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+        with _fast_prevalidated_session_binding(self.runtime, self.session_id):
+            task = asyncio.create_task(
+                self.runtime.decide_lead_step(
+                    _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+                )
             )
-        )
-        await asyncio.wait_for(sibling_started.wait(), timeout=2)
-        sibling_release.set()
-        decision = await task
+            await asyncio.wait_for(
+                sibling_started.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
+            )
+            sibling_release.set()
+            decision = await task
 
         self.assertEqual(sibling_finishes, 2)
         self.assertIs(decision.turn.state, CollaborationStepState.FAILED)
@@ -330,6 +388,10 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             result.synthesis_outcome,
             CollaborationSynthesisOutcomeKind.NOT_ATTEMPTED,
         )
+        with self.runtime._session_artifact_binding(
+            self.session_id
+        ).open_ready_resources():
+            pass
 
     async def test_outer_cancellation_joins_tasks_persists_terminals_and_cleans_marker(
         self,
@@ -357,10 +419,17 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
             )
         )
-        await asyncio.wait_for(both_started.wait(), timeout=2)
+        await asyncio.wait_for(
+            both_started.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
+        )
         task.cancel()
         with self.assertRaises(asyncio.CancelledError):
             await task
+
+        with self.runtime._session_artifact_binding(
+            self.session_id
+        ).open_ready_resources():
+            pass
 
         self.assertEqual(self.runtime._live_execution_markers, set())
         history = self.history(conversation_id)
@@ -390,7 +459,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             len(_payloads(history, CollaborationTerminalOutcomePayload)), 2
         )
         restarted_backend = _LeadBackend()
-        restarted = StoryRuntime(self.workspace, restarted_backend)  # type: ignore[arg-type]
+        restarted = StoryRuntime(self.control_workspace, restarted_backend)  # type: ignore[arg-type]
         finalized = await restarted.lead_turn(
             self.session_id,
             conversation_id,
@@ -421,7 +490,9 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                     entered += 1
                     if entered == len(specialist_ids):
                         ready.set()
-                    await asyncio.wait_for(release.wait(), timeout=2)
+                    await asyncio.wait_for(
+                        release.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
+                    )
                     return _specialist_outcome()(call, provider)
 
                 for agent_id in specialist_ids:
@@ -435,7 +506,9 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                         )
                     )
                 )
-                await asyncio.wait_for(ready.wait(), timeout=2)
+                await asyncio.wait_for(
+                    ready.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
+                )
                 self.assertEqual(entered, len(specialist_ids))
                 release.set()
                 decision = await task
@@ -455,7 +528,9 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         task = asyncio.create_task(self.runtime.decide_lead_step(
             _decision(proposed, CollaborationConfirmationDecision.CONFIRM)))
         try:
-            await asyncio.wait_for(entered.wait(), timeout=2)
+            await asyncio.wait_for(
+                entered.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
+            )
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await task
@@ -471,7 +546,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertIs(execution.assignment_outcomes[0].outcome, CollaborationAssignmentOutcomeKind.SUCCEEDED)
         self.assertEqual(len(_payloads(history, CollaborationSpecialistReplyPayload)), 1)
         backend = _LeadBackend()
-        restarted = StoryRuntime(self.workspace, backend)
+        restarted = StoryRuntime(self.control_workspace, backend)
         result = await restarted.lead_turn(self.session_id, conversation, "Inspect the cancelled result.")
         self.assertIs(result.state, CollaborationStepState.INTERRUPTED)
         self.assertEqual(backend.calls, [])
@@ -682,7 +757,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         )
         self.assertTrue(expected)
         restarted_backend = _LeadBackend()
-        restarted = StoryRuntime(self.workspace, restarted_backend)  # type: ignore[arg-type]
+        restarted = StoryRuntime(self.control_workspace, restarted_backend)  # type: ignore[arg-type]
         restored = await restarted.lead_turn(
             self.session_id, conversation_id, "Finalize the known result.",
         )
@@ -690,7 +765,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertEqual(restored.validation_details, expected)
         self.assertEqual(restarted_backend.calls, [])
         complete = self.history(conversation_id)
-        repeated = restarted._finalize_known_result_locked(known, projection)
+        repeated = restarted._finalize_known_result_locked(self.session_id, known, projection)
         self.assertEqual(repeated, restored)
         self.assertEqual(self.history(conversation_id), complete)
         self.assertNotIn(private, repr(complete))
@@ -751,7 +826,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
 
                 restarted_backend = _LeadBackend()
                 restarted = StoryRuntime(
-                    self.workspace, restarted_backend,  # type: ignore[arg-type]
+                self.control_workspace, restarted_backend,  # type: ignore[arg-type]
                 )
                 restored = await restarted.lead_turn(
                     self.session_id, conversation_id, "Finalize the known result.",
@@ -760,7 +835,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 self.assertEqual(restored.validation_details, expected)
                 self.assertEqual(restarted_backend.calls, [])
                 complete = self.history(conversation_id)
-                repeated = restarted._finalize_known_result_locked(known, projection)
+                repeated = restarted._finalize_known_result_locked(self.session_id, known, projection)
                 self.assertEqual(repeated, restored)
                 self.assertEqual(self.history(conversation_id), complete)
 
@@ -827,7 +902,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         )
         restarted_backend = _LeadBackend()
         restarted = StoryRuntime(
-            self.workspace, restarted_backend,  # type: ignore[arg-type]
+            self.control_workspace, restarted_backend,  # type: ignore[arg-type]
         )
         restored = await restarted.lead_turn(
             self.session_id, conversation_id, "Finalize concurrent results.",
@@ -836,7 +911,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertEqual(restored.validation_details, expected)
         self.assertEqual(restarted_backend.calls, [])
         self.assertEqual(
-            restarted._finalize_known_result_locked(known, projection), restored,
+            restarted._finalize_known_result_locked(self.session_id, known, projection), restored,
         )
 
     async def test_failed_specialist_retries_transient_validation_publication(
@@ -901,7 +976,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
 
         restarted_backend = _LeadBackend()
         restarted = StoryRuntime(
-            self.workspace, restarted_backend,  # type: ignore[arg-type]
+            self.control_workspace, restarted_backend,  # type: ignore[arg-type]
         )
         restored = await restarted.lead_turn(
             self.session_id, conversation_id, "Finalize failed specialist result.",
@@ -1018,7 +1093,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
 
         restarted_backend = _LeadBackend()
         restarted = StoryRuntime(
-            self.workspace, restarted_backend,  # type: ignore[arg-type]
+            self.control_workspace, restarted_backend,  # type: ignore[arg-type]
         )
         recovered = await restarted.lead_turn(
             self.session_id, conversation_id, "Inspect the uncertain attempt.",
@@ -1107,7 +1182,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
 
         self.assertIs(decision.turn.state, CollaborationStepState.OUTCOME_UNKNOWN)
         restarted_backend = _LeadBackend()
-        restarted = StoryRuntime(self.workspace, restarted_backend)  # type: ignore[arg-type]
+        restarted = StoryRuntime(self.control_workspace, restarted_backend)  # type: ignore[arg-type]
         recovery = await restarted.lead_turn(
             self.session_id,
             conversation_id,

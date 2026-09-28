@@ -140,8 +140,8 @@ execution extensions. Only the internal-checkpoint profile can receive the
 validated alternate index derived from an exact session/operation identity;
 callers cannot inject arbitrary `GIT_*` environment variables. #509 now
 consumes the story-commit seam, and #510 now consumes the checkpoint seam. #492
-owns the user confirmation UI. This revision exposes no command, lead action,
-or public facade for the new infrastructure. See the
+introduced the user confirmation UI. This revision exposes no standalone Git
+command, provider action, or public Git facade for the infrastructure. See the
 [exact history contract](../reference/git-adapter.md#package-internal-session-history).
 
 ### Exact confirmed story commits

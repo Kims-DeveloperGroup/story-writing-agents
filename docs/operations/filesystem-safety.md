@@ -176,6 +176,189 @@ tips may advance, and generic session readiness does not classify their
 committed contents; story-commit and session-recovery owners validate that
 history.
 
+Session-artifact binding also captures a narrower physical-generation identity
+under an already-held READY lease. It covers the control root, common Git
+directory, per-session administrative directory, linked session worktree, and
+the unique bounded `.git` and `commondir` indirection files, including exact
+metadata and file digests. An opaque pin retains six non-inheritable descriptors
+for those four directories and two files so deletion cannot recycle their
+identities while Lead or synthesis persistence still depends on them. Pin
+acquisition and recheck take only a short repository lock, repeat the bounded
+no-follow relationship proof, and release the lock before returning. They run
+no Git child or semantic READY, manifest, policy, or artifact scan and grant no
+traversal, read, mutation, or repository authority.
+
+Generation directory/file opens and duplicates, plus initial binding
+composition, keep each descriptor locally owned until transfer. Every
+`BaseException` closes the locally owned descriptor while preserving the
+primary failure. Batch cleanup continues through every descriptor after a
+`BaseException`, exhausts lock/lease release and required postchecks, and keeps
+an active primary authoritative.
+
+The generation identity, binding, and pin are confined to the creator process
+and opaque thread token. Foreign-thread and forked-child acquisition or recheck
+fails before repository locking, descriptor validation, or other filesystem
+I/O. Close is still idempotent; after a fork, the child-safe close path releases
+only the child's inherited descriptor copies without entering inherited locks
+or granting generation authority.
+
+For each Codex story call, and only for that call, the session-artifact owner
+uses the same physical facts to mint an opaque provider-execution capability.
+It opens the exact session root, retains the full lower generation pin, and
+transfers one non-inheritable duplicate to a fixed isolated exec helper. The
+helper uses descriptor-relative `fchdir`, closes the transfer descriptor, and
+executes Codex with `--cd .`. The child therefore starts on the retained
+original inode without changing the parent process working directory or
+reopening the named path. The capability is immutable, rejects copying and
+serialization, and is process/thread-affine. An immediate call closes it after
+the invocation. Deferred Lead publication instead transfers the entered
+execution and provider contexts to the active in-memory continuation
+transaction and closes them when publication resolves; the authority is never
+stored on a provider binding, adapter, or durable record.
+
+Codex process creation requires Darwin's `sandbox-exec` and canonicalized
+resource paths. The compiled SBPL profile denies by default. It admits reads of
+only the literal canonical resolved Codex executable and required system
+runtime files, but none of the exact session subtree. Session `.git`
+reads/writes and every session
+write remain explicit denies. The initialization/control root, sibling
+worktrees, lexical traversal, symlink escape targets, and prompt staging are
+also denied. Descriptor-selected CWD therefore supplies process placement and
+generation identity without granting story-content access. Context capture,
+explicit references, and SEARCH/READ remain host-owned guarded reads whose
+selected bytes enter only provider payloads or observations.
+
+The remaining closed allowances cover the exact schema read and output write,
+null/random devices, process support, outbound network/system sockets, and one
+provider-native state subtree. Resolved `CODEX_HOME` is accepted only when it
+was configured as an absolute path and already names a directory owned by the
+effective user with no group/other write bits. It must be neither the
+filesystem root nor the user home, and it may not overlap in either direction
+with the exact control root, the schema-derived sibling-worktree container
+(including the selected session), prompt staging, or response-output directory.
+Invalid or unsafe state fails before launch. Instructions are injected after a
+prelaunch staging read; schema and output stay in external temporary storage.
+The response is opened with no-follow semantics, must be a singly linked
+regular file before and after the read, and is read only up to 8 MiB. Its
+identity, mode, link count, size, and modification metadata must remain stable
+during the read, and its bytes must decode as strict UTF-8. The call therefore
+creates no provider-definition or output residue in the story Git tree.
+
+The launch descriptor is non-inheritable in the parent and is always numbered
+at least three before the helper receives it, so replacement of standard input,
+output, or error with provider pipes cannot redirect the helper's `fchdir`.
+The generation is checked before descriptor duplication, after child creation,
+after process return, around reference/SEARCH/READ host observation and
+provider-call acceptance, before and after context-checkpoint commit, after
+adapter temporary cleanup, and when either a direct execution-workspace owner or
+contextual invocation exits. The owner revalidates even while unwinding: exit
+loss after a clean body fails the apparent return, while an active body failure
+stays primary and receives only a content-free validation note. When
+publication is deferred, retained provider and execution contexts close in
+reverse order, the execution generation is revalidated before its close, and
+only clean completion accepts the provider-call finalizer. Loss or cleanup
+failure after a checkpoint commit invalidates that exact ledger generation.
+Exit loss taints the exact generation-bound thread where one is governed by the
+continuation. A deleted, replaced, or symlinked named session root cannot
+acquire the old descriptor authority or redirect a call. Unsupported hosts, a
+missing deprecated sandbox facility, an executable mismatch, or a noncanonical
+exception path fail before provider submission; there is no path-only working-
+directory or unconfined fallback. This Codex boundary requires no Codex
+configuration file in the session worktree.
+
+Antigravity story calls use the same descriptor-selected exact session CWD and
+generation checks, not the adapter's control directory. Before capability
+entry, the host prepares and independently revalidates an immutable plan that
+ties the semantic story-agent ID, content-qualified native selector, and exact
+final role bytes. The adapter recomputes that plan and binding-component byte
+accounting from the immutable definition snapshot, then requires its staged
+file and retained accounting to match. The exact selector is the role's YAML
+name, `.agents/agents/<native-selector>/agent.md` directory, and `--agent`
+value; the semantic ID remains the runtime state and accounting identity.
+Projection traversal through the live READY binding is descriptor-relative and
+no-follow. Directories must be owner-controlled with no group or other writes;
+the selected role must be regular, singly linked, byte-exact, and have exact
+mode `0400`. Pre-launch and post-return checks require that same exact file
+identity, so replacing the role with equal bytes still fails closed. Only
+`.agents/agents`, content-qualified canonical-role directories, and their
+`agent.md` leaves are admitted. Selected-role content validation is bounded by
+the exact planned size, while unselected qualified role leaves are validated by
+topology and metadata without content reads. The top-level `.agents` namespace
+and its case-folded aliases must remain untracked; any tracked variant fails
+closed before projection mutation or provider submission, including on case-
+sensitive worktrees for portability. A pre-existing empty qualified directory
+is preserved and rejected during preflight, before the Git exclusion or role
+tree is mutated.
+
+Role publication is immutable and create-only. Older supported role versions
+coexist and runtime never replaces or prunes them. A concurrent winner is used
+only when complete validation proves the exact requested bytes and safe leaf;
+a differing or unsafe winner is preserved and rejected. If effective-user,
+descriptor-relative, no-follow, nonblocking, create-only link, or link-no-follow
+support is missing, projection fails before path access or mutation.
+
+When `/.agents/` must be appended to the common Git exclusion, records are
+split only on LF; one CR immediately before LF is treated as CRLF, while every
+other CR remains data. A terminal lone CR therefore fails closed when insertion
+is required, preserving the original bytes. The intended final bytes—including
+any separator and the appended line—must remain at or below 64 KiB. An absent
+`exclude` is published create-only. An existing safe file that its effective
+owner can read is opened no-follow and retained. After exact initial identity,
+size, and named-path checks, that inode may be normalized to `0600` before the
+suffix append; it is synced and accepted only after exact final named-path
+content and identity readback. A normal append therefore preserves its inode.
+If another actor replaces the pathname, runtime never
+replaces that winner; it preserves the winner and fails closed. Differing
+bytes, unsafe or foreign entries, symlinks, hard links, FIFOs, devices,
+identity replacement, an oversized intended exclusion, and topology drift
+fail closed and are preserved. Nonblocking reads reject FIFOs and other special
+files promptly.
+
+A failed fresh projection removes only directories created by that call that
+still have their recorded identity and remain empty, walking leaf first.
+Existing, changed, replaced, or nonempty paths are preserved. Cleanup failure
+does not replace the primary setup failure and is recorded only as content-free
+context. The read-only role projection is persistent runtime control data, not
+mutable provider residue or story content; Git, artifact, reference, and SEARCH/
+READ selection exclude it.
+
+Antigravity's Darwin sandbox allows literal reads only for the executable,
+session-root/role traversal, selected role, and required system resources. It
+denies direct session story-file reads, the session `.git` path, and all writes
+beneath the session root. Mutable native continuation state is external and
+partitioned beneath the canonical control workspace by session physical
+generation, session, agent, and definition fingerprint; staged definitions are
+rooted there as well. Before any invocation-state directories are created,
+runtime rejects overlap between native state and the exact session worktree.
+Schema/request arguments and stdout/stderr transport remain external as well.
+Unsupported or unavailable confinement fails closed.
+
+Ordinary artifact access retains the stronger semantic boundary: one outer
+synchronous transaction performs a complete READY validation before and after
+its body. Nested access and repository calls reuse that transaction with only
+thread, lease, and named-root liveness checks. Borrowed Story Commit access has
+its own complete history-owned pre/post validation, and Apply adds an explicit
+complete check immediately before its mutation method starts. No Git lease or
+live artifact access is retained across provider work; only the identity-only
+generation pin may span that await.
+
+Binding creator affinity applies before every READY, repository-callback,
+session-source, Story Commit service-composition, and borrowed access factory
+can take a binding lock, acquire a Git lease, invoke its READY validator, open a
+worktree
+descriptor, or reach repository/source I/O. Until activation transfers
+ownership to an access object, the factory owns every descriptor and lease it
+has acquired. Any `BaseException` during setup closes the untransferred
+descriptor and unwinds the lease, preserving the primary failure and recording
+only secondary cleanup diagnostics.
+
+Same-process foreign-thread context teardown may privately revoke access and
+release its lease. A fork-child revoke instead avoids the inherited binding
+lock and closes only the child's worktree-descriptor copy. When the forked Git
+lease context exits, it closes the child's common-Git descriptor but does not
+issue `LOCK_UN`; the parent's lock continues to exclude contenders until the
+parent releases it.
+
 Every Git child uses fixed arguments, `shell=False`, bounded streams and time,
 disabled prompting, hooks, signing, filters, pagers, and inherited Git control
 variables, followed by root-identity revalidation and complete process/pipe
@@ -229,7 +412,31 @@ main-root facts, and no unreported canonical change. Canonical symlinks,
 aliases, unsafe paths, content drift, pre-staged entries, and moved identities
 fail closed. Noncanonical untracked files are omitted and preserved.
 
-Commit authority is nonserializable and consumed before I/O. Under the lease,
+Commit authority is nonserializable and consumed before I/O. Its process/thread
+check precedes the internal one-use lock, so a forked child rejects it without
+waiting on a copied lock, consuming parent authority, or reaching filesystem or
+Git work. The runtime-bound service that owns Prepare, Authorize, Reject,
+Revise, Execute, Inspect, Recover, and internal repository-access binding has
+the same creator-process/thread boundary, checked before service state, locks,
+filesystem access, or Git work.
+
+Immediately before entering the Apply guard, runtime acquires one six-
+descriptor physical-generation pin. A successful Apply retains that generation
+continuously through result/request preparation, then transfers the same pin to
+its pending owner before publishing the Commit request. The identity-only pin
+cannot be traversed and does not exclude noncooperating Git; semantic READY
+checks remain authoritative. It closes exactly once after terminal decision/result
+publication, failure, cancellation, exact-owner replacement, or best-effort
+runtime abandonment. Failure before request publication closes the new local
+owner. A mismatched decision or failed decision append preserves the published
+owner; after a durable decision, cleanup retires only the exact owner observed
+at entry and leaves any replacement live. Recovery fallback retains and
+revalidates the pin through its ownership result, then closes it unless
+ownership transferred. A definitive archive, including an already-archived
+command, retires the exact pending Commit owners; a verified compensating
+unarchive of a focused conversation does not.
+
+Under the lease,
 the executor synchronizes `running` evidence before the first mutation, then
 uses only literal `hash-object -w --no-filters --stdin`, `update-index`
 cache-entry/removal, `write-tree`, `commit-tree`, and compare-and-swap
@@ -238,6 +445,12 @@ Candidate paths are supplied after `--` where the Git command accepts a path;
 no glob, directory-wide add, checkout, reset, clean, hook, signing, filter,
 textconv, alias, pager/editor, credential prompt, remote, or provider input can
 widen the set.
+
+Authorize validates the current candidate and clean index before consulting
+revision history. An externally pre-staged index observed before durable
+`running` is therefore stale candidate drift requiring repreparation, not a
+recovery-only staged operation; the foreign index and worktree bytes are
+preserved.
 
 The verified tree must equal the prepared expected tree. The commit has exactly
 one prepared parent, exact message, and captured effective identity, and only
@@ -322,6 +535,16 @@ check every component and require embedded IDs to match the owning path. This
 protects namespace integrity, not access control: a process with workspace
 access can still name another session.
 
+Descriptor-relative session-source reads retain every directory descriptor
+from the session root through the leaf parent, not only the final directory.
+After the leaf, inventory, or absence observation, they reopen the path and
+require every original parent-child edge to name the retained identity.
+Compound agent state accepts at most 8 MiB and 10,000 JSONL records across its
+selected files; a debate log accepts at most 10,000 records. Both use a lazy
+line iterator, so record 10,001 is rejected before slicing, parsing, or
+retention. Missing nested directories and leaves also revalidate the complete
+retained ancestor prefix before absence is accepted.
+
 The provider-session claim guard is opened without following symlinks when the
 platform supports it, verified as the same regular file, and locked with POSIX
 `flock` or Windows one-byte advisory locking. Suspicious state fails closed.
@@ -338,6 +561,25 @@ capture does not use the application catalog as its path source or require a
 catalog audit. Each unique path is securely read once at initial capture;
 multiple ranges retain request order while sharing that immutable source
 snapshot.
+
+Guarded runtime preparation parses first, then obtains and validates one
+non-inheritable duplicate of the exact session root before the repository can
+publish `captured` authorization. Ownership transfers to the runtime operation
+exactly once. Supplier, validation, construction, and unretained publication
+paths close the descriptor; the pin grants no traversal or repository
+authority. A registry-callback failure after capture closes transient content
+and leaves only a content-free orphan for later restart reconciliation rather
+than recursively entering repository cleanup from the callback.
+
+Reference-provider actions and terminal mutation of their operation state use
+the same creator PID/thread affinity and reject a foreign thread or forked
+child before locks or I/O. Pending cleanup and reconciliation deliberately use
+PID-only authority: another thread in the same process may complete them under
+fresh guarded access. Where supported, an `os.register_at_fork` child hook
+eagerly replaces the inherited process-wide registry lock and clears inherited
+handles as the fork returns; a pre-lock PID check remains the defensive lazy
+fallback. The child leaves durable orphan recovery to a later artifact-
+sensitive boundary.
 
 The complete source must be strict UTF-8 without NUL. Universal CRLF, LF, and
 lone-CR records determine exact one-based range slices, including their line

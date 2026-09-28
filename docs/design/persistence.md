@@ -965,8 +965,8 @@ catalog, and application operation acquires both and runs recovery before it
 reads current artifact authority. The private store uses existing
 descriptor-safe storage and is not exported. #520 adds the module-supported
 internal `apply_artifact_changes(request)` repository seam; neither repository
-nor store is exported by a package facade. #491 will separately supply lead/user
-Apply-confirmation authority.
+nor store is exported by a package facade. Runtime separately supplies
+lead/user Apply-confirmation authority.
 
 The seam accepts exactly one frozen `ArtifactApplicationRequest`, never prose,
 a mapping, a mutable wrapper, or a subclass. The request owns its exact
@@ -1024,8 +1024,17 @@ completed or verified before the next repository-owned authoritative access.
 
 This seam neither confirms nor rejects a proposal, refreshes prompt context,
 calls a provider or agent, nor stages or commits Git. Reject and Revise mean
-#491 does not invoke it. A later story-commit action must independently inspect
+runtime does not invoke it. A later story-commit action must independently inspect
 the applied state and obtain fresh Git-specific authority.
+
+For a successful runtime Apply, the exact physical/semantic session binding is
+reopened across follow-on `story_commit_request` publication and in-memory
+service registration. The Apply result and Commit request publish as an exact
+pair when possible. Detected binding loss suppresses the returned request and
+removes the in-memory service. If request publication cannot be proved, exact
+readback distinguishes a published pair from verified result-only history;
+the latter projects `reprepare_commit_request` across restart. Ambiguous
+readback requires inspection before any new Commit request.
 
 The additive `inspect_artifact_application(application_id)` method shares the
 same repository boundary but never calls the apply path. It validates one exact

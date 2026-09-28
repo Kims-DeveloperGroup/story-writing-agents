@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import traceback
 from dataclasses import replace
+from types import SimpleNamespace
 from unittest import mock
 
 from story_writing_agents import StoryRuntime
@@ -13,6 +16,12 @@ from story_writing_agents import orchestrator as owner
 from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT, EXECUTION_SPECIALIST
 from story_writing_agents.specialist_routing import AuthoringActivity
 from story_writing_agents.errors import BackendProtocolError
+from story_writing_agents.workspace.initialization import (
+    SessionArtifactBinding,
+    SessionArtifactBindingError,
+    compose_session_artifact_binding,
+)
+from story_writing_agents.writing_artifacts._storage import ArtifactRootSecurityError
 from tests.recommendation_fixture import (
     DRAFT, OUTLINE, RecommendationCase, action, decision, digest,
     preparation, recommendation, rewrite_history,
@@ -23,7 +32,12 @@ from tests import test_lead_artifact_application as application
 from tests import test_lead_story_commit as commit
 
 
+
+
 class LeadRecommendationTests(RecommendationCase):
+
+
+
 
 
 
@@ -189,37 +203,12 @@ class LeadRecommendationTests(RecommendationCase):
 
 
 
-class LeadRecommendationSynthesisTests(RecommendationCase):
-    async def consultation(self, *, actionable, pause=False, mixed=False):
-        conversation_id = self.conversation("Synthetic synthesis")
-        proposed = await self.proposal(conversation_id, text="Review this finished user candidate: " + DRAFT)
-        self.backend.enqueue_for(PLOT_ARCHITECT, lead._specialist_outcome())
-        selected = action() if actionable else None
-        base = lead._synthesis_outcome(message=DRAFT, recommended_action=selected)
-        def synthesis(call, provider):
-            value = json.loads(base(call, provider))
-            result = value["action"]["result"]
-            self.assertEqual(
-                set(result),
-                {"message", "recommended_action"} if actionable else {"message"},
-            )
-            if mixed:
-                material = lead._workflow_material(call.payload)
-                result["next_intent"] = {"purpose": "Review again.",
-                    "assignments": [{"agent_id": PLOT_ARCHITECT, "instruction": "Review all sources.",
-                        "input_ids": [*(i["input_id"] for i in material["inputs"]),
-                                      *(i["reply_event_id"] for i in material["replies"])],
-                        "mode": "review"}]}
-            return json.dumps(value, ensure_ascii=False)
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, synthesis)
-        if pause:
-            with mock.patch.object(self.runtime, "_finalize_known_result_locked", side_effect=RuntimeError("known result paused")):
-                with self.assertRaisesRegex(RuntimeError, "known result paused"):
-                    await self.runtime.decide_lead_step(lead._decision(proposed, c.CollaborationConfirmationDecision.CONFIRM))
-            result = None
-        else:
-            result = await self.runtime.decide_lead_step(lead._decision(proposed, c.CollaborationConfirmationDecision.CONFIRM))
-        return conversation_id, proposed, result
+
+
+
+
+
+
 
 
 
@@ -231,22 +220,6 @@ class LeadRecommendationRecoveryTests(RecommendationCase):
             source_ids=("reference_1", "current_response"), objective_id=objective_id),
             text=f"Inspect ${{{OUTLINE}}} and recommend exactly one preparation.")
 
-    def assert_failed_origin(self, conversation_id, turn, code):
-        events = self.history(conversation_id)
-        started = self.payload_events(conversation_id, c.LeadRecommendationStartedPayload)[-1]
-        failures = self.payload_events(conversation_id, c.CollaborationLeadOutcomeFailurePayload)
-        self.assertEqual(len(failures), 1)
-        failure = failures[0]
-        self.assertIs(failure.payload.code, code)
-        self.assertEqual((failure.turn_id, failure.step_id), (started.turn_id, started.step_id))
-        calls = [e for e in events if e.turn_id == started.turn_id and type(e.payload) is c.CollaborationProviderCallPayload]
-        if calls:
-            self.assertEqual(failure.payload.call_id, calls[-1].payload.call_id)
-            self.assertEqual(failure.payload.invocation_id, calls[-1].payload.invocation_id)
-        self.assertEqual(sum(type(e.payload) is c.CollaborationMessagePayload and
-            e.direction is c.CollaborationDirection.USER_TO_LEAD for e in events), 1)
-        self.assert_no_downstream(conversation_id)
-        return failure
 
 
 
@@ -271,60 +244,10 @@ class LeadRecommendationRecoveryTests(RecommendationCase):
                     await self.runtime.decide_lead_recommendation(decision(turn))
             self.assertFalse(self.payload_events(conversation_id, c.LeadRecommendationResultPayload))
             calls, history = len(self.backend.calls), self.history(conversation_id)
-            restarted = StoryRuntime(self.workspace, self.backend)
+            restarted = StoryRuntime(self.control_workspace, self.backend)
             blocked = await restarted.lead_turn(self.session_id, conversation_id, "Do not replay uncertain work.")
             self.assertIs(blocked.next_action, c.CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME if fault == "uncertain"
                           else c.CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY)
             self.assertEqual(len(self.backend.calls), calls)
             self.assertEqual(self.history(conversation_id), history)
             self.assertIsNone(blocked.recommendation_request)
-
-
-
-
-class LeadRecommendationAuthRecoveryTests(RecommendationCase):
-    def auth_provider(self, *, prelude_failure=None):
-        """Real context recovery with a synthetic native pre-execution rejection."""
-        from contextlib import ExitStack, contextmanager
-        from story_writing_agents.errors import ProviderAuthenticationRequiredError
-        from story_writing_agents.agent_context.service import context_provider_failure_facts, record_context_provider_failure
-        from story_writing_agents.provider_auth_recovery import provider_activity, validate_provider_replay
-        invoke = lead._LeadContextProvider.invoke_context
-        prepare = lead._LeadContextProvider.prepare_references
-        pending = [prelude_failure] if prelude_failure is not None else []
-
-        async def invoke_with_activity(provider, request):
-            async with provider_activity(provider.provider_id) as generation:
-                validate_provider_replay()
-                try:
-                    return await invoke(provider, request)
-                except ProviderAuthenticationRequiredError as failure:
-                    failure.auth_generation = generation
-                    facts = context_provider_failure_facts(failure)
-                    record_context_provider_failure(failure, replace(facts,
-                        taint_existing_thread=(not failure.replay_safe or facts.timed_out),
-                        submission_uncertain=(not failure.replay_safe or facts.submission_uncertain)))
-                    raise
-
-        async def prepare_with_activity(provider, request):
-            async with provider_activity(provider.provider_id) as generation:
-                validate_provider_replay()
-                if pending:
-                    failure = pending.pop()
-                    provider.backend.reference_calls.append(request)
-                    accounting = provider._account({"type": "object"}, {"synthetic_reference_count": 1},
-                        call_kind=lead.ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ)
-                    failure.auth_generation = generation
-                    record_context_provider_failure(failure, lead.ContextProviderFailureFacts(accounting))
-                    raise failure
-                return await prepare(provider, request)
-
-        @contextmanager
-        def scope():
-            with ExitStack() as stack:
-                stack.enter_context(mock.patch.object(lead._LeadContextProvider, "provider_id", "antigravity"))
-                stack.enter_context(mock.patch.object(lead._LeadContextProvider, "invoke_context", new=invoke_with_activity))
-                stack.enter_context(mock.patch.object(lead._LeadContextProvider, "prepare_references", new=prepare_with_activity))
-                stack.enter_context(mock.patch.object(self.backend, "backend_overrides", {LEAD_ORCHESTRATOR: "antigravity"}))
-                yield
-        return scope()

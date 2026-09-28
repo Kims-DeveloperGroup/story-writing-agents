@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
@@ -25,7 +26,10 @@ from story_writing_agents.git.story_commit_contracts import (
     StoryCommitFailureCode,
     StoryCommitPathOperation,
 )
-from story_writing_agents.workspace.initialization import provision_session_resources
+from story_writing_agents.workspace.initialization import (
+    compose_session_artifact_binding,
+    provision_session_resources,
+)
 from story_writing_agents.workspace.schema import canonical_initializer_scaffold
 from story_writing_agents.writing_artifacts import (
     ArtifactCreateOperation,
@@ -108,23 +112,8 @@ class StoryCommitGitTestCase(GitSessionResourceGitTestCase):
         )
         return root, session_root, evidence
 
-    def prepare_binding(
-        self,
-        *,
-        object_format: str = "sha1",
-        after: bytes = "새 장면 🌙\n".encode(),
-    ) -> tuple[Path, Path, StoryCommitApplicationEvidence, StoryCommitCandidateBinding]:
-        root, session_root, evidence = self.applied_replace(
-            object_format=object_format, after=after
-        )
-        binding = prepare_story_commit_candidate(
-            root,
-            manifest(),
-            evidence,
-            "Update opening 🌙",
-            ("core outline now exposes the revised opening",),
-        )
-        return root, session_root, evidence, binding
+
+
 
 
 class StoryCommitCandidateContractTests(unittest.TestCase):
@@ -271,6 +260,7 @@ class StoryCommitCandidateContractTests(unittest.TestCase):
 
 
 class StoryCommitCandidateIntegrationTests(StoryCommitGitTestCase):
+
     def test_prepare_is_git_read_only_durable_and_restart_loadable(self) -> None:
         root, session_root, evidence = self.applied_replace()
         before = self.repository_snapshot(root)

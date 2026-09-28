@@ -5,10 +5,12 @@ front-channel facade. `RuntimeSession` binds those operations to one session
 ID. The runtime can obtain one strict lead outcome, disclose a consultation,
 construct an exact complete-state-bound artifact candidate, and execute its
 one-to-three specialist assignments after an exact structured confirmation.
-Artifact review can produce an immutable reviewed proposal. The runtime also
-exposes a stepwise, separately confirmed consensus workflow through Python.
-Neither workflow applies or mutates an artifact, grants Apply authority, or
-performs Git work.
+Artifact review can produce an immutable reviewed proposal. A separate exact
+Apply decision can apply that proposal, and a later separate exact Commit
+decision can create its local session-branch commit. The runtime also exposes
+a stepwise, separately confirmed consensus workflow through Python. Review and
+consensus finalization alone never apply an artifact, grant Apply authority, or
+perform Git work.
 
 The installed shell calls the session-bound lead methods for ordinary focused
 input and constructs exact decisions through structured controls. It does not
@@ -37,6 +39,175 @@ whose configured session/provider lifecycle is ready when binding occurs.
 `backend=None` remains valid for provider-free management and inspection, but
 provider-backed lead and confirmed consensus execution then raise
 `BackendProtocolError`.
+
+### Control workspace and exact session artifacts
+
+Construct `StoryRuntime` from the initialized `main` workspace. Runtime
+configuration, directives, conversation storage, diagnostics, and other
+control-plane state remain rooted there. The construction-compatible
+`StoryRuntime.artifacts` repository likewise names that control root, but it
+has no session authority and must not be used as an active session's artifact
+repository.
+
+Every artifact-sensitive runtime call instead derives the session ID already
+present in its public arguments or durable identity, freshly requires that
+session's exact READY branch/ref/sibling-worktree resources, and creates a
+call-local binding pinned to the validated worktree's physical
+`(st_dev, st_ino)` identity. Each outer synchronous artifact transaction opens
+a short cooperating-runtime guard: it holds the common-Git lease, performs one
+complete semantic READY inspection before the body, opens the no-follow named
+root at the pinned identity, and performs one complete READY plus physical-root
+check before a result escapes. Same-thread nested guards and repository
+operations reuse that lease and descriptor and check only live thread/lease
+authority plus the named physical root; they do not repeat the whole READY
+scan. Long-lived reference and source adapters instead retain an access
+factory and acquire a new outer transaction for each operation. Borrowed Story
+Commit access performs one complete validation before and after its body
+through the live history owner. Apply performs an additional explicit complete
+READY check immediately before `apply_artifact_changes()` starts. All of these
+exit checks run after success, `RuntimeError`, or cancellation. If the body and
+exit check both fail, binding loss is authoritative; a clean postcheck
+preserves the original exception, and cleanup completes in either case. The
+authoritative binding failure may note only the superseded exception's type;
+it carries no body/provider message or content. The
+binding keeps one stable exact repository object private. Retaining it grants
+no later or cross-thread authority. The underlying Git lease, session history,
+artifact access, and Commit authority are affine to a
+package-internal, process-aware opaque token for the creator's thread state,
+not its numeric identifier. A later thread state cannot inherit authority after
+numeric identifier reuse. Foreign-thread surface calls, including explicit
+close, fail; context-manager teardown instead privately revokes tokens and
+closes descriptors/leases without granting foreign authority.
+
+The binding performs that creator check at every READY, repository-callback,
+session-source, Story Commit service-composition, and borrowed access factory
+before touching its operation lock, acquiring a Git lease, invoking a READY
+callback, opening a descriptor, or reaching repository/source I/O. Factory
+setup retains ownership
+of each new descriptor and lease until the access object activates; every
+`BaseException` before transfer closes and unwinds those resources while
+preserving the primary failure. In a forked child, access revoke skips the
+copied binding lock and closes only the child's worktree-descriptor copy. Git
+lease exit closes the child's common-Git descriptor without `LOCK_UN`, leaving
+the parent's exclusion intact.
+
+Binding composition also captures one physical session-generation identity
+under its initial READY lease: the control root, common Git directory,
+per-worktree administrative directory, session worktree, and the bounded
+`.git` and `commondir` indirection files with exact metadata and digests. An
+opaque generation pin retains six non-inheritable descriptors for those four
+directories and two files. Acquisition and recheck take only a short repository
+identity lock, repeat that bounded no-follow relationship proof, and release
+the lock before returning; they run no Git subprocess or semantic READY,
+manifest, policy, or artifact scan. The pin exposes no descriptor, traversal,
+content-read, mutation, or repository authority and is not a substitute for a
+guarded READY transaction. Generation directory/file opens and duplicates,
+and initial binding composition, retain local descriptor ownership until
+transfer. Every `BaseException` closes those local descriptors without
+replacing the primary failure. Batch cleanup attempts every close despite an
+earlier `BaseException`; descriptor closes, lock/lease releases, and required
+postchecks are exhausted while the active primary remains authoritative.
+
+Direct Lead and Lead-synthesis invocations acquire this pin before any
+session-derived definition, source, or provider work and retain it through the
+durable result append. Synthesis transfers the same opaque pin to its
+persistence owner; direct Lead work retains it around its own publication.
+Both recheck the physical generation and close the pin after persistence, and
+failure, cancellation, malformed output, binding loss, or a non-transferred
+exit closes it exactly once. The identity pin may span a provider `await`, but
+no Git lease or artifact access does. The generation identity, binding, and pin
+may be acquired or revalidated only by their creator process and opaque thread
+token. Foreign-thread or forked-child use fails before repository locking or
+filesystem inspection; a child may only close its inherited descriptor copies
+through the idempotent, child-safe close path. If provider or persistence work
+fails while the physical-generation recheck also detects loss, generation loss
+is authoritative and enters the existing recovery boundary. Any retained
+diagnostic about the displaced body/provider failure is limited to its
+content-free exception type, never its message or payload.
+Lead and collaboration pin finalization is primary-aware: it preserves an
+active failure and cannot skip the remaining bound-agent or sibling cleanup.
+
+The continuity pin alone grants no process working-directory authority. For
+each Codex or Antigravity story invocation, the same `SessionArtifactBinding`
+separately mints an opaque call-local execution capability: the provider enters
+the retained session-root descriptor under the fail-closed Darwin boundary.
+Codex receives native project root `--cd .`; Antigravity uses the exact CWD as
+its native project root without an adapter-control fallback. That placement
+grants no direct manuscript/core-document read authority; host-owned context,
+reference, SEARCH, and READ services deliver only selected story content in
+provider payloads and observations. Direct
+BoundAgent entry points retain the execution-workspace owner around the full
+logical call and revalidate currentness when it exits, including after apparent
+body success. Exit loss fails that return; if another body failure is already
+active, it remains primary and receives only a content-free failure-type note.
+See the
+[Provider session execution boundary](backend-and-sessions.md#codex-session-execution-boundary).
+Antigravity additionally requires the exact protected session role projection;
+Codex continues direct developer-instruction injection and needs no worktree
+configuration file.
+
+This covers explicit and contextual references, source status and
+fingerprints, proposal and review
+revalidation, Apply and application-ledger access, recovery reads, consensus
+artifact material, and the interactive attachment picker. A
+`RuntimeSession` forwards the same session ID; switching between two ready
+sessions or using them concurrently cannot borrow the control root or the
+other session's repository.
+
+Lead current-state capture reads canonical core snapshots through the exact
+session binding. Its runtime overrides remain control-plane state: the same
+control workspace owns `set_runtime_overrides()`, directives, and their reads,
+so an uncommitted stale copy in a session worktree is never treated as current.
+
+The interactive picker performs its path inventory and selected-file read as
+separate guarded operations. The range viewer receives only the bytes returned
+by that guarded read; neither the picker nor viewer retains repository access.
+
+Binding is validation only. It never provisions resources, calls a provider,
+or performs artifact I/O. Absent, moved, mismatched, staged, or otherwise
+non-ready resources fail closed with a content-free binding failure before
+provider or artifact access; runtime never falls back to `main`, the process
+working directory, or a previously used session. Use Session Create or Reopen
+to establish the lifecycle precondition before calling an artifact-sensitive
+method. Existing public constructor and method signatures are unchanged.
+
+The common-Git lease serializes only operations that cooperate with this
+runtime. A persistent noncooperating Git change is rejected by a later READY
+checkpoint, but the runtime does not claim continuous exclusion of arbitrary
+external Git that changes and restores state between checkpoints. Stop all
+workspace processes before manual inspection or recovery.
+
+Provider context keeps the same ownership split. Focused conversation remains
+in the configured conversation store. Active-debate and invoking-agent-state
+reads use a package-internal, descriptor-relative `SessionSourceWorkspace`
+derived from the same call-local binding; it exposes no generic path, write, or
+Git authority. Source paths must be canonical relative POSIX text. Each allowed
+read retains the complete no-follow descriptor chain from the session root
+through every leaf ancestor, accepts only one unique regular-file leaf, and
+revalidates every original parent-child edge after the leaf observation and
+before returning. It rejects FIFOs/devices/symlinks/hard links and
+identity/metadata drift, caps each file at 8 MiB, and checks embedded debate or
+agent-state ownership. A compound agent-state or debate read retains its full
+directory chain and rechecks the complete leaf-directory inventory: names plus
+device, inode, type, link count, size, nanosecond modification time, and
+nanosecond change time. Exactly 8,192 entries are accepted per inventoried
+directory; an additional entry, parent replacement, or any inventory drift
+fails closed. A compound agent-state read additionally accepts at most 8 MiB
+across all of its JSONL files and at most 10,000 records. Debate JSONL likewise
+accepts at most 10,000 records. Both readers scan records lazily; record 10,001 fails before
+line slicing, JSON parsing, or retention. The exact limits are accepted and the
+first excess byte or record fails closed. A missing agent-state parent produces
+an empty result only after the retained existing ancestor prefix and the absent
+edge are observed twice and remain exact. A missing leaf is likewise accepted
+only after its full ancestor chain is revalidated. Creation between the failed
+open and return fails closed. A missing, replaced, or unsafe bound root fails
+closed as a content-free `source_unavailable` instead of borrowing control-root
+or sibling-session state.
+
+Artifact-sensitive definitions capture the canonical ordered behavior-policy
+bytes from that guarded session worktree. Validated configuration, runtime
+overrides, backend and route selection, and persona remain owned by the control
+workspace; session policy capture does not redirect those authorities.
 
 ## Phase-confirmed consensus methods
 
@@ -215,7 +386,15 @@ no installed CLI or interactive continuation route.
 Provider input is an `AgentRequest` with the runtime-selected agent, phase,
 revision, fixed task text, input, and current candidate. Canonical artifact
 input retains the normal provider-read reference authorization and digest
-revalidation; durable events contain handles/digests rather than file bytes.
+revalidation. Artifact-backed consensus therefore binds the exact physical
+session worktree, reconciles only cleanup owned by that identity, and builds
+the agent definition from its guarded policy bytes. Candidate-only consensus
+with no same-process pending reference cleanup performs no artifact/reference
+worktree read and uses the control-owned definition. Each Codex provider call
+still opens the exact session binding for its call-local execution capability.
+If cleanup is pending, that binding also reconciles only identity-matching
+ownership; its definition then uses the binding's session policy. Durable
+events contain handles/digests rather than file bytes.
 See [Consensus runs](../guides/consensus-runs.md) for examples and user-visible
 state meanings, and [Consensus design](../design/consensus-workflow.md) for the
 event/authority mechanism.
@@ -248,6 +427,13 @@ StoryRuntime.inspect_reference_operation(
     operation_id: str,
 ) -> ReferenceOperationHistory | None
 ```
+
+A reference-operation ID encodes its owning session. Inspection decodes that
+canonical identity and reads only the corresponding session worktree's
+persisted reference ledger after fresh READY validation. Malformed identities
+raise `ValueError`; `RuntimeSession.inspect_reference_operation()` also rejects
+an otherwise valid identity belonging to a different session. Neither case
+falls back to another repository.
 
 `RuntimeConfigurationCandidate` is defined in the orchestrator module but is
 not a package-root export. Prepare requires a backend and complete quiescence;
@@ -346,6 +532,7 @@ LeadTurnResult(
     recommendation_request: LeadRecommendationRequestPayload | None = None,
     trace: ReplyTrace | None = None,
     validation_details: tuple[str, ...] = (),
+    story_commit_preparation_request: StoryCommitPreparationRequest | None = None,
 )
 ```
 
@@ -626,6 +813,15 @@ foreign session decision with `ValueError`. Current-basis drift closes as
 `stale` without preparation. Session/conversation
 serialization prevents two concurrent decisions from consuming one request.
 
+For both a direct Lead recommendation and a collaboration-synthesis
+recommendation, runtime carries the invocation's one exact session-artifact
+binding through response validation and request persistence. The recommendation
+basis and source fingerprint are derived through that same binding object; a
+fresh binding cannot silently substitute another worktree generation between
+provider invocation, validation, and persistence. The physical generation pin
+described above covers that whole interval; its repository guards remain short
+and no Git lease spans the provider await.
+
 Ordinary input is a real new authoring instruction: runtime atomically records
 it and supersedes an unconfirmed recommendation before the new Lead turn. It
 never fabricates a structured Confirm. Known preparation results can finalize
@@ -904,6 +1100,212 @@ grants later execution authority. Specialist assessments are evidence, not a
 vote, and synthesis cannot discard a concern because more peers returned
 `supports`.
 
+### Apply and Commit decision methods
+
+```python
+await StoryRuntime.decide_artifact_application(
+    decision: ArtifactApplicationDecision,
+) -> ArtifactApplicationDecisionResult
+await StoryRuntime.decide_story_commit(
+    decision: StoryCommitDecisionRequest,
+) -> StoryCommitDecisionResult
+await StoryRuntime.reprepare_story_commit(
+    request: StoryCommitPreparationRequest,
+) -> StoryCommitRequestPayload
+```
+
+Import the decision and result values from
+`story_writing_agents.conversations`. `RuntimeSession` exposes the same three
+method signatures and rejects a decision or preparation request owned by
+another session.
+
+A result-only successful Apply tail projects
+`reprepare_commit_request` and returns its exact
+`story_commit_preparation_request` before ordinary Lead text appends a
+message or calls a provider. An extant exact Commit request instead
+projects `submit_commit_decision` and has no preparation request.
+
+`reprepare_story_commit()` accepts a structured
+`StoryCommitPreparationRequest` with the session, conversation, step,
+original Apply-result event, application ID and request digest, and current
+tail event IDs. It is available only from a typed reprepare state. It
+revalidates those durable facts, prepares a candidate, and publishes a
+new Commit request without committing; that request needs its own fresh
+structured decision. After a structured Revise, the new candidate carries a
+durable revision ordinal in its proposed local commit message so a retired
+candidate ID is not reused; the applied artifact evidence is unchanged.
+After restart, an extant old request stays visible,
+but a decision without its process-local binding closes stale/reprepare
+before Git mutation; re-preparation then creates a fresh request. Mismatched or
+uncertain owner facts require inspection.
+
+Apply requires the exact authoritative request tail and same-process one-use
+authority. Immediately before any candidate revalidation or write, runtime
+freshly binds the exact session worktree. If binding or physical-root
+validation fails after the Apply decision became durable but before the
+repository's `apply_artifact_changes()` method starts, the returned and
+persisted application result is
+`recovery_required` with `operator_recovery`; artifact application does not
+start and no provider call is attempted. Once that method has started, an
+unclassified root, security, or format failure is conservatively
+`outcome_unknown` with `inspect_and_resolve_outcome`; the exact application
+must be inspected before any new write. This includes guard-exit rejection
+after the repository method returned: its optimistic terminal result is not
+published and no Commit request is created. A terminal recovery condition
+reported by the repository remains `recovery_required`. Successful application affects
+only the correlated session worktree and its application ledger. Control-root
+and sibling-session bytes remain outside the operation.
+
+Commit remains a distinct decision and authority boundary. Its internal
+service carries the successful Apply binding's physical worktree identity
+into candidate preparation, authorization, and execution. Runtime retains
+one six-descriptor physical-generation pin from the Apply guard through
+candidate preparation and result/request publication. Preparation may
+create an immutable candidate but cannot stage or commit. A successful
+handoff publishes the Apply result and exact Commit request in one
+`append_batch` operation. If that append raises, runtime reads back the
+exact batch, event IDs, payloads, prior tail, and final length. A proven
+pair is accepted; proven absence permits a result-only Apply record with
+`reprepare_commit_request`; anything unproved remains
+`outcome_unknown` for inspection, never replay. The result-only fallback
+also requires exact readback. The pin transfers to the process-local
+pending Commit owner only after verified pair publication; otherwise it
+closes. If that owner is lost later, the durable request remains visible,
+but a structured decision closes stale/reprepare before Git mutation.
+The pin grants no repository access or exclusion from external Git.
+
+The retained identity-bound Commit service is creator-process/thread affine.
+Prepare, Authorize, Reject, Revise, Execute, Inspect, Recover, and internal
+repository-access binding reject a foreign thread or forked child before
+reading service state, taking service or history locks, or reaching
+filesystem/Git I/O. The Commit service also
+independently holds its session-history lease and places semantic READY
+checkpoints around execution, inspection, recovery, and every durable history
+transition. Normal phases require a clean READY index; after intentional
+staging, phase-aware topology checks instead require exactly the candidate
+index/worktree, branch and internal-ref tips, registered worktree, main-root
+HEAD/status, and bound physical root. READY/history resource loss detected
+before the `running` record is durable maps to `recovery_required`; failure
+after it is durable maps to `outcome_unknown`. A candidate/root replacement
+found before execution remains candidate drift and requires a fresh request.
+Candidate and clean-index revalidation precedes revision-history inspection,
+so an externally pre-staged index detected before `running` is durable is stale
+and requires repreparation; it is not treated as a recovery-only staged
+operation. Failure while publishing the final `committed` record also durably
+preserves the same operation as `outcome_unknown` when the phase topology can
+still be proved. Apply never implies Commit, and neither operation pushes,
+merges, or grants a provider direct filesystem or Git authority.
+
+Identity-bound candidate preparation borrows the live session-history READY
+validator for canonical capture through the binding's one stable guarded
+repository generation. The artifact snapshot, Git invariants, and create-only
+candidate append stay under that same lease and READY authority; no second
+repository generation or independently reacquired Git lease is substituted.
+Likewise, merely constructing `running` in memory is not durable Commit start.
+Pre-durable error mapping remains in force until the history append succeeds.
+
+A structurally invalid or mismatched decision is rejected before publication
+and preserves its published pending owner. If decision publication itself
+fails, that owner and pin likewise remain available for a later exact decision.
+After decision publication succeeds, terminal cleanup retires precisely the
+owner observed when processing began—even when its request no longer matches
+the durable tail—and never closes a replacement installed concurrently.
+A definitive conversation archive, including an already-archived command,
+likewise retires the exact pending Commit owners; verified compensation that
+unarchives a focused conversation does not perform that retirement.
+
+The identity-bound service applies the same Apply-root requirement to
+`inspect()` and `recover()`, checking before and between their owner reads and
+before every possible history transition. A replaced root returns
+`recovery_required`; neither method reports or advances a staged, committed,
+or other durable operation state from replacement resources.
+
+Terminal inspection and recovery require the current session to be READY but
+perform no history transition. A historical `committed` operation remains
+inspectable after later commits: its recorded commit must exactly match its
+candidate and equal or be an ancestor of the current READY branch tip, rather
+than remain current `HEAD`. Reset/divergence, a missing or mismatched commit,
+or candidate mismatch fails `recovery_required`. Historical `rejected` and
+`recovery_required` records likewise remain immutable inspectable terminal
+evidence under current READY.
+
+If ordinary READY fails only because the index is staged, inspection and
+recovery may enter a recovery-only read admission under one lease. Admission
+requires the addressed, exactly correlated live Story Commit/candidate and
+revalidates the branch and internal ref, candidate tree, exact index and
+matching worktree, no untracked files or external Git operation, session-root/
+registered-worktree identity, main HEAD, and the main-worktree status plus
+allowed-path content fingerprint before and after. Unaddressed reconciliation
+also requires exactly one eligible operation/candidate pair. Only that Story
+Commit owner can receive or advance the correlated staged state. Arbitrary
+non-READY dirty or staged state remains a session-resource recovery failure;
+ordinary READY itself is unchanged and strict.
+
+A successful Apply result and its follow-on Commit request are published as
+an exact pair under the Apply binding. If publication fails, exact readback
+proves whether the pair landed. Proven absence permits a durable result-only
+`reprepare_commit_request` state across restart; uncertain readback requires
+inspection. Repreparation publishes a fresh request and does not authorize
+Commit without a fresh structured decision.
+
+Known provider work is not replayed merely because session resources disappear
+during local closure. Binding loss while finalizing a completed artifact review
+durably closes the artifact and collaboration state as `recovery_required` and
+does not issue Apply authority. Binding loss while proving recommendation or
+reference closure returns the typed blocking recovery result and preserves the
+original attempt. Guarded explicit-reference binding loss is likewise preserved
+through preparation, read action, failure, terminalization, and cleanup, so
+Lead returns `recovery_required` with no provider or fallback call. This
+resource failure is not semantic staleness: true source,
+basis, relationship, or candidate drift remains `stale` and requires fresh
+planning/review, while loss of the exact bound resources requires recovery.
+Repair authoritative session resources/history before continuing.
+
+For those guarded references, creation publishes the operation or invocation
+owner before a fallible access exit. A nonempty parsed batch acquires and
+validates its non-inheritable physical-worktree descriptor before the
+repository can publish `CAPTURED`; successful construction transfers that pin
+to the operation exactly once. Every failure after publication defers cleanup.
+A process-shared `StoryRuntime` registry keys content-free ownership
+by control workspace, session, physical worktree identity, and operation while
+transient bytes/results, authorization, capability authority, and retained
+binding access are closed. The operation retains one private, non-traversed
+duplicated directory descriptor that pins the exact original worktree during
+deferred cleanup. This descriptor is never read, serialized, exposed to a
+provider, or treated as repository authority. It closes exactly once on a
+terminal success or failure, reconciled completion, stale-owner abandonment,
+or an unretained preparation path. The next same-process artifact-sensitive
+boundary reconciles only an owner whose physical identity matches its fresh
+binding. A replacement
+root receives neither the old cleanup nor its operation ID in the replacement's
+live-owner exclusion set; the stale transient owner and its pin are closed and
+the original durable history is unchanged. After restart, the next such
+boundary reconciles durable nonterminal orphans instead. Reconciliation is
+invocation-first, operation-second, idempotent, non-replaying, and fail-closed
+on corrupt evidence. See
+[Explicit-reference evidence recovery](../operations/recovery-and-limitations.md#explicit-reference-evidence-recovery).
+
+If the post-capture registry callback fails, transient authorization and the
+unretained descriptor close without nested repository cleanup, while the
+durable operation remains at `REQUESTED` → `CAPTURED`. The callback failure is
+re-raised unchanged. A later artifact-sensitive boundary discovers that
+content-free operation as a restart orphan and terminalizes it without provider
+replay.
+
+Reference deferral first detaches every pending invocation, authorization,
+repository, and repository-access authority. It then attempts every applicable
+content, authorization, and owner-pin cleanup, preserving an active primary
+failure and recording only content-free cleanup exception types.
+
+Guarded reference preparation preserves `WorkspaceSecurityError` and binding
+failures for runtime recovery mapping instead of flattening them into an
+ordinary reference workflow failure. Unguarded public repository composition
+retains its fixed `ReferenceOperationFailure` conversion. Thus loss of the
+selected session root remains a typed recovery boundary and does not authorize
+provider work or fallback. If either preserved failure arrives after guarded
+authority publication, runtime closes transient content and retains only the
+content-free cleanup operation for fresh-binding reconciliation.
+
 ### Free text and recovery
 
 Calling `lead_turn(..., "Yes")` is contextual conversation, never structured
@@ -930,7 +1332,12 @@ Before accepting new text, `lead_turn` normalizes authoritative state:
 Unresolved `running` with no live owner and no authoritative result becomes
 `outcome_unknown`; it is never replayed. A `running` result batch is finalized
 locally to `completed`, `failed`, or `interrupted`. The runtime clears live
-execution markers and releases bound-agent resources on every exit path.
+execution markers and releases bound-agent resources on every exit path. Each
+retained bound-agent use is released by one separately joined task. Cancellation
+cannot interrupt or duplicate that release: the runtime shields and joins it,
+then propagates the original cancellation after cleanup. A simultaneous
+release failure is recorded on that cancellation; without cancellation, the
+release failure remains the reported failure.
 
 ### Context event sink
 
@@ -1029,9 +1436,18 @@ await RuntimeSession.decide_lead_step(
     *,
     action_progress_sink: ContextActionProgressSink | None = None,
 ) -> LeadDecisionResult
+await RuntimeSession.decide_artifact_application(
+    decision: ArtifactApplicationDecision,
+) -> ArtifactApplicationDecisionResult
+await RuntimeSession.decide_story_commit(
+    decision: StoryCommitDecisionRequest,
+) -> StoryCommitDecisionResult
+await RuntimeSession.reprepare_story_commit(
+    request: StoryCommitPreparationRequest,
+) -> StoryCommitRequestPayload
 ```
 
-The bound decision method rejects a decision for another session. Bound
+The bound methods reject decisions and preparation requests for another session. Bound
 reference inspection likewise rejects an operation ID that does not belong to
 its session.
 
@@ -1057,7 +1473,8 @@ There is no package-root `Runtime` or `Session` alias. Import the explicit
 No alternate or forwarding entry point restores `converse`,
 `converse_with_retrieval`, `run_prompt`, or `run_draft` on the runtime classes.
 There is no unconfirmed/public raw specialist-dispatch, debate-start,
-artifact-application, commit, push, merge, or one-turn bypass method. Consensus
+artifact-application bypass, general Git, push, merge, or one-turn bypass
+method. Consensus
 is available only through the separately confirmed Python methods above; it
 has no installed shell command.
 
@@ -1079,8 +1496,9 @@ typed evidence-bound lead judgments or failures, dispatch, typed
 reply/synthesis, provider-call-accounting, result, and state events as
 applicable. Attached references create content-free
 reference-operation evidence and send authorized selected bytes to the
-configured provider for each addressed invocation. These methods never publish
-an artifact or mutate Git.
+configured provider for each addressed invocation. Conversation, consultation,
+review, and consensus methods never publish an artifact or mutate Git; only the
+separate exact Apply and Commit decision methods can perform those effects.
 
 <a id="context-lifecycle-observer"></a>
 

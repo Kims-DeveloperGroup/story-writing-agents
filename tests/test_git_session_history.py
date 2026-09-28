@@ -4,14 +4,27 @@ from __future__ import annotations
 
 import hashlib
 import os
+import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
 from story_writing_agents.git import GitBaselineManifest, GitManifestEntry
+from story_writing_agents.git import repository_lock as lock_module
 from story_writing_agents.git import session_history as history_module
-from story_writing_agents.git.session_history import open_git_session_history
+from story_writing_agents.git.session_contracts import (
+    GitSessionFailureCode,
+    GitSessionOperationKind,
+    GitSessionRecoveryAction,
+    GitSessionResourceError,
+    GitSessionResourceState,
+)
+from story_writing_agents.git.session_history import (
+    open_git_session_history,
+    open_story_commit_recovery_history,
+)
 from story_writing_agents.git.session_history_contracts import (
     GIT_SESSION_HISTORY_DIRECTORY,
     GitSessionCandidatePath,
@@ -20,6 +33,7 @@ from story_writing_agents.git.session_history_contracts import (
     GitSessionCommitOperationRecord,
     GitSessionHistoryError,
     GitSessionHistoryFailureCode,
+    GitSessionHistoryRecoveryAction,
     GitSessionHistoryState,
     GitSessionHistorySnapshot,
     GitSessionIdentitySource,
@@ -30,6 +44,7 @@ from story_writing_agents.git.session_history_contracts import (
 from story_writing_agents.workspace.initialization import provision_session_resources
 from story_writing_agents.workspace.schema import canonical_initializer_scaffold
 
+from tests.git_contract_fixture import exception_graph
 from tests.test_git_session_resources import GitSessionResourceGitTestCase
 
 
@@ -111,6 +126,10 @@ class GitSessionHistorySafetyTests(GitSessionResourceGitTestCase):
 
     def _tree(self, root: Path) -> str:
         return self.run_git(root, "rev-parse", "HEAD^{tree}").stdout.decode().strip()
+
+
+
+
 
 
     def test_snapshot_fails_closed_on_drift_corruption_and_preserves_lease(self) -> None:

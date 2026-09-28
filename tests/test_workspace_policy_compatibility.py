@@ -112,8 +112,6 @@ class WorkspacePolicyCompatibilityTests(DisposableGitTestCase):
 
     policy_fixtures = _FIXTURES
 
-    def _policies(self):
-        return _legacy_policies(self.policy_fixtures)
 
     def _scaffold(self):
         return _legacy_scaffold(self.policy_fixtures)
@@ -179,11 +177,6 @@ class WorkspacePolicyCompatibilityTests(DisposableGitTestCase):
             for agent in ROSTER
         }
 
-    def _reject_without_mutation(self, root: Path) -> None:
-        before = self._snapshot(root)
-        with self.assertRaises((WorkspaceFormatError, WorkspaceSecurityError)):
-            Workspace(root).require_ready()
-        self.assertEqual(self._snapshot(root), before)
 
     def test_fresh_legacy_and_current_main_admission_are_isolated_and_read_only(self) -> None:
         legacy = self._initialize("legacy")

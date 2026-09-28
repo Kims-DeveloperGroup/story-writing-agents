@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import configparser
+from contextlib import nullcontext
 import email.parser
 import importlib.util
 import io
@@ -344,8 +345,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 146)
-        self.assertEqual(len(edges), 595)
+        self.assertEqual(len(modules), 148)
+        self.assertEqual(len(edges), 621)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
@@ -402,14 +403,18 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.config",
                 "story_writing_agents.errors",
                 "story_writing_agents.git",
+                "story_writing_agents.git.repository_lock",
                 "story_writing_agents.git.session_contracts",
                 "story_writing_agents.git.session_checkpoints",
                 "story_writing_agents.git.session_history",
                 "story_writing_agents.git.session_resources",
                 "story_writing_agents.git.story_commits",
+                "story_writing_agents.provider_execution_workspace",
                 "story_writing_agents.runtime_state_paths",
                 "story_writing_agents.workspace._policy_baselines",
+                "story_writing_agents.workspace.session_role_projection",
                 "story_writing_agents.workspace.schema",
+                "story_writing_agents.writing_artifacts.repository",
             },
             "story_writing_agents.workspace.schema": {
                 "story_writing_agents.agents",
@@ -451,13 +456,34 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.git.repository_lock",
                 "story_writing_agents.git.session_contracts",
             },
+            "story_writing_agents.git.story_commit_candidates": {
+                "story_writing_agents.git.contracts",
+                "story_writing_agents.git.process",
+                "story_writing_agents.git.session_contracts",
+                "story_writing_agents.git.session_history",
+                "story_writing_agents.git.session_history_contracts",
+                "story_writing_agents.git.session_resources",
+                "story_writing_agents.git.story_commit_contracts",
+                "story_writing_agents.writing_artifacts",
+                "story_writing_agents.writing_artifacts.repository",
+            },
+            "story_writing_agents.git.story_commits": {
+                "story_writing_agents.git.adapter",
+                "story_writing_agents.git.contracts",
+                "story_writing_agents.git.process",
+                "story_writing_agents.git.repository_lock",
+                "story_writing_agents.git.session_contracts",
+                "story_writing_agents.git.session_history",
+                "story_writing_agents.git.session_history_contracts",
+                "story_writing_agents.git.session_resources",
+                "story_writing_agents.git.story_commit_candidates",
+                "story_writing_agents.git.story_commit_contracts",
+            },
         }
         for source, expected in git_dependencies.items():
-            with self.subTest(git_source=source):
-                self.assertEqual(
-                    {target for edge_source, target in edges if edge_source == source},
-                    expected,
-                )
+            context = nullcontext() if source.endswith((".story_commit_candidates", ".story_commits")) else self.subTest(git_source=source)
+            with context:
+                self.assertEqual({target for edge_source, target in edges if edge_source == source}, expected, source)
         changed_storage_dependencies = {
             "story_writing_agents.conversation_storage.composition": {
                 "story_writing_agents.conversation_search",
@@ -535,6 +561,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.conversation_storage.selection",
                 "story_writing_agents.conversation_storage.sqlite",
                 "story_writing_agents.conversation_storage.sqlite_database",
+                "story_writing_agents.orchestrator",
                 "story_writing_agents.workspace",
             },
         )
@@ -708,6 +735,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.conversations.session_context",
                 "story_writing_agents.errors",
                 "story_writing_agents.provider_auth_recovery",
+                "story_writing_agents.provider_execution_workspace",
                 "story_writing_agents.structured_output_validation",
                 "story_writing_agents.workspace",
             },
@@ -1166,9 +1194,9 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.workspace.core as workspace_core
                 from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
                 assert len(story_writing_agents.__all__) == 106
-                assert len(conversations.__all__) == 158
+                assert len(conversations.__all__) == 159
                 assert len(conversation_events.__all__) == 120
-                assert len(conversation_context.__all__) == 30
+                assert len(conversation_context.__all__) == 31
                 assert conversations.CollaborationProposal is conversation_events.CollaborationProposal
                 assert conversations.CollaborationEventStore is conversation_context.CollaborationEventStore
                 assert conversations.CollaborationProposal.__module__ == "story_writing_agents.conversations"
@@ -1412,9 +1440,9 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.conversations.context as context
                 import story_writing_agents.conversations.events as events
                 assert len(story_writing_agents.__all__) == 106
-                assert len(conversations.__all__) == 158
+                assert len(conversations.__all__) == 159
                 assert len(events.__all__) == 120
-                assert len(context.__all__) == 30
+                assert len(context.__all__) == 31
                 assert catalog.ConversationCatalog is conversations.ConversationCatalog
                 assert events.ConversationEvent is conversations.ConversationEvent
                 assert not hasattr(context, "ConversationEventStore")

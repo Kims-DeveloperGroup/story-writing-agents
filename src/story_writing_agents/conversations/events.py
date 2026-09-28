@@ -696,6 +696,7 @@ class ArtifactApplicationNextAction(StrEnum):
     """One safe user action following an application outcome."""
 
     REQUEST_COMMIT_CONFIRMATION = "request_commit_confirmation"
+    REPREPARE_COMMIT_REQUEST = "reprepare_commit_request"
     CONTINUE_WITH_LEAD = "continue_with_lead"
     REGENERATE_AND_REVIEW = "regenerate_and_review"
     INSPECT_AND_RESOLVE_OUTCOME = "inspect_and_resolve_outcome"
@@ -2998,7 +2999,10 @@ class ArtifactApplicationResultPayload:
                 self.result.application_id != self.application_id
                 or self.outcome is not expected
                 or self.next_action
-                is not ArtifactApplicationNextAction.REQUEST_COMMIT_CONFIRMATION
+                not in {
+                    ArtifactApplicationNextAction.REQUEST_COMMIT_CONFIRMATION,
+                    ArtifactApplicationNextAction.REPREPARE_COMMIT_REQUEST,
+                }
             ):
                 raise ValueError("artifact application terminal result is inconsistent")
         else:

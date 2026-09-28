@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
 import subprocess
 import unittest
+from contextlib import contextmanager
 from dataclasses import replace
 from unittest import mock
 
 from story_writing_agents import StoryRuntime, Workspace
+from story_writing_agents import orchestrator as orchestrator_module
+from story_writing_agents.conversations import context as context_module
 from story_writing_agents.agents import LEAD_ORCHESTRATOR
 from story_writing_agents.conversations import (
     ArtifactApplicationDecision,
     ArtifactApplicationDecisionKind,
+    ArtifactApplicationResultPayload,
     CollaborationConfirmationDecision,
+    CollaborationNextAction,
     CollaborationSideEffect,
     StoryCommitDecisionRequest,
     StoryCommitNextAction,
@@ -34,6 +41,7 @@ from story_writing_agents.git.story_commit_contracts import (
 from story_writing_agents.workspace.initialization import provision_session_resources
 
 from tests import test_lead_artifact_application as lead_artifact_application_tests
+from tests.collaboration_contract_fixture import seed_reviewed_artifact
 from tests.helpers import pristine_initialized_workspace
 from tests.test_artifact_proposal_orchestration import (
     _RULES,
@@ -128,10 +136,13 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
             check=True,
             stdout=subprocess.DEVNULL,
         )
-        self.backend = _LeadBackend()
+        self.backend = _LeadBackend(vendor="fixture")
         self.runtime = StoryRuntime(self.workspace, self.backend)  # type: ignore[arg-type]
 
-    async def reviewed_create(self, subject: str = "Reviewed update"):
+    async def reviewed_create(
+        self, subject: str = "Reviewed update", *,
+        new_text: str = "Use restrained close-third narration.\n",
+    ):
         conversation_id = self.conversation(subject)
         self.backend.enqueue(
             _artifact_outcome(
@@ -139,7 +150,7 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
                     {
                         "evidence_id": _reference_ids(material)[0],
                         "kind": "replace",
-                        "new_text": "Use restrained close-third narration.\n",
+                        "new_text": new_text,
                     }
                 ],
                 evidence_status="empty",
@@ -180,13 +191,51 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
             self.git("status", "--porcelain=v1", "-z"),
         )
 
-    async def applied_create(self, subject: str = "Prepared local commit"):
-        turn = await self.reviewed_create(subject)
+    async def applied_create(
+        self, subject: str = "Prepared local commit", *, seeded=False,
+        new_text: str = "Use restrained close-third narration.\n",
+    ):
+        turn = (
+            await seed_reviewed_artifact(
+                self, self.conversation(subject), (("replace", _RULES, new_text),),
+            ) if seeded else await self.reviewed_create(subject, new_text=new_text)
+        )
         applied = await self.runtime.decide_artifact_application(
             _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
         )
         self.assertIsNotNone(applied.commit_request)
         return applied
+
+    def pending_commit(self, applied):
+        reviewed = applied.request.reviewed_proposal
+        key = (reviewed.session_id, reviewed.conversation_id, reviewed.step_id)
+        pending = self.runtime._pending_story_commits[key]
+        pin = pending._generation_pin
+        self.assertIsNotNone(pin)
+        descriptors = pin._pin._descriptors
+        self.assertEqual(len(descriptors), 6)
+        for descriptor in descriptors:
+            os.fstat(descriptor)
+        return key, pending, pin, descriptors
+
+    def assert_pin_closed(self, pin, descriptors) -> None:
+        self.assertIsNone(pin._pin)
+        for descriptor in descriptors:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
+    @contextmanager
+    def track_pin_closes(self, *pins):
+        calls = []
+        original_close = type(pins[0]).close
+
+        def tracked_close(current):
+            if current in pins:
+                calls.append(current)
+            return original_close(current)
+
+        with mock.patch.object(type(pins[0]), "close", new=tracked_close):
+            yield calls
 
     def assert_commit_events_round_trip(self, conversation_id: str) -> None:
         commit_types = (StoryCommitRequestPayload, StoryCommitResultPayload)
@@ -205,11 +254,44 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
                 )
 
     async def test_request_is_inspectable_and_reject_is_zero_git_mutation(self) -> None:
-        applied = await self.applied_create("Reject commit")
+        applied = await self.applied_create("Reject commit", seeded=True)
+        key, _pending, pin, descriptors = self.pending_commit(applied)
         request = applied.commit_request
         assert request is not None
+        events = self.history(applied.request.reviewed_proposal.conversation_id)
+        application_results = [
+            event for event in events if type(event.payload) is ArtifactApplicationResultPayload
+        ]
+        commit_requests = [
+            event for event in events if type(event.payload) is StoryCommitRequestPayload
+        ]
+        self.assertEqual((len(application_results), len(commit_requests)), (1, 1))
+        self.assertEqual(
+            (application_results[0].batch_id, application_results[0].event_id),
+            (
+                commit_requests[0].batch_id,
+                commit_requests[0].payload.application_result_event_id,
+            ),
+        )
+        self.assertEqual(
+            tuple(
+                (event.batch_ordinal, event.batch_size)
+                for event in (application_results[0], commit_requests[0])
+            ),
+            ((0, 2), (1, 2)),
+        )
         before_files = self.artifact_snapshot()
         before_git = self.session_git_snapshot()
+        restarted_backend = _LeadBackend()
+        restarted = StoryRuntime(self.workspace, restarted_backend)  # type: ignore[arg-type]
+        redisclosed = await restarted.lead_turn(
+            self.session_id, applied.request.reviewed_proposal.conversation_id,
+            "Commit these changes now.",
+        )
+        self.assertIs(redisclosed.next_action, CollaborationNextAction.SUBMIT_COMMIT_DECISION)
+        self.assertEqual(redisclosed.story_commit_request, request)
+        self.assertEqual(restarted_backend.calls, [])
+        self.assertEqual(self.session_git_snapshot(), before_git)
 
         self.assertEqual(
             request.choices,
@@ -239,9 +321,21 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         )
         self.assertEqual(self.session_git_snapshot(), before_git)
 
-        rejected = await self.runtime.decide_story_commit(
-            _commit_decision(applied, StoryCommitDecision.REJECT)
-        )
+        close_calls = []
+        original_close = type(pin).close
+
+        def tracked_close(current):
+            if current is pin:
+                close_calls.append(current)
+            return original_close(current)
+
+        with mock.patch.object(type(pin), "close", new=tracked_close):
+            rejected = await self.runtime.decide_story_commit(
+                _commit_decision(applied, StoryCommitDecision.REJECT)
+            )
+        self.assertEqual(close_calls, [pin])
+        self.assertNotIn(key, self.runtime._pending_story_commits)
+        self.assert_pin_closed(pin, descriptors)
         self.assertIs(rejected.outcome.outcome, StoryCommitOutcomeKind.REJECTED)
         self.assertIs(rejected.outcome.result.state, StoryCommitState.REJECTED)
         self.assertEqual(self.artifact_snapshot(), before_files)
@@ -260,6 +354,7 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         applied = await self.applied_create("Exact commit")
+        key, _pending, pin, descriptors = self.pending_commit(applied)
         request = applied.commit_request
         assert request is not None
         before_head = self.git("rev-parse", "HEAD").strip()
@@ -270,10 +365,15 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
             commands.append(arguments)
             return original_run(runner, arguments, **kwargs)
 
-        with mock.patch.object(GitProcessRunner, "run", tracked_run):
+        with mock.patch.object(GitProcessRunner, "run", tracked_run), \
+                self.track_pin_closes(pin) as close_calls:
             committed = await self.runtime.decide_story_commit(
                 _commit_decision(applied, StoryCommitDecision.COMMIT)
             )
+
+        self.assertEqual(close_calls, [pin])
+        self.assertNotIn(key, self.runtime._pending_story_commits)
+        self.assert_pin_closed(pin, descriptors)
 
         self.assertIs(committed.outcome.outcome, StoryCommitOutcomeKind.COMMITTED)
         result = committed.outcome.result
@@ -323,6 +423,86 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
             await self.runtime.decide_story_commit(
                 _commit_decision(applied, StoryCommitDecision.COMMIT)
             )
+
+        revised_apply = await self.applied_create(
+            "Revised exact commit", seeded=True,
+            new_text="Use a measured close-third voice.\n",
+        )
+        old_request = revised_apply.commit_request
+        assert old_request is not None
+        revised_head = self.git("rev-parse", "HEAD").strip()
+        revised = await self.runtime.decide_story_commit(
+            _commit_decision(
+                revised_apply, StoryCommitDecision.REVISE,
+                revision_request="Refine the local commit message.",
+            )
+        )
+        self.assertIs(revised.outcome.outcome, StoryCommitOutcomeKind.SUPERSEDED)
+        self.assertIs(revised.outcome.next_action, StoryCommitNextAction.REPREPARE)
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), revised_head)
+        history = self.history(revised_apply.request.reviewed_proposal.conversation_id)
+        self.assertIs(type(history[-1].payload), StoryCommitResultPayload)
+        projection = project_collaboration_history(history)
+        for outcome, action in (
+            (StoryCommitOutcomeKind.OUTCOME_UNKNOWN, CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME),
+            (StoryCommitOutcomeKind.RECOVERY_REQUIRED, CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY),
+        ):
+            terminal = replace(revised.outcome, outcome=outcome, result=None)
+            self.assertIs(
+                context_module._artifact_operation_next_action(
+                    replace(history[-1], payload=terminal),
+                    projection.current_artifact_application_request,
+                    projection.current_artifact_application_result,
+                    projection.current_story_commit_request,
+                    terminal,
+                ),
+                action,
+            )
+        rejected_reprepare = replace(
+            revised.outcome, outcome=StoryCommitOutcomeKind.REJECTED, result=None
+        )
+        self.assertIsNot(
+            context_module._artifact_operation_next_action(
+                replace(history[-1], payload=rejected_reprepare),
+                projection.current_artifact_application_request,
+                projection.current_artifact_application_result,
+                projection.current_story_commit_request,
+                rejected_reprepare,
+            ),
+            CollaborationNextAction.REPREPARE_COMMIT_REQUEST,
+        )
+        redisclosed = await self.runtime.lead_turn(
+            self.session_id, revised_apply.request.reviewed_proposal.conversation_id,
+            "Commit the revision now.",
+        )
+        self.assertIs(redisclosed.next_action, CollaborationNextAction.REPREPARE_COMMIT_REQUEST)
+        preparation = redisclosed.story_commit_preparation_request
+        assert preparation is not None
+        fresh_request = await self.runtime.reprepare_story_commit(preparation)
+        self.assertNotEqual(fresh_request.candidate.candidate_id, old_request.candidate.candidate_id)
+        self.assertEqual(fresh_request.application_result_event_id, old_request.application_result_event_id)
+        with mock.patch.object(GitProcessRunner, "run", tracked_run):
+            revised_commit = await self.runtime.decide_story_commit(
+                _commit_decision(
+                    replace(revised_apply, commit_request=fresh_request),
+                    StoryCommitDecision.COMMIT, confirmation_id="revised_commit_confirmation",
+                )
+            )
+        self.assertIs(revised_commit.outcome.outcome, StoryCommitOutcomeKind.COMMITTED)
+        revised_result = revised_commit.outcome.result
+        assert revised_result is not None
+        final_head = self.git("rev-parse", "HEAD").strip()
+        self.assertNotEqual(final_head, revised_head)
+        self.assertEqual(revised_result.commit_id.encode("ascii"), final_head)
+        self.assertEqual(
+            self.git("diff-tree", "--no-commit-id", "--name-only", "-r", final_head.decode()).splitlines(),
+            [_RULES.encode()],
+        )
+        self.assertEqual(self.git("diff", "--cached", "--binary"), b"")
+        self.assertFalse(any(command[0] in forbidden for command in commands))
+
+
+
 
 
 

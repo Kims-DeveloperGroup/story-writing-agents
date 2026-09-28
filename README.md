@@ -282,15 +282,87 @@ The exact grammar is in the [CLI reference](docs/reference/cli.md) and
 orchestration facade. It can bind a `RuntimeSession`; both expose async
 `lead_turn()`, `propose_specialist_advisory()`, `decide_lead_recommendation()`,
 and `decide_lead_step()` methods. Confirmation executes the disclosed read-only consultation through
-`decide_lead_step()`. Both facades also expose a phase-confirmed consensus API:
+`decide_lead_step()`. Separate artifact-application and local story-commit
+decision methods consume only their own exact structured controls. Both
+facades also expose a phase-confirmed consensus API:
 submit prompt/draft input, inspect, decide or confirm the exact phase,
 explicitly request its successor, interrupt, and resume inspection. There is
 also an explicit synthesis-deadlock continuation call that binds the source result,
 unresolved critique material, operator ruling, and added repair-round budget;
 it prepares a fresh REPAIR confirmation and never copies candidate text. There
-is no public unconfirmed specialist dispatch, artifact publication, consensus
-shell command, or Git method. The package root no longer exports the broad
+is no public unconfirmed specialist dispatch, direct artifact-publication
+bypass, consensus shell command, or general Git method. The package root no longer exports the broad
 `Runtime` or `Session` aliases.
+
+Construct `StoryRuntime` from the initialized `main` workspace. That root is
+the control plane for configuration, conversation history, and diagnostics;
+it is not the story-artifact root for an active session. Every
+artifact-sensitive session operation freshly validates the session's exact branch/ref/
+sibling-worktree identity and pins the worktree's physical `(st_dev, st_ino)`
+identity. Each repository or session-source step uses a short synchronous
+outer guard: it holds the cooperating-runtime Git lease and verifies the exact
+semantic READY resources and named physical root once before and once after the
+transaction. Nested repository work reuses that transaction with liveness and
+named-root checks instead of repeating the full READY scan. A guard never spans
+a provider await or specialist concurrency; the next filesystem transaction
+reacquires and revalidates it. Direct Lead and Lead-synthesis paths instead
+retain one opaque six-descriptor physical-generation pin through durable
+result publication. That pin carries no semantic READY, traversal, or
+repository authority, and no Git lease spans the provider wait. The
+binding does not expose its repository directly: only live guarded access does,
+and that access expires on exit. Exit revalidation runs after success, error,
+or cancellation; detected binding loss takes precedence over the body result.
+Artifact access and provider-visible active-debate or own-agent state then come
+only from that worktree; conversation history retains its separately configured
+control-plane storage. Replacing the named worktree does not transfer authority
+to the replacement.
+The runtime never falls back to `main`, the current directory, or a previously
+used session, and it does not provision missing session resources as a side
+effect. For every Codex or Antigravity Lead, specialist, synthesis, consensus,
+or direct bound-agent call, the runtime derives a call-local execution
+capability from that binding. The child enters the descriptor-selected exact
+session worktree, so its OS working directory is the same pinned generation,
+never provider staging or the control workspace. Codex also uses `--cd .`;
+Antigravity treats that exact CWD as its native project root without an adapter-
+control fallback. On Darwin, a second default-deny sandbox gives Codex no
+session-tree reads and gives Antigravity only literal project traversal plus
+its selected protected role file. Neither provider receives direct manuscript
+or core-document access; session writes and `.git` are denied. Host-owned
+context, explicit-reference, SEARCH, and READ services select and deliver story
+content through the provider payload instead. Codex exceptions admit only its
+literal canonical executable, required system runtime files, transport,
+outbound network access, and an existing absolute owner-controlled `CODEX_HOME`
+that cannot overlap the control root, the schema-derived sibling-worktree
+container, staging, or output transport. Bound instructions, schema, and
+response transport remain outside story Git. The Codex response is accepted only
+from a no-follow, identity-stable, singly linked regular file containing strict
+UTF-8 and no more than 8 MiB. The
+deprecated Darwin sandbox facility is fail-closed when unavailable, and an
+unsupported host does not fall back to an unconfined Codex story call.
+Codex also rejects a fully encoded `developer_instructions=` argument above
+512 KiB before submission; large custom bindings should deliver story material
+through host-owned context, references, or SEARCH/READ instead.
+Deferred Lead publication retains its execution and provider contexts until
+publication resolves. Cleanup and generation revalidation finish before the
+provider-call finalizer is accepted; failure after checkpoint commit invalidates
+that exact committed generation. Direct execution-workspace ownership also
+revalidates currentness on exit; exit loss prevents an apparent success from
+returning, while an active body failure remains primary.
+Antigravity derives a content-qualified native selector from the semantic
+story-agent ID and deterministic base role bytes. That exact selector is the
+role's YAML name, `.agents/agents/<native-selector>/agent.md` directory, and
+`--agent` value. Runtime revalidates this semantic/native/final-byte plan and
+recomputes the staged file and binding byte accounting from the immutable bound
+definition before provider workspace setup. Semantic agent identity still owns
+routing, settings, accounting, and external provider state. Each protected
+`0400` role leaf is published create-only, remains unversioned, and can coexist
+with older role versions; runtime never replaces or prunes it. Definitions and
+mutable provider state remain external beneath the canonical control workspace;
+provider state is generation-qualified, while provider CWD stays in the session
+worktree and schema/output transport also stays external. Codex continues to
+inject developer instructions directly and requires no worktree configuration
+file.
+Create or reopen the session through the lifecycle first.
 
 ```python
 from story_writing_agents import StoryRuntime, Workspace
@@ -333,10 +405,14 @@ infrastructure boundaries. Start with the [runtime API](docs/reference/runtime-a
 The canonical reference-source paths are the four exact core-document paths and
 eligible lowercase-`.md` files below `manuscript/`. Python `lead_turn()` accepts
 ordered `${path}` and `${path}#Lx-Ly` content-free indicators. Runtime performs
-a separate mandatory read before the substantive lead call and retains only
+a separate mandatory read from the exact session worktree before the substantive
+lead call and retains only
 the indicator/range/revision facts in the proposal. In focused Lead input, `$`
 opens the canonical-artifact picker and `$$` opens the same picker followed by
-the independent range viewer. Both insert durable identity-only indicators. See
+the independent range viewer. Picker inventory and each selected-file read use
+their own short guarded access, follow the currently attached session, and are
+freshly validated on entry and exit. Both insert durable identity-only
+indicators. See
 [artifact references](docs/guides/artifact-references.md).
 
 ## Important limits
@@ -362,6 +438,34 @@ the independent range viewer. Both insert durable identity-only indicators. See
   refs, content-free session history, exact confirmed story commits, and
   closed-path internal checkpoints are supported internally. These internal
   capabilities do not grant the lead Apply, commit, or checkpoint authority.
+- Missing, moved, mismatched, or otherwise non-ready session Git resources
+  stop artifact-sensitive work before provider or artifact I/O. There is no
+  fallback or automatic provisioning. If binding or physical-root validation
+  fails after Apply was durably confirmed but before the repository's
+  `apply_artifact_changes()` method starts, runtime records
+  `recovery_required` / `operator_recovery` and does not start artifact
+  application. Once that method has started, an unclassified root, security,
+  or format failure is conservatively
+  `outcome_unknown` / `inspect_and_resolve_outcome`.
+- Session-source reads accept only canonical relative POSIX paths and unique
+  regular-file leaves. Symlinks, FIFOs, devices, hard-linked leaves, unstable
+  file identity/metadata, and foreign embedded session/debate/agent ownership
+  fail closed before content is accepted.
+- The cooperating-runtime Git lease is advisory to this runtime. Persistent
+  external Git drift is detected at the next guard checkpoint, but arbitrary
+  noncooperating Git that mutates and restores state between checkpoints is
+  outside the guarantee. Stop workspace processes before external recovery.
+- A Commit request prepared after successful Apply remains pinned to that
+  Apply worktree's physical identity through candidate preparation,
+  authorization, and execution. Replacement before durable Commit execution
+  requires repreparation; uncertainty after execution starts requires
+  inspection. Identity-bound Commit inspection and recovery also require the
+  original Apply root and never advance durable operation state after detecting
+  replacement. If follow-on Commit-request publication fails after a durable
+  Apply result, verified result-only history projects
+  `reprepare_commit_request` across restart. Repreparation publishes a fresh
+  request that still needs a structured decision; ambiguous publication
+  readback requires inspection.
 - Smoke is intentionally provider-free and story-free.
 - Workspace configuration, histories, diagnostics, and artifacts are local
   plaintext unless the surrounding environment protects them.

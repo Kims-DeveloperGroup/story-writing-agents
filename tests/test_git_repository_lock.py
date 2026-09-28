@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import multiprocessing
 import os
 import threading
 import unittest
@@ -73,6 +74,7 @@ class GitRepositoryLockSafetyTests(DisposableGitTestCase):
         self.initialize(root)
         return root
 
+
     def test_lease_revalidates_names_and_expires_after_every_exit(self) -> None:
         root = self._repository("lease")
         lease: GitRepositoryLease | None = None
@@ -105,6 +107,9 @@ class GitRepositoryLockSafetyTests(DisposableGitTestCase):
             caught.exception.code,
             GitRepositoryLockFailureCode.UNSAFE_ROOT,
         )
+
+
+
 
     def test_symlinked_root_or_common_directory_is_never_followed(self) -> None:
         root = self._repository("real")

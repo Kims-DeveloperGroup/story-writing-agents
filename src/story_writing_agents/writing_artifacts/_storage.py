@@ -62,8 +62,25 @@ class SecureFileSnapshot:
 class SecureWorkspaceStorage:
     """Perform call-local artifact I/O from one verified workspace root."""
 
-    def __init__(self, root: str | os.PathLike[str]) -> None:
+    def __init__(
+        self,
+        root: str | os.PathLike[str],
+        *,
+        expected_root_identity: tuple[int, int] | None = None,
+    ) -> None:
+        if expected_root_identity is not None and (
+            type(expected_root_identity) is not tuple
+            or len(expected_root_identity) != 2
+            or any(
+                type(value) is not int or value <= 0
+                for value in expected_root_identity
+            )
+        ):
+            raise TypeError(
+                "expected_root_identity must be a physical directory identity"
+            )
         self._root = Path(os.path.abspath(os.fspath(root)))
+        self._expected_root_identity = expected_root_identity
         self._identity: tuple[int, int] | None = None
         self._identity_lock = threading.Lock()
         self._active_lease: tuple[
@@ -231,6 +248,11 @@ class SecureWorkspaceStorage:
             identity = (observed.st_dev, observed.st_ino)
             if not stat.S_ISDIR(observed.st_mode) or any(value <= 0 for value in identity):
                 raise ArtifactRootSecurityError("workspace root identity is not meaningful")
+            if (
+                self._expected_root_identity is not None
+                and identity != self._expected_root_identity
+            ):
+                raise ArtifactRootSecurityError("workspace root identity changed")
             with self._identity_lock:
                 if self._identity is None:
                     self._identity = identity
@@ -258,9 +280,13 @@ class SecureWorkspaceStorage:
         try:
             retained = os.fstat(descriptor)
             named = os.fstat(verification)
-            if (named.st_dev, named.st_ino) != (
-                retained.st_dev,
-                retained.st_ino,
+            retained_identity = (retained.st_dev, retained.st_ino)
+            if (
+                (named.st_dev, named.st_ino) != retained_identity
+                or (
+                    self._expected_root_identity is not None
+                    and retained_identity != self._expected_root_identity
+                )
             ):
                 raise ArtifactRootSecurityError(
                     "workspace root identity changed during artifact I/O"

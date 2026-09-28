@@ -13,6 +13,7 @@ import sys
 import tempfile
 import unittest
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import FrozenInstanceError, fields, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -125,6 +126,8 @@ from story_writing_agents.interactive_terminal import (
     INTERACTIVE_ERROR_SPECS,
     InteractiveErrorCode,
     InteractiveTerminal,
+    ReferenceInputFailure,
+    ReferenceInputFailureKind,
 )
 from story_writing_agents.provider_auth import (
     AUTH_PROVIDERS,
@@ -162,6 +165,10 @@ from story_writing_agents.orchestrator import RuntimeSession
 from story_writing_agents.workspace import (
     Workspace,
 )
+from story_writing_agents.workspace.initialization import (
+    SessionArtifactBindingError,
+    require_ready_session_resources,
+)
 
 from tests.collaboration_contract_fixture import STEP_ID, contract_batches, make_proposal
 from tests.helpers import pristine_initialized_workspace
@@ -179,49 +186,8 @@ _COLLIDING_B = "c_0123456789" + ("b" * 22)
 _UNIQUE_C = "c_fedcba9876" + ("c" * 22)
 
 
-def _idle_transition_assessment(
-    session_id: str,
-    *,
-    allowed: bool,
-) -> SessionTransitionAssessment:
-    """Build one exact idle transition result for controller ordering tests."""
-
-    return SessionTransitionAssessment(
-        session_id=session_id,
-        conversation_id=None,
-        scope=SessionTransitionScope.IDLE,
-        state=(
-            SessionTransitionAssessmentState.IDLE_READY
-            if allowed
-            else SessionTransitionAssessmentState.RECOVERY_REQUIRED
-        ),
-        next_action=(
-            SessionTransitionNextAction.BEGIN_WITH_LEAD
-            if allowed
-            else SessionTransitionNextAction.OPERATOR_RECOVERY
-        ),
-        owner=None if allowed else SessionRecoveryOwner.REPOSITORY_STATUS,
-        failure_code=(
-            SessionRecoveryFailureCode.NONE
-            if allowed
-            else SessionRecoveryFailureCode.REPOSITORY_STATE_MISMATCH
-        ),
-        allowed_operations=tuple(SessionTransitionOperation) if allowed else (),
-        recovery_result=None,
-    )
 
 
-def _confirmation_prompt(message: str, *, default: bool) -> str:
-    """Return one exact callback-profile semantic confirmation prompt."""
-
-    suffix = "[Y/n]" if default else "[y/N]"
-    default_text = "yes" if default else "no"
-    return (
-        f"Question: {message}\n"
-        "Choices: y/yes or n/no\n"
-        f"Default: {default_text}\n"
-        f"confirm {suffix}> "
-    )
 
 
 class ScriptedTerminalCallbacks:
@@ -416,10 +382,6 @@ def _access_relative(session_id: str) -> str:
     return f"{_SESSION_DIRECTORY}/{session_id}.access.json"
 
 
-def _default_relative(session_id: str) -> str:
-    """Return one per-session conversation-selection path for assertions."""
-
-    return f"{_CONVERSATION_DEFAULT_DIRECTORY}/{session_id}.json"
 
 
 def _error_record(code: InteractiveErrorCode, *, width: int = 80) -> str:
@@ -516,115 +478,10 @@ def _conversation_metadata(
     )
 
 
-def _stored_transcript_event(
-    conversation_id: str,
-    sequence: int,
-    *,
-    session_id: str = "session",
-    content: str | None = None,
-    kind: ConversationEventKind = ConversationEventKind.USER_MESSAGE,
-    sender: str = "user",
-    recipient: str = "lead_orchestrator",
-    turn_id: str | None = None,
-) -> ConversationEvent:
-    """Build one valid stored event for controller page-validation tests."""
-
-    return ConversationEvent(
-        schema_version=CONVERSATION_EVENT_SCHEMA_VERSION,
-        session_id=session_id,
-        conversation_id=conversation_id,
-        turn_id=f"turn_{sequence}" if turn_id is None else turn_id,
-        sequence=sequence,
-        timestamp=_CREATED,
-        sender=sender,
-        recipient=recipient,
-        kind=kind,
-        content=f"event {sequence}" if content is None else content,
-    )
 
 
-def _transcript_page(
-    conversation_id: str,
-    events: tuple[ConversationEvent, ...],
-    *,
-    requested_start: int,
-    requested_end: int,
-    snapshot_last: int,
-    cursor_next: int | None = None,
-    cursor_limit: int = 24,
-) -> ConversationTranscriptPage:
-    """Build one structurally valid fresh page with an optional continuation."""
-
-    cursor = (
-        None
-        if cursor_next is None
-        else ConversationTranscriptCursor(
-            "session",
-            conversation_id,
-            cursor_next,
-            requested_end,
-            snapshot_last,
-            None,
-            cursor_limit,
-            None,
-        )
-    )
-    return ConversationTranscriptPage(
-        "session",
-        conversation_id,
-        events,
-        requested_start,
-        requested_end,
-        snapshot_last,
-        sum(len(event.content.encode("utf-8")) for event in events),
-        cursor,
-        cursor is not None,
-    )
 
 
-class ScriptedConversationMemoryService:
-    """Return scripted search/pages while recording exact controller calls."""
-
-    def __init__(
-        self,
-        *,
-        search_outcomes: tuple[object, ...] = (),
-        transcript_outcomes: tuple[object, ...] = (),
-    ) -> None:
-        """Store deterministic outcomes and call logs without resources."""
-
-        self.search_outcomes = list(search_outcomes)
-        self.transcript_outcomes = list(transcript_outcomes)
-        self.search_calls: list[ConversationSearchQuery] = []
-        self.transcript_calls: list[tuple[str, int, int]] = []
-
-    def search(self, query: ConversationSearchQuery) -> object:
-        """Record and return one search outcome, raising scripted failures."""
-
-        self.search_calls.append(query)
-        if not self.search_outcomes:
-            raise AssertionError("unexpected conversation search")
-        outcome = self.search_outcomes.pop(0)
-        if isinstance(outcome, BaseException):
-            raise outcome
-        return outcome
-
-    def read_transcript(
-        self,
-        conversation_id: str,
-        *,
-        start_sequence: int,
-        max_events: int,
-    ) -> object:
-        """Record and return one fresh-page outcome or scripted failure."""
-
-        self.transcript_calls.append((conversation_id, start_sequence, max_events))
-        if not self.transcript_outcomes:
-            raise AssertionError("unexpected transcript read")
-        outcome = self.transcript_outcomes.pop(0)
-        if isinstance(outcome, BaseException):
-            raise outcome
-        return outcome
 
 
 class MemoryConversationCatalog:
@@ -1322,7 +1179,7 @@ class ControllerContractTests(ControllerTestCase):
                 "provider_auth",
                 "provider_catalog",
                 "session_lifecycle",
-                "workspace",
+                "workspace", "workspace.initialization",
             },
             "interactive_controller._session_policy": {
                 "errors",
@@ -1614,8 +1471,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 146)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 595)
+        self.assertEqual(len(modules), 148)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 621)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -6593,40 +6450,6 @@ class ControllerSettingsTests(ControllerTestCase):
                 )
 
 
-class _RetiredSchemaV1ControllerSearchAndTranscriptExamples:
-    """Verify provider-free memory commands and attachment-scoped wiring."""
-
-
-
-    def prepared_attached_controller(
-        self,
-        *reads: object,
-        entries: tuple[ConversationMetadata, ...] = (),
-        selected_id: str | None = None,
-    ) -> tuple[
-        Workspace,
-        AgentBackend,
-        MemoryConversationCatalog,
-        InteractiveController,
-        ScriptedTerminalCallbacks,
-    ]:
-        """Create one attached session with an injected deterministic catalog."""
-
-        workspace = self.make_workspace()
-        self.seed_session(workspace, "session", durable_state=SessionDurableState.READY)
-        save_default_session(workspace, "session")
-        if selected_id is not None:
-            save_default_conversation(workspace, "session", selected_id)
-        catalog = MemoryConversationCatalog(entries)
-        backend = self.make_backend(workspace)
-        controller, _backend, callbacks = self.make_controller(
-            workspace,
-            *reads,
-            backend=backend,
-            conversation_catalog=catalog,
-            terminal_width=240,
-        )
-        return workspace, backend, catalog, controller, callbacks
 
 
 
@@ -6640,47 +6463,6 @@ class _RetiredSchemaV1ControllerSearchAndTranscriptExamples:
 
 
 
-class ControllerV2HistoryCommandTests(ControllerTestCase):
-    """Verify provider-free structured search, transcript, and history commands."""
-
-
-    def prepared_v2_controller(
-        self,
-        *reads: object,
-        subject: str = "Focused collaboration",
-        with_history: bool = True,
-    ) -> tuple[
-        object,
-        ConversationStorageServices,
-        ConversationMetadata,
-        InteractiveController,
-        ScriptedTerminalCallbacks,
-    ]:
-        workspace = self.make_workspace()
-        self.seed_session(workspace, "session", durable_state=SessionDurableState.READY)
-        save_default_session(workspace, "session")
-        services = compose_filesystem_conversation_storage(workspace)
-        metadata = services.catalog.create("session", subject)
-        save_default_conversation(workspace, "session", metadata.conversation_id)
-        if with_history:
-            batch = contract_batches(metadata.conversation_id)["proposal"]
-            services.event_store.append_batch(
-                CollaborationEventBatch(
-                    batch_id=batch.batch_id,
-                    expected_last_sequence=batch.expected_last_sequence,
-                    events=tuple(
-                        replace(event, session_id="session") for event in batch.events
-                    ),
-                )
-            )
-        controller, backend, callbacks = self.make_controller(
-            workspace,
-            *reads,
-            conversation_storage_services=services,
-            terminal_width=240,
-        )
-        self.addCleanup(backend.close)
-        return workspace, services, metadata, controller, callbacks
 
 
 
@@ -6837,34 +6619,6 @@ class ControllerConversationCommandTests(ControllerTestCase):
 
 
 
-class ControllerSwitchTests(ControllerTestCase):
-    """Verify destination-first switching and bounded compensation."""
-
-    def prepare_switch(
-        self,
-    ) -> tuple[
-        Workspace,
-        AgentBackend,
-        InteractiveController,
-        ScriptedTerminalCallbacks,
-    ]:
-        """Create ready source and destination sessions with a source default."""
-
-        workspace = self.make_workspace()
-        self.seed_session(workspace, "source", durable_state=SessionDurableState.READY)
-        self.seed_session(
-            workspace, "destination", durable_state=SessionDurableState.READY
-        )
-        save_default_session(workspace, "source")
-        backend = self.make_backend(workspace)
-        controller, _backend, callbacks = self.make_controller(
-            workspace,
-            "/session resume destination",
-            "/quit",
-            backend=backend,
-            terminal_width=200,
-        )
-        return workspace, backend, controller, callbacks
 
 
 
@@ -6874,30 +6628,6 @@ class ControllerSwitchTests(ControllerTestCase):
 
 
 
-class ControllerEndAndCleanupTests(ControllerTestCase):
-    """Verify pause confirmation, state verification, and exit precedence."""
-
-    def prepared_attached_controller(
-        self,
-        *reads: object,
-    ) -> tuple[
-        Workspace,
-        AgentBackend,
-        InteractiveController,
-        ScriptedTerminalCallbacks,
-    ]:
-        """Create a default ready session and controller with scripted input."""
-
-        workspace = self.make_workspace()
-        self.seed_session(workspace, "session", durable_state=SessionDurableState.READY)
-        save_default_session(workspace, "session")
-        backend = self.make_backend(workspace)
-        controller, _backend, callbacks = self.make_controller(
-            workspace,
-            *reads,
-            backend=backend,
-        )
-        return workspace, backend, controller, callbacks
 
 
 

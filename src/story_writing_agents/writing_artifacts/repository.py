@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import re
 import threading
+from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 from typing import Mapping, NoReturn
 from uuid import uuid4
@@ -45,6 +47,7 @@ from .authorization import (
     build_authorized_references,
 )
 from .catalog import (
+    CORE_ARTIFACT_PATHS,
     ArtifactCatalog,
     ArtifactCatalogEntry,
     manuscript_artifact_path,
@@ -96,8 +99,16 @@ class WritingArtifactRepository:
     any prepared artifact application before observing canonical files.
     """
 
-    def __init__(self, workspace_root: str | Path) -> None:
-        self._storage = SecureWorkspaceStorage(workspace_root)
+    def __init__(
+        self,
+        workspace_root: str | Path,
+        *,
+        expected_root_identity: tuple[int, int] | None = None,
+    ) -> None:
+        self._storage = SecureWorkspaceStorage(
+            workspace_root,
+            expected_root_identity=expected_root_identity,
+        )
         self._applications = ArtifactApplicationStore(self._storage)
         self._sources = CanonicalArtifactFilesystem(self._storage)
         self._lock = threading.RLock()
@@ -107,6 +118,7 @@ class WritingArtifactRepository:
             ARTIFACT_SNAPSHOTS_DIRECTORY,
             ARTIFACT_STAGING_DIRECTORY,
         )
+        self._operation_access: Callable[[], AbstractContextManager[None]] | None = None
 
     def catalog(self) -> ArtifactCatalog:
         """Return only current, provenance-backed canonical entries."""
@@ -221,6 +233,32 @@ class WritingArtifactRepository:
         with self._locked_sources():
             return self._sources.read_text(path, max_bytes=max_bytes)
 
+    def are_sources_absent(
+        self, paths: tuple[str, ...], *, max_bytes: int | None = None
+    ) -> bool:
+        """Prove exact absence of an ordered subset of canonical core sources."""
+        if type(paths) is not tuple:
+            raise TypeError("artifact paths must be a tuple")
+        if (
+            not paths
+            or len(paths) > len(CORE_ARTIFACT_PATHS)
+            or any(type(path) is not str or path not in CORE_ARTIFACT_PATHS for path in paths)
+            or len(set(paths)) != len(paths)
+        ):
+            raise ValueError("artifact paths must be a nonempty unique core subset")
+        if max_bytes is not None and (
+            type(max_bytes) is not int or max_bytes <= 0
+        ):
+            raise ValueError("max_bytes must be None or a positive integer")
+        with self._locked_sources():
+            for path in paths:
+                try:
+                    self._sources.read_text(path, max_bytes=max_bytes)
+                except FileNotFoundError:
+                    continue
+                return False
+            return True
+
     def capture_reference_authorization(
         self,
         *,
@@ -228,6 +266,21 @@ class WritingArtifactRepository:
         batch: ArtifactReferenceBatch,
     ) -> ReferenceAuthorization | None:
         """Capture one immutable filesystem-authorized reference snapshot."""
+
+        return self.capture_runtime_reference_authorization(
+            operation_id=operation_id,
+            batch=batch,
+            on_created=None,
+        )
+
+    def capture_runtime_reference_authorization(
+        self,
+        *,
+        operation_id: str,
+        batch: ArtifactReferenceBatch,
+        on_created: Callable[[ReferenceAuthorization], None] | None,
+    ) -> ReferenceAuthorization | None:
+        """Capture and optionally publish authority before guarded lock exit."""
 
         if type(batch) is not ArtifactReferenceBatch:
             raise TypeError("batch must be an ArtifactReferenceBatch")
@@ -277,11 +330,14 @@ class WritingArtifactRepository:
                     ReferenceOperationState.CAPTURED,
                     proofs,
                 )
-                return ReferenceAuthorization(
+                authorization = ReferenceAuthorization(
                     manifest,
                     captured,
                     owner=self._reference_authorization_owner,
                 )
+                if on_created is not None:
+                    on_created(authorization)
+                return authorization
             except ReferenceAuthorizationError as exc:
                 if began:
                     self._reference_evidence.append_operation_event(
@@ -298,6 +354,21 @@ class WritingArtifactRepository:
         correlation: ReferenceInvocationCorrelation,
     ) -> ReadCapability:
         """Issue one durable, one-use capability over a captured operation."""
+
+        return self.authorize_runtime_reference_invocation(
+            authorization,
+            correlation,
+            on_created=None,
+        )
+
+    def authorize_runtime_reference_invocation(
+        self,
+        authorization: ReferenceAuthorization,
+        correlation: ReferenceInvocationCorrelation,
+        *,
+        on_created: Callable[[ReadCapability], None] | None,
+    ) -> ReadCapability:
+        """Issue and optionally publish capability authority before guard exit."""
 
         if type(authorization) is not ReferenceAuthorization:
             raise TypeError("authorization must be a ReferenceAuthorization")
@@ -316,13 +387,16 @@ class WritingArtifactRepository:
                 capability_id,
                 references,
             )
-        return ReadCapability(
-            authorization,
-            correlation,
-            capability_id=capability_id,
-            authorized_references=references,
-            owner=self._reference_authorization_owner,
-        )
+            capability = ReadCapability(
+                authorization,
+                correlation,
+                capability_id=capability_id,
+                authorized_references=references,
+                owner=self._reference_authorization_owner,
+            )
+            if on_created is not None:
+                on_created(capability)
+            return capability
 
     def begin_reference_invocation(
         self,
@@ -330,6 +404,21 @@ class WritingArtifactRepository:
         correlation: ReferenceInvocationCorrelation,
     ) -> ReferenceReadInvocation:
         """Begin one provider-observed read invocation over a captured batch."""
+
+        return self.begin_runtime_reference_invocation(
+            authorization,
+            correlation,
+            on_created=None,
+        )
+
+    def begin_runtime_reference_invocation(
+        self,
+        authorization: ReferenceAuthorization,
+        correlation: ReferenceInvocationCorrelation,
+        *,
+        on_created: Callable[[ReferenceReadInvocation], None] | None,
+    ) -> ReferenceReadInvocation:
+        """Begin and optionally publish a handle before guarded lock exit."""
 
         if type(authorization) is not ReferenceAuthorization:
             raise TypeError("authorization must be a ReferenceAuthorization")
@@ -339,11 +428,24 @@ class WritingArtifactRepository:
             correlation,
             authorization.manifest.references,
         )
-        capability = self.authorize_reference_invocation(
+        invocation: ReferenceReadInvocation | None = None
+
+        def publish(capability: ReadCapability) -> None:
+            nonlocal invocation
+            invocation = _RepositoryReferenceReadInvocation(self, request, capability)
+            if on_created is not None:
+                on_created(invocation)
+
+        self.authorize_runtime_reference_invocation(
             authorization,
             correlation,
+            on_created=publish,
         )
-        return _RepositoryReferenceReadInvocation(self, request, capability)
+        if invocation is None:
+            raise ReferenceAuthorizationError(
+                ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
+            )
+        return invocation
 
     def deliver_authorized_references(
         self,
@@ -358,32 +460,32 @@ class WritingArtifactRepository:
             type(item) is not ArtifactReference for item in requested
         ):
             raise TypeError("requested references must be an ArtifactReference tuple")
-        authorization = capability.consume(self._reference_authorization_owner)
-        try:
-            references, contents = authorization.delivery_snapshot(
-                self._reference_authorization_owner
-            )
-        except ReferenceAuthorizationError as exc:
-            self._terminate_invocation_after_failure(capability, exc.code)
-            raise
-        if references != capability.authorized_references:
-            self._terminate_invocation_after_failure(
-                capability,
-                ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
-            )
-            raise ReferenceAuthorizationError(
-                ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
-            )
-        if requested != authorization.manifest.references:
-            self._terminate_invocation_after_failure(
-                capability,
-                ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
-            )
-            raise ReferenceAuthorizationError(
-                ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
-            )
-        try:
-            with self._locked_sources(evidence=True):
+        with self._locked_sources(evidence=True):
+            authorization = capability.consume(self._reference_authorization_owner)
+            try:
+                references, contents = authorization.delivery_snapshot(
+                    self._reference_authorization_owner
+                )
+            except ReferenceAuthorizationError as exc:
+                self._append_invocation_failure_under_lock(capability, exc.code)
+                raise
+            if references != capability.authorized_references:
+                self._append_invocation_failure_under_lock(
+                    capability,
+                    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
+                )
+                raise ReferenceAuthorizationError(
+                    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
+                )
+            if requested != authorization.manifest.references:
+                self._append_invocation_failure_under_lock(
+                    capability,
+                    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
+                )
+                raise ReferenceAuthorizationError(
+                    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
+                )
+            try:
                 self._revalidate_reference_authorization(authorization)
                 self._reference_evidence.append_invocation_event(
                     capability.correlation,
@@ -391,14 +493,14 @@ class WritingArtifactRepository:
                     ReferenceInvocationState.DELIVERED,
                     references,
                 )
-        except ReferenceAuthorizationError as exc:
-            self._terminate_invocation_after_failure(capability, exc.code)
-            raise
-        return ArtifactReferenceDelivery(
-            capability.correlation,
-            references,
-            contents,
-        )
+            except ReferenceAuthorizationError as exc:
+                self._append_invocation_failure_under_lock(capability, exc.code)
+                raise
+            return ArtifactReferenceDelivery(
+                capability.correlation,
+                references,
+                contents,
+            )
 
     def record_reference_result_received(
         self,
@@ -444,8 +546,11 @@ class WritingArtifactRepository:
             raise TypeError("outcome must be a ReferenceAuthorizationErrorCode")
         if type(capability) is not ReadCapability:
             raise TypeError("capability must be a ReadCapability")
-        authorization = capability.retire(self._reference_authorization_owner)
         with self._locked_sources(evidence=True):
+            authorization = self._authorization_from_capability(
+                capability,
+                require_consumed=False,
+            )
             self._reference_evidence.append_invocation_event(
                 capability.correlation,
                 capability.capability_id,
@@ -453,6 +558,7 @@ class WritingArtifactRepository:
                 authorization.authorized_references,
                 outcome=outcome,
             )
+            capability.retire(self._reference_authorization_owner)
 
     def revalidate_reference_operation(
         self,
@@ -539,6 +645,99 @@ class WritingArtifactRepository:
         with self._locked_sources(evidence=True):
             return self._reference_evidence.inspect(operation_id)
 
+    def reconcile_reference_operation(
+        self,
+        session_id: str,
+        operation_id: str,
+    ) -> bool:
+        """Forward-recover one exact session operation without transient bytes."""
+
+        self._require_reference_operation_session(operation_id, session_id)
+        with self._locked_sources(evidence=True):
+            self._reference_evidence.reconcile_incomplete(
+                operation_id,
+                outcome=ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
+            )
+            history = self._reference_evidence.inspect(operation_id)
+            return bool(
+                history is not None
+                and history.operation_events[-1].operation_state
+                in {
+                    ReferenceOperationState.ACCEPTED,
+                    ReferenceOperationState.TERMINATED,
+                }
+            )
+
+    def reconcile_incomplete_reference_operations(
+        self,
+        session_id: str,
+        *,
+        excluded_ids_supplier: Callable[[], frozenset[str]],
+    ) -> tuple[str, ...]:
+        """Forward-recover orphans against one lease-atomic live snapshot."""
+
+        if not callable(excluded_ids_supplier):
+            raise TypeError("excluded_ids_supplier must be callable")
+        reconciled: list[str] = []
+        with self._locked_sources(evidence=True):
+            histories = self._reference_evidence.inventory()
+            excluded_operation_ids = excluded_ids_supplier()
+            if type(excluded_operation_ids) is not frozenset or any(
+                type(item) is not str for item in excluded_operation_ids
+            ):
+                raise TypeError(
+                    "excluded operation IDs must be a frozenset of strings"
+                )
+            for operation_id in excluded_operation_ids:
+                self._require_reference_operation_session(operation_id, session_id)
+            for history in histories:
+                operation_id = history.manifest.operation_id
+                self._require_reference_operation_session(operation_id, session_id)
+                if (
+                    operation_id in excluded_operation_ids
+                    or history.operation_events[-1].operation_state
+                    in {
+                        ReferenceOperationState.ACCEPTED,
+                        ReferenceOperationState.TERMINATED,
+                    }
+                ):
+                    continue
+                self._reference_evidence.reconcile_incomplete(
+                    operation_id,
+                    outcome=ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
+                )
+                reconciled.append(operation_id)
+        return tuple(reconciled)
+
+    @staticmethod
+    def _require_reference_operation_session(
+        operation_id: str,
+        session_id: str,
+    ) -> None:
+        """Fail closed unless an operation embeds the exact supplied session."""
+
+        try:
+            if type(operation_id) is not str or type(session_id) is not str:
+                raise TypeError
+            validate_session = _SAFE_IDENTITY.fullmatch(session_id)
+            validate_operation = _SAFE_IDENTITY.fullmatch(operation_id)
+            prefix = f"rr_{len(session_id):02x}_{session_id}_"
+            suffix = operation_id.removeprefix(prefix)
+            valid = (
+                validate_session is not None
+                and len(session_id) <= 64
+                and validate_operation is not None
+                and operation_id.startswith(prefix)
+                and len(suffix) == 32
+                and all(character in "0123456789abcdef" for character in suffix)
+            )
+        except (TypeError, ValueError):
+            valid = False
+        if not valid:
+            raise ReferenceAuthorizationError(
+                ReferenceAuthorizationErrorCode.EVIDENCE_CORRUPT
+            )
+
     def _authorization_from_capability(
         self,
         capability: ReadCapability,
@@ -558,13 +757,22 @@ class WritingArtifactRepository:
         outcome: ReferenceAuthorizationErrorCode,
     ) -> None:
         with self._locked_sources(evidence=True):
-            self._reference_evidence.append_invocation_event(
-                capability.correlation,
-                capability.capability_id,
-                ReferenceInvocationState.TERMINATED,
-                capability.authorized_references,
-                outcome=outcome,
-            )
+            self._append_invocation_failure_under_lock(capability, outcome)
+
+    def _append_invocation_failure_under_lock(
+        self,
+        capability: ReadCapability,
+        outcome: ReferenceAuthorizationErrorCode,
+    ) -> None:
+        """Append failure termination while the caller holds source authority."""
+
+        self._reference_evidence.append_invocation_event(
+            capability.correlation,
+            capability.capability_id,
+            ReferenceInvocationState.TERMINATED,
+            capability.authorized_references,
+            outcome=outcome,
+        )
 
     def _revalidate_reference_authorization(
         self,
@@ -669,6 +877,10 @@ class WritingArtifactRepository:
 
     def _locked_sources(self, *, evidence: bool = False):
         return _RepositorySourceLock(self, evidence=evidence)
+
+    def _open_operation_access(self) -> AbstractContextManager[None]:
+        access = self._operation_access
+        return nullcontext() if access is None else access()
 
     def _ensure_source_directories(self, *, evidence: bool) -> None:
         self._applications.ensure_directories()
@@ -834,7 +1046,7 @@ class _RepositoryReferenceReadInvocation:
                 outcome,
             )
         except BaseException:
-            pass
+            return
         self._state = "terminated"
 
 
@@ -844,30 +1056,50 @@ class _RepositoryLock:
     def __init__(self, repository: WritingArtifactRepository) -> None:
         self._repository = repository
         self._file_lock = None
+        self._operation_context = None
+        self._operation_entered = False
+        self._repository_lock_acquired = False
 
     def __enter__(self) -> None:
-        self._repository._lock.acquire()
         try:
+            self._operation_context = self._repository._open_operation_access()
+            self._operation_context.__enter__()
+            self._operation_entered = True
+            self._repository._lock.acquire()
+            self._repository_lock_acquired = True
             self._repository._ensure_state_directories()
             self._file_lock = self._repository._storage.exclusive_lock(
                 ARTIFACT_LOCK_PATH
             )
             self._file_lock.__enter__()
             self._repository._applications.recover()
-        except BaseException:
-            try:
-                if self._file_lock is not None:
-                    self._file_lock.__exit__(None, None, None)
-            finally:
-                self._repository._lock.release()
+        except BaseException as failure:
+            self._cleanup_failed_enter(failure)
             raise
+
+    def _cleanup_failed_enter(self, failure: BaseException) -> None:
+        cleanups = []
+        if self._file_lock is not None:
+            cleanups.append(lambda: self._file_lock.__exit__(None, None, None))
+        if self._repository_lock_acquired:
+            cleanups.append(self._repository._lock.release)
+        if self._operation_entered:
+            assert self._operation_context is not None
+            cleanups.append(
+                lambda: self._operation_context.__exit__(None, None, None)
+            )
+        _run_repository_entry_cleanups(cleanups, failure)
 
     def __exit__(self, exc_type, exc, traceback) -> None:
         try:
             if self._file_lock is not None:
                 self._file_lock.__exit__(exc_type, exc, traceback)
         finally:
-            self._repository._lock.release()
+            try:
+                self._repository._lock.release()
+            finally:
+                assert self._operation_context is not None
+                self._operation_context.__exit__(exc_type, exc, traceback)
 
 
 class _RepositorySourceLock:
@@ -882,27 +1114,84 @@ class _RepositorySourceLock:
         self._repository = repository
         self._evidence = evidence
         self._file_lock = None
+        self._operation_context = None
+        self._operation_entered = False
+        self._repository_lock_acquired = False
 
     def __enter__(self) -> None:
-        self._repository._lock.acquire()
         try:
+            self._operation_context = self._repository._open_operation_access()
+            self._operation_context.__enter__()
+            self._operation_entered = True
+            self._repository._lock.acquire()
+            self._repository_lock_acquired = True
             self._repository._ensure_source_directories(evidence=self._evidence)
             self._file_lock = self._repository._storage.exclusive_lock(
                 ARTIFACT_LOCK_PATH
             )
             self._file_lock.__enter__()
             self._repository._applications.recover()
-        except BaseException:
-            try:
-                if self._file_lock is not None:
-                    self._file_lock.__exit__(None, None, None)
-            finally:
-                self._repository._lock.release()
+        except BaseException as failure:
+            self._cleanup_failed_enter(failure)
             raise
+
+    def _cleanup_failed_enter(self, failure: BaseException) -> None:
+        cleanups = []
+        if self._file_lock is not None:
+            cleanups.append(lambda: self._file_lock.__exit__(None, None, None))
+        if self._repository_lock_acquired:
+            cleanups.append(self._repository._lock.release)
+        if self._operation_entered:
+            assert self._operation_context is not None
+            cleanups.append(
+                lambda: self._operation_context.__exit__(None, None, None)
+            )
+        _run_repository_entry_cleanups(cleanups, failure)
 
     def __exit__(self, exc_type, exc, traceback) -> None:
         try:
             if self._file_lock is not None:
                 self._file_lock.__exit__(exc_type, exc, traceback)
         finally:
-            self._repository._lock.release()
+            try:
+                self._repository._lock.release()
+            finally:
+                assert self._operation_context is not None
+                self._operation_context.__exit__(exc_type, exc, traceback)
+
+
+def _run_repository_entry_cleanups(
+    cleanups: list[Callable[[], object]],
+    failure: BaseException,
+) -> None:
+    """Run every acquired-entry cleanup without replacing its primary failure."""
+
+    for cleanup in cleanups:
+        try:
+            cleanup()
+        except BaseException as cleanup_failure:
+            try:
+                failure.add_note(
+                    "artifact repository entry cleanup failed: "
+                    f"{type(cleanup_failure).__name__}"
+                )
+            except BaseException:
+                pass
+
+
+def create_guarded_writing_artifact_repository(
+    workspace_root: str | Path,
+    *,
+    expected_root_identity: tuple[int, int],
+    operation_access: Callable[[], AbstractContextManager[None]],
+) -> WritingArtifactRepository:
+    """Create one package-internal repository with a per-transaction caller gate."""
+
+    if not callable(operation_access):
+        raise TypeError("operation_access must be callable")
+    repository = WritingArtifactRepository(
+        workspace_root,
+        expected_root_identity=expected_root_identity,
+    )
+    repository._operation_access = operation_access
+    return repository

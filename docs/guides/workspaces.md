@@ -249,23 +249,22 @@ worktree: <workspace-parent>/<workspace-name>.story-worktrees/novel
 `story init` records only this grammar. The package-internal #504 lifecycle can
 create the correlated triple; #455 owns its connection to the installed
 session commands. #505 coordinates later history work. #509 now supplies exact
-story commits and closed-path checkpoints internally; #491 and #492 still own
-application production and the lead confirmation UI. The original
+story commits and closed-path checkpoints internally; runtime supplies
+application production and the separate Lead confirmation UI. The original
 `main` root remains the exact initialization baseline throughout.
 
 ## Session Git resources
 
-This is internal runtime infrastructure, not a command available to a user in
-this revision. It gives a later session composition one isolated place for
-mutable files without changing the initialization root.
+This is internal runtime infrastructure, not a standalone Git command. The
+installed session lifecycle uses it to give each session one isolated place
+for mutable files without changing the initialization root.
 
-Users will be able to create or resume one exact triple through #455. They can
-already rely on the implemented substrate to preserve exact resources across
-process exit and to reject ambiguous state. They cannot make current
-`story session create` provision the triple, use Reopen to create or repair
-resources, delete a durable session, migrate an older layout, contact a remote,
-or request reset, clean, prune, garbage collection, rebase, merge, or history
-rewrite through this seam.
+Users can create or resume one exact triple through the installed session
+commands. Create provisions or verifies the triple; Reopen requires it already
+ready and never creates or repairs missing resources. The substrate preserves
+exact resources across process exit and rejects ambiguous state. It cannot
+delete a durable session, migrate an older layout, contact a remote, or perform
+reset, clean, prune, garbage collection, rebase, merge, or history rewrite.
 
 The five Git-resource states are separate from the provider-session `ready`
 and `paused` states shown by current commands:
@@ -360,12 +359,13 @@ and the [internal Git-resource contract](../reference/git-adapter.md#package-int
 
 This section explains infrastructure now used by internal exact story commits
 and session runtime checkpoints. There is no `story commit` or checkpoint
-command in this revision, and the lead cannot trigger either operation yet.
+command in this revision. The separately confirmed Lead workflow can trigger a
+story commit through runtime; no ordinary Lead action triggers a checkpoint.
 
-Before #508, an interrupted future Git operation would have had no dedicated,
+Before #508, an interrupted Git operation would have had no dedicated,
 restart-safe record showing which candidate and repository tip it concerned.
 The runtime now has an internal, content-free evidence store and closed Git
-process profiles. The user-facing actions remain later work:
+process profiles. The user-facing story-commit actions are now integrated:
 
 ```text
 Available internally now (#508)
@@ -378,7 +378,7 @@ Internal exact story commit now (#509)
   typed successful application evidence + exact structured decision
   -> prepare candidate -> authorize Commit -> stage -> commit -> classify
 
-Future lead integration (#491 + #492)
+Installed Lead integration
   lead: proposes exact paths, impact, and commit message
   user: chooses Commit, Reject, or Revise
   runtime: supplies the typed evidence/decision to #509
@@ -392,16 +392,17 @@ Later application output must be based on the durable classification rather
 than a blind retry. For example, interruption after a Git process starts can
 produce `outcome_unknown`; restart must inspect the exact repository facts
 instead of reusing the user's confirmation or checkpoint request. No current UI
-displays these internal classifications.
+displays raw internal records; the Lead workflow projects only their bounded
+user-facing state and next action.
 
 ### What the recorded states mean
 
-| State | External meaning in the future workflow | Safe next action |
+| State | External meaning in the Lead workflow | Safe next action |
 | --- | --- | --- |
-| `prepared` | An immutable candidate describes exact affected paths and before/after digests. It is evidence, not confirmation and not a Git mutation. | Present/revalidate it through the future confirmation workflow; prepare a new candidate if its facts are stale. |
+| `prepared` | An immutable candidate describes exact affected paths and before/after digests. It is evidence, not confirmation and not a Git mutation. | Present/revalidate it through the confirmation workflow; prepare a new candidate if its facts are stale. |
 | `running` | An operation owner durably recorded that work started against one expected tip. Success is not proved. | If interrupted, inspect the operation and repository before any retry. Never infer that confirmation or a checkpoint request remains reusable. |
-| `staged` | A future story-commit operation recorded that staging completed, but no commit is proved. Checkpoints do not use this state. | Preserve the worktree/index and inspect; do not restage or commit blindly. |
-| `committed` | The terminal record includes the resulting story commit or checkpoint object ID. | Reverify the referenced object/tip and report success through the future owning workflow. |
+| `staged` | A story-commit operation recorded that staging completed, but no commit is proved. Checkpoints do not use this state. | Preserve the worktree/index and inspect; do not restage or commit blindly. |
+| `committed` | The terminal record includes the resulting story commit or checkpoint object ID. | Reverify the referenced object/tip and report success through the owning workflow. |
 | `rejected` | A story-commit proposal was declined before execution. It is terminal and authorizes nothing. Checkpoints do not use this state. | Leave it as evidence; prepare a new candidate for a materially different proposal. |
 | `outcome_unknown` | Git may have mutated, but the result could not be proved. | Stop replay, preserve all evidence, and inspect. A later owner may classify the same operation as `committed` or `recovery_required`. |
 | `recovery_required` | The facts are unsafe, inconsistent, or cannot be reconciled automatically. This is terminal. | Stop writers, preserve the repository and history subtree, and use explicit operator recovery or a trusted backup. |
@@ -414,8 +415,17 @@ trees, a bounded proposed commit message and impact labels, and whether author
 and committer identity came from environment, repository, global, or system
 configuration. They contain no core-document/manuscript bytes, provider
 prompt/reply, raw Git output, credential, descriptor, writable capability, or
-serialized confirmation authority. A later real Git commit will still retain
+serialized confirmation authority. A real Git commit still retains
 its effective author/committer identity and message in ordinary Git history.
+
+Story Commit decision operation IDs are derived from the action and immutable
+candidate: SHA-256 of the ASCII bytes `<commit|reject|revise>\0<candidate_id>`,
+truncated to 32 lowercase hexadecimal characters. A `rejected` record can
+therefore identify either Reject or Revise; every other operation state must
+identify Commit. Inspection and recovery recompute that relationship instead
+of trusting an arbitrary 32-hex name. Pre-#661 random Commit IDs and Reject IDs
+salted by a confirmation ID are incompatible evidence and fail closed as
+`recovery_required`; they are not migrated.
 
 The common-Git layout is local and per-session:
 
@@ -442,27 +452,27 @@ and [privacy implications](../operations/privacy-and-provider.md#session-history
 ## Exact confirmed story commits
 
 The capability in this section is package-internal. It proves the runtime can
-perform the safe Git part of a confirmed story commit, but there is no installed
-command and no current lead conversation calls it. #491 must first supply typed
-evidence that an exact artifact change set was successfully applied, and #492
-must turn an interactive user choice into the structured decision shown below.
+perform the safe Git part of a confirmed story commit. There is no standalone
+installed Git command: the Lead workflow supplies typed evidence that an exact
+artifact change set was successfully applied, then turns a separate interactive
+user choice into the structured decision shown below.
 
 ### User impact and complete flow
 
-With that integration, users can review every affected canonical path,
+Users can review every affected canonical path,
 before/after digest, proposed message, impact boundary, branch tip/tree, opaque
 correlations, and author/committer identity source before choosing Commit,
 Reject, or Revise. Applying files never stages or commits them. A stale,
 revised, mismatched, or already-used decision never persists as replayable Git
 authority: the same service rejects a reused confirmation ID, and a process
-restart loses every authority. #492 must obtain a fresh user decision after
+restart loses every authority. Runtime must obtain a fresh user decision after
 restart rather than resubmitting an old decision value.
 
 ```text
-successful artifact application evidence (#491)
+successful artifact application evidence
   -> Prepare: verify exact files/session/index and persist immutable candidate
-  -> lead shows content-free candidate projection (#492)
-  -> user chooses Commit | Reject | Revise (#492)
+  -> lead shows content-free candidate projection
+  -> user chooses Commit | Reject | Revise
   -> Commit only: one-use authority -> durable running -> exact staging
                   -> durable staged -> commit-tree -> branch CAS
                   -> durable committed result
@@ -567,7 +577,12 @@ state, and unrelated noncanonical working bytes remain invariant.
 - **Interrupted after staging:** restart can prove the branch stayed at the old
   tip and the worktree/index exactly matches the expected tree. It reports
   `staged` with `operator_recovery`; it never resets, commits, cleans, or replays
-  the consumed confirmation automatically.
+  the consumed confirmation automatically. Session recovery attributes this
+  state to Story Commit only when the reviewed change set, relationship
+  digests, application provenance/results, and normalized candidate path
+  effects—including before/after digests, final artifacts, rename lineage, and
+  deletion provenance—also agree exactly. The expected-tree proof still comes
+  from the exact staged snapshot topology.
 - **Commit exists after a lost result:** if the session branch already points
   to the exact one-parent candidate commit, recovery records `committed` and
   returns that object ID without creating another commit.

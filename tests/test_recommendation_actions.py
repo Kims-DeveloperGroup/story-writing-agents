@@ -231,14 +231,14 @@ class RecommendationActionContractTests(RecommendationCase):
                 conversation_id=conversation_id, events=history))
             wire = serialize_conversation_archive(archive)
             self.assertEqual(serialize_conversation_archive(deserialize_conversation_archive(wire)), wire)
-        coordinator = WorkspaceConversationStorageMutationCoordinator(self.workspace)
+        coordinator = WorkspaceConversationStorageMutationCoordinator(self.control_workspace)
         with coordinator.borrow(timeout_seconds=2.0) as lease:
-            provisioned = provision_sqlite_conversation_storage(self.workspace, lease=lease)
+            provisioned = provision_sqlite_conversation_storage(self.control_workspace, lease=lease)
         self.assertIs(provisioned.capability, ConversationStorageCapability.READY)
-        transfer = transfer_conversation_storage(self.workspace, source_backend=ConversationStorageBackend.FILESYSTEM,
+        transfer = transfer_conversation_storage(self.control_workspace, source_backend=ConversationStorageBackend.FILESYSTEM,
             destination_backend=ConversationStorageBackend.SQLITE)
         self.assertIs(transfer.outcome, ConversationStorageTransferOutcome.COMPLETED)
-        restored = compose_sqlite_conversation_storage(self.workspace).event_store.read(self.session_id, conversation_id)
+        restored = compose_sqlite_conversation_storage(self.control_workspace).event_store.read(self.session_id, conversation_id)
         self.assertEqual(restored, complete)
         self.assertEqual(c.project_collaboration_history(restored), c.project_collaboration_history(complete))
         self.assertNotIn("capability", repr(c.project_collaboration_history(restored)))

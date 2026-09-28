@@ -177,12 +177,13 @@ The initial session set is empty. `story init` still creates none of these
 resources. The package-internal #504 provision operation can materialize one
 exact correlated triple while keeping the pristine `main` root invariant;
 #455 owns command wiring. #508 provides internal content-free history evidence;
-#509 owns later story commits, #510 owns checkpoints, and #492 owns their
+#509 owns story commits, #510 owns checkpoints, and runtime owns the separate
 confirmation UI. Session provisioning/history state is separate from both the
 root initialization journal and writing-artifact transaction journals.
 
-Artifact state appears only when its direct repository owner is accessed; no
-current public shell command publishes output. `recovery_blocked.json` appears
+Artifact state appears only when its direct repository owner is accessed; the
+installed Lead path reaches it only after separate review and Apply controls.
+`recovery_blocked.json` appears
 only after artifact recovery cannot be trusted. Staging residue is
 non-authoritative, never catalog-listed, retained after successful and failed
 publication, and may grow. Only exact JSON entries under artifact
@@ -754,27 +755,90 @@ backup when the record is damaged.
 ```
 
 `durable_state` is `ready` or `paused`; `absent` has no manifest. Timestamps
-include UTC offsets and are ordered. Thread keys are `<backend>:<agent_id>`.
-Each thread value has exactly `backend`, `agent_id`, `fingerprint`, `thread_id`,
-`tainted`, and `updated_at`; its key must match its backend and agent. Thread
-IDs use the documented safe pattern and `tainted` is boolean. Opening ready
-state and releasing access do not rewrite the manifest.
+include UTC offsets and are ordered. A thread key is either the base
+`<backend>:<agent_id>` form or the fingerprint-qualified
+`<backend>:<agent_id>:<fingerprint>` form. Each thread value has exactly
+`backend`, `agent_id`, `fingerprint`, `thread_id`, `tainted`, and `updated_at`;
+its key must match its backend, agent, and, when qualified, its safe
+fingerprint. Thread IDs use the documented safe pattern and `tainted` is
+boolean. Opening ready state and releasing access do not rewrite the manifest.
+
+The base key is used when the effective continuation fingerprint is the bound
+definition fingerprint. A different effective fingerprint, including a Codex
+or Antigravity session-generation fingerprint, uses the qualified key. Lookup
+and taint for that generation address only the exact qualified record; they
+never fall back to or mutate the legacy base record. A successful store writes
+the qualified record while retaining the legacy base record.
+Other qualified generations are retained as well: ordinary load, store, and
+taint operations do not prune provider-thread history.
 
 Codex and Antigravity threads may coexist in one manifest and remain distinct
-because the backend is part of the key. A compatible thread requires the same
-backend, agent, and definition fingerprint and must not be tainted. A mismatch
-or taint starts a fresh provider conversation after the next successful call;
-it does not delete the older provider-native data.
+because the backend is part of the key; multiple qualified fingerprints for one
+backend and agent may coexist as well. A compatible thread requires the same
+backend, agent, and effective continuation fingerprint and must not be tainted.
+A mismatch or taint starts a fresh provider conversation after the next
+successful call; it does not delete the older provider-native data.
+
+This qualified-key extension retains schema version 2 but is forward-only once
+a qualified record has been written. Older binaries that accept only base keys
+reject such a manifest; do not downgrade in place or delete individual thread
+records to make it open. Stop all writers and restore a verified pre-upgrade
+workspace backup, or run a version that understands qualified records.
 
 ## Antigravity-native state
 
-Antigravity owns a stable root below `provider_sessions/.antigravity/` and
-partitions bound definitions by agent and definition fingerprint. Invocation
-state is separately partitioned by session, agent, and definition fingerprint.
-Each invocation uses sibling isolated provider and working directories and
-copies only the verified bound rules into the working directory. The runtime
-deliberately retains this plaintext state across switch, pause, quit, EOF, and
-`AgentBackend.close()` so a compatible provider conversation can resume later.
+Antigravity owns a stable root below the canonical control workspace's
+`provider_sessions/.antigravity/`, including when `AgentBackend` was constructed
+from a session worktree. It partitions bound definitions by agent and
+definition fingerprint. Invocation state is separately partitioned by session,
+physical session-generation digest, agent, and definition fingerprint at
+`sessions/<session>/<generation>/<agent>/<definition>/provider`. It remains
+outside the selected session worktree, while provider CWD remains that exact
+worktree. Any overlap is rejected before per-invocation state directories or
+provider work. The runtime deliberately retains this plaintext state across
+switch, pause, quit, EOF, and `AgentBackend.close()` so a compatible, proved-
+generation provider conversation can resume later. Foreign or unproved
+generation state is retained but starts fresh rather than being adopted.
+
+The selected session worktree contains persistent runtime-control projections
+at `.agents/agents/<native-selector>/agent.md`. A domain-separated SHA-256
+selector is derived from the semantic agent ID and deterministic base role
+bytes, then used as the role YAML name, directory, and `--agent` value.
+Projection owns and revalidates an immutable plan tying the semantic ID, native
+selector, and exact final bytes. Before setup, the adapter recomputes that plan,
+the staged role, and component-byte accounting from the immutable definition
+snapshot and requires the staged file and binding accounting to match. The
+semantic ID still owns runtime state, settings, and accounting. Each projected
+file exactly matches the staged role, is singly linked with exact mode `0400`,
+and has owner-controlled directories. Content-qualified versions are published
+create-only, coexist, and are never replaced or pruned. An exact safe concurrent
+winner may be adopted only after full validation; a differing or unsafe winner
+is preserved and rejected. A pre-existing empty qualified directory is
+preserved and rejected before Git-exclusion or role-tree mutation. Selected-
+role content validation is bounded by the exact planned size; unselected
+qualified leaves are metadata-validated without content reads. The top-level
+`.agents` namespace and its case-folded aliases must remain untracked; any
+tracked variant fails closed before projection mutation or provider submission,
+including on case-sensitive worktrees for portability.
+
+The common Git exclusion contains `/.agents/`; its parser recognizes LF and
+CRLF records, not lone CR separators, and fails closed without rewriting when
+a missing entry follows a terminal lone CR. Intended final bytes may not exceed
+64 KiB. If `exclude` is absent, it is published create-only. If a present safe
+file is readable by its effective owner, runtime opens it no-follow. After
+exact identity, size, and named-path checks, the retained inode may be
+normalized to `0600` before the suffix append; runtime then syncs it and
+requires exact final named-path content and identity readback. A normal append
+preserves the inode; a concurrent pathname winner is preserved and never
+overwritten.
+
+Story references, SEARCH/READ sources, and artifact paths also exclude this
+tree. It is therefore unversioned protected control data, not mutable provider-
+native residue or story content. If required effective-user, descriptor-
+relative, no-follow, nonblocking, or create-only link support is missing,
+projection fails before access. Differing/unsafe bytes or foreign topology fail
+closed and are preserved. Failed fresh setup removes only still-empty,
+identity-matching directories created by that call.
 
 Each successful invocation supplies one JSON result with a safe
 `conversation_id`; resume requires it to equal the retained reference. The
@@ -783,10 +847,10 @@ manifest stores only that validated reference. It does not store native
 as a process-visible `--print` argument with empty stdin; see
 [provider privacy](../../operations/privacy-and-provider.md#provider-processes-and-credentials).
 
-Antigravity owns the native conversation contents beneath its isolated state.
+Antigravity owns the native conversation contents beneath its external state.
 Neither close nor taint is deletion, secure erase, or a retention policy. Back
 up and protect this root with the rest of the workspace, and do not edit its
-provider-managed contents.
+provider-managed contents or the protected session role projection.
 
 ## Access claim and guard
 

@@ -127,6 +127,13 @@ interruption. Preserve the linked worktree, common Git administration,
 markers, index, refs, and working bytes, stop automated writers, and inspect
 offline. Do not retry merely because partial metadata may have been read.
 
+The same precedence applies to the physical-generation pin retained across a
+Lead or synthesis provider await and its durable persistence: if that work
+fails while the final generation recheck also detects replacement or drift,
+the generation loss is authoritative and enters the recovery-required/
+operator-recovery contract. The simultaneous provider or persistence failure
+does not authorize retry against an unproved generation.
+
 These reads never continue, abort, reset, clean, checkout, stage, commit, or
 repair Git. They also do not establish which story session owns the worktree.
 The recovery reconciler and transition assessor correlate those observations
@@ -174,9 +181,178 @@ Concrete cases:
   change is recovery-required. Unstaged story work and untracked entries are
   allowed; the workspace layer still checks all 25 Git-materialized scaffold
   leaves, their ancestors, local configuration, and referenced personae.
+- Ordinary READY remains strict. A separate recovery-only Story Commit reader
+  may defer only index cleanliness, and only long enough to prove one exact
+  correlated staged operation under the narrower contract below. It does not
+  make arbitrary non-READY dirty or staged state ready.
 - Concurrent Create calls for the same or different session IDs serialize
   across the repository. Exact same-session calls converge; case-distinct IDs
   follow filesystem identity truth and a real alias fails closed.
+
+Artifact-sensitive runtime and picker operations add no recovery shortcut.
+Each call freshly requires the exact READY identity and then uses only that
+session worktree for artifact source reads, references, proposals,
+application-ledger access, Apply, and recovery. The binding pins the physical
+`(st_dev, st_ino)` identity and the exact semantic branch/ref/worktree READY
+inspection. Each outer repository or session-state transaction holds the
+cooperating-runtime Git lease only for its short synchronous body, performing
+one complete READY and named-root check before and after it. Nested binding and
+repository actions reuse the transaction with liveness/root checks rather than
+repeating the complete READY scan. No such guard spans a provider await or
+concurrent specialist execution; a later transaction reacquires it. The binding
+keeps one stable exact repository private and exposes it only through live
+same-thread access, so a retained raw repository or cross-thread use fails.
+Access, Git leases, and Commit authority use opaque process-aware thread-
+state tokens rather than numeric identifiers, so identifier reuse grants no
+authority. Same-thread nested access is reentrant; long-lived reference/source
+adapters reacquire an outer guard for each operation. Borrowed Commit access
+retains complete history-owned validation before and after its body. Nested
+liveness and outer/borrowed postchecks run on success, `RuntimeError`, and
+cancellation. When both the body and exit fail, binding loss takes precedence;
+a clean postcheck preserves the original exception, and cleanup remains
+guaranteed.
+
+That binding's creator-process/thread check runs at every repository, source,
+READY, Story Commit service-composition, and borrowed access factory before a
+binding lock, Git lease, READY callback, descriptor open, or I/O. Factory-local
+descriptors and
+leases remain owned there until access activation transfers them; any
+`BaseException` before transfer closes and unwinds them while preserving the
+primary failure. Descriptor-batch cleanup attempts every close despite a prior
+`BaseException`, exhausts lock/lease release and required postchecks, and
+preserves the active primary exception. A fork-child revoke
+avoids the copied binding lock and closes only the child's worktree descriptor.
+Its inherited Git lease closes the child
+common-Git descriptor without `LOCK_UN`, so the parent's exclusion remains in
+force. A copied Story Commit authority likewise rejects on PID/thread affinity
+before its one-use lock and leaves the parent's authority unconsumed.
+
+Direct Lead and Lead-synthesis owners acquire a separate opaque six-descriptor
+physical-generation pin before session-derived sources, definitions, or
+provider work and retain it through durable persistence. Its short-lock
+acquisition/recheck grants no semantic READY or artifact authority and retains
+no Git lease across the provider await.
+
+The later Commit-request owner uses the identity-only six-descriptor pin that
+runtime acquires immediately before the Apply guard. After successful Apply,
+that same pin continuously retains the physical generation through result and
+request preparation, transfers to the pending owner before publication, and
+remains through terminal decision/result publication. Request preparation or
+publication failure closes the local owner; a mismatched decision or failed decision append preserves an
+already published owner. Once the decision is durable, cleanup closes exactly
+the owner observed at entry, including a stale mismatched owner, without
+closing a concurrently installed replacement. Terminal success, failure, or
+cancellation and exact-owner replacement also close once; abandoned runtime
+owners have an idempotent best-effort final release. This pin prevents physical
+identity recycling only and does not exclude an external Git writer. Recovery
+fallback retains and revalidates the opaque pin until the ownership result is
+known, then closes it unless ownership transferred. A definitive conversation
+archive, including an already-archived command, retires the exact pending
+Commit owners; successful focused-archive compensation verifies unarchive and
+does not retire them.
+
+The corresponding runtime-bound `StoryCommitService` is creator-process/thread
+affine for Prepare, Authorize, Reject, Revise, Execute, Inspect, Recover, and
+internal repository-access binding. Foreign-thread or fork-child use fails
+before process-local service state, locks, filesystem access, or Git I/O.
+Direct-module unbound compatibility is unchanged.
+
+Conversation history remains in its separately
+configured control-plane store. Absent
+resources are not provisioned; moved, mismatched, staged, or otherwise
+non-ready resources do not fall back to
+`main`, the current directory, a sibling session, or an older binding. The
+binding failure is content-free and occurs before provider or artifact I/O.
+
+Session-state source paths must be canonical relative POSIX text, and each leaf
+must remain one singly linked regular file throughout the read. Symlinks,
+FIFOs, devices, hard links, replacement or metadata drift, and embedded
+session/debate/agent ownership that disagrees with the requested path all fail
+closed without exposing the replacement as evidence. Compound agent-state and
+debate reads retain the complete root-to-leaf-parent descriptor chain and
+compare the exact whole inventory—names plus device, inode, type, link count,
+size, nanosecond modification time, and nanosecond change time—before returning.
+Every parent-child edge is reopened and revalidated after the final leaf,
+inventory, or absence observation. Agent-state JSONL accepts at most 8 MiB and
+10,000 records across all selected files; debate JSONL accepts 10,000 records.
+Both reject record 10,001 before line slicing, parsing, or retention. An absent
+agent-state parent or leaf is accepted only after the retained existing
+ancestor prefix remains exact; late creation fails closed.
+
+The common-Git lease coordinates this runtime's cooperating operations only.
+Persistent external Git drift is rejected by the before/after or next-action
+READY check. A noncooperating process that changes and restores Git state
+between checkpoints is outside the supported guarantee; stop all workspace
+processes before external inspection, repair, or recovery.
+
+If exact binding or physical-root validation fails after an Apply decision is
+durably recorded but before the repository's `apply_artifact_changes()` method
+starts, runtime consumes that decision once and appends an
+`artifact_application_result` with `recovery_required` and
+`operator_recovery`, does not start artifact application, and emits no Commit
+request for that result. Once that method starts, an unclassified root,
+security, or format failure remains `outcome_unknown` with
+`inspect_and_resolve_outcome`, including when the method returned before its
+outer binding postcheck rejected completion. Runtime publishes no optimistic
+application result or Commit request in that state. A repository-classified
+terminal recovery condition remains `recovery_required`. After deriving the
+complete current artifact state and relationship result, Apply explicitly
+repeats complete READY validation immediately before marking repository
+execution started and calling the mutation method; its outer transaction still
+postvalidates before a result escapes. Preserve the session resources and
+authoritative history and inspect any uncertain application before another
+write. Commit remains a separate decision. Its runtime-composed service carries
+the Apply worktree's physical identity through request preparation,
+authorization, and execution while independently revalidating semantic READY.
+Runtime also reopens the Apply binding around the `story_commit_request` append
+and in-memory service registration. Detected binding loss suppresses the
+returned request and removes the in-memory service, but cannot roll back an
+already-durable append. Commit execution/inspection/recovery keeps the session-
+history lease around its semantic READY checkpoints and durable transitions.
+Before intentional staging it requires ordinary READY; afterward phase-aware
+checks require the exact candidate index/worktree and the complete registered
+session/main-root topology. READY/history resource loss detected before the
+`running` record is durable maps to `recovery_required`; any ambiguity after
+that record is durable maps to `outcome_unknown`. Candidate/root replacement
+before execution still requires
+repreparation. Failure to publish the final `committed` transition durably
+preserves `outcome_unknown` when exact phase authority can be proved.
+
+Identity-bound Commit `inspect()` and `recover()` check the Apply root before
+and between durable-owner observations and immediately before any recovery
+transition. Both ordinary READY and staged-recovery admission require the
+operation and candidate to share the exact session, candidate identity,
+correlation, and expected branch tip. Replacement or cross-linked records
+become `recovery_required`; neither path advances an operation from those
+facts.
+
+If a successful Apply has no follow-on Commit request after preparation or
+publication failure, its durable result-only history projects
+`reprepare_commit_request` when exact readback proves the absence. A fresh
+structured Commit decision is still required after repreparation. An
+ambiguous publication outcome requires inspection instead of repreparation.
+This change covers only the #661 Git/session resource path. Conversation-side
+occurrence remains follow-up work in
+[Issue #668](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/668),
+and is not shipped behavior here. Direct recovery-topology validation now
+normalizes a delegated session-resource failure to the history-owned
+`recovery_required` / `operator_recovery` contract, without mutation or an
+exposed lower-layer exception chain.
+The same session binding now mints the call-local Codex and Antigravity
+execution-worktree capability described in
+[Provider execution-worktree recovery](#codex-execution-worktree-recovery).
+
+Resource loss during local closure does not replay known provider work. A
+completed artifact-review result that cannot be finalized against its bound
+session closes durably as artifact/collaboration `recovery_required`, without
+Apply authority. Recommendation or reference closure that cannot prove its
+correlated session evidence returns a typed blocking recovery result and keeps
+the original attempt closed. Guarded reference binding loss retains its
+resource classification through preparation, read action, failure,
+terminalization, and cleanup, then maps to `recovery_required` without a
+provider or fallback call. Public unguarded references retain their fixed
+`ReferenceOperationFailure` conversion. Repair the exact resources and
+authoritative history instead of retrying that provider call.
 
 The runtime never automatically removes a named branch, internal ref,
 worktree, worktree-administration entry, seed object, journal-backed recovery
@@ -193,10 +369,10 @@ supplies closed-path internal checkpoints.
 
 Issue #508 supplies package-internal evidence and classification. #509 now
 supplies internal exact story-commit execution, and #510 now supplies exact
-internal-ref checkpoint execution and conservative recovery. No current
-command, lead action, or public facade starts either one, and no current UI
-displays these states: #491 still owns application evidence and #492 owns the
-lead confirmation UI.
+internal-ref checkpoint execution and conservative recovery. The separately
+confirmed Lead workflow can start a story commit through the runtime; no
+standalone Git command or provider capability does so. Checkpoints remain
+package-internal and are not started merely by ordinary Lead work.
 
 For any internal interruption or later public-workflow interruption, first stop
 repository writers and preserve the main repository, sibling session worktree,
@@ -230,13 +406,13 @@ and [workspace composition](../reference/workspace-api.md#workspace-session-hist
 
 | State, result, or failure | Meaning | Safe response |
 | --- | --- | --- |
-| Candidate `prepared` | Exact path/digest/expected-tree evidence exists; no confirmation or Git index/object/ref mutation is implied. | Revalidate it. When #492 is available, request a fresh exact decision; if any candidate fact changed, `reprepare` from new successful application evidence. |
+| Candidate `prepared` | Exact path/digest/expected-tree evidence exists; no confirmation or Git index/object/ref mutation is implied. | Revalidate it and request a fresh exact decision through the Lead workflow; if any candidate fact changed, `reprepare` from new successful application evidence. |
 | Checkpoint `unchanged` / `none` | An empty delta or fully validated same-tree result needed no operation. No operation ID, index, object, or ref update exists to recover. | Continue from the unchanged internal tip; do not fabricate an operation or checkpoint ID. |
 | Commit `rejected` / `none` | One Reject or Revise decision was recorded before execution. It is terminal and authorizes nothing. Reject preserves the candidate; Revise invalidates it. | After Reject, keep the candidate and require a fresh confirmation for another decision. After Revise, apply/prepare a new candidate and request new confirmation. |
 | Story commit `running` / `inspect` | Commit authority was consumed and intent was durable before staging, but the resulting index/branch state is not yet proved. | Call the internal recovery classifier once writers are stopped. Do not replay confirmation or execute again. It may classify exact staging, an exact committed tip, ambiguity, or recovery-required state. |
 | Checkpoint `running` / `inspect` | Intent is durable against one expected internal tip, but CAS completion is not proved. | Stop repository writers and call the internal checkpoint recovery classifier. Do not resubmit the delta, rerun `commit-tree`, or retry CAS. |
 | Story commit `staged` / `operator_recovery` | The branch remains at the old tip and index/worktree exactly match the candidate tree, but no commit is proved. | Preserve worktree, index, objects, and records. Inspect and recover explicitly; the service never automatically commits, resets, cleans, or restages. |
-| Story commit or checkpoint `committed` / `none` | The terminal record names the exact commit and corresponding branch/internal-ref tip. Recovery can reach this state when a correlated commit was already CAS-installed but result persistence/reporting failed. | Treat the returned existing object as the result after verification. Do not create a duplicate commit. |
+| Story commit or checkpoint `committed` / `none` | The terminal record names the exact commit. Story Commit permits that commit to equal or be an ancestor of the current READY branch tip after later valid commits; checkpoint rules retain their internal-ref correlation. Recovery can reach this state when a correlated commit was already CAS-installed but result persistence/reporting failed. | Treat the returned existing object as the result after verification. Do not create a duplicate commit. |
 | Operation `outcome_unknown` / `inspect` | Git may have mutated, or the branch/index/result cannot be classified exactly. | Preserve all records, index, refs, and objects. Inspect; only an exact correlated tip may advance the same record to `committed`. Otherwise retain ambiguity or require operator recovery. |
 | Operation `recovery_required` / `operator_recovery` | State is inconsistent, unsafe, substituted, or no longer automatically reconcilable. It is terminal. | Perform explicit operator recovery or restore a complete trusted backup. Never edit the record or delete/reset evidence to force another transition. |
 | Missing/noncanonical/oversized record, unexpected entry, alias, symlink, hard link, or failed fsync | The store cannot trust the addressed history boundary. | Stop all writers, retain exact bytes and metadata, and investigate offline. Do not normalize, replace, or follow the rejected path. |
@@ -250,6 +426,55 @@ or cleanup. Process exit, session pause/close, and a later successful operation
 do not erase earlier evidence.
 
 For story commits specifically:
+
+- Commit, Reject, and Revise operation IDs are the first 32 lowercase
+  hexadecimal characters of SHA-256 over ASCII
+  `<commit|reject|revise>\0<candidate_id>`. Inspection and recovery recompute
+  this ownership: `rejected` accepts only the Reject or Revise identity, while
+  every other state requires Commit. Pre-#661 random Commit or
+  confirmation-salted Reject evidence is `recovery_required`; no migration or
+  compatibility reader rewrites it.
+- Execution, inspection, and recovery place semantic READY checks before and
+  after durable history observations/transitions while the session-history
+  lease is live. Once the candidate is intentionally staged, exact phase
+  topology replaces the ordinary clean-index READY assertion; unrelated
+  staging, worktree/ref drift, or registration/main-root drift fails closed.
+- A READY/history resource failure before a `running` operation is durable is
+  `recovery_required`. Once `running` is durable, an unproved outcome is
+  `outcome_unknown`; this includes ambiguity while publishing the final
+  `committed` record, which is durably downgraded to `outcome_unknown` when the
+  phase can still be proved.
+- Candidate and clean-index revalidation occurs before revision-history
+  inspection. External pre-staging observed before durable `running` is stale
+  candidate drift with `reprepare`, not recovery-only staged admission; the
+  staged index and working bytes remain untouched.
+- Constructing the initial `running` record in memory is not durable. Failures
+  keep their pre-durable mapping until its create-only history append returns
+  successfully; only a successfully appended `running` record crosses the
+  uncertain-outcome boundary.
+- Recovery-only staged admission holds one lease and requires an addressed,
+  exactly correlated `running`, `staged`, or `outcome_unknown` operation and
+  candidate. An unaddressed reconciliation snapshot requires exactly one
+  eligible pair. The guard revalidates the exact branch and internal ref,
+  candidate tree, staged index and matching worktree, absence of untracked
+  files and external Git activity, bound session root and registered worktree,
+  main HEAD, and main-worktree status plus allowed-path content fingerprint
+  before and after. Only the Story Commit recovery owner may perform a
+  monotonic transition after admission.
+- Session recovery attributes an exact staged snapshot to Story Commit only
+  when reviewed/application provenance, relationship and change-set coherence,
+  normalized Create/Patch/Replace/Delete/Rename effects, candidate
+  before/after digests, affected paths, final artifacts, rename lineage, and
+  deletion provenance all agree. The expected-tree proof remains the separate
+  exact staged-index/worktree topology from the recovery snapshot. A mismatch
+  fails closed instead of borrowing Story Commit ownership from path names.
+- Terminal `inspect()` and `recover()` require current READY and never write or
+  advance history. A historical `committed` record remains valid when its
+  commit exactly matches its candidate and equals or is an ancestor of the
+  current READY branch tip. Resetting away, divergent ancestry, a missing or
+  mismatched commit, or candidate mismatch is `recovery_required`. Historical
+  `rejected` and `recovery_required` records remain immutable inspectable
+  evidence under current READY.
 
 - If interruption leaves `running` but the old branch tip and exact candidate
   index/worktree are present, `recover()` records/returns `staged` with
@@ -311,6 +536,18 @@ returns `recovery_required`. When no authoritative collaboration read was
 accepted, `collaboration_tail_sequence=0` means “tail unavailable,” not
 “durable history is empty.”
 
+If the initial session-resource observation is recovery-required because of a
+staged index, reconciliation first attempts the recovery-only Story Commit
+snapshot. An exact staged topology is assigned to `story_commit` only when one
+candidate/operation also matches the reviewed change-set and relationship
+digests, application provenance and result digests, and normalized operation
+effects with exact before/after, affected-path, final-artifact, rename, and
+deletion facts. Expected-tree authority still comes from that staged snapshot,
+not from caller-supplied review evidence alone. Missing or mismatched
+application correlation is reported with the Story Commit owner; if the narrow
+snapshot itself cannot prove its exact topology, the original arbitrary
+non-READY dirty/resource condition remains owned by `session_resources`.
+
 For an accepted lifecycle, the reconciler reads collaboration, the exact
 session-resource triple, complete session history, external Git operation, and
 linked session-worktree status as generation A. It performs an exact
@@ -318,10 +555,17 @@ application-ID owner lookup when application evidence exists, selects at most
 one correlated candidate/commit/checkpoint chain, and reads the current-`HEAD`
 log only when that chain claims a committed story operation. It then rereads
 collaboration, resources, history, external Git, and status as generation B.
-Any owner drift or second-read failure returns `outcome_unknown` for that owner
-instead of combining generations. Stable facts are selected again, any commit
-is checked against the nonempty newest-first log and stable status, and only
-then are they passed to the pure classifier.
+The exact artifact binding is established against generation A; application
+inspection runs through it. Each generation's external-operation and linked-
+status observation, plus the conditional committed-`HEAD` log read, has its own
+short guarded access through that same binding. A final guarded checkpoint then
+requires the same physical root and semantic READY resources as generation B.
+Session-resource drift, a second resource-read failure, or binding loss at any
+of these guarded observations is `recovery_required` for session resources
+rather than permission to combine generations. Drift or second-read failure
+for the other owners remains `outcome_unknown` for that owner. Stable facts are
+selected again, any commit is checked against the nonempty newest-first log and
+stable status, and only then are they passed to the pure classifier.
 
 The visible result fields answer different questions:
 
@@ -334,16 +578,18 @@ The visible result fields answer different questions:
   blockers do not fabricate them.
 
 A first-read owner failure normally returns `recovery_required`; a second-read
-failure or changed A/B observation returns `outcome_unknown`. Resource
-provisioning also remains outcome-unknown, while absent resources are a
-missing predecessor. Artifact inspection distinguishes a recovered exact
-result from blocked outcomes: absence maps to `missing_predecessor`; drift,
-corruption, or a mismatched/foreign result maps to `correlation_mismatch`; and
-artifact `recovery_required` maps to `owner_recovery_required`. Its documented
-recovery-before-read may finish or verify an already-journaled application and
-create only its standard maintenance state. This is owner maintenance, not a
-new workflow mutation: reconciliation
-never calls Apply, invokes a provider, replays work, changes Git or lifecycle,
+failure or changed A/B observation normally returns `outcome_unknown`. Session
+resources are stricter: any A/B change, second-read failure, or exact-binding
+loss returns `recovery_required`. Resource provisioning remains outcome-
+unknown, while absent resources are a missing predecessor. Artifact inspection
+distinguishes a recovered exact result from blocked outcomes: absence maps to
+`missing_predecessor`; drift, corruption, or a mismatched/foreign result maps
+to `correlation_mismatch`; artifact `recovery_required` maps to
+`owner_recovery_required`; and loss of the binding during that inspection also
+requires owner recovery. Its documented recovery-before-read may finish or
+verify an already-journaled application and create only its standard
+maintenance state. This is owner maintenance, not a new workflow mutation:
+reconciliation never calls Apply, invokes a provider, replays work, changes Git or lifecycle,
 cleans evidence, or performs `next_action`.
 
 | Projected state | What it means to a user | Exact next action |
@@ -352,7 +598,7 @@ cleans evidence, or performs `next_action`.
 | `proposed` | The collaboration history has an active proposal, but no exact reviewed artifact candidate is supplied. | `continue_with_lead` |
 | `reviewed` | The reviewed proposal/candidate facts agree, but no application-confirmation request exists. | `request_application_confirmation` |
 | `awaiting_application` | The exact application request and its visible Confirm/Reject/Revise choices are durable and still correlated. No executable capability is retained. | `submit_application_decision` |
-| `applied_not_committed` | An exact session-bound terminal application result is correlated, but no story commit is closed. `applied` requires exactly its affected paths as unstaged changes; idempotent `unchanged` requires a clean status. | `request_commit_confirmation` |
+| `applied_not_committed` | An exact session-bound terminal application result is correlated, but no story commit is closed. `applied` requires exactly its affected paths as unstaged changes; idempotent `unchanged` requires clean status. A matching durable Commit request permits confirmation; a proven result-only tail, including legacy history that advertised confirmation without a request, requires re-preparation. Uncertain publication requires owner inspection. | `request_commit_confirmation` only with an exact request; otherwise `reprepare_commit_request` or `inspect_owner_outcome` |
 | `staged` | The exact candidate and commit operation are correlated and Git status proves only those candidate paths are staged at the expected branch tip. A commit is not yet proved. | `inspect_story_commit` |
 | `committed` | Commit metadata, branch tip, tree, parent, candidate, application, proposal, and correlation facts agree. | `continue_with_lead` |
 | `rejected` | Collaboration history or the exact story-commit operation records a terminal rejection. It authorizes no apply or commit. | `continue_with_lead` |
@@ -539,7 +785,7 @@ and `pause_session`; “enter, leave, pause” below abbreviates those values.
 | `proposed` | `active` / `follow_active_recovery` | null / `none` | `lead` / `continue_with_lead` | enter, leave, pause |
 | `reviewed` | `active` / `follow_active_recovery` | null / `none` | `lead` / `request_application_confirmation` | enter, leave, pause |
 | `awaiting_application` | `active` / `follow_active_recovery` | null / `none` | `lead` / `submit_application_decision` | enter, leave, pause |
-| `applied_not_committed` | `active` / `follow_active_recovery` | null / `none` | `artifact_application` / `request_commit_confirmation` | enter only |
+| `applied_not_committed` | `active` / `follow_active_recovery` | null / `none` | `story_commit` / `request_commit_confirmation` with an exact request, or `reprepare_commit_request` for proven absence | enter only |
 | `staged` | `active` / `follow_active_recovery` | null / `none` | `story_commit` / `inspect_story_commit` | enter only |
 | `committed` | `active` / `follow_active_recovery` | null / `none` | `story_commit` / `continue_with_lead` | enter, leave, pause |
 | `rejected` | `active` / `follow_active_recovery` | null / `none` | `collaboration_history` or `story_commit` / `continue_with_lead` | enter, leave, pause |
@@ -706,7 +952,8 @@ infer authority from visible text or replay incomplete work.
 | `finalize_recommendation` | Recommendation history has local closure work. | Let runtime validate and finalize the exact known result; do not replay provider work. |
 | `submit_confirmation` | One exact proposal is waiting. | Submit `confirm`, `reject`, or `revise` with every returned identity/digest field. Text such as `Yes` is not confirmation. |
 | `submit_application_decision` | The exact reviewed Apply request is still pending. | Use its structured Apply/Reject/Revise control. Ordinary Lead/advisory input rediscloses the same request without a provider call or history append. |
-| `submit_commit_decision` | The exact local Commit request is still pending. | Use its separate structured Commit/Reject/Revise control. Ordinary Lead/advisory input rediscloses the same request without a provider call or history append. |
+| `submit_commit_decision` | The exact local Commit request is still pending. | Use its separate structured Commit/Reject/Revise control. Ordinary Lead/advisory input rediscloses the same request without a provider call or history append. After restart, lost process-local binding may close the decision as stale/reprepare before any Git mutation. |
+| `reprepare_commit_request` | Apply succeeded, but no exact durable Commit request exists, an older result advertised one without publishing it, or an exact prior request ended stale/reprepare. | Use the typed reprepare path against the same durable Apply evidence and current terminal tail; inspect if owner facts drift. It publishes a fresh request, not a Commit, and ordinary prose cannot authorize either action. |
 | `start_or_reconfirm` | A confirmation is durable, but projection alone is not a reusable capability. A live `decide_lead_step()` normally crosses this boundary immediately. | Let the owning runtime use its private single-use start authority. After restart, collect the fresh `reconfirmation_required` request instead of reconstructing authority. |
 | `reconfirmation_required` | A confirmed proposal survived restart but its live execution capability did not. | Present the same proposal/digest with the fresh request and collect another exact decision. No provider call is needed. |
 | `finalize_result` | `running` has an authoritative result batch but lacks its visible terminal state. | Let runtime append deterministic local finalization. Do not call a provider or replay assignments. |
@@ -729,6 +976,14 @@ once runtime closes the exact attempt and reference accounting. Retry requires
 explicit new input and reacquires current evidence. Failed closure or uncertain
 reference cleanup remains recovery-gated; a recorded provider timeout alone
 does not establish that cleanup succeeded.
+
+If a provider invocation already has durable `SUBMITTED` call events and
+reference cleanup then loses its session-artifact binding, that binding failure
+remains the primary failure. Runtime still preserves the exact submitted-call
+count in assignment/result/terminal evidence and carries forward the original
+submission-uncertainty classification; cleanup failure neither resets the
+count nor invents certainty. The durable count remains matched to `SUBMITTED`
+events and never authorizes provider replay.
 
 The owner-conversation authoring objective survives clarification, side
 discussion, consultation, review, rejection, staleness, failure, and restart.
@@ -764,7 +1019,11 @@ The runtime joins all parallel assignment tasks before classifying a known
 partial failure. One failed peer does not cancel successful siblings, and no
 lead synthesis is attempted over an incomplete set. Outer cancellation cancels
 and joins every child, persists knowable terminal facts/result, removes the
-live marker, releases bound-agent resources, and re-raises. For those
+live marker, releases bound-agent resources, and re-raises. Bound-agent release
+itself is one shielded, joined task: cancellation is propagated only after the
+exact retained use is released once. If release also fails, the cancellation
+remains primary and records that cleanup failure; without cancellation, the
+release failure remains visible. For those
 specialist/synthesis invocations, a submitted timeout or transport failure
 marked outcome-uncertain enters `outcome_unknown`; the read-only Lead retry
 path does not abandon them. A PREPARED call that never crossed the provider
@@ -1202,7 +1461,7 @@ outcomes:
 
 A recoverable crash is not reported as a partial application on the next
 authoritative call: that call completes or verifies the existing journal first.
-Reject and Revise are not repository outcomes; #491 must leave this seam
+Reject and Revise are not repository outcomes; runtime must leave this seam
 uninvoked. Recovery does not infer confirmation, refresh agent context, call a
 provider, or stage/commit Git. Any later Git operation has separate evidence
 and confirmation.
@@ -1306,6 +1565,65 @@ revalidation passes. After process loss, history can be inspected but an
 interrupted authorization cannot be resumed or used to reconstruct content.
 Start a new operation with a new ID after correcting any source problem.
 
+For runtime-composed guarded references, selected-root security or binding
+loss is preserved for the orchestration recovery boundary rather than reduced
+to a generic workflow failure. No provider call or fallback source is
+authorized by that failure. Guarded creation publishes its exact operation or
+invocation owner before the access exit can fail. `StoryRuntime` retains that
+owner strongly in one process-shared workspace/session/physical-worktree/
+operation registry. Every failure after that publication defers cleanup.
+Deferral immediately closes selected-byte results, content-bearing
+authorization, capability authority, and the old binding access. The unfinished
+operation retains only content-free cleanup ownership and one private,
+non-traversed duplicated directory descriptor that pins the exact original
+worktree; the pin is never read, serialized, provider-visible, or used as
+repository authority.
+Neither the failed invocation nor known provider work is replayed.
+
+For a nonempty guarded reference batch, runtime acquires and validates the
+non-inheritable session-root pin before `CAPTURED` authorization can become
+durable. Supplier, validation, operation-ID, construction, and other
+pre-transfer failures close the pin. A failure in the post-capture registry
+callback is the exceptional unowned case: the content-bearing authorization
+and pin close immediately, the callback error escapes unchanged, and the
+durable history remains at `REQUESTED` → `CAPTURED`. Cleanup does not recursively
+re-enter the repository from that callback. Because no transient owner survives
+as cleanup authority, a later artifact-sensitive boundary discovers this
+content-free operation as a restart orphan and terminalizes it through the
+normal inventory path without replaying provider work.
+
+The next same-process artifact-sensitive boundary drains a retained owner only
+through a fresh binding with the same physical worktree identity. A replacement
+root cannot receive the old cleanup: runtime closes the pin, removes that stale
+transient owner, and does not include its operation ID in the replacement root's
+live-owner exclusion set. Terminal success or failure, reconciled completion,
+stale-owner abandonment, and every unretained preparation path each close the
+pin exactly once. The original durable history remains
+unchanged. A candidate-only consensus call enters this reference-cleanup
+boundary only for known same-process pending cleanup and otherwise performs no
+artifact/reference worktree read. It still opens the exact session execution
+capability for each Codex provider call. After restart, the next artifact-
+sensitive boundary inventories durable histories and reconciles unowned
+nonterminal operations. It terminates every unfinished
+invocation before the operation, is idempotent after interruption, and leaves
+already terminal evidence unchanged. A restart candidate-only consensus call
+does not scan the worktree, so an orphan waits for an artifact-sensitive
+boundary. Corrupt evidence fails closed and blocks the boundary; it is never
+skipped, rewritten, or used to authorize replay.
+
+Reference pin ownership is cleared before close, making owner cleanup one-shot.
+Deferral uses `finally`-style cleanup, so any `BaseException` from content or
+authorization retirement cannot skip the pin close. An already active failure
+remains primary; close failures add only content-free exception-type notes, and
+all applicable cleanup steps are attempted.
+
+The original operation's provider-facing and mutation authority is both
+process- and opaque-thread-affine. A foreign thread or forked child rejects it
+before repository locking or I/O. Only cleanup and reconciliation are
+same-process, PID-only responsibilities: another thread may finish them through
+fresh binding access, while a child process discards inherited registry handles
+and relies on durable restart reconciliation instead.
+
 `inspect_reference_operation()` distinguishes absence from corruption. It
 returns no history only when the named operation directory is absent. If any
 part of a present operation is missing, changed, noncanonical, duplicated,
@@ -1354,6 +1672,122 @@ reference history and the Lead attempt allows `retry_lead_turn`, including
 after reference content was delivered. The failure and open authoring
 objective remain durable. A new turn creates a new reference operation;
 uncertain cleanup or corrupt accounting keeps the existing recovery block.
+
+<a id="codex-execution-worktree-recovery"></a>
+
+## Codex and Antigravity execution-worktree recovery
+
+Every Codex or Antigravity story call binds its provider continuation to a
+domain-separated digest of the exact session physical generation. If the named
+worktree is missing, replaced, symlinked, or otherwise no longer matches before
+launch, the call fails without a provider process and without falling back to
+the control root, current directory, staging, or another session. Restore or
+reopen the exact READY session resources, then submit fresh authorized work;
+the runtime does not replay the failed call automatically. The descriptor CWD
+does not authorize manuscript or core-document reads: host-owned context,
+reference, SEARCH, and READ services remain the story-content delivery path.
+
+A valid replacement generation at the same pathname is intentionally
+incompatible with prior Codex or Antigravity continuation state. The next safe
+authorized call bootstraps a fresh provider thread while retaining the old
+content-free record and Antigravity-native history. Compatible history for the
+same proved generation resumes. The runtime does not relabel the old checkpoint,
+adopt foreign native history, or treat path equality as generation equality.
+
+The schema-v2 provider-session manifest retains legacy base records and
+fingerprint-qualified records for successive generations. For an effective
+generation fingerprint, lookup and taint address only its exact qualified key;
+they never fall back to or mutate the legacy base record. Ordinary thread
+updates do not prune any earlier generation record. Once a qualified key has
+been written, the manifest is
+forward-only: an older binary that accepts base keys alone rejects it. Do not
+downgrade in place or hand-delete retained records; stop all writers and restore
+a verified pre-upgrade workspace backup, or use a compatible newer runtime.
+
+If generation authority is lost after process submission, or after a response
+returns but before acceptance/publication, the binding failure outranks the
+apparent provider result. The call retains submitted accounting where known,
+does not durably accept the response, and best-effort taints the exact existing
+continuation so later work cannot assume it is clean. An explicit retry needs
+new top-level authority and, for references, a new operation, capture,
+coordinator, and capability. Never infer non-execution from a missing accepted
+result.
+
+Darwin sandbox unavailability, an unsupported host, invalid canonical
+resources, or unsafe native state fails before submission and has no
+unconfined fallback. For `CODEX_HOME`, verify an existing effective-user-owned
+directory configured by an absolute path, with no group/other write bits, that
+is not filesystem root or user home and does not contain or sit beneath the
+control root, schema-derived sibling-worktree container (including every
+session), staging, or response-output directory. Apple's underlying
+`sandbox-exec` facility is
+deprecated, so deployment checks must treat its absence as loss of Codex story-
+call capability. Authentication, catalog, help, and other management probes
+are outside this story boundary.
+
+For Antigravity, verify the exact protected
+`.agents/agents/<native-selector>/agent.md` projection. The selector is derived
+from the semantic agent ID and deterministic base role bytes and must match the
+role YAML name and `--agent` value. Runtime independently revalidates that
+semantic/native/final-byte plan and recomputes the staged file and binding
+accounting from the immutable definition snapshot before setup. Differing
+bytes or accounting, unsafe modes, links, FIFOs/devices, foreign entries, or a
+pre-existing empty qualified directory block provider work and are preserved;
+do not overwrite or normalize them as retry. The empty-directory case fails
+before the Git exclusion or role tree is mutated. Exact `0400` role versions
+coexist, publication is create-only, and runtime never replaces or prunes a
+leaf. Selected-role content validation is bounded by the exact planned size;
+unselected qualified leaves are metadata-validated without content reads. Keep
+the top-level `.agents` namespace and its case-folded aliases untracked: any
+tracked variant fails before projection mutation or provider submission,
+including on case-sensitive worktrees for portability, and must be removed from
+the index before retry. A concurrent winner is accepted only after full exact
+validation. A failed fresh installation cleans only unchanged empty
+directories created by that call. If effective-user, descriptor-relative,
+no-follow, nonblocking, or
+create-only link support is missing, projection fails before path access.
+Staged definitions and mutable native history remain beneath the canonical
+control workspace under generation-qualified state paths. An overlap with the
+session worktree rejects the call before per-invocation directories are
+created. Unproved history is retained but never resumed; restore the exact
+READY generation or allow a fresh bootstrap. Missing Darwin confinement fails
+closed without an adapter-control CWD fallback.
+
+For Codex, treat a missing, symlinked, multiply linked, non-regular, changing, oversized,
+or invalid-UTF-8 response output as a failed submitted call, not as recoverable
+transport to follow or reread. The runtime opens the exact result name without
+following links, verifies one stable singly linked regular-file identity and
+metadata across the read, and accepts at most 8 MiB. Preserve the existing
+thread's tainted state and use fresh top-level authority for any explicit retry.
+
+Codex also rejects a fully encoded `developer_instructions=` process argument
+larger than 512 KiB before submission and without tainting an existing thread.
+The limit includes the prefix, JSON quotes, escapes, and UTF-8 bytes, so raw
+instruction-file size is not the acceptance measure. For an older custom
+definition that depended on larger file staging, keep stable role constraints
+in the binding and migrate story material to host-owned context, explicit
+references, or SEARCH/READ sources. Do not weaken the limit or place that
+material in the session tree for provider filesystem access.
+
+Generation is revalidated after provider adapter cleanup and when contextual
+invocation ownership exits, not only before accepting the decoded result. A
+direct BoundAgent execution-workspace owner also revalidates as it exits after
+the logical body: loss prevents an apparent successful return, taints the exact
+generation-bound continuation, and terminalizes the response as a runtime
+failure rather than accepted, while an active body failure remains primary and
+receives only a content-free validation note.
+Reference, SEARCH, and READ work revalidates after the host constructs its
+observation and before the provider-call finalizer is accepted. Context-ledger
+checkpoint commit is checked immediately before and after publication. A
+deferred Lead continuation retains the execution and provider contexts through
+that decision, closes and revalidates them before accepting the provider-call
+finalizer, and publishes checkpoint advancement only after clean completion.
+Loss or cleanup failure after publication invalidates that exact checkpoint
+generation. A later exit failure similarly taints the generation-bound thread
+and invalidates an already committed non-pending checkpoint. If another
+continuation body failure is active, it remains primary and receives only a
+content-free validation note. Do not resume from an invalidated checkpoint;
+restore exact READY resources and begin the next safe authorized bootstrap.
 
 ## Controller cancellation proof
 

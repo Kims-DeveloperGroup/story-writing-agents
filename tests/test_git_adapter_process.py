@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from threading import Event, Thread
 from unittest import mock
 
 from story_writing_agents.git import (
@@ -20,6 +21,7 @@ from story_writing_agents.git import (
 )
 from story_writing_agents.git import adapter as adapter_module
 from story_writing_agents.git import process as process_module
+from story_writing_agents.git import session_resources as resources_module
 
 from tests.git_contract_fixture import digest, exception_graph
 
@@ -77,10 +79,13 @@ class _FakeProcess:
         self.returncode: int | None = None
         self.terminate_calls = 0
         self.kill_calls = 0
-        self.wait_timeouts: list[float] = []
+        self.wait_timeouts: list[float | None] = []
+        self.wait_gate: Event | None = None
 
-    def wait(self, timeout: float) -> int:
+    def wait(self, timeout: float | None = None) -> int:
         self.wait_timeouts.append(timeout)
+        if timeout is None and self.wait_gate is not None:
+            self.wait_gate.wait()
         result = self.wait_results.pop(0) if self.wait_results else 0
         if isinstance(result, BaseException):
             raise result
@@ -98,6 +103,8 @@ class _FakeProcess:
 
     def kill(self) -> None:
         self.kill_calls += 1
+        if self.wait_gate is not None:
+            self.wait_gate.set()
 
 
 class GitAdapterProcessTests(unittest.TestCase):
@@ -110,6 +117,18 @@ class GitAdapterProcessTests(unittest.TestCase):
         self.root = Path(self.temporary.name).resolve()
         self.adapter = GitRepositoryAdapter(self.root)
         self.identity = self.adapter._bind_root()  # noqa: SLF001
+        self.threads: list[Thread] = []
+        self.thread_start_failure: int | None = None
+        def make_thread(*args: object, **kwargs: object) -> Thread:
+            thread = Thread(*args, **kwargs)
+            self.threads.append(thread)
+            if len(self.threads) == self.thread_start_failure:
+                thread.start = mock.Mock(side_effect=RuntimeError("private thread start"))
+            return thread
+        thread_patch = mock.patch.object(process_module.threading, "Thread", side_effect=make_thread)
+        thread_patch.start()
+        self.addCleanup(thread_patch.stop)
+        self.addCleanup(lambda: self.assertFalse(any(thread.is_alive() for thread in self.threads)))
 
     def _run_with_process(
         self,
@@ -210,6 +229,7 @@ class GitAdapterProcessTests(unittest.TestCase):
         self.assertTrue(process.stdin.closed)
         self.assertTrue(process.stdout.closed)
         self.assertTrue(process.stderr.closed)
+        self.assertEqual(process.wait_timeouts, [None])
         self.assertEqual(process.stdout.close_calls, 1)
         self.assertEqual(process.stderr.close_calls, 1)
         self.assertEqual(result.stdout, b"bounded")
@@ -296,13 +316,13 @@ class GitAdapterProcessTests(unittest.TestCase):
         self.assertTrue(process.stderr.closed)
 
     def test_timeout_terminates_then_kills_and_returns_bounded_error(self) -> None:
-        timeout = subprocess.TimeoutExpired(("git", "status"), 30)
         stop_timeout = subprocess.TimeoutExpired(("git", "status"), 2)
         process = _FakeProcess(
-            wait_results=(timeout, stop_timeout, 0),
+            wait_results=(stop_timeout, 0),
             poll_results=(None,),
         )
-        with mock.patch.object(
+        process.wait_gate = Event()
+        with mock.patch.object(process_module, "_PROCESS_TIMEOUT_SECONDS", 0.01), mock.patch.object(
             process_module.subprocess, "Popen", return_value=process
         ):
             with self.assertRaises(GitOperationError) as caught:
@@ -315,12 +335,14 @@ class GitAdapterProcessTests(unittest.TestCase):
         self.assertIs(caught.exception.code, GitFailureCode.PROCESS_TIMED_OUT)
         self.assertEqual(process.terminate_calls, 1)
         self.assertEqual(process.kill_calls, 1)
+        self.assertTrue(process.wait_gate.is_set())
+        self.assertEqual(process.returncode, 0)
         self.assertTrue(process.stdout.closed)
         self.assertTrue(process.stderr.closed)
         self.assertEqual(
             process.wait_timeouts,
             [
-                process_module._PROCESS_TIMEOUT_SECONDS,  # noqa: SLF001
+                None,
                 process_module._PROCESS_STOP_TIMEOUT_SECONDS,  # noqa: SLF001
                 process_module._PROCESS_STOP_TIMEOUT_SECONDS,  # noqa: SLF001
             ],
@@ -342,7 +364,28 @@ class GitAdapterProcessTests(unittest.TestCase):
                 GitFailureCode.PROCESS_START_FAILED,
             ),
         )
-        for process, expected in cases:
+        a, b = b"a" * 40, b"b" * 40
+        row_a = b"100644 blob " + a + b"       1\tfixture/a\0"
+        row_b = b"100644 blob " + b + b"       1\tfixture/b\0"
+        tree = row_a + row_b
+        frame_a, frame_b = a + b" blob 1\nx\n", b + b" blob 1\ny\n"
+        frames = frame_a + frame_b
+        invalid_groups = (
+            ((tree, a + b" missing\n"), (tree, b"c" * 40 + b" blob 1\nx\n" + frame_b),
+             (tree, frame_b + frame_a), (tree, frame_a.replace(b" blob ", b" tree ") + frame_b)),
+            tuple((tree, a + b" blob " + size + b"\nx\n" + frame_b)
+                  for size in (b"-1", b"01", b"x", b"99999999999999999999", b"2")) +
+            ((tree, a + b" blob"), (row_a.replace(b" 1\t", b" 5\t"), a + b" blob 5\nx"),
+             (tree, a + b" blob 1\nx" + frame_b), (tree, "PRIVATE_NON_BYTES")),
+            ((tree, frames + b"PRIVATE_TRAILING"), (row_a + row_a, frame_a + frame_a),
+             (tree[:-1], frames), (b"PRIVATE_MALFORMED\0", frames),
+             (row_a.replace(b" 1\t", b" -1\t"), frames),
+             (row_a.replace(b" 1\t", b" 01\t"), frames),
+             (row_a.replace(b"100644", b"100755"), frames),
+             (row_a.replace(b"fixture/a", b"\xff"), frames)),
+        )
+        repository = object.__new__(resources_module._Repository)
+        for case_number, (process, expected) in enumerate(cases):
             with self.subTest(code=expected.value):
                 if isinstance(process.stdout.chunks[0], BaseException):
                     original = process.stdout.read
@@ -367,6 +410,15 @@ class GitAdapterProcessTests(unittest.TestCase):
                 self.assertNotIn("private", repr(caught.exception))
                 self.assertTrue(process.stdout.closed)
                 self.assertTrue(process.stderr.closed)
+                for inventory, output in invalid_groups[case_number]:
+                    with mock.patch.object(resources_module._Repository, "_required", side_effect=(
+                        process_module.GitProcessResult(inventory, 0),
+                        process_module.GitProcessResult(output, 0),
+                    )), self.assertRaises(resources_module.GitSessionResourceError) as caught:
+                        repository._tree_digests("0" * 40)
+                    self.assertEqual(exception_graph(caught.exception), (caught.exception,))
+                    self.assertIs(caught.exception.code, resources_module.GitSessionFailureCode.RECOVERY_REQUIRED)
+                    self.assertNotIn("PRIVATE", repr(caught.exception))
 
     def test_keyboard_interrupt_owns_process_and_maps_all_recovery_states(self) -> None:
         process = _FakeProcess(
@@ -383,6 +435,22 @@ class GitAdapterProcessTests(unittest.TestCase):
         self.assertEqual(process.terminate_calls, 1)
         self.assertTrue(process.stdout.closed)
         self.assertTrue(process.stderr.closed)
+
+        main_process = _FakeProcess()
+        original_join = Thread.join
+        interrupted = False
+        def join(thread: Thread, timeout: float | None = None) -> None:
+            nonlocal interrupted
+            if timeout == process_module._PROCESS_TIMEOUT_SECONDS and not interrupted:
+                interrupted = True
+                raise KeyboardInterrupt()
+            original_join(thread, timeout)
+        with mock.patch.object(Thread, "join", join), mock.patch.object(process_module.subprocess, "Popen", return_value=main_process):
+            with self.assertRaises(KeyboardInterrupt):
+                self.adapter._run_git(("status", "--"), identity=self.identity)
+        self.assertTrue(interrupted)
+        self.assertEqual(main_process.terminate_calls, 1)
+        self.assertTrue(main_process.stdout.closed and main_process.stderr.closed)
 
         manifest = GitBaselineManifest((GitManifestEntry("outline.md", digest(b"x")),))
         for state in GitRepositoryState:
@@ -449,6 +517,19 @@ class GitAdapterProcessTests(unittest.TestCase):
         self.assertEqual(exception_graph(caught.exception), (caught.exception,))
         self.assertTrue(close_failure.stdout.closed)
         self.assertTrue(close_failure.stderr.closed)
+
+        for position in (1, 2, 3):
+            failed_start = _FakeProcess()
+            self.thread_start_failure = len(self.threads) + position
+            with mock.patch.object(process_module.subprocess, "Popen", return_value=failed_start):
+                with self.assertRaises(GitOperationError) as caught:
+                    self.adapter._public_call(GitOperationKind.STATUS, lambda: self.adapter._run_git(("status", "--"), identity=self.identity))
+            self.assertIs(caught.exception.code, GitFailureCode.PROCESS_START_FAILED)
+            self.assertEqual(exception_graph(caught.exception), (caught.exception,))
+            self.assertNotIn("private thread start", repr(caught.exception))
+            self.assertEqual(failed_start.terminate_calls, 1)
+            self.assertTrue(failed_start.stdout.closed and failed_start.stderr.closed)
+        self.thread_start_failure = None
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ from story_writing_agents import StoryRuntime
 from story_writing_agents import conversations as c
 from story_writing_agents.agents import PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR
 from story_writing_agents.specialist_routing import AuthoringActivity, AuthoringScope, ArtifactReviewDomain, SpecialistAssignmentMode, ReviewBasis
+from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
 from tests.test_lead_orchestration import (
     LeadOrchestrationTestCase, _LeadBackend, _compact_scope, _decision, _provider_envelope,
     _workflow_material, _live_scope, _specialist_outcome, _synthesis_outcome, _visible_outcome,
@@ -161,7 +162,12 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertIs(result.proposal.assignments[0].mode, SpecialistAssignmentMode.DRAFT)
 
     def artifact_bytes(self):
-        return tuple((x.path,x.content) for x in self.runtime.artifacts.capture_complete_state())
+        return tuple(
+            (item.path, item.content)
+            for item in WritingArtifactRepository(
+                self.workspace.root
+            ).capture_complete_state()
+        )
 
     async def test_draft_integrates_exact_all_role_review_apply_and_storage_parity(self):
         from tests.test_lead_artifact_application import _application_decision
@@ -222,14 +228,14 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.backend.enqueue(status)
         await self.runtime.lead_turn(self.session_id,self.conversation(),"Report the recorded application status.")
         self.assertNotIn(task_id,{item["task_id"] for item in offered})
-        coordinator=WorkspaceConversationStorageMutationCoordinator(self.workspace)
+        coordinator=WorkspaceConversationStorageMutationCoordinator(self.control_workspace)
         with coordinator.borrow(timeout_seconds=2.0) as lease:
-            provision_sqlite_conversation_storage(self.workspace,lease=lease)
-        transfer=transfer_conversation_storage(self.workspace,source_backend=ConversationStorageBackend.FILESYSTEM,destination_backend=ConversationStorageBackend.SQLITE)
+            provision_sqlite_conversation_storage(self.control_workspace,lease=lease)
+        transfer=transfer_conversation_storage(self.control_workspace,source_backend=ConversationStorageBackend.FILESYSTEM,destination_backend=ConversationStorageBackend.SQLITE)
         self.assertIs(transfer.outcome,ConversationStorageTransferOutcome.COMPLETED)
-        verified=verify_conversation_storage(self.workspace,source_backend=ConversationStorageBackend.FILESYSTEM,destination_backend=ConversationStorageBackend.SQLITE)
+        verified=verify_conversation_storage(self.control_workspace,source_backend=ConversationStorageBackend.FILESYSTEM,destination_backend=ConversationStorageBackend.SQLITE)
         self.assertIs(verified.outcome,ConversationStorageTransferOutcome.COMPLETED)
-        persisted=compose_sqlite_conversation_storage(self.workspace).event_store.read(self.session_id,conversation)
+        persisted=compose_sqlite_conversation_storage(self.control_workspace).event_store.read(self.session_id,conversation)
         self.assertEqual(persisted,history)
         self.assertEqual(tuple(c.encode_collaboration_event(e) for e in persisted),tuple(c.encode_collaboration_event(e) for e in history))
 

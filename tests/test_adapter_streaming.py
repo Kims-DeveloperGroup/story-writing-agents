@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -16,17 +18,18 @@ from story_writing_agents.agent_context.progress import (
 )
 from story_writing_agents.errors import ProviderAuthenticationRequiredError
 from story_writing_agents.prompts import PromptAssembler
+from story_writing_agents.workspace.initialization import compose_session_artifact_binding
 from story_writing_agents.provider_adapter import (
     ProviderInvocation,
     ProviderInvocationError,
 )
 from story_writing_agents.provider_process import ProcessRequest, ProcessResult
-from tests.helpers import initialized_workspace
+from tests.helpers import live_provider_execution_workspace, pristine_initialized_workspace
 
 
 class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self.workspace = initialized_workspace(self)
+        self.workspace = pristine_initialized_workspace(self)
         self.backend = AgentBackend(self.workspace)
         self.addCleanup(self.backend.close)
         self.codex_adapter = self.backend._codex_adapter
@@ -35,6 +38,24 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             session_id="definition_session",
             agent_id=PLOT_ARCHITECT,
         )
+
+    async def _invoke_codex(self, binding, invocation):
+        with live_provider_execution_workspace(self.workspace.root, invocation.session_id) as workspace:
+            return await self.codex_adapter.invoke(
+                binding, replace(invocation, execution_workspace=workspace)
+            )
+
+    async def _invoke_antigravity(self, adapter, binding, invocation):
+        with live_provider_execution_workspace(self.workspace.root, invocation.session_id) as workspace:
+            # Copied test roots can retain group-writable modes on Linux.
+            self.workspace.path(".git").chmod(0o700)
+            workspace.worktree_root.chmod(0o700)
+            owner = compose_session_artifact_binding(self.workspace.root, invocation.session_id)
+            with owner.open_ready_resources() as access:
+                access.install_provider_role(adapter.session_role_projection(binding))
+            return await adapter.invoke(
+                binding, replace(invocation, execution_workspace=workspace)
+            )
 
     async def test_codex_adapter_streams_status_reasoning_and_message_events(self) -> None:
         adapter = self.codex_adapter
@@ -91,7 +112,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
-            result = await adapter.invoke(binding, invocation)
+            result = await self._invoke_codex(binding, invocation)
 
         self.assertEqual(result.response_text, '{"summary":"Final plot outline"}')
         # Verify dispatched stream events
@@ -157,7 +178,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
             try:
-                await adapter.invoke(binding, invocation)
+                await self._invoke_codex(binding, invocation)
             except Exception:
                 pass
 
@@ -171,6 +192,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
     async def test_antigravity_adapter_streams_events_and_parses_stream_json(self) -> None:
         agy_backend = AgentBackend(
             self.workspace,
+            antigravity_executable=sys.executable,
             backend_overrides={PLOT_ARCHITECT: "antigravity"},
         )
         self.addCleanup(agy_backend.close)
@@ -235,7 +257,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
-            result = await adapter.invoke(binding, invocation)
+            result = await self._invoke_antigravity(adapter, binding, invocation)
 
         # Check command selected stream-json
         self.assertIn("--output-format", captured_commands[0])
@@ -259,6 +281,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
     async def test_antigravity_adapter_uses_json_when_no_stream_sink(self) -> None:
         agy_backend = AgentBackend(
             self.workspace,
+            antigravity_executable=sys.executable,
             backend_overrides={PLOT_ARCHITECT: "antigravity"},
         )
         self.addCleanup(agy_backend.close)
@@ -307,7 +330,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
-            result = await adapter.invoke(binding, invocation)
+            result = await self._invoke_antigravity(adapter, binding, invocation)
 
         # Output format should be json, not stream-json
         fmt_idx = captured_requests[0].command.index("--output-format")
@@ -318,6 +341,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
     def _make_agy_binding(self, session_id: str):
         agy_backend = AgentBackend(
             self.workspace,
+            antigravity_executable=sys.executable,
             backend_overrides={PLOT_ARCHITECT: "antigravity"},
         )
         self.addCleanup(agy_backend.close)
@@ -379,7 +403,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with mock.patch.object(adapter, "_has_current_finish", return_value=True):
-                result = await adapter.invoke(binding, invocation)
+                result = await self._invoke_antigravity(adapter, binding, invocation)
 
         # Incomplete output attaches response_diagnostic with non-sensitive terminal output
         self.assertIsNotNone(result.response_diagnostic)
@@ -433,7 +457,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
-                await adapter.invoke(binding, invocation)
+                await self._invoke_antigravity(adapter, binding, invocation)
             self.assertIn("malformed JSON", str(cm.exception))
 
     async def test_codex_adapter_handles_structured_reasoning_and_cumulative_deltas(self) -> None:
@@ -479,7 +503,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
-            result = await adapter.invoke(binding, invocation)
+            result = await self._invoke_codex(binding, invocation)
 
         self.assertEqual(result.response_text, '{"summary":"Final"}')
         self.assertEqual(len(events), 5)
@@ -495,6 +519,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
     async def test_antigravity_adapter_running_status_notice_emits_status_and_is_not_captured_as_terminal(self) -> None:
         agy_backend = AgentBackend(
             self.workspace,
+            antigravity_executable=sys.executable,
             backend_overrides={PLOT_ARCHITECT: "antigravity"},
         )
         self.addCleanup(agy_backend.close)
@@ -543,7 +568,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
-            result = await adapter.invoke(binding, invocation)
+            result = await self._invoke_antigravity(adapter, binding, invocation)
 
         self.assertEqual(result.response_text, '{"summary":"Completed"}')
         self.assertEqual(len(events), 1)
@@ -553,6 +578,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
     async def test_antigravity_adapter_recognizes_wrapped_authentication_error(self) -> None:
         agy_backend = AgentBackend(
             self.workspace,
+            antigravity_executable=sys.executable,
             backend_overrides={PLOT_ARCHITECT: "antigravity"},
         )
         self.addCleanup(agy_backend.close)
@@ -589,7 +615,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as exc_info:
-                await adapter.invoke(binding, invocation)
+                await self._invoke_antigravity(adapter, binding, invocation)
             self.assertIsNotNone(exc_info.exception.authentication_failure)
             self.assertIsInstance(
                 exc_info.exception.authentication_failure,
@@ -599,6 +625,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
     async def test_antigravity_adapter_unwraps_event_alias_result_envelope(self) -> None:
         agy_backend = AgentBackend(
             self.workspace,
+            antigravity_executable=sys.executable,
             backend_overrides={PLOT_ARCHITECT: "antigravity"},
         )
         self.addCleanup(agy_backend.close)
@@ -638,7 +665,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
-            result = await adapter.invoke(binding, invocation)
+            result = await self._invoke_antigravity(adapter, binding, invocation)
         self.assertEqual(result.response_text, '{"msg":"Hello world"}')
 
     async def test_codex_adapter_handles_id_less_items_independently(self) -> None:
@@ -677,7 +704,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
-            result = await adapter.invoke(binding, invocation)
+            result = await self._invoke_codex(binding, invocation)
 
         self.assertEqual(result.response_text, '{"done":true}')
         text_events = [e for e in events if e.kind is ProviderStreamEventKind.TEXT_DELTA]
@@ -745,7 +772,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
-                await adapter.invoke(binding, invocation)
+                await self._invoke_antigravity(adapter, binding, invocation)
             self.assertIn("2 terminal result events; expected exactly 1", str(cm.exception))
 
     async def test_antigravity_adapter_rejects_invalid_line_before_terminal_result(self) -> None:
@@ -789,7 +816,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
-                await adapter.invoke(binding, invocation)
+                await self._invoke_antigravity(adapter, binding, invocation)
             self.assertIn("invalid stream line: malformed JSON line", str(cm.exception))
 
     async def test_antigravity_adapter_rejects_trailing_data_after_terminal_result(self) -> None:
@@ -834,7 +861,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
-                await adapter.invoke(binding, invocation)
+                await self._invoke_antigravity(adapter, binding, invocation)
             self.assertIn("trailing data after terminal result", str(cm.exception))
 
     async def test_antigravity_adapter_recognizes_authentication_failure_with_streaming_preamble(self) -> None:
@@ -888,7 +915,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
-                await adapter.invoke(binding, invocation)
+                await self._invoke_antigravity(adapter, binding, invocation)
             self.assertIsNotNone(cm.exception.authentication_failure)
             self.assertTrue(cm.exception.authentication_failure.replay_safe)
             self.assertFalse(cm.exception.taint_existing_thread)
@@ -934,7 +961,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
-                await adapter.invoke(binding, invocation)
+                await self._invoke_antigravity(adapter, binding, invocation)
             self.assertIn("invalid stream line: malformed JSON line", str(cm.exception))
 
     async def test_antigravity_adapter_rejects_nan_or_infinity_in_stream_line(self) -> None:
@@ -978,7 +1005,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
-                await adapter.invoke(binding, invocation)
+                await self._invoke_antigravity(adapter, binding, invocation)
             self.assertIn("invalid stream line: malformed JSON line", str(cm.exception))
 
     async def test_antigravity_adapter_rejects_recursion_error_in_stream_line(self) -> None:
@@ -1023,7 +1050,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
-                await adapter.invoke(binding, invocation)
+                await self._invoke_antigravity(adapter, binding, invocation)
             self.assertIn("invalid stream line: malformed JSON line", str(cm.exception))
 
     async def test_antigravity_adapter_rejects_unknown_event_type_carrying_structured_output(self) -> None:
@@ -1060,7 +1087,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
-                await adapter.invoke(binding, invocation)
+                await self._invoke_antigravity(adapter, binding, invocation)
             self.assertIn("invalid stream line: unknown event type 'custom_unknown'", str(cm.exception))
 
     async def test_antigravity_adapter_rejects_unknown_event_type_carrying_status_running(self) -> None:
@@ -1104,7 +1131,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
-                await adapter.invoke(binding, invocation)
+                await self._invoke_antigravity(adapter, binding, invocation)
             self.assertIn("invalid stream line: unknown event type 'unexpected_type'", str(cm.exception))
 
     async def test_antigravity_adapter_fails_closed_when_stream_contains_invalid_line_before_auth_terminal(self) -> None:
@@ -1157,7 +1184,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
-                await adapter.invoke(binding, invocation)
+                await self._invoke_antigravity(adapter, binding, invocation)
             # Should fail closed on invalid stream line, NOT enter auth recovery
             self.assertIn("invalid stream line: unknown event type 'bogus_event'", str(cm.exception))
             self.assertIsNone(cm.exception.authentication_failure)
@@ -1196,7 +1223,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
-                await adapter.invoke(binding, invocation)
+                await self._invoke_antigravity(adapter, binding, invocation)
             self.assertIn("invalid stream line: invalid event discriminator", str(cm.exception))
 
     async def test_antigravity_adapter_rejects_explicit_null_event_discriminator_with_running_status(self) -> None:
@@ -1240,7 +1267,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
-                await adapter.invoke(binding, invocation)
+                await self._invoke_antigravity(adapter, binding, invocation)
             self.assertIn("invalid stream line: invalid event discriminator", str(cm.exception))
 
     async def test_antigravity_adapter_unwraps_result_envelope_with_whitespace_discriminator(self) -> None:
@@ -1278,7 +1305,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
-            result = await adapter.invoke(binding, invocation)
+            result = await self._invoke_antigravity(adapter, binding, invocation)
         self.assertEqual(result.response_text, '{"status":"ok"}')
 
     async def test_antigravity_adapter_rejects_conflicting_event_discriminators(self) -> None:
@@ -1315,7 +1342,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
-                await adapter.invoke(binding, invocation)
+                await self._invoke_antigravity(adapter, binding, invocation)
             self.assertIn("invalid stream line: conflicting event discriminator", str(cm.exception))
 
     async def test_antigravity_adapter_rejects_one_null_discriminator_when_other_present(self) -> None:
@@ -1352,7 +1379,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
-                await adapter.invoke(binding, invocation)
+                await self._invoke_antigravity(adapter, binding, invocation)
             self.assertIn("invalid stream line: invalid event discriminator", str(cm.exception))
 
     async def test_codex_adapter_streams_item_delta_and_avoids_completed_replay(self) -> None:
@@ -1403,7 +1430,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
-            result = await adapter.invoke(binding, invocation)
+            result = await self._invoke_codex(binding, invocation)
 
         self.assertEqual(result.response_text, '{"summary":"Completed story"}')
         # Expect:
@@ -1473,7 +1500,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
-            result = await adapter.invoke(binding, invocation)
+            result = await self._invoke_codex(binding, invocation)
 
         self.assertEqual(result.response_text, '{"summary":"Done"}')
         # Exactly 2 events should have been emitted:
@@ -1535,7 +1562,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
-            result = await adapter.invoke(binding, invocation)
+            result = await self._invoke_codex(binding, invocation)
 
         self.assertEqual(result.response_text, '{"summary":"Done"}')
         # Exactly 2 events should have been emitted (the matching and remembered agent_message deltas):
@@ -1606,7 +1633,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
-            result = await adapter.invoke(binding, invocation)
+            result = await self._invoke_codex(binding, invocation)
 
         self.assertEqual(result.response_text, '{"summary":"Done"}')
         # Exactly 1 event should have been emitted (the matching valid delta):
@@ -1617,6 +1644,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
     async def test_antigravity_adapter_streams_native_step_update_and_init_events(self) -> None:
         agy_backend = AgentBackend(
             self.workspace,
+            antigravity_executable=sys.executable,
             backend_overrides={PLOT_ARCHITECT: "antigravity"},
         )
         self.addCleanup(agy_backend.close)
@@ -1674,7 +1702,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
-            result = await adapter.invoke(binding, invocation)
+            result = await self._invoke_antigravity(adapter, binding, invocation)
 
         self.assertEqual(result.thread_id, "conv_native_1")
         self.assertEqual(json.loads(result.response_text), {"reply": "First part second part.\n"})
@@ -1693,6 +1721,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
     async def test_antigravity_adapter_surfaces_provider_error_on_non_zero_returncode(self) -> None:
         agy_backend = AgentBackend(
             self.workspace,
+            antigravity_executable=sys.executable,
             backend_overrides={PLOT_ARCHITECT: "antigravity"},
         )
         self.addCleanup(agy_backend.close)
@@ -1737,7 +1766,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
-                await adapter.invoke(binding, invocation)
+                await self._invoke_antigravity(adapter, binding, invocation)
 
         self.assertEqual(str(cm.exception), "Antigravity CLI exited with status 1")
         # Verify status event was emitted to stream sink
@@ -1748,6 +1777,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
     async def test_antigravity_adapter_surfaces_provider_stderr_on_non_zero_returncode(self) -> None:
         agy_backend = AgentBackend(
             self.workspace,
+            antigravity_executable=sys.executable,
             backend_overrides={PLOT_ARCHITECT: "antigravity"},
         )
         self.addCleanup(agy_backend.close)
@@ -1779,7 +1809,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(ProviderInvocationError) as cm:
-                await adapter.invoke(binding, invocation)
+                await self._invoke_antigravity(adapter, binding, invocation)
 
         self.assertEqual(str(cm.exception), "Antigravity CLI exited with status 1")
         self.assertIsNotNone(cm.exception.response_diagnostic)
@@ -1788,6 +1818,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
     async def test_antigravity_adapter_replays_stdout_when_no_streaming_callbacks_delivered(self) -> None:
         agy_backend = AgentBackend(
             self.workspace,
+            antigravity_executable=sys.executable,
             backend_overrides={PLOT_ARCHITECT: "antigravity"},
         )
         self.addCleanup(agy_backend.close)
@@ -1834,7 +1865,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
-            result = await adapter.invoke(binding, invocation)
+            result = await self._invoke_antigravity(adapter, binding, invocation)
 
         self.assertEqual(result.thread_id, "conv_fallback_1")
         self.assertEqual(json.loads(result.response_text), {"reply": "Fallback text."})
@@ -1880,7 +1911,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
-            await self.codex_adapter.invoke(binding, invocation)
+            await self._invoke_codex(binding, invocation)
 
         # Invalid UTF-8 line must be skipped and not emitted
         self.assertEqual(len(events), 2)
@@ -1930,7 +1961,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
-            await self.codex_adapter.invoke(binding, invocation)
+            await self._invoke_codex(binding, invocation)
 
         # "secret" and "ignored" must be rejected fail-closed; only "visible" is emitted
         self.assertEqual(len(events), 1)
@@ -1971,7 +2002,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
-            await adapter.invoke(binding, invocation)
+            await self._invoke_antigravity(adapter, binding, invocation)
 
         text_deltas = [ev.text for ev in events if ev.kind == ProviderStreamEventKind.TEXT_DELTA]
         thought_deltas = [ev.text for ev in events if ev.kind == ProviderStreamEventKind.THOUGHT_DELTA]
@@ -2016,7 +2047,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
-            await self.codex_adapter.invoke(binding, invocation)
+            await self._invoke_codex(binding, invocation)
 
         # Only "start" from item.started should be emitted; conflict and stale delta must be ignored
         emitted_texts = [ev.text for ev in events if ev.kind == ProviderStreamEventKind.TEXT_DELTA]
@@ -2062,7 +2093,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
-            await self.codex_adapter.invoke(binding, invocation)
+            await self._invoke_codex(binding, invocation)
 
         # Only initial texts from item.started should be emitted; both IDs retired
         emitted_texts = [ev.text for ev in events if ev.kind == ProviderStreamEventKind.TEXT_DELTA]
@@ -2103,7 +2134,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(Exception):
-                await adapter.invoke(binding, invocation)
+                await self._invoke_antigravity(adapter, binding, invocation)
 
         status_events = [ev for ev in events if ev.kind == ProviderStreamEventKind.STATUS]
         self.assertTrue(any("Error: Quota exceeded for tier" in ev.text for ev in status_events))
@@ -2145,7 +2176,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
-            await self.codex_adapter.invoke(binding, invocation)
+            await self._invoke_codex(binding, invocation)
 
         emitted_texts = [ev.text for ev in events if ev.kind == ProviderStreamEventKind.TEXT_DELTA]
         self.assertEqual(emitted_texts, ["hello"])
@@ -2187,7 +2218,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with mock.patch("story_writing_agents.codex_adapter.run_process", new=fake_run_process):
-            await self.codex_adapter.invoke(binding, invocation)
+            await self._invoke_codex(binding, invocation)
 
         emitted_texts = [ev.text for ev in events if ev.kind == ProviderStreamEventKind.TEXT_DELTA]
         self.assertEqual(emitted_texts, ["first part"])
@@ -2237,7 +2268,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
-            await adapter.invoke(binding, invocation)
+            await self._invoke_antigravity(adapter, binding, invocation)
 
         text_deltas = [e for e in events if e.kind == ProviderStreamEventKind.TEXT_DELTA]
         self.assertEqual(len(text_deltas), 0)
@@ -2282,7 +2313,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
-            await adapter.invoke(binding, invocation)
+            await self._invoke_antigravity(adapter, binding, invocation)
 
         text_deltas = [e.text for e in events if e.kind == ProviderStreamEventKind.TEXT_DELTA]
         self.assertEqual(
@@ -2331,7 +2362,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=fake_run_process):
             with self.assertRaises(Exception):
-                await adapter.invoke(binding, invocation)
+                await self._invoke_antigravity(adapter, binding, invocation)
 
         status_events = [e.text for e in events if e.kind == ProviderStreamEventKind.STATUS]
         for text in status_events:

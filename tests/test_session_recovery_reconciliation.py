@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import ast
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
 import hashlib
 import inspect
@@ -13,6 +13,7 @@ from unittest import mock
 
 import story_writing_agents
 import story_writing_agents.session_recovery as recovery_facade
+from story_writing_agents.git import story_commit_candidates as candidates_module
 from story_writing_agents.conversations import (
     CollaborationAgentProfile,
     CollaborationAssignment,
@@ -88,19 +89,27 @@ from story_writing_agents.session_recovery.transition_assessment import (
     SessionTransitionAssessor,
     SessionTransitionOperation,
 )
+from story_writing_agents.workspace.initialization import StoryCommitRecoverySnapshot
 from tests.collaboration_contract_fixture import (
     LEAD, USER, make_batch, make_draft, provider_call_drafts, store_batch,
 )
 from story_writing_agents.writing_artifacts import (
     ArtifactApplicationError,
     ArtifactApplicationErrorCode,
+    ArtifactDeletionProvenance,
     ArtifactApplicationFinalArtifact,
     ArtifactApplicationProvenance,
     ArtifactApplicationResult,
     ArtifactApplicationState,
     ArtifactCreateOperation,
+    ArtifactDeleteOperation,
     ArtifactKind,
+    ArtifactPatchOperation,
     ArtifactRelationshipValidation,
+    ArtifactRenameLineage,
+    ArtifactRenameOperation,
+    ArtifactReplaceOperation,
+    ArtifactTextHunk,
     build_artifact_change_set,
 )
 
@@ -109,6 +118,21 @@ _ROOT = Path(__file__).resolve().parents[1]
 _SOURCE = _ROOT / "src" / "story_writing_agents" / "session_recovery" / "reconciliation.py"
 _WORKSPACE = Path("/tmp/recovery-main")
 _SESSION = "novel"
+
+
+class _RecoveryPin:
+    def __init__(self, *, lost: bool = False) -> None:
+        self.lost = lost
+        self.require_calls = 0
+        self.close_calls = 0
+
+    def require_current(self) -> None:
+        self.require_calls += 1
+        if self.lost:
+            raise RuntimeError("recovery generation changed")
+
+    def close(self) -> None:
+        self.close_calls += 1
 _CONVERSATION = "conversation-1"
 _PATH = "manuscript/part-01/opening.md"
 _TIP = "1" * 40
@@ -290,12 +314,26 @@ def _resources(
 
 def _artifact_facts(
     state: ArtifactApplicationState = ArtifactApplicationState.APPLIED,
+    *,
+    base_content: bytes | None = None,
 ) -> tuple[SessionReviewedProposalEvidence, SessionArtifactApplicationEvidence]:
     content = b"opening"
     digest = hashlib.sha256(content).hexdigest()
+    base = {} if base_content is None else {_PATH: base_content}
+    operation = (
+        ArtifactCreateOperation(_PATH, ArtifactKind.MANUSCRIPT, content, digest)
+        if base_content is None
+        else ArtifactReplaceOperation(
+            _PATH,
+            ArtifactKind.MANUSCRIPT,
+            hashlib.sha256(base_content).hexdigest(),
+            content,
+            digest,
+        )
+    )
     change_set = build_artifact_change_set(
-        {},
-        (ArtifactCreateOperation(_PATH, ArtifactKind.MANUSCRIPT, content, digest),),
+        base,
+        (operation,),
     )
     relationship = ArtifactRelationshipValidation(
         1, change_set.base_state_digest, change_set.projected_state_digest,
@@ -347,7 +385,11 @@ def _candidate(
     correlation: str = _CORRELATION,
     application_id: str = "application-1",
     proposal_id: str = "proposal-1",
+    base_content: bytes | None = None,
 ) -> GitSessionCandidateRecord:
+    before_digest = (
+        None if base_content is None else hashlib.sha256(base_content).hexdigest()
+    )
     return GitSessionCandidateRecord(
         session_id=_SESSION,
         branch=f"story/session/{_SESSION}",
@@ -360,8 +402,12 @@ def _candidate(
         paths=(
             GitSessionCandidatePath(
                 _PATH,
-                GitSessionCandidatePathOperation.CREATE,
-                None,
+                (
+                    GitSessionCandidatePathOperation.CREATE
+                    if base_content is None
+                    else GitSessionCandidatePathOperation.UPDATE
+                ),
+                before_digest,
                 hashlib.sha256(b"opening").hexdigest(),
             ),
         ),
@@ -462,6 +508,7 @@ class _Observation:
     trace: list[str]
     adapter_instances: list[object]
     repository_instances: list[object]
+    binding_open_count: int
 
 
 def _observe(
@@ -476,6 +523,10 @@ def _observe(
     reviewed: SessionReviewedProposalEvidence | None = None,
     application: SessionArtifactApplicationEvidence | None = None,
     stored_application: object | None = None,
+    binding_accesses: tuple[object, ...] | None = None,
+    binding_failure: BaseException | None = None,
+    binding_fail_on: int | None = None,
+    recovery_snapshot: object | None = None,
     transition: bool = False,
 ) -> _Observation:
     trace: list[str] = []
@@ -484,8 +535,11 @@ def _observe(
     snapshot_values = list(snapshots or (_snapshot(), _snapshot()))
     external_values = list(externals or (_external(), _external()))
     status_values = list(statuses or (_status(), _status()))
+    initial_resources = resource_values[0]
+    access_values = list(binding_accesses or ())
     adapter_instances: list[object] = []
     repository_instances: list[object] = []
+    binding_open_count = 0
 
     def next_value(values: list[object], label: str):
         trace.append(label)
@@ -531,7 +585,46 @@ def _observe(
             self.apply_called = True
             raise AssertionError("Apply is forbidden during reconciliation")
 
+    class Access:
+        def __init__(self, resources):
+            self.resources = resources
+            self._repository = None
+
+        @property
+        def repository(self):
+            if self._repository is None:
+                self._repository = Repository(
+                    initial_resources.identity.worktree_root
+                )
+            return self._repository
+
+    class Binding:
+        resources = initial_resources
+
+        @contextmanager
+        def open_ready_resources(self):
+            nonlocal binding_open_count
+            binding_open_count += 1
+            if binding_failure is not None and (
+                binding_fail_on is None
+                or binding_open_count == binding_fail_on
+            ):
+                raise binding_failure
+            resources = (
+                next_value(access_values, "binding")
+                if access_values
+                else initial_resources
+            )
+            yield Access(resources)
+
     with ExitStack() as stack:
+        stack.enter_context(
+            mock.patch.object(
+                reconciliation_module,
+                "GitSessionGenerationPin",
+                _RecoveryPin,
+            )
+        )
         stack.enter_context(
             mock.patch.object(
                 reconciliation_module,
@@ -546,8 +639,31 @@ def _observe(
                 side_effect=lambda root, session: next_value(snapshot_values, "history"),
             )
         )
+        if recovery_snapshot is not None:
+            stack.enter_context(
+                mock.patch.object(
+                    reconciliation_module,
+                    "inspect_story_commit_recovery_snapshot",
+                    side_effect=(
+                        recovery_snapshot
+                        if isinstance(recovery_snapshot, BaseException)
+                        else None
+                    ),
+                    return_value=(
+                        None
+                        if isinstance(recovery_snapshot, BaseException)
+                        else recovery_snapshot
+                    ),
+                )
+            )
         stack.enter_context(mock.patch.object(reconciliation_module, "GitRepositoryAdapter", Adapter))
-        stack.enter_context(mock.patch.object(reconciliation_module, "WritingArtifactRepository", Repository))
+        stack.enter_context(
+            mock.patch.object(
+                reconciliation_module,
+                "compose_session_artifact_binding",
+                return_value=Binding(),
+            )
+        )
         owner = (
             SessionTransitionAssessor(_WORKSPACE)
             if transition else SessionRecoveryReconciler(_WORKSPACE, store)
@@ -559,7 +675,14 @@ def _observe(
             artifact_application=application,
             **({"collaboration_store": store} if transition else {}),
         )
-    return _Observation(result, store, trace, adapter_instances, repository_instances)
+    return _Observation(
+        result,
+        store,
+        trace,
+        adapter_instances,
+        repository_instances,
+        binding_open_count,
+    )
 
 
 class SessionRecoveryReconcilerContractTests(unittest.TestCase):
@@ -808,6 +931,9 @@ class SessionRecoveryLifecycleTests(unittest.TestCase):
 
 
 class SessionRecoveryStateTests(unittest.TestCase):
+
+
+
     def test_applied_staged_and_committed_states_use_complete_correlated_predecessors(self) -> None:
         reviewed, application = _artifact_facts()
         cases = (
@@ -1017,6 +1143,38 @@ class SessionRecoveryArtifactTests(unittest.TestCase):
                 self.assertFalse(repository.apply_called)
 
 
+
+
+class SessionRecoveryBoundaryTests(unittest.TestCase):
+    def test_failures_are_content_safe_no_authority_is_retained_and_boundary_is_exact(self) -> None:
+        observed = _observe(histories=(RuntimeError("PRIVATE PROSE"),))
+        self.assertIs(observed.result.state, SessionRecoveryState.RECOVERY_REQUIRED)
+        self.assertNotIn("PRIVATE PROSE", repr(observed.result))
+        self.assertEqual(
+            set(SessionRecoveryReconciler.__slots__),
+            {"_workspace_root", "_collaboration_store"},
+        )
+        self.assertFalse(any("snapshot" in name or "adapter" in name or "repository" in name for name in SessionRecoveryReconciler.__slots__))
+
+        tree = ast.parse(_SOURCE.read_text())
+        dependencies = {
+            node.module
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.level in {1, 2}
+        }
+        self.assertEqual(dependencies, {
+            "contracts", "conversations", "git", "git.session_contracts", "git.session_resources",
+            "git.session_history_contracts", "session_lifecycle",
+            "workspace.initialization", "writing_artifacts",
+        })
+        forbidden = ("provider", "controller", "apply_artifact_changes")
+        for value in forbidden:
+            self.assertNotIn(value, _SOURCE.read_text())
+        self.assertNotIn("git.process", dependencies)
+        self.assertNotIn("git.session_history", dependencies)
+
+
+
 class SessionRecoveryDriftTests(unittest.TestCase):
     def test_each_owner_generation_drift_returns_outcome_unknown_without_mixing_snapshots(self) -> None:
         unrelated = _candidate(suffix="drift", correlation="unrelated")
@@ -1067,37 +1225,6 @@ class SessionRecoveryDriftTests(unittest.TestCase):
                 self.assertIs(observed.result.state, SessionRecoveryState.OUTCOME_UNKNOWN)
                 self.assertIs(observed.result.owner, owner)
                 self.assertIs(observed.result.next_action, SessionRecoveryNextAction.INSPECT_OWNER_OUTCOME)
-
-
-class SessionRecoveryBoundaryTests(unittest.TestCase):
-    def test_failures_are_content_safe_no_authority_is_retained_and_boundary_is_exact(self) -> None:
-        observed = _observe(histories=(RuntimeError("PRIVATE PROSE"),))
-        self.assertIs(observed.result.state, SessionRecoveryState.RECOVERY_REQUIRED)
-        self.assertNotIn("PRIVATE PROSE", repr(observed.result))
-        self.assertEqual(
-            set(SessionRecoveryReconciler.__slots__),
-            {"_workspace_root", "_collaboration_store"},
-        )
-        self.assertFalse(any("snapshot" in name or "adapter" in name or "repository" in name for name in SessionRecoveryReconciler.__slots__))
-
-        tree = ast.parse(_SOURCE.read_text())
-        dependencies = {
-            node.module
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom) and node.level in {1, 2}
-        }
-        self.assertEqual(dependencies, {
-            "contracts", "conversations", "git", "git.session_contracts",
-            "git.session_history_contracts", "session_lifecycle",
-            "workspace.initialization", "writing_artifacts",
-            "writing_artifacts.repository",
-        })
-        forbidden = ("provider", "controller", "apply_artifact_changes")
-        for value in forbidden:
-            self.assertNotIn(value, _SOURCE.read_text())
-        self.assertNotIn("git.process", dependencies)
-        self.assertNotIn("git.session_history", dependencies)
-
 
 if __name__ == "__main__":
     unittest.main()

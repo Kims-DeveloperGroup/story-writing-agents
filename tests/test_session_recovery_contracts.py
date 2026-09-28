@@ -12,8 +12,11 @@ from pathlib import Path
 
 import story_writing_agents
 from story_writing_agents.conversations import (
-    CollaborationAgentProfile,
+    ArtifactApplicationNextAction,
+    ArtifactApplicationOutcomeKind,
+    ArtifactApplicationResultPayload,
     ArtifactProposalState,
+    CollaborationAgentProfile,
     CollaborationAssignment,
     CollaborationBudget,
     CollaborationConfirmationDecision,
@@ -405,6 +408,7 @@ class SessionRecoverySurfaceTests(unittest.TestCase):
         self.assertEqual(tuple(item.value for item in SessionRecoveryNextAction), (
             "continue_with_lead", "request_application_confirmation",
             "submit_application_decision", "request_commit_confirmation",
+            "reprepare_commit_request",
             "inspect_story_commit", "inspect_owner_outcome", "operator_recovery",
         ))
         self.assertEqual(tuple(item.value for item in SessionRecoveryOwner), (
@@ -660,6 +664,33 @@ class SessionRecoveryProjectionTests(unittest.TestCase):
                 result = reconcile_session_recovery(evidence)
                 self.assertIs(result.state, state)
                 self.assertIs(result.next_action, action)
+        _, application = _artifact_facts()
+        result_payload = ArtifactApplicationResultPayload(
+            confirmation_request_id="request-1",
+            decision_event_id="decision-1",
+            reviewed_proposal_id="proposal-1",
+            reviewed_proposal_digest=_proposal().proposal_digest,
+            application_id=application.application_result.application_id,
+            application_request_digest=_tagged("c"),
+            outcome=ArtifactApplicationOutcomeKind.APPLIED,
+            next_action=ArtifactApplicationNextAction.REPREPARE_COMMIT_REQUEST,
+            result=application.application_result,
+        )
+        result_only = replace(
+            _applied_evidence(),
+            collaboration_history=replace(
+                _history(),
+                current_artifact_application_result=result_payload,
+                next_safe_action=CollaborationNextAction.REPREPARE_COMMIT_REQUEST,
+            ),
+        )
+        reprepare = reconcile_session_recovery(result_only)
+        self.assertIs(reprepare.state, SessionRecoveryState.APPLIED_NOT_COMMITTED)
+        self.assertIs(
+            reprepare.next_action, SessionRecoveryNextAction.REPREPARE_COMMIT_REQUEST,
+        )
+        self.assertIs(reprepare.owner, SessionRecoveryOwner.STORY_COMMIT)
+        self.assertIsNone(reprepare.confirmation_request_id)
 
     def test_missing_foreign_mismatched_and_contradictory_owner_states_never_project_ready(self) -> None:
         staged = _commit_evidence(GitSessionHistoryState.STAGED)
@@ -867,7 +898,7 @@ class SessionRecoveryBoundaryTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         modules, edges = _module_graph()
-        self.assertEqual((len(modules), len(edges)), (146, 595))
+        self.assertEqual((len(modules), len(edges)), (148, 621))
         self.assertFalse(_has_cycle(modules, edges))
 
 

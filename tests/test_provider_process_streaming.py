@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
+import tempfile
 import unittest
+from pathlib import Path
+
+from story_writing_agents import provider_process as process_module
 
 from story_writing_agents.provider_process import (
     ProcessRequest,
@@ -33,6 +38,34 @@ class TestProviderProcessStreaming(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.stdout, b"hello\nworld\n")
         self.assertEqual(result.stderr, b"err\n")
         self.assertEqual(result.returncode, 0)
+        with tempfile.TemporaryDirectory(prefix="provider-replacement-") as temporary:
+            root = Path(temporary).resolve() / "session"
+            root.mkdir()
+            descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                root.rename(root.with_name("moved"))
+                root.mkdir()
+                replacement = root / "replacement.txt"
+                replacement.write_bytes(b"PRIVATE_REPLACEMENT_BYTES")
+                requirements = process_module.DarwinSandboxRequirements(
+                    executable=(cat_executable := Path("/bin/cat").resolve(strict=True)), read_subpaths=(cat_executable.parent,),
+                    deny_subpaths=(root / ".git",), deny_write_subpaths=(root,))
+                if sys.platform != "darwin":
+                    with self.assertRaises(process_module.ProcessStartFailed):
+                        process_module._darwin_confined_command((str(cat_executable), str(replacement)), requirements)
+                else:
+                    sandboxed = process_module._darwin_confined_command((str(cat_executable), str(replacement)), requirements)
+                    command = (os.path.realpath(sys.executable), "-I", "-c",
+                               process_module._DESCRIPTOR_EXEC_HELPER, str(descriptor), *sandboxed)
+                    process = await asyncio.create_subprocess_exec(
+                        *command, pass_fds=(descriptor,), stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE)
+                    stdout, stderr = await asyncio.wait_for(process.communicate(), 5)
+                    self.assertNotEqual(process.returncode, 0)
+                    self.assertEqual(stdout, b"")
+                    self.assertNotIn(b"PRIVATE_REPLACEMENT_BYTES", stderr)
+            finally:
+                os.close(descriptor)
 
     async def test_streaming_receives_lines_in_real_time(self) -> None:
         """Verify stdout lines are dispatched to callback and collected in ProcessResult."""

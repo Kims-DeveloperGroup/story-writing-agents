@@ -39,6 +39,7 @@ from story_writing_agents.writing_artifacts import (
     manuscript_artifact_path,
 )
 from story_writing_agents.writing_artifacts import _storage as storage_module
+from story_writing_agents.writing_artifacts import repository as repository_module
 from story_writing_agents.writing_artifacts import (
     filesystem_sources as filesystem_sources_module,
 )
@@ -100,6 +101,8 @@ class WritingArtifactTestCase(unittest.TestCase):
                 else candidate_author_agent_id
             ),
         )
+
+
 
 
 class ArtifactGrammarTests(unittest.TestCase):

@@ -12,6 +12,7 @@ from story_writing_agents import StoryRuntime, Workspace
 from story_writing_agents import conversations as c
 from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT
 from story_writing_agents.workspace.initialization import provision_session_resources
+from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
 from tests import test_lead_orchestration as lead
 from tests import test_artifact_proposal_orchestration as artifact
 from tests import test_lead_artifact_application as application
@@ -44,11 +45,13 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
 
     def setUp(self):
         main = pristine_initialized_workspace(self)
+        self.control_workspace = main
         self.session_id = "story_session"
         ready = provision_session_resources(main.root, self.session_id)
+        self.session_resources = ready
         self.workspace = Workspace(ready.identity.worktree_root).require_ready()
-        self.backend = lead._LeadBackend(persist_context_threads=True)
-        self.runtime = StoryRuntime(self.workspace, self.backend)
+        self.backend = lead._LeadBackend(persist_context_threads=True, vendor="fixture")
+        self.runtime = StoryRuntime(self.control_workspace, self.backend)
         self.objective_tasks = {}
 
     def projection(self, conversation_id):
@@ -59,7 +62,12 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
 
     def snapshots(self):
         return (
-            tuple((a.path, a.content) for a in self.runtime.artifacts.capture_complete_state()),
+            tuple(
+                (a.path, a.content)
+                for a in WritingArtifactRepository(
+                    self.workspace.root
+                ).capture_complete_state()
+            ),
             subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=self.workspace.root),
             subprocess.check_output(["git", "diff", "--cached", "--binary"], cwd=self.workspace.root),
         )
@@ -297,13 +305,13 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         archive = archive_from_conversations(archive_conversation(session_id=self.session_id, conversation_id=conversation_id, events=before))
         wire = serialize_conversation_archive(archive)
         self.assertEqual(serialize_conversation_archive(deserialize_conversation_archive(wire)), wire)
-        coordinator = WorkspaceConversationStorageMutationCoordinator(self.workspace)
+        coordinator = WorkspaceConversationStorageMutationCoordinator(self.control_workspace)
         with coordinator.borrow(timeout_seconds=2.0) as lease:
-            result = provision_sqlite_conversation_storage(self.workspace, lease=lease)
+            result = provision_sqlite_conversation_storage(self.control_workspace, lease=lease)
         self.assertIs(result.capability, ConversationStorageCapability.READY)
-        transferred = transfer_conversation_storage(self.workspace, source_backend=ConversationStorageBackend.FILESYSTEM, destination_backend=ConversationStorageBackend.SQLITE)
+        transferred = transfer_conversation_storage(self.control_workspace, source_backend=ConversationStorageBackend.FILESYSTEM, destination_backend=ConversationStorageBackend.SQLITE)
         self.assertIs(transferred.outcome, ConversationStorageTransferOutcome.COMPLETED)
-        services = compose_sqlite_conversation_storage(self.workspace)
+        services = compose_sqlite_conversation_storage(self.control_workspace)
         after = services.event_store.read(self.session_id, conversation_id)
         self.assertEqual(after, before)
         self.assertEqual(tuple(c.encode_collaboration_event(e) for e in after), tuple(c.encode_collaboration_event(e) for e in before))

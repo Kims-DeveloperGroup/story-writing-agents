@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import os
 import re
 import shutil
+import stat
 import tempfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -25,6 +27,7 @@ from .agent_context import (
 from .agents import ROSTER
 from .config import ConfigurationSnapshot
 from .errors import ConfigurationError, ProviderAuthenticationRequiredError
+from .git.session_contracts import GIT_SESSION_WORKTREE_SIBLING_SUFFIX
 from .models import AgentDefinition
 from .provider_adapter import (
     AgentExecutionProfile,
@@ -37,6 +40,7 @@ from .provider_adapter import (
 )
 from .provider_process import (
     CreateProcess,
+    DarwinSandboxRequirements,
     ProcessExecutableNotFound,
     ProcessRequest,
     ProcessStartFailed,
@@ -44,9 +48,82 @@ from .provider_process import (
     WaitFor,
     run_process,
 )
+from .provider_execution_workspace import ProviderExecutionWorkspace
 
 
 _SAFE_THREAD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+# Leave substantial headroom below Darwin's aggregate process-argument ceiling.
+_MAX_DEVELOPER_INSTRUCTIONS_ARGUMENT_UTF8_BYTES = 512 * 1_024
+_MAX_CODEX_RESPONSE_UTF8_BYTES = 8 * 1_024 * 1_024
+
+
+def _regular_output_exists(path: Path) -> bool:
+    """Return whether the exact output name is currently a regular file."""
+
+    try:
+        observed = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return False
+    return stat.S_ISREG(observed.st_mode)
+
+
+def _read_regular_output(path: Path) -> str:
+    """Read one bounded, identity-stable regular output without following links."""
+
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
+    )
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise OSError("Codex response output is not a regular file")
+        if before.st_size > _MAX_CODEX_RESPONSE_UTF8_BYTES:
+            raise ProviderInvocationError(
+                "Codex CLI returned oversized structured output",
+                taint_existing_thread=True,
+            )
+        content = bytearray()
+        while len(content) <= _MAX_CODEX_RESPONSE_UTF8_BYTES:
+            chunk = os.read(
+                descriptor,
+                min(
+                    64 * 1_024,
+                    _MAX_CODEX_RESPONSE_UTF8_BYTES + 1 - len(content),
+                ),
+            )
+            if not chunk:
+                break
+            content.extend(chunk)
+        if len(content) > _MAX_CODEX_RESPONSE_UTF8_BYTES:
+            raise ProviderInvocationError(
+                "Codex CLI returned oversized structured output",
+                taint_existing_thread=True,
+            )
+        after = os.fstat(descriptor)
+        if not stat.S_ISREG(after.st_mode) or after.st_nlink != 1:
+            raise OSError("Codex response output is not a regular file")
+        if (
+            before.st_dev,
+            before.st_ino,
+            before.st_mode,
+            before.st_nlink,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_mode,
+            after.st_nlink,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        ):
+            raise OSError("Codex response output changed while being read")
+        return bytes(content).decode("utf-8", errors="strict")
+    finally:
+        os.close(descriptor)
 
 
 def _reject_duplicate_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -153,6 +230,7 @@ class CodexAdapter:
         timeout_seconds: float,
         configuration: ConfigurationSnapshot,
         explicit_model: str | None,
+        control_root: Path,
         execution_profiles: Mapping[str, AgentExecutionProfile] | None = None,
         create_process: Callable[[], CreateProcess] = (
             lambda: asyncio.create_subprocess_exec
@@ -163,8 +241,16 @@ class CodexAdapter:
         ),
         which: Callable[[], Callable[[str], str | None]] = lambda: shutil.which,
     ) -> None:
+        if (
+            not isinstance(control_root, Path)
+            or not control_root.is_absolute()
+            or Path(os.path.realpath(control_root)) != control_root
+            or not control_root.is_dir()
+        ):
+            raise ValueError("Codex control root must be a canonical directory")
         self.executable = executable
         self.timeout_seconds = timeout_seconds
+        self._control_root = control_root
         self._configuration = configuration
         self._explicit_model = explicit_model
         self._execution_profiles = (
@@ -397,11 +483,25 @@ class CodexAdapter:
     ) -> ProviderResult:
         """Run one Codex structured turn and validate its thread envelope."""
 
+        execution_workspace = invocation.execution_workspace
+        if (
+            type(execution_workspace) is not ProviderExecutionWorkspace
+            or execution_workspace.session_id != invocation.session_id
+        ):
+            raise ProviderInvocationError(
+                "Codex execution workspace is unavailable",
+                taint_existing_thread=False,
+            )
+        execution_workspace.require_current()
+
         temporary_directory = Path(
             self._make_temporary_directory()(prefix="story-codex-output-")
         )
         schema_path = temporary_directory / "schema.json"
         output_path = temporary_directory / "response.json"
+        invocation_failure: BaseException | None = None
+        submitted = False
+        stdin: bytes | None = None
         try:
             if invocation.payload_json is None:
                 raise ProviderInvocationError(
@@ -416,15 +516,15 @@ class CodexAdapter:
                     taint_existing_thread=False,
                 ) from None
             schema_path.write_bytes(schema_json)
-            command = self.command(
+            command, darwin_sandbox = self._confined_command(
                 binding.staging_directory,
                 schema_path,
                 output_path,
                 invocation.thread_id,
                 binding.definition.agent_id,
+                execution_workspace,
             )
             stdin = invocation.payload_json
-            submitted = False
             create_process = self._create_process()
             agent_id = binding.definition.agent_id
             stream_sink = invocation.stream_sink
@@ -709,6 +809,8 @@ class CodexAdapter:
                         on_stdout_line=(
                             handle_stream_line if stream_sink is not None else None
                         ),
+                        execution_workspace=execution_workspace,
+                        darwin_sandbox=darwin_sandbox,
                     ),
                     create_process=tracked_create_process,
                     wait_for=self._wait_for(),
@@ -765,7 +867,7 @@ class CodexAdapter:
 
             try:
                 authentication = (
-                    None if result.returncode == 0 and output_path.is_file()
+                    None if result.returncode == 0 and _regular_output_exists(output_path)
                     else self._authentication_failure(result.stdout)
                 )
                 if authentication is not None:
@@ -801,7 +903,8 @@ class CodexAdapter:
                             taint_existing_thread=False,
                         )
                 try:
-                    response_text = output_path.read_text(encoding="utf-8")
+                    execution_workspace.require_current()
+                    response_text = _read_regular_output(output_path)
                 except OSError as exc:
                     raise ProviderInvocationError(
                         "Codex CLI did not write its final response",
@@ -812,12 +915,14 @@ class CodexAdapter:
                         "Codex CLI returned malformed structured output",
                         taint_existing_thread=True,
                     ) from exc
-                return ProviderResult(
+                provider_result = ProviderResult(
                     thread_id=thread_id,
                     response_text=response_text,
                     usage=self.provider_usage(events),
                     actual_transport_utf8_bytes=len(stdin),
                 )
+                execution_workspace.require_current()
+                return provider_result
             except BaseException as exc:
                 if isinstance(exc, ProviderInvocationError):
                     exc.record_response_diagnostic(response_diagnostic)
@@ -827,8 +932,212 @@ class CodexAdapter:
                     actual_transport_utf8_bytes=len(stdin),
                 )
                 raise
+        except BaseException as failure:
+            invocation_failure = failure
+            raise
         finally:
             shutil.rmtree(temporary_directory, ignore_errors=True)
+            try:
+                execution_workspace.require_current()
+            except BaseException as validation_failure:
+                if invocation_failure is None:
+                    record_provider_failure_accounting(
+                        validation_failure,
+                        state=(
+                            ProviderCallState.SUBMITTED
+                            if submitted
+                            else ProviderCallState.PREPARED
+                        ),
+                        actual_transport_utf8_bytes=(
+                            None if stdin is None else len(stdin)
+                        ),
+                    )
+                    raise
+                try:
+                    invocation_failure.add_note(
+                        "Codex execution workspace exit validation failed: "
+                        f"{type(validation_failure).__name__}"
+                    )
+                except BaseException:
+                    pass
+
+    def _confined_command(
+        self,
+        staging_directory: Path,
+        schema_path: Path,
+        output_path: Path,
+        thread_id: str | None,
+        agent_id: str | None,
+        execution_workspace: ProviderExecutionWorkspace,
+    ) -> tuple[list[str], DarwinSandboxRequirements]:
+        """Build a native Codex command and its exact process requirements."""
+
+        execution_workspace.require_current()
+        resolved_executable = self._which()(self.executable)
+        if resolved_executable is None:
+            raise ProviderInvocationError(
+                f"Codex CLI executable was not found: {self.executable}",
+                taint_existing_thread=False,
+            )
+        executable = Path(os.path.realpath(resolved_executable))
+        staging = Path(os.path.realpath(staging_directory))
+        schema = Path(os.path.realpath(schema_path))
+        output = Path(os.path.realpath(output_path))
+        session_root = Path(os.path.realpath(execution_workspace.worktree_root))
+        session_container = self._control_root.with_name(
+            self._control_root.name + GIT_SESSION_WORKTREE_SIBLING_SUFFIX
+        )
+        if session_root != session_container / execution_workspace.session_id:
+            raise ProviderInvocationError(
+                "Codex execution workspace is unavailable",
+                taint_existing_thread=False,
+            )
+        native_state = self._native_state_directory(
+            session_root=session_root,
+            session_container=session_container,
+            staging=staging,
+            output=output,
+        )
+        definition_path = staging / "AGENTS.md"
+        try:
+            developer_instructions = definition_path.read_text(
+                encoding="utf-8",
+                errors="strict",
+            )
+        except (OSError, UnicodeError) as exc:
+            raise ProviderInvocationError(
+                "Codex bound instructions are unavailable",
+                taint_existing_thread=False,
+            ) from exc
+        developer_instructions_argument = (
+            "developer_instructions="
+            + json.dumps(developer_instructions, ensure_ascii=False)
+        )
+        if (
+            len(developer_instructions_argument.encode("utf-8", errors="strict"))
+            > _MAX_DEVELOPER_INSTRUCTIONS_ARGUMENT_UTF8_BYTES
+        ):
+            raise ProviderInvocationError(
+                "Codex bound instructions exceed the safe process argument limit",
+                taint_existing_thread=False,
+            )
+        sandbox = DarwinSandboxRequirements(
+            executable=executable,
+            read_paths=(executable, schema),
+            write_subpaths=(native_state,),
+            write_paths=(output,),
+            deny_subpaths=(session_root / ".git", staging),
+            deny_write_subpaths=(session_root,),
+            network=True,
+        )
+        command = [
+            os.fspath(executable),
+            "--ask-for-approval",
+            "never",
+            "--sandbox",
+            "read-only",
+            "--cd",
+            ".",
+            "exec",
+        ]
+        model, reasoning_effort = self.invocation_settings(agent_id)
+        if model is not None:
+            command.extend(["--model", model])
+        if reasoning_effort is not None:
+            command.extend(
+                ["--config", f'model_reasoning_effort="{reasoning_effort}"']
+            )
+        if thread_id is not None:
+            command.append("resume")
+        command.extend(
+            [
+                "--json",
+                "--skip-git-repo-check",
+                "--ignore-user-config",
+                "--ignore-rules",
+                "--disable",
+                "apps",
+                "--disable",
+                "multi_agent",
+                "--disable",
+                "shell_tool",
+                "--disable",
+                "web_search",
+                "--config",
+                'web_search="disabled"',
+                "--config",
+                "project_root_markers=[]",
+                "--config",
+                developer_instructions_argument,
+                "--output-schema",
+                os.fspath(schema),
+                "--output-last-message",
+                os.fspath(output),
+            ]
+        )
+        if thread_id is not None:
+            command.append(thread_id)
+        command.append("-")
+        execution_workspace.require_current()
+        return command, sandbox
+
+    def _native_state_directory(
+        self,
+        *,
+        session_root: Path,
+        session_container: Path,
+        staging: Path,
+        output: Path,
+    ) -> Path:
+        """Return a narrow, owned Codex state root or fail before launch."""
+
+        configured_native_state = Path(
+            os.environ.get("CODEX_HOME", os.fspath(Path.home() / ".codex"))
+        )
+        if not configured_native_state.is_absolute():
+            raise ProviderInvocationError(
+                "Codex native state directory is unsafe",
+                taint_existing_thread=False,
+            )
+        native_state = Path(os.path.realpath(configured_native_state))
+        home = Path(os.path.realpath(Path.home()))
+
+        def overlaps(first: Path, second: Path) -> bool:
+            return bool(
+                first == second
+                or first in second.parents
+                or second in first.parents
+            )
+
+        try:
+            observed = os.stat(native_state, follow_symlinks=False)
+        except OSError:
+            observed = None
+        effective_uid = os.geteuid() if hasattr(os, "geteuid") else None
+        if (
+            observed is None
+            or not stat.S_ISDIR(observed.st_mode)
+            or effective_uid is None
+            or observed.st_uid != effective_uid
+            or stat.S_IMODE(observed.st_mode) & 0o022
+            or native_state == Path(native_state.anchor)
+            or native_state == home
+            or any(
+                overlaps(native_state, protected)
+                for protected in (
+                    session_root,
+                    session_container,
+                    staging,
+                    output.parent,
+                    self._control_root,
+                )
+            )
+        ):
+            raise ProviderInvocationError(
+                "Codex native state directory is unsafe",
+                taint_existing_thread=False,
+            )
+        return native_state
 
     def command(
         self,

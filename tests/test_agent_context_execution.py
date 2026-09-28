@@ -90,6 +90,7 @@ from story_writing_agents.agents import EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR
 from story_writing_agents.conversation_storage import (
     compose_filesystem_conversation_storage,
 )
+from story_writing_agents.conversations.session_context import SessionHistorySnapshot
 from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
@@ -357,14 +358,33 @@ class _ScriptedProvider:
         self.second_invocation_entered = asyncio.Event()
         self.inspections: list[tuple[object, str, str | None]] = []
         self.finalizers: list[_RecordingFinalizer] = []
+        self.currentness_observations: list[
+            tuple[tuple[tuple[str, ContextProviderTerminalCode | None], ...], ...]
+        ] = []
+        self.currentness_hook: Callable[[], None] | None = None
+        self.invocation_depth = 0
+        self.invocation_exits = 0
         self._next_thread = 1
 
     @asynccontextmanager
-    async def invocation(self, _scope: object, _policy: str):
+    async def invocation(
+        self,
+        _scope: object,
+        _policy: str,
+        *,
+        continuation_identity: object | None = None,
+        execution_workspace: object | None = None,
+    ):
+        del continuation_identity, execution_workspace
         self.invocation_entries += 1
+        self.invocation_depth += 1
         if self.invocation_entries >= 2:
             self.second_invocation_entered.set()
-        yield
+        try:
+            yield
+        finally:
+            self.invocation_depth -= 1
+            self.invocation_exits += 1
 
     @staticmethod
     def _key(scope: object, policy_fingerprint: str) -> tuple[object, str]:
@@ -374,6 +394,19 @@ class _ScriptedProvider:
         value = self.threads.get(self._key(scope, policy_fingerprint))
         self.inspections.append((scope, policy_fingerprint, value))
         return value
+
+    def require_current_execution_workspace(
+        self,
+        _scope: object,
+        _policy_fingerprint: str,
+    ) -> None:
+        if self.invocation_depth <= 0:
+            raise AssertionError("execution workspace escaped its invocation")
+        self.currentness_observations.append(
+            tuple(tuple(finalizer.calls) for finalizer in self.finalizers)
+        )
+        if self.currentness_hook is not None:
+            self.currentness_hook()
 
     def _accounting(
         self,
@@ -606,6 +639,7 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
                 "physical_call_limit",
                 "include_core_statuses",
                 "session_state_json",
+                "execution_workspace",
             ),
         )
         request = self.request()
@@ -994,6 +1028,11 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.assertEqual(
             [finalizer.calls for finalizer in provider.finalizers],
             [[("accepted", None)]] * 3,
+        )
+        self.assertIn(((),), provider.currentness_observations)
+        self.assertIn(
+            ((("accepted", None),), ()),
+            provider.currentness_observations,
         )
 
     async def test_compatible_ready_is_delta_and_provider_history_loss_bootstraps(self) -> None:
@@ -1620,6 +1659,23 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
             ],
         )
 
+        class _ExitFailureProvider(_ScriptedProvider):
+            @asynccontextmanager
+            async def invocation(self, *args, **kwargs):
+                async with super().invocation(*args, **kwargs):
+                    yield
+                raise RuntimeError("session-root postvalidation failed")
+
+        exit_request = self.request(session_id="session-exit")
+        exit_provider = _ExitFailureProvider((_answer,))
+        with self.assertRaisesRegex(RuntimeError, "session-root postvalidation failed"):
+            await self.invoke(exit_provider, exit_request)
+        self.assertIsNone(self.inspect(exit_provider, exit_request).record.ready_checkpoint)
+        self.assertEqual(
+            exit_provider.finalizers[0].calls,
+            [("post_response_runtime_failure", ContextProviderTerminalCode.CONTEXT_RUNTIME_FAILED)],
+        )
+
     def test_frozen_failure_mapping_covers_all_service_boundaries(self) -> None:
         cases = (
             (
@@ -2183,6 +2239,8 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
         self.assertIs(
             self.inspect(provider, request).record.state, ContextLedgerRecordState.READY
         )
+
+
 
     async def test_authoritative_failure_remains_primary_when_terminal_sink_fails(
         self,

@@ -180,7 +180,22 @@ authority.
 Canonical artifact input uses the normal reference operation: runtime
 revalidates the path and digest and gives the provider an authorized read
 coordinator. Canonical bytes are not embedded in durable consensus events and
-the agent cannot bypass the reference.
+the agent cannot bypass the reference. This artifact-backed path binds the
+exact physical session worktree, reconciles only reference cleanup owned by
+that identity, and builds the agent definition from its canonical session
+policy bytes; configuration, backend/route, runtime overrides, and persona
+remain control-owned.
+
+Candidate-only consensus normally reads unpublished candidate material without
+requesting artifact/reference worktree access and uses the control-owned
+definition. Each Codex provider call still creates a fresh exact binding for
+its call-local execution capability. If the process-shared runtime registry has
+pending reference cleanup for that session, the same binding also reconciles
+only cleanup whose physical identity matches and supplies session policy
+without replaying provider work. A replaced root receives neither the old
+cleanup nor the old operation ID as a live-owner exclusion. With no registered
+cleanup the call performs no artifact scan merely to discover one; a restart
+orphan is instead reconciled at the next artifact-sensitive boundary.
 
 ## Continue a synthesis deadlock without copying the candidate
 

@@ -39,6 +39,8 @@ from story_writing_agents.workspace.initialization import (
     WorkspaceRootInspection,
     WorkspaceRootRole,
     WorkspaceRootState,
+    compose_session_artifact_binding,
+    provision_session_resources,
 )
 
 
@@ -89,6 +91,16 @@ def workspace_git_identity():
 
     with mock.patch.dict(os.environ, _TEST_GIT_IDENTITY, clear=False):
         yield
+
+
+@contextmanager
+def live_provider_execution_workspace(root: Path, session_id: str):
+    """Issue a call-local provider workspace through the real session owner."""
+
+    provision_session_resources(root, session_id)
+    binding = compose_session_artifact_binding(root, session_id)
+    with binding.open_provider_execution_workspace() as workspace:
+        yield workspace
 
 
 def initialize_test_workspace(root: str | os.PathLike[str]) -> Workspace:

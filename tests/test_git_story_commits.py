@@ -3,17 +3,38 @@
 from __future__ import annotations
 
 import copy
+import multiprocessing
 import os
 import pickle
+import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from dataclasses import replace
+from pathlib import Path
 from unittest import mock
 
 import story_writing_agents
 import story_writing_agents.git as git_facade
 from story_writing_agents.git import story_commits as commits_module
-from story_writing_agents.git.session_history import open_git_session_history
+from story_writing_agents.git import repository_lock as lock_module
+from story_writing_agents.git.session_history import (
+    GitSessionHistory,
+    GitSessionRecoveryHistory,
+    open_git_session_history,
+)
+from story_writing_agents.git.session_history_contracts import (
+    GIT_SESSION_HISTORY_DIRECTORY,
+    GitSessionCommitOperationRecord,
+    GitSessionHistoryError,
+    GitSessionHistoryFailureCode,
+    GitSessionHistoryRecoveryAction,
+    GitSessionHistoryState,
+    advance_commit_operation,
+    encode_commit_operation,
+)
 from story_writing_agents.git.story_commit_contracts import (
+    StoryCommitApplicationEvidence,
     StoryCommitConfirmation,
     StoryCommitDecision,
     StoryCommitError,
@@ -22,8 +43,25 @@ from story_writing_agents.git.story_commit_contracts import (
     StoryCommitState,
 )
 from story_writing_agents.git.story_commits import StoryCommitService
+from story_writing_agents.workspace.initialization import (
+    SessionArtifactBindingError,
+    compose_session_artifact_binding,
+)
+from story_writing_agents.workspace import initialization as initialization_module
+from story_writing_agents.workspace.schema import canonical_initializer_scaffold
+from story_writing_agents.writing_artifacts import (
+    ArtifactKind,
+    ArtifactReplaceOperation,
+    build_artifact_change_set,
+    canonical_artifact_kind,
+)
+from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
 
-from tests.test_git_story_commit_candidates import StoryCommitGitTestCase, manifest
+from tests.test_git_story_commit_candidates import (
+    StoryCommitGitTestCase,
+    manifest,
+    sha,
+)
 
 
 class StoryCommitServiceTests(StoryCommitGitTestCase):
@@ -37,6 +75,9 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
         )
         return root, session_root, service, candidate
 
+
+
+
     @staticmethod
     def confirmation(candidate, decision=StoryCommitDecision.COMMIT, suffix="1"):
         return StoryCommitConfirmation(
@@ -48,13 +89,9 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
         )
 
 
-    @staticmethod
-    def _execute_error(service, authority):
-        try:
-            service.execute(authority)
-        except StoryCommitError as error:
-            return error
-        raise AssertionError("cross-thread authority unexpectedly executed")
+
+
+
 
     def test_only_exact_commit_decision_authorizes_and_confirmation_cannot_replay(
         self,
@@ -71,7 +108,11 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
                     caught.exception.code, StoryCommitFailureCode.AUTHORITY_INVALID
                 )
         confirmation = self.confirmation(candidate, suffix="exact")
-        service.authorize(candidate, confirmation)
+        authority = service.authorize(candidate, confirmation)
+        self.assertEqual(
+            authority._operation_id,
+            commits_module._candidate_operation_id("commit", candidate.candidate_id),
+        )
         with self.assertRaises(StoryCommitError) as caught:
             service.authorize(candidate, confirmation)
         self.assertIs(caught.exception.code, StoryCommitFailureCode.AUTHORITY_INVALID)
@@ -85,6 +126,27 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
         with self.assertRaises(StoryCommitError) as caught:
             service.authorize(candidate, mismatched)
         self.assertIs(caught.exception.code, StoryCommitFailureCode.AUTHORITY_INVALID)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

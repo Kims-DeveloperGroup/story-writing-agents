@@ -8,7 +8,7 @@
 > `$`/`$$` activates canonical selection and ranged viewing. Existing artifacts and
 > reference-operation evidence remain inspectable through direct components.
 > The pure exact change-set and relationship-policy contracts documented below
-> remain available independently of those inactive runtime workflows.
+> remain available independently of their installed runtime callers.
 
 This reference uses **writing artifact path** for the canonical story-output
 topology. A current source at one of those paths may be manual or
@@ -91,10 +91,12 @@ grants none of their authority.
 > exact request and may persist it through the private #519 store. Neither the
 > value contract nor repository seam asks a user or agent for confirmation,
 > calls a provider, changes prompt context, or stages or commits Git. They are
-> not an installed CLI command or lead-agent action.
+> not standalone installed commands or provider/lead capabilities. The runtime
+> invokes this seam only after its separate exact Apply decision boundary.
 
-In the later workflow, #491 will create an `ArtifactApplicationRequest` only after
-the user separately confirms **Apply** for one reviewed candidate. The request
+The installed Lead workflow creates an `ArtifactApplicationRequest` for one
+reviewed candidate and invokes the repository only after the user separately
+confirms **Apply**. The request
 then carries the exact content-bearing `ArtifactChangeSet` that the repository
 may apply. Possessing, constructing, or deserializing this value is not proof of
 confirmation and grants no provider, agent, or Git authority.
@@ -115,8 +117,8 @@ The immutable provenance keeps the later application tied to the review facts:
 The contract validates shapes and the embedded change-set correlation. It does
 not look up a candidate or determine whether Apply was confirmed. The repository
 does reread the complete canonical state and recompute the relationship result
-under its lease before writing; #491 remains responsible for creating authority
-only after confirmation.
+under its lease before writing; runtime remains responsible for creating
+authority only after confirmation.
 
 ### Public Python surface
 
@@ -340,11 +342,11 @@ exact canonical fields is the only accepted form.
 
 The package-internal #509 story-commit service consumes a typed
 `StoryCommitApplicationEvidence` only after some owning workflow has applied the
-exact change set successfully. #491 will produce that evidence; it is not a
-public writing-artifacts export or current CLI/lead behavior. Applying artifact
-files and committing them remain separate operations: Apply never stages or
-commits, and a change-set value or application receipt is not user confirmation
-or Git authority.
+exact change set successfully. The installed Lead runtime produces that
+evidence internally; it is not a public writing-artifacts export. Applying
+artifact files and committing them remain separate operations: Apply never
+stages or commits, and a change-set value or application receipt is not user
+confirmation or Git authority.
 
 The evidence binds the session/application/proposal/correlation IDs, complete
 `ArtifactChangeSet`, and its exact projected-state digest. Candidate preparation
@@ -1355,6 +1357,82 @@ their current nonterminal states. It records neither `result_received` nor
 `accepted`. The local fallback reply may still be visible, but its
 `origin=runtime_fallback` trace does not change that reference history.
 
+Guarded runtime preparation parses the indicators first. For a nonempty
+reference batch it then acquires and validates one non-inheritable, duplicated
+session-root descriptor before the repository can create `CAPTURED`
+authorization. Construction transfers that physical-worktree pin exactly once
+to the operation. Supplier, pin-validation, operation-ID, or construction
+failure closes every descriptor that was not transferred. If ordinary
+non-callback operation construction fails after capture, the repository closes
+the authorization and terminalizes that durable operation as
+`workflow_failure`.
+
+Registered `StoryRuntime` creation normally publishes ownership from the
+repository's post-capture callback, before its fallible access exit. The
+process-shared registry is keyed by control workspace, session, exact physical
+worktree identity, and operation and holds a strong cleanup owner until that
+operation is terminal; another `StoryRuntime` in the same process therefore
+does not mistake live work for a restart orphan. If the publication callback
+itself fails after durable `REQUESTED` and `CAPTURED` events, preparation closes
+the content-bearing authorization and unretained pin without recursively
+entering the repository transaction. It re-raises the callback failure
+unchanged and leaves the content-free `CAPTURED` operation as a restart orphan;
+a later artifact-sensitive boundary inventories and terminalizes it through
+the ordinary restart cleanup path.
+
+Once registered guarded creation has published the operation, every later
+failure defers cleanup, not only guard or workspace-security failures. Deferral
+immediately closes every retained selected-byte result and content-bearing
+authorization, makes one-use capabilities unusable, clears pending coordinators
+and repository access, and leaves content-free ownership plus the operation's
+private, non-traversed worktree descriptor. The pin is never read, serialized,
+provider-visible, or usable as repository authority. The failed invocation and
+any known provider work are not replayed.
+
+Operational reference authority belongs to the process and opaque thread token
+that created it. Beginning or finishing work, handling a provider read action,
+recording or accepting its result, and invocation termination all reject a
+foreign thread or forked child with `correlation_mismatch` before repository
+locking or I/O. Cleanup state is narrower: another thread in the same process
+may inspect pending state and complete retained reconciliation through its own
+fresh guarded repository access. A forked process cannot do so. Where the
+platform supports `os.register_at_fork`, its `after_in_child` hook eagerly
+replaces the inherited lock and handle set with an empty child-local registry
+as the fork returns. A PID check before each registry lock remains a defensive
+lazy fallback. Inherited operations are therefore never treated as live child
+authority.
+
+At the next same-process artifact-sensitive boundary, runtime reconciles a
+retained owner only when the fresh binding has the same physical worktree
+identity. Same-generation terminal or reconciled completion closes the pin. If
+the session name now resolves to a replacement root, runtime closes the pin,
+strips and unregisters the stale transient owner without running its cleanup
+against the replacement, and does not add the old operation ID to the
+replacement's live-owner exclusion set; the original root's durable history is
+unchanged. Terminal success or failure, reconciled completion, stale-owner
+abandonment, and every unretained preparation path each close the pin exactly
+once. A candidate-only consensus call enters this boundary only when the
+registry reports pending cleanup; otherwise it performs no artifact/reference
+worktree access. Each Codex provider call still opens its own exact session
+execution capability.
+
+Reference descriptor cleanup is `BaseException`-safe and primary-aware.
+Preparation relinquishes each local descriptor before attempting its close,
+and an operation clears its owner-pin field before closing, so the owner path is
+one-shot. A failure while deferring content or authorization cannot skip the
+pin close. When another failure is already active, a close failure adds only
+its exception type as a content-free note and cannot replace the primary;
+without a primary, ordinary close `OSError` is suppressed while a non-`OSError`
+`BaseException` propagates. All applicable cleanup steps are still attempted.
+
+After process restart, no transient registry owner survives. The next
+artifact-sensitive boundary inventories validated reference history and
+reconciles every nonterminal orphan. Reconciliation is idempotent: already
+terminal state is unchanged, and an interrupted invocation-termination prefix
+can resume before the operation is terminated. Missing, malformed, or
+inconsistent evidence fails closed as `evidence_corrupt` instead of being
+repaired or skipped.
+
 The durable schema-v2 history contains ordered path and optional range,
 content-free filesystem source identity, selected SHA-256 and byte count,
 source line count, agent/invocation
@@ -1417,8 +1495,9 @@ out-of-bounds range or a value above either limit fails with a fixed,
 content-free code. These authorization limits are separate from the ranged
 viewer's 8 MiB defensive source limit.
 
-Delivery consumes the capability before checking the caller's requested tuple,
-so a mismatched order, path, or range cannot be retried with that capability.
+After guarded repository access is entered, delivery consumes the capability
+before checking the caller's requested tuple, so a mismatched order, path, or
+range cannot be retried with that capability.
 Before delivery, invocation acceptance, operation checkpoints, and final
 operation acceptance, the repository compares the complete current filesystem
 source identity and full-file hash with the original capture. The selected
@@ -1440,14 +1519,16 @@ evidence namespace are safe.
 
 ## What a user can change
 
-No current public command changes an artifact. Users can ask the Python lead to
-critique or recommend a change, construct an exact artifact candidate, confirm
-its specialist review, and inspect an immutable reviewed proposal. Users can
+Users can ask the Python or installed interactive Lead to critique or
+recommend a change, construct an exact artifact candidate, confirm its
+specialist review, and inspect an immutable reviewed proposal. A separate
+structured Apply decision can publish that exact reviewed change in the
+correlated session worktree. Review confirmation alone does not apply the
+candidate, and providers never receive filesystem or Git authority. Users can
 also prepare or inspect safe canonical files directly while no workspace
-process is active. A lead decision authorizes only the disclosed review; it
-does not apply the candidate. A manual file has no agent-produced provenance.
+process is active. A manual file has no agent-produced provenance.
 
-The later execution/publication workflow is expected to support:
+The implemented execution/publication workflow supports:
 
 - an outline request can lead the lead orchestrator to publish full replacements
   for `global_outline.md` or `part_outlines.md`;
@@ -1516,9 +1597,15 @@ aliases, symlinks, hard-linked files, special files, internal state, and outside
 paths are excluded. These source rules do not relax the stricter publication
 identity in [Exact output paths](#exact-output-paths).
 
+Host code can use `WritingArtifactRepository.are_sources_absent(paths, max_bytes=...)`
+to check a nonempty, ordered, unique subset of the four core paths in one guarded
+source operation. It returns `True` only when every requested path is physically
+missing, and `False` at the first readable file. It preserves strict source-read
+limits and errors; an unsafe entry excluded from discovery does not prove absence.
+
 | State | Source behavior | Publication behavior |
 | --- | --- | --- |
-| Absent | The path is not listed, viewable, referenceable, or available to contextual source capture. | `apply_artifact_changes()` or the temporary native caller may create it when an exact request and policy permit. No installed UI invokes that seam yet. |
+| Absent | The path is not listed, viewable, referenceable, or available to contextual source capture. | `apply_artifact_changes()` may create it when an exact request and policy permit; the installed Lead path reaches that seam only after separate review and Apply decisions. |
 | Present and safe | The path is listed. Opening captures current bytes with strict UTF-8/NUL and 8 MiB checks; role-allowlisted core files can enter contextual P2 selection. Empty whole-file references are valid. | If catalog/application-ledger metadata matches, it may also be a current applied artifact. Source use alone does not establish that fact. |
 | Manual, pre-provenance, or hash-divergent | It has the same source behavior as any other present safe file. A changed core file changes its context revision and can force delta/bootstrap. | No provenance is fabricated or adopted. Its current bytes can make an exact create/update/delete request stale before journaling. |
 | Unsafe or unsupported | It is excluded during metadata discovery when the failure is entry-local; an exact open fails closed. A listed file whose bytes later prove oversized, invalid UTF-8, or NUL-containing fails when opened. | It cannot be published through the unsafe identity. |
@@ -1546,10 +1633,10 @@ canonical story sources.
 The #519 private persistence owner now sits beneath the #520
 `WritingArtifactRepository.apply_artifact_changes()` seam. The repository is a
 module-supported internal component, not a package-facade export or installed
-CLI command. It accepts application authority but does not obtain it: #491 will
-supply the separate lead/user Apply-confirmation workflow. It has no provider,
-agent, context, or Git entry point. The retained `commit_consensus` method is
-only a temporary translator for its existing native caller.
+CLI command. It accepts application authority but does not obtain it: the
+runtime supplies the separate lead/user Apply-confirmation workflow. It has no
+provider, agent, context, or Git entry point. The retained `commit_consensus`
+method is only a compatibility translator for its existing native caller.
 
 Repository construction remains I/O-free. Every authoritative catalog,
 canonical-source, explicit-reference, and application operation then uses one
@@ -1562,6 +1649,31 @@ in-process repository lock
 -> perform the requested read or application
 -> release the lease
 ```
+
+The runtime-composed session variant adds an outer READY gate without changing
+that repository API. One exact repository object belongs to the binding, but
+each transaction requires live same-thread binding access. One outer access
+performs the complete semantic READY pre/post pair; same-thread nested binding
+and repository operations reuse that transaction with active lease and named-
+root checks instead of repeating the full scan. A retained raw repository
+therefore fails outside access. Long-lived runtime reference/source adapters
+retain an access factory, not authority, and reacquire an outer guard for each
+operation. Borrowed Story Commit artifact access retains its own complete
+history-owned pre/post validation, and Apply explicitly rechecks READY
+immediately before its repository mutation starts.
+
+Guarded runtime references preserve the package-internal
+`SessionArtifactGuardFailure` classification, including its existing concrete
+`story_writing_agents.workspace.initialization.SessionArtifactBindingError`,
+through preparation, read action, explicit failure, terminalization, and
+cleanup. A later guard or preserved workspace-security failure also takes
+precedence while closing an earlier provider or workflow failure. Lead maps
+that resource loss to
+`recovery_required` before any provider or fallback call. Guarded preparation
+continues to propagate `WorkspaceSecurityError`. None of this changes the
+unguarded repository contract: public preparation and operation failure still
+convert ordinary failures to the fixed content-free `ReferenceOperationFailure`
+result. The internal marker adds no project-root or subpackage-facade export.
 
 The private store, not `repository.py` or `_storage.py`, is the sole interpreter
 of application journals, immutable records, catalog transitions, completed
@@ -1651,9 +1763,9 @@ effects. Call `catalog()` separately when current membership is needed.
 | Repair one incomplete core document with a patch to `core_documents/character_sheets.md`, with that core path attached to the reviewed evidence. | `applied`; one affected path and one final core path/kind/SHA-256 fact. The repository does not claim that a lead obtained confirmation. |
 | Replace `manuscript/part-01/opening.md` after review against the sorted attached paths `core_documents/character_sheets.md` and `core_documents/narrative_rules.md`. | `applied`; the manuscript path and final digest. Attached core paths are relationship-review facts, not implicit write targets. |
 | Repair multi-file consistency in one request by patching `global_outline.md`, replacing `opening.md`, and patching every affected inbound manuscript link. | `applied`; every operation path appears in the affected/final/rename/delete facts. Omitting a path from the request is not deletion. |
-| Reject the proposal or request a revision before Apply. | #491 must not call this method. There is no result, journal, catalog change, or artifact write. A revised candidate needs a fresh exact request and confirmation. |
+| Reject the proposal or request a revision before Apply. | Runtime must not call this method. There is no result, journal, catalog change, or artifact write. A revised candidate needs a fresh exact request and confirmation. |
 
-For example, after #491 eventually records confirmation it may pass an
+For example, after runtime records the separate confirmation it may pass an
 already-built request to the repository:
 
 ```text

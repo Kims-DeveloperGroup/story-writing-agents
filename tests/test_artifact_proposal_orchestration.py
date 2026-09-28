@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from unittest import mock
 
 from story_writing_agents import StoryRuntime
 from story_writing_agents.agent_context.accounting import ProviderCallKind
@@ -15,6 +16,7 @@ from story_writing_agents.agents import (
 from story_writing_agents.artifact_proposals import (
     serialize_artifact_review_candidate,
 )
+from story_writing_agents.writing_artifacts import ArtifactReviewReason
 from story_writing_agents.conversations import (
     ArtifactProposalState,
     ArtifactProposalStatePayload,
@@ -27,6 +29,8 @@ from story_writing_agents.conversations import (
     CollaborationLeadOutcomeFailureCode,
     CollaborationLeadOutcomeFailurePayload,
     CollaborationNextAction,
+    CollaborationStepState,
+    CollaborationStepStatePayload,
     CollaborationSpecialistAssessment,
     LeadOutcomeKind,
     artifact_reviewed_proposal_digest,
@@ -51,6 +55,8 @@ from story_writing_agents.conversation_storage.sqlite import (
     compose_sqlite_conversation_storage,
     provision_sqlite_conversation_storage,
 )
+from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
+from story_writing_agents.writing_artifacts._storage import ArtifactRootSecurityError
 
 from tests.test_lead_orchestration import (
     LeadOrchestrationTestCase,
@@ -160,7 +166,9 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
     def artifact_snapshot(self) -> tuple[tuple[str, bytes], ...]:
         return tuple(
             (item.path, item.content)
-            for item in self.runtime.artifacts.capture_complete_state()
+            for item in WritingArtifactRepository(
+                self.workspace.root
+            ).capture_complete_state()
         )
 
     def artifact_events(self, conversation_id: str, payload_type: type) -> tuple:
@@ -304,6 +312,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             }.issubset(readable_keys)
         )
 
+
     async def test_core_conflict_revision_and_manuscript_atomic_rename_workflows(
         self,
     ) -> None:
@@ -395,25 +404,29 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
     async def test_ordinary_discussion_captures_current_state_without_specialists(self) -> None:
         conversation_id = self.conversation("Ordinary discussion")
         calls = 0
-        original = self.runtime.artifacts.capture_complete_state
+        original = WritingArtifactRepository.capture_complete_state
 
-        def counted_snapshot():
+        def counted_snapshot(repository):
             nonlocal calls
             calls += 1
-            return original()
+            return original(repository)
 
-        self.runtime.artifacts.capture_complete_state = counted_snapshot  # type: ignore[method-assign]
-        self.backend.enqueue(
-            _visible_outcome(
-                "answer",
-                "A scene goal should identify the desired change and obstacle.",
+        with mock.patch.object(
+            WritingArtifactRepository,
+            "capture_complete_state",
+            new=counted_snapshot,
+        ):
+            self.backend.enqueue(
+                _visible_outcome(
+                    "answer",
+                    "A scene goal should identify the desired change and obstacle.",
+                )
             )
-        )
-        result = await self.runtime.lead_turn(
-            self.session_id,
-            conversation_id,
-            "What is a scene goal?",
-        )
+            result = await self.runtime.lead_turn(
+                self.session_id,
+                conversation_id,
+                "What is a scene goal?",
+            )
         self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
         self.assertIsNone(result.artifact_proposal)
         self.assertEqual(calls, 1)
@@ -822,7 +835,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         )
 
         restart_backend = _LeadBackend()
-        restarted = StoryRuntime(self.workspace, restart_backend)  # type: ignore[arg-type]
+        restarted = StoryRuntime(self.control_workspace, restart_backend)  # type: ignore[arg-type]
         projection = project_collaboration_history(
             restarted.conversation_storage_services.event_store.read(
                 self.session_id,
@@ -910,27 +923,27 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         reviewed = decided.turn.artifact_proposal.reviewed_proposal
         filesystem_history = self.history(conversation_id)
 
-        coordinator = WorkspaceConversationStorageMutationCoordinator(self.workspace)
+        coordinator = WorkspaceConversationStorageMutationCoordinator(self.control_workspace)
         with coordinator.borrow(timeout_seconds=2.0) as lease:
             preflight = provision_sqlite_conversation_storage(
-                self.workspace,
+                self.control_workspace,
                 lease=lease,
             )
         self.assertIs(preflight.capability, ConversationStorageCapability.READY)
         transferred = transfer_conversation_storage(
-            self.workspace,
+            self.control_workspace,
             source_backend=ConversationStorageBackend.FILESYSTEM,
             destination_backend=ConversationStorageBackend.SQLITE,
         )
         self.assertIs(transferred.outcome, ConversationStorageTransferOutcome.COMPLETED)
         verified = verify_conversation_storage(
-            self.workspace,
+            self.control_workspace,
             source_backend=ConversationStorageBackend.FILESYSTEM,
             destination_backend=ConversationStorageBackend.SQLITE,
         )
         self.assertIs(verified.outcome, ConversationStorageTransferOutcome.COMPLETED)
 
-        sqlite_services = compose_sqlite_conversation_storage(self.workspace)
+        sqlite_services = compose_sqlite_conversation_storage(self.control_workspace)
         sqlite_history = sqlite_services.event_store.read(
             self.session_id,
             conversation_id,
@@ -941,6 +954,10 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.assertIs(projection.current_artifact_state, ArtifactProposalState.REVIEWED)
 
     async def test_search_read_answer_can_add_an_artifact_candidate(self) -> None:
+        reference_ids = []
+        core_paths = ("core_documents/character_sheets.md", _OUTLINE, _RULES, "core_documents/part_outlines.md")
+        for path in (_RULES, "core_documents/part_outlines.md"):
+            self.workspace.path(path).write_text("Core reference fixture.\nSecond core reference line.\n", encoding="utf-8")
         conversation_id = self.conversation("Search read artifact intent")
         self.backend.enqueue(_visible_outcome("answer", "A prior visible answer."))
         await self.runtime.lead_turn(
@@ -966,7 +983,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                             }
                         ],
                     },
-                    "evidence_ids": [evidence_id],
+                    "evidence_ids": [*reference_ids, evidence_id],
                     "evidence_status": "verified",
                     "kind": "proposal",
                     "message": "The read context supports an exact candidate.",
@@ -978,6 +995,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             )
 
         def search_prior_answer(call, _provider):
+            reference_ids[:] = _reference_ids(_workflow_material(call.payload))
             return json.dumps(
                 {
                     "action": {
@@ -1001,7 +1019,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         result = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
-            "Search and read the prior answer before proposing a scene.",
+            "Search and read the prior answer before proposing a scene." + "".join(f" ${{{path}}}" + ("#L1-L1" if path in core_paths[2:] else "") for path in reversed(core_paths)) + "".join(f" ${{{path}}}#L2-L2" for path in reversed(core_paths[2:])),
         )
         self.assertIs(
             result.artifact_proposal.state,
@@ -1026,6 +1044,8 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             read_evidence_id,
             result.artifact_proposal.candidate.candidate.grounding_evidence_ids,
         )
+        attached = tuple(fact.artifact_path for fact in result.artifact_proposal.candidate.candidate.relationship_validation.review_facts if fact.reason is ArtifactReviewReason.ATTACHED_CORE_EVIDENCE)
+        self.assertEqual(tuple(sorted(attached, key=lambda path: path.encode("utf-8"))), core_paths)
 
     async def test_provider_authority_fields_fall_back_without_candidate(
         self,
@@ -1094,7 +1114,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.assertEqual(receipt.content_digest, empty_digest)
         self.assertNotEqual(receipt.revision_digest, receipt.content_digest)
         def translated(selected):
-            return case.runtime._artifact_intent_evidence(selected, session_id=case.session_id, conversation_id=conversation_id)
+            return case.runtime._artifact_intent_evidence(selected, session_id=case.session_id, conversation_id=conversation_id, artifact_binding=case.runtime._session_artifact_binding(case.session_id))
         valid = translated(evidence)
         self.assertEqual(len(valid), 1)
         self.assertEqual((valid[0].source_digest, valid[0].boundary_digest), (empty_digest, empty_digest))
@@ -1147,7 +1167,10 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         )
         self.assertIs(receipt.acquisition, c.CollaborationEvidenceAcquisition.READ)
         scope = self.runtime._agent_context_service.scope(self.session_id, ContextSubjectKind.CONVERSATION, conversation_id, LEAD_ORCHESTRATOR)
-        snapshot = WritingArtifactSourceAdapter(self.runtime.artifacts, scope).capture(_OUTLINE, CONTEXT_SOURCE_POLICY)
+        snapshot = WritingArtifactSourceAdapter(
+            WritingArtifactRepository(self.workspace.root),
+            scope,
+        ).capture(_OUTLINE, CONTEXT_SOURCE_POLICY)
         whole_sha = snapshot.descriptor.content_digest
         self.assertEqual(whole_sha, objectives.digest(text))
         self.assertNotEqual(snapshot.descriptor.revision, whole_sha)
@@ -1157,7 +1180,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         for selected in (whole, ranged):
             with self.subTest(boundary=selected.boundary_kind):
                 evidence = replace(result.evidence, receipts=(selected,))
-                converted, = self.runtime._artifact_intent_evidence(evidence, session_id=self.session_id, conversation_id=conversation_id)
+                converted, = self.runtime._artifact_intent_evidence(evidence, session_id=self.session_id, conversation_id=conversation_id, artifact_binding=self.runtime._session_artifact_binding(self.session_id))
                 self.assertEqual(converted.source_digest, whole_sha)
                 self.assertEqual(converted.boundary_digest, selected.content_digest)
                 self.assertEqual((converted.start_line, converted.end_line), (selected.start_line, selected.end_line))
@@ -1166,18 +1189,18 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 intent = ArtifactReplaceIntent(selected.evidence_id, "Whole replacement.\n") if selected.boundary_kind == "whole" else ArtifactPatchIntent(selected.evidence_id, "Revised 민 line.\r\n")
                 review_scope = AuthoringScope(AuthoringActivity.REVIEW, (_OUTLINE,), (),
                     "Review the exact synthetic whole or ranged candidate.", "synthetic_review", 1)
-                candidate = self.runtime._construct_artifact_review_candidate(session_id=self.session_id, conversation_id=conversation_id, turn_id=result.turn_id, step_id=result.step_id, intent=ArtifactProposalIntent((intent,)), evidence=evidence, authoring_scope=review_scope)
+                candidate = self.runtime._construct_artifact_review_candidate(session_id=self.session_id, conversation_id=conversation_id, turn_id=result.turn_id, step_id=result.step_id, intent=ArtifactProposalIntent((intent,)), evidence=evidence, authoring_scope=review_scope, artifact_binding=self.runtime._session_artifact_binding(self.session_id))
                 self.assertEqual("sha256:" + candidate.change_set.operations[0].base_digest, whole_sha)
                 for invalid in (replace(selected, revision_digest=objectives.digest("wrong metadata")), replace(selected, content_digest=objectives.digest("wrong bytes"))):
                     with self.assertRaises(ValueError):
-                        self.runtime._artifact_intent_evidence(replace(evidence, receipts=(invalid,)), session_id=self.session_id, conversation_id=conversation_id)
+                        self.runtime._artifact_intent_evidence(replace(evidence, receipts=(invalid,)), session_id=self.session_id, conversation_id=conversation_id, artifact_binding=self.runtime._session_artifact_binding(self.session_id))
         # Byte-identical physical replacement is stale despite equal whole/boundary hashes.
         path = self.workspace.path(_OUTLINE)
         replacement = path.with_suffix(".replacement")
         replacement.write_bytes(path.read_bytes())
         replacement.replace(path)
         with self.assertRaises(ValueError):
-            self.runtime._artifact_intent_evidence(result.evidence, session_id=self.session_id, conversation_id=conversation_id)
+            self.runtime._artifact_intent_evidence(result.evidence, session_id=self.session_id, conversation_id=conversation_id, artifact_binding=self.runtime._session_artifact_binding(self.session_id))
 
 
 if __name__ == "__main__":

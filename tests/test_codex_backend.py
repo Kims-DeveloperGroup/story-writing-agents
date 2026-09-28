@@ -17,6 +17,7 @@ import warnings
 import weakref
 from dataclasses import MISSING, FrozenInstanceError, fields, replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, get_type_hints
 from unittest import mock
 
@@ -55,6 +56,7 @@ from story_writing_agents import (
     ReplyTraceOrigin,
     SessionAccessState,
     SessionDurableState,
+    SessionLifecycleState,
     Workspace,
 )
 from story_writing_agents import cli as cli_module
@@ -87,6 +89,7 @@ from story_writing_agents.agent_context import (
     ProviderCallKind,
     ProviderCallState,
     ProviderUsage,
+    account_provider_payload,
     canonical_provider_json,
 )
 from story_writing_agents.agent_context.manifest import (
@@ -94,7 +97,7 @@ from story_writing_agents.agent_context.manifest import (
     ContextScope,
     ContextSubjectKind,
 )
-from story_writing_agents.agents import LEAD_ORCHESTRATOR
+from story_writing_agents.agents import CORE_DOCUMENTS, LEAD_ORCHESTRATOR
 from story_writing_agents.agent_context.service import (
     ContextProviderCallRequest,
     ContextProviderTerminalCode,
@@ -124,7 +127,14 @@ from story_writing_agents.interactive_settings import (
     prepare_settings_save,
     update_agent_backend,
 )
+from story_writing_agents.git.session_resources import GitSessionGenerationPin
 from story_writing_agents.orchestrator import StoryRuntime
+from story_writing_agents.provider_execution_workspace import (
+    ProviderExecutionWorkspace,
+    mint_provider_execution_workspace,
+)
+from story_writing_agents.workspace.initialization import provision_session_resources
+from story_writing_agents.workspace.initialization import SessionArtifactBindingError
 from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
@@ -146,6 +156,7 @@ from story_writing_agents.provider_adapter import (
     ExecutionValueSource,
     ProviderInvocationError,
     ProviderResult,
+    provider_failure_accounting,
     record_provider_failure_accounting,
 )
 from story_writing_agents.provider_error_artifacts import (
@@ -167,6 +178,7 @@ from tests.helpers import (
     all_manuscripts,
     core_snapshot,
     initialized_workspace,
+    pristine_initialized_workspace,
 )
 
 
@@ -208,14 +220,21 @@ def append(value):
     + """
 raw_payload = sys.stdin.read()
 payload = json.loads(raw_payload)
+reference_prelude = payload.get("operation") == "writing_artifact_reference_read"
 agent_directory = Path(argv[argv.index("--cd") + 1])
+developer_instructions = next(
+    value.split("=", 1)[1]
+    for value in argv
+    if value.startswith("developer_instructions=")
+)
 schema_path = Path(argv[argv.index("--output-schema") + 1])
 schema = json.loads(schema_path.read_text(encoding="utf-8"))
 append({
     "argv": argv,
     "payload": payload,
     "raw_payload": raw_payload,
-    "agents": (agent_directory / "AGENTS.md").read_text(encoding="utf-8"),
+    "cwd": os.getcwd(),
+    "agents": json.loads(developer_instructions),
     "schema": schema,
 })
 
@@ -256,7 +275,16 @@ if mode == "nonzero" or os.environ.get("STORY_FAKE_CODEX_FAIL_SUBSTANTIVE") == "
     raise SystemExit(7)
 
 output_path = Path(argv[argv.index("--output-last-message") + 1])
-if mode == "missing_output":
+if mode == "symlink_output":
+    output_path.symlink_to(os.environ["STORY_FAKE_CODEX_SYMLINK_TARGET"])
+elif mode == "hardlink_output":
+    os.link(os.environ["STORY_FAKE_CODEX_HARDLINK_TARGET"], output_path)
+elif reference_prelude and "STORY_FAKE_CODEX_REFERENCE_ACTION" in os.environ:
+    output_path.write_text(
+        os.environ["STORY_FAKE_CODEX_REFERENCE_ACTION"],
+        encoding="utf-8",
+    )
+elif mode == "missing_output":
     pass
 elif "STORY_FAKE_CODEX_PHYSICAL_OUTPUTS" in os.environ:
     outputs = json.loads(os.environ["STORY_FAKE_CODEX_PHYSICAL_OUTPUTS"])
@@ -1879,8 +1907,7 @@ class CodexBackendDefaultsTests(unittest.TestCase):
 
 class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self.workspace = initialized_workspace(self)
-        _mark_debug_session_attached(self.workspace)
+        self.workspace = pristine_initialized_workspace(self)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.fake_directory = Path(temporary.name)
@@ -1894,11 +1921,36 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
         self.environment.start()
         self.addCleanup(self.environment.stop)
+        self.fake_native_boundary = mock.patch(
+            "story_writing_agents.provider_process._darwin_confined_command",
+            side_effect=lambda command, _requirements: tuple(command),
+        )
+        self.fake_native_boundary.start()
+        self.addCleanup(self.fake_native_boundary.stop)
 
     def definition(self, agent_id: str = PLOT_ARCHITECT):
         return PromptAssembler(self.workspace).build_definition(
             session_id="definition_session",
             agent_id=agent_id,
+        )
+
+
+    def create_provisioned_session_with_access(
+        self,
+        backend: AgentBackend,
+        session_id: str,
+    ) -> SessionLifecycleState:
+        provision_session_resources(self.workspace.root, session_id)
+        _mark_debug_session_attached(self.workspace)
+        return backend.create_session_with_access(session_id)
+
+    async def direct_execution_workspace(
+        self,
+        bound: object,
+        session_id: str,
+    ) -> ProviderExecutionWorkspace:
+        return await self.enterAsyncContext(
+            bound._direct_codex_execution_workspace(session_id, None)  # type: ignore[attr-defined]
         )
 
     async def test_both_native_backends_preserve_session_continuation_and_legacy_namespaces(self):
@@ -1917,7 +1969,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     return value
 
                 backend = factory()
-                backend.create_session_with_access(session)
+                self.create_provisioned_session_with_access(backend, session)
                 scope = ContextScope("continuity-workspace", session, ContextSubjectKind.CONVERSATION, "conversation_a", LEAD_ORCHESTRATOR)
                 identity = ContextContinuationIdentity(scope.workspace_id, session, LEAD_ORCHESTRATOR)
                 policy = "sha256:" + "7" * 64
@@ -1972,7 +2024,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     async def test_native_mismatched_thread_is_ambiguous_without_replay_proof(self):
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access("story_session")
+        self.create_provisioned_session_with_access(backend, "story_session")
         bound = await backend.bind(self.definition())
         await bound.converse(self.conversation_request())
         before = len(self.provider_invocations())
@@ -2205,7 +2257,15 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         manifest = self.workspace.read_json(
             f"agent_states/orchestrator_state/provider_sessions/{session_id}.json"
         )
-        return manifest["provider_threads"][f"codex:{PLOT_ARCHITECT}"]
+        matches = [
+            thread
+            for thread in manifest["provider_threads"].values()
+            if thread["backend"] == "codex"
+            and thread["agent_id"] == PLOT_ARCHITECT
+        ]
+        if not matches:
+            raise KeyError(f"codex:{PLOT_ARCHITECT}")
+        return max(matches, key=lambda thread: thread["updated_at"])
 
     def write_codex_defaults(
         self,
@@ -2334,104 +2394,54 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-    async def test_binding_stages_isolated_agents_and_turn_omits_static_prompt(
-        self,
-    ) -> None:
-        definition = self.definition()
-        role = definition.system_prompt_file.read_text()
-        persona = definition.persona_file.read_text()
-        contexts = [
-            reference.read_text() for reference in definition.context_document_files
-        ]
+    async def test_binding_stages_isolated_agents_and_turn_omits_static_prompt(self) -> None:
+        session_id = "story_session"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        accounting_records: list[ProviderCallAccounting] = []
-        backend._context_accounting_sink = accounting_records.append
-        backend.create_session_with_access("story_session")
-
+        self.create_provisioned_session_with_access(backend, session_id)
+        resources = provision_session_resources(self.workspace.root, session_id)
+        definition = self.definition()
         bound = await backend.bind(definition)
+        staged = (bound.staging_directory / "AGENTS.md").read_text(encoding="utf-8")
         self.assertIsInstance(bound, BoundAgent)
         self.assertEqual(bound.vendor, "codex")
-        staged = (bound.staging_directory / "AGENTS.md").read_text(encoding="utf-8")
-        binding_components = bound._provider_binding.binding_components
-        self.assertEqual(
-            sum(component.serialized_utf8_bytes for component in binding_components),
-            len(staged.encode("utf-8")),
-        )
-        self.assertEqual(
-            tuple(
-                component.identity
-                for component in binding_components
-                if component.kind is ContextComponentKind.CORE_DOCUMENT
-            ),
-            tuple(
-                f"core_documents/{reference.path.name}"
-                for reference in definition.context_document_files
-            ),
-        )
-        self.assertIn(role, staged)
-        self.assertIn(persona, staged)
-        for context in contexts:
-            self.assertIn(context, staged)
-        self.assertNotEqual(bound.staging_directory, self.workspace.root)
-
-        reply = await bound.invoke(self.request())
-        self.assertEqual(
-            reply,
-            replace(
-                AgentReply.candidate("r0", "generated candidate"),
-                trace=ReplyTrace(
-                    role=PLOT_ARCHITECT,
-                    action="candidate",
-                    context_sources=("current_input",),
-                    recovered_fields=(),
-                    origin=ReplyTraceOrigin.PROVIDER,
-                ),
-            ),
-        )
+        self.assertNotEqual(bound.staging_directory, resources.identity.worktree_root)
+        self.assertIn(definition.system_prompt_file.read_text(), staged)
+        self.assertIn(definition.persona_file.read_text(), staged)
+        reply = await bound.invoke(self.request(session_id=session_id))
+        self.assertEqual(reply.content, "generated candidate")
         invocation = self.invocations()[0]
-        payload_text = json.dumps(invocation["payload"], ensure_ascii=False)
-        self.assertNotIn(role, payload_text)
-        self.assertNotIn(persona, payload_text)
-        for context in contexts:
-            self.assertNotIn(context, payload_text)
         argv = invocation["argv"]
-        self.assertEqual(argv[argv.index("exec") + 1], "--json")
-        self.assertNotIn("--model", argv)
-        self.assertFalse(
-            any(
-                isinstance(value, str) and value.startswith("model_reasoning_effort=")
-                for value in argv
-            )
-        )
-        self.assertIn("--ignore-user-config", argv)
-        self.assertIn("--ignore-rules", argv)
+        self.assertEqual(invocation["cwd"], str(resources.identity.worktree_root))
+        self.assertEqual(argv[argv.index("--cd") + 1], ".")
         self.assertIn("read-only", argv)
         self.assertIn("project_root_markers=[]", argv)
-        self.assertIn("web_search", argv)
-        self.assertTrue(
-            any(
-                isinstance(value, str) and value.startswith("project_doc_max_bytes=")
-                for value in argv
-            )
-        )
-        self.assertNotIn("resume", argv)
-        self.assertEqual(len(accounting_records), 1)
-        accounting = accounting_records[0]
-        self.assertIs(accounting.state, ProviderCallState.SUBMITTED)
-        self.assertIs(accounting.payload.call_kind, ProviderCallKind.DEBATE)
-        self.assertEqual(
-            accounting.actual_transport_utf8_bytes,
-            len(invocation["raw_payload"].encode("utf-8")),
-        )
-        self.assertIsNone(accounting.usage)
-        self.assertEqual(
-            sum(
-                component.serialized_utf8_bytes
-                for component in accounting.binding_components
-            ),
-            len(staged.encode("utf-8")),
-        )
+        self.assertIn("--ignore-user-config", argv)
+        self.assertIn("--ignore-rules", argv)
+        self.assertIn("developer_instructions=" + json.dumps(staged, ensure_ascii=False), argv)
+        self.assertNotIn(definition.system_prompt_file.read_text(), invocation["raw_payload"])
+        self.assertNotIn(definition.persona_file.read_text(), invocation["raw_payload"])
+        self.assertEqual(sum(c.serialized_utf8_bytes for c in bound._provider_binding.binding_components), len(staged.encode()))
+        self.assertFalse((resources.identity.worktree_root / "AGENTS.md").exists())
+        root = resources.identity.worktree_root
+        moved = root.with_name(root.name + "-moved")
+        root.rename(moved)
+        self.addCleanup(moved.rename, root)
+        before = len(self.invocations())
+        with self.assertRaises(SessionArtifactBindingError) as caught:
+            await bound.invoke(self.request(session_id=session_id))
+        self.assertEqual(str(caught.exception), "session artifact resources are unavailable")
+        self.assertEqual(len(self.invocations()), before)
+
+
+
+
+
+
+
+
+
+
 
     async def test_binding_stages_immutable_bytes_after_all_source_paths_become_unsafe(
         self,
@@ -2575,7 +2585,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(backend.close)
         records: list[ProviderCallAccounting] = []
         backend._context_accounting_sink = records.append
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
         malformed_usage = json.dumps(
             {
@@ -2615,7 +2625,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         session_id = "context_sink_states"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
         records: list[ProviderCallAccounting] = []
         backend._context_accounting_sink = records.append
@@ -2686,7 +2696,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         conversation_id = "exchange_conversation"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
 
         debate = await bound.invoke(
@@ -2770,8 +2780,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         session_id = "exchange_capture_timing"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
+        execution_workspace = await self.enterAsyncContext(
+            bound._direct_codex_execution_workspace(session_id, None)
+        )
         original_store_thread = backend._store_thread
 
         def begin(*_args: object, **_kwargs: object) -> Lifecycle:
@@ -2807,6 +2820,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 schema={},
                 payload={},
                 decode=decode,
+                execution_workspace=execution_workspace,
             )
         self.assertEqual(reply, AgentReply.candidate("r0", "accepted"))
         self.assertEqual(
@@ -2818,7 +2832,6 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 "accounting",
                 "decode",
                 "thread",
-                "accepted",
             ],
         )
 
@@ -2850,6 +2863,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 schema={},
                 payload={},
                 decode=malformed,
+                execution_workspace=execution_workspace,
             )
         self.assertEqual(
             events,
@@ -2865,254 +2879,61 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(details, ["Structured response\n$: malformed JSON"])
 
-    async def test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread(
-        self,
-    ) -> None:
+    async def test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread(self) -> None:
         session_id = "contextual_physical"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         definition = self.definition()
         bound = await backend.bind(definition)
         provider = bound._context_provider()
-        scope = ContextScope(
-            "workspace-context",
-            session_id,
-            ContextSubjectKind.CONVERSATION,
-            "conversation-context",
-            PLOT_ARCHITECT,
-        )
+        scope = ContextScope("workspace-context", session_id, ContextSubjectKind.CONVERSATION, "conversation-context", PLOT_ARCHITECT)
         policy = "sha256:" + "7" * 64
         payload, component_paths = compact_context_payload(_shared_context_payload(), {
-            ("i",): ContextComponentKind.CURRENT_INPUT, ("h",): ContextComponentKind.CONVERSATION_CONTEXT})
-        payload.update({
-            "c": "A" * 43,
-            "q": ["conversation", "sa", "wco", [4, 2, 2, 4, 8, 8, 16, 200], "text"],
+            ("i",): ContextComponentKind.CURRENT_INPUT,
+            ("h",): ContextComponentKind.CONVERSATION_CONTEXT,
         })
-        schema = {"type": "object"}
+        payload.update({"c": "A" * 43, "q": ["conversation", "sa", "wco", [4, 2, 2, 4, 8, 8, 16, 200], "text"]})
         captured = []
-
         async def invoke(_binding, invocation):
             captured.append(invocation)
-            thread_id = invocation.thread_id or "contextual-codex-thread"
-            assert invocation.payload_json is not None
-            return ProviderResult(
-                thread_id,
-                '{"action":"answer"}',
-                usage=ProviderUsage(input_tokens=0, output_tokens=2),
-                actual_transport_utf8_bytes=len(invocation.payload_json),
-            )
-
+            invocation.execution_workspace.require_current()
+            return ProviderResult(invocation.thread_id or "contextual-codex-thread", '{"action":"answer"}',
+                                  usage=ProviderUsage(0, 2), actual_transport_utf8_bytes=len(invocation.payload_json))
         with mock.patch.object(backend._codex_adapter, "invoke", new=invoke):
             async with provider.invocation(scope, policy):
                 self.assertIsNone(provider.inspect_context_thread(scope, policy))
-                first = await provider.invoke_context(
-                    ContextProviderCallRequest(
-                        scope,
-                        policy,
-                        "context-call-1",
-                        ProviderCallKind.COLLABORATION_INITIAL,
-                        schema,
-                        payload,
-                        component_paths,
-                    )
-                )
-                self.assertEqual(
-                    provider.inspect_context_thread(scope, policy),
-                    first.thread_id,
-                )
+                first = await provider.invoke_context(ContextProviderCallRequest(
+                    scope, policy, "context-call-1", ProviderCallKind.COLLABORATION_INITIAL,
+                    {"type": "object"}, payload, component_paths))
                 first.finalizer.accepted()
-                second = await provider.invoke_context(
-                    ContextProviderCallRequest(
-                        scope,
-                        policy,
-                        "context-call-2",
-                        ProviderCallKind.COLLABORATION_CONTINUATION,
-                        schema,
-                        {
-                            "c": "B" * 43,
-                            "q": [
-                                "conversation",
-                                "sa",
-                                "wco",
-                                [3, 1, 2, 4, 7, 8, 16, 200],
-                                "text",
-                            ],
-                            "o": ["r", [[1, "c", "bounded"]]],
-                        },
-                        {("o",): (ContextComponentKind.RETRIEVED_OBSERVATION)},
-                        expected_thread_id=first.thread_id,
-                    )
-                )
+                second = await provider.invoke_context(ContextProviderCallRequest(
+                    scope, policy, "context-call-2", ProviderCallKind.COLLABORATION_CONTINUATION,
+                    {"type": "object"}, payload, component_paths, expected_thread_id=first.thread_id))
                 second.finalizer.accepted()
-                third = await backend._invoke_context_physical(
-                    bound,
-                    scope=scope,
-                    policy_fingerprint=policy,
-                    expected_thread_id=second.thread_id,
-                    schema=schema,
-                    payload={
-                        "references": [{"path": "core_documents/global_outline.md"}]
-                    },
-                    call_kind=ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
-                    component_paths={
-                        ("references",): (
-                            ContextComponentKind.MANDATORY_REFERENCE_DESCRIPTOR
-                        )
-                    },
-                    mandatory_reference_paths=(),
-                )
-                third.finalizer.accepted()
-
-                async def contextual_result(call_id: str):
-                    return await provider.invoke_context(
-                        ContextProviderCallRequest(
-                            scope,
-                            policy,
-                            call_id,
-                            ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION,
-                            schema,
-                            {
-                                "c": call_id.ljust(43, "x"),
-                                "q": [
-                                    "conversation",
-                                    "a",
-                                    "wco",
-                                    [2, 0, 0, 4, 7, 8, 15, 200],
-                                    "text",
-                                ],
-                            },
-                            {},
-                            expected_thread_id=third.thread_id,
-                        )
-                    )
-
-                rejected = await contextual_result("context-call-4")
-                rejected.finalizer.rejected(
-                    ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH
-                )
-                cancelled = await contextual_result("context-call-5")
-                cancelled.finalizer.cancelled()
-                runtime_failed = await contextual_result("context-call-6")
-                runtime_failed.finalizer.post_response_runtime_failure(
-                    ContextProviderTerminalCode.CONTEXT_RUNTIME_FAILED
-                )
-                reference_failed = await contextual_result("context-call-7")
-                reference_failed.finalizer.post_response_runtime_failure(
-                    ContextProviderTerminalCode.REFERENCE_RUNTIME_FAILED
-                )
-                for result in (
-                    rejected,
-                    cancelled,
-                    runtime_failed,
-                    reference_failed,
-                ):
-                    result.finalizer.accepted()
-                    result.finalizer.cancelled()
-
-        self.assertEqual(
-            (
-                second.thread_id,
-                third.thread_id,
-                rejected.thread_id,
-                cancelled.thread_id,
-                runtime_failed.thread_id,
-                reference_failed.thread_id,
-            ),
-            (first.thread_id,) * 6,
-        )
-        self.assertEqual(len(captured), 7)
+                self.assertEqual(provider.inspect_context_thread(scope, policy), first.thread_id)
+                self.assertEqual(second.thread_id, first.thread_id)
         self.assertEqual(captured[0].payload_json, canonical_provider_json(payload))
-        self.assertEqual(
-            first.accounting.actual_transport_utf8_bytes,
-            len(captured[0].payload_json),
-        )
+        self.assertIsNone(captured[0].thread_id)
+        self.assertEqual(captured[1].thread_id, first.thread_id)
         self.assertEqual(first.accounting.usage, ProviderUsage(0, 2))
-        records = _agent_exchange_records(self.workspace)
-        self.assertEqual(
-            [record["request_type"] for record in records],
-            ["request", "response", "outcome"] * 7,
-        )
-        exchanges = {record["exchange_id"]: [] for record in records}
-        for record in records:
-            exchanges[record["exchange_id"]].append(record)
-        self.assertEqual(len(exchanges), 7)
-        self.assertTrue(all(len(exchange) == 3 for exchange in exchanges.values()))
-        self.assertTrue(
-            all(
-                sum(record["request_type"] == "outcome" for record in exchange) == 1
-                for exchange in exchanges.values()
-            )
-        )
-        request_contents = [
-            json.loads(record["content"])
-            for record in records
-            if record["request_type"] == "request"
-        ]
-        self.assertEqual(
-            [content["call_kind"] for content in request_contents],
-            [
-                "collaboration_initial",
-                "collaboration_continuation",
-                "writing_artifact_reference_read",
-                "conversation_retrieval_continuation",
-                "conversation_retrieval_continuation",
-                "conversation_retrieval_continuation",
-                "conversation_retrieval_continuation",
-            ],
-        )
-        self.assertEqual(
-            [content["prior_thread_id"] for content in request_contents],
-            [None, first.thread_id, first.thread_id, *([first.thread_id] * 4)],
-        )
-        self.assertEqual(
-            [
-                json.loads(record["content"])
-                for record in records
-                if record["request_type"] == "outcome"
-            ],
-            [
-                *([{"code": "accepted", "outcome": "accepted"}] * 3),
-                {
-                    "code": "response_correlation_mismatch",
-                    "outcome": "rejected",
-                },
-                {"code": "cancelled", "outcome": "cancelled"},
-                {
-                    "code": "context_runtime_failed",
-                    "outcome": "post_response_runtime_failure",
-                },
-                {
-                    "code": "reference_runtime_failed",
-                    "outcome": "post_response_runtime_failure",
-                },
-            ],
-        )
-        manifest = self.workspace.read_json(
-            f"agent_states/orchestrator_state/provider_sessions/{session_id}.json"
-        )
+        self.assertEqual(first.accounting.actual_transport_utf8_bytes, len(captured[0].payload_json))
+        self.assertEqual(captured[0].execution_workspace.worktree_root, provision_session_resources(self.workspace.root, session_id).identity.worktree_root)
+        with self.assertRaises(SessionArtifactBindingError):
+            captured[0].execution_workspace.require_current()
+        exchanges = _agent_exchange_records(self.workspace)
+        self.assertEqual(len(exchanges), 6)
+        self.assertEqual(sum(record["request_type"] == "request" for record in exchanges), 2)
+        manifest = self.workspace.read_json(f"agent_states/orchestrator_state/provider_sessions/{session_id}.json")
         self.assertEqual(manifest["provider_threads"], {})
-        context_records = tuple(
-            self.workspace.path(
-                "agent_states/orchestrator_state/provider_sessions/"
-                f".contextual/v1/{session_id}"
-            ).glob("*.json")
-        )
-        self.assertEqual(len(context_records), 1)
-        self.assertNotIn("CONTEXTUAL_UNICODE", context_records[0].read_text())
-        other_scope = replace(scope, subject_id="other-conversation")
-        async with provider.invocation(other_scope, policy):
-            self.assertIsNone(provider.inspect_context_thread(other_scope, policy))
+        async with provider.invocation(replace(scope, subject_id="other-conversation"), policy):
+            self.assertIsNone(provider.inspect_context_thread(replace(scope, subject_id="other-conversation"), policy))
         backend.close()
-
         restarted = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(restarted.close)
         restarted.acquire_session_access(session_id)
         restarted_provider = (await restarted.bind(definition))._context_provider()
         async with restarted_provider.invocation(scope, policy):
-            self.assertEqual(
-                restarted_provider.inspect_context_thread(scope, policy),
-                first.thread_id,
-            )
+            self.assertEqual(restarted_provider.inspect_context_thread(scope, policy), first.thread_id)
 
     async def test_contextual_submitted_failure_taints_only_exact_context_thread(
         self,
@@ -3120,7 +2941,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         session_id = "contextual_failure"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
         provider = bound._context_provider()
         scope = ContextScope(
@@ -3183,7 +3004,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         session_id = "context_sink_isolation"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
         provider = mock.AsyncMock(
             return_value=ProviderResult(
@@ -3239,7 +3060,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         session_id = "context_sink_failure_isolation"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
         failures: tuple[BaseException, ...] = (
             RuntimeError("PRIVATE_RUNTIME_SINK"),
@@ -3287,6 +3108,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         """Trace the selected adapter for successful and failed vendor binds."""
 
+        _mark_debug_session_attached(self.workspace)
         for vendor in ("codex", "antigravity"):
             for outcome in ("success", "failure"):
                 with self.subTest(vendor=vendor, outcome=outcome):
@@ -3405,7 +3227,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             executable=str(self.executable),
         )
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         before_configuration = backend_configuration_snapshot(backend)
         route_generations = backend.provider_route_generations()
         before_assembler = PromptAssembler(
@@ -3587,10 +3409,12 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         session_id = "defaults_snapshot"
+        provision_session_resources(self.workspace.root, session_id)
+        _mark_debug_session_attached(self.workspace)
         self.write_codex_defaults("persisted-one", "high")
         first_definition = self.definition()
         first = AgentBackend(self.workspace, executable=str(self.executable))
-        first.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(first, session_id)
         first_bound = await first.bind(first_definition)
 
         self.write_codex_defaults("persisted-two", "low")
@@ -3600,6 +3424,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         await first_bound.invoke(
             self.request(session_id=session_id, debate_id="after_edit")
         )
+        first_fingerprint = self.thread(session_id)["fingerprint"]
         first.close()
 
         second_definition = self.definition()
@@ -3658,9 +3483,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     f"{session_id}.json"
                 )["provider_threads"]
             ),
-            {"codex:plot_architect"},
+            {f"codex:plot_architect:{thread['fingerprint']}"},
         )
-        self.assertEqual(thread["fingerprint"], first_definition.fingerprint)
+        self.assertEqual(thread["fingerprint"], first_fingerprint)
         self.assertEqual(
             thread["thread_id"],
             "thread-defaults_snapshot-plot_architect",
@@ -3670,12 +3495,12 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         session_id = "configured_rejection"
-        model = "future-safe-model"
-        effort = "xhigh"
+        model, effort = "future-safe-model", "xhigh"
         self.write_codex_defaults(model, effort)
+        _mark_debug_session_attached(self.workspace)
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
         captured_stderr = io.StringIO()
 
@@ -3737,7 +3562,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         session_id = "diagnostic_failure"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
         captured_stderr = io.StringIO()
         with (
@@ -3792,7 +3617,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     session_id = f"antigravity_{operation}_{terminal}"
                     correlation_id = f"{operation}_{terminal}_correlation"
                     story_marker = f"PRIVATE_{operation.upper()}_{terminal.upper()}"
-                    backend.create_session_with_access(session_id)
+                    self.create_provisioned_session_with_access(backend, session_id)
                     handler = _RecordingRetrievalHandler()
                     if operation == "invoke":
                         request: object = replace(
@@ -3945,7 +3770,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         executable=str(self.executable),
                     )
                     self.addCleanup(backend.close)
-                    backend.create_session_with_access(session_id)
+                    self.create_provisioned_session_with_access(backend, session_id)
                     bound = await backend.bind(self.definition())
                     handler = _RecordingRetrievalHandler()
                     if operation == "invoke":
@@ -4051,7 +3876,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     executable=str(self.executable),
                 )
                 self.addCleanup(backend.close)
-                backend.create_session_with_access(session_id)
+                self.create_provisioned_session_with_access(backend, session_id)
                 bound = await backend.bind(self.definition())
                 request = self.retrieval_request(
                     session_id=session_id,
@@ -4150,7 +3975,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     executable=str(self.executable),
                 )
                 self.addCleanup(backend.close)
-                backend.create_session_with_access(session_id)
+                self.create_provisioned_session_with_access(backend, session_id)
                 bound = await backend.bind(self.definition())
                 handler: object = _RecordingRetrievalHandler()
                 provider_patch: contextlib.AbstractContextManager[object]
@@ -4313,7 +4138,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 executable=str(self.executable),
             )
             self.addCleanup(backend.close)
-            created = backend.create_session_with_access(session_id)
+            created = self.create_provisioned_session_with_access(backend, session_id)
             bound = await backend.bind(self.definition())
             reply = await bound.invoke(self.request(session_id=session_id))
             backend.close()
@@ -4336,7 +4161,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         session_id = "debate_context_session"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
         legacy = self.request(session_id=session_id)
         await bound.invoke(legacy)
@@ -4438,7 +4263,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         ]
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(definition)
         request = self.conversation_request(
             session_id=session_id,
@@ -4537,7 +4362,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
         payload_text = json.dumps(payload, ensure_ascii=False)
         for content in static_content:
-            self.assertNotIn(content, payload_text)
+            if content:
+                self.assertNotIn(content, payload_text)
 
         self.assertEqual(
             _tree_snapshot(self.workspace.path("discussion_logs")),
@@ -4589,7 +4415,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(dynamic_user.content, unvalidated)
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access("snapshot_session")
+        self.create_provisioned_session_with_access(backend, "snapshot_session")
         await (await backend.bind(self.definition())).converse(request)
 
         payload = self.provider_invocations()[0]["payload"]
@@ -4601,7 +4427,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access("story_session")
+        self.create_provisioned_session_with_access(backend, "story_session")
         definition = self.definition()
         bound = await backend.bind(definition)
         context_a = _context_window(
@@ -4628,8 +4454,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        incompatible = replace(definition, fingerprint="0" * 64)
-        incompatible_bound = await backend.bind(incompatible)
+        incompatible_bound = await backend.bind(replace(definition, fingerprint="0" * 64))
         await incompatible_bound.converse(
             self.conversation_request(
                 conversation_id="conversation_c",
@@ -4642,18 +4467,19 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("resume", invocations[0]["argv"])
         self.assertIn("resume", invocations[1]["argv"])
         self.assertNotIn("resume", invocations[2]["argv"])
-        second_payload = json.dumps(
-            invocations[1]["payload"],
-            ensure_ascii=False,
-        )
+        second_payload = json.dumps(invocations[1]["payload"], ensure_ascii=False)
         self.assertIn("CONTEXT_B_USER", second_payload)
         self.assertNotIn("CONTEXT_A_USER", second_payload)
-        self.assertEqual(self.thread("story_session")["fingerprint"], "0" * 64)
+        execution_workspace = await self.direct_execution_workspace(incompatible_bound, "story_session")
+        expected = execution_workspace.continuation_digest("legacy-definition-policy", incompatible_bound.definition.fingerprint).removeprefix("sha256:")
+        threads = self.workspace.read_json("agent_states/orchestrator_state/provider_sessions/story_session.json")["provider_threads"]
+        self.assertEqual((threads[f"codex:{PLOT_ARCHITECT}:{expected}"]["fingerprint"],
+                          self.thread("story_session")["fingerprint"]), (expected, expected))
 
     async def test_invoke_and_converse_share_one_serialized_thread(self) -> None:
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access("mixed_session")
+        self.create_provisioned_session_with_access(backend, "mixed_session")
         definition = self.definition()
         debate_bound = await backend.bind(definition)
         conversation_bound = await backend.bind(definition)
@@ -4707,7 +4533,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         definition = self.definition()
         first = AgentBackend(self.workspace, executable=str(self.executable))
-        first.create_session_with_access("story_session")
+        self.create_provisioned_session_with_access(first, "story_session")
         await (await first.bind(definition)).invoke(
             self.request(debate_id="debate_one")
         )
@@ -4732,7 +4558,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             "agent_states/orchestrator_state/provider_sessions/story_session.json"
         )
         self.assertEqual(
-            manifest["provider_threads"]["codex:plot_architect"]["thread_id"],
+            self.thread("story_session")["thread_id"],
             "thread-story_session-plot_architect",
         )
 
@@ -4743,13 +4569,17 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         first = AgentBackend(self.workspace, executable=str(self.executable))
         legacy_definition = self.definition()
         for index, session_id in enumerate(session_ids, start=1):
-            first.create_session_with_access(session_id)
+            self.create_provisioned_session_with_access(first, session_id)
             await (await first.bind(legacy_definition)).invoke(
                 self.request(
                     session_id=session_id,
                     debate_id=f"legacy_{index}",
                 )
             )
+        legacy_fingerprints = {
+            session_id: self.thread(session_id)["fingerprint"]
+            for session_id in session_ids
+        }
         first.close()
 
         antigravity = update_agent_backend(
@@ -4816,16 +4646,16 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             all("resume" not in invocation["argv"] for invocation in invocations)
         )
         for session_id in session_ids:
-            self.assertEqual(
+            self.assertNotEqual(
                 self.thread(session_id)["fingerprint"],
-                current_definition.fingerprint,
+                legacy_fingerprints[session_id],
             )
 
     async def test_threads_are_separate_by_agent_and_story_session(self) -> None:
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access("session_one")
-        backend.create_session_with_access("session_two")
+        self.create_provisioned_session_with_access(backend, "session_one")
+        self.create_provisioned_session_with_access(backend, "session_two")
         plot = await backend.bind(self.definition(PLOT_ARCHITECT))
         character = await backend.bind(self.definition(CHARACTER_CUSTODIAN))
 
@@ -4845,13 +4675,22 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             "agent_states/orchestrator_state/provider_sessions/session_two.json"
         )
         self.assertEqual(
+            {
+                f"{thread['backend']}:{thread['agent_id']}:{thread['fingerprint']}"
+                for thread in session_one["provider_threads"].values()
+            },
             set(session_one["provider_threads"]),
-            {"codex:plot_architect", "codex:character_custodian"},
         )
-        self.assertEqual(set(session_two["provider_threads"]), {"codex:plot_architect"})
+        self.assertEqual(
+            {
+                f"{thread['backend']}:{thread['agent_id']}:{thread['fingerprint']}"
+                for thread in session_two["provider_threads"].values()
+            },
+            set(session_two["provider_threads"]),
+        )
         self.assertNotEqual(
-            session_one["provider_threads"]["codex:plot_architect"]["thread_id"],
-            session_two["provider_threads"]["codex:plot_architect"]["thread_id"],
+            self.thread("session_one")["thread_id"],
+            self.thread("session_two")["thread_id"],
         )
 
     async def test_separate_bindings_serialize_one_session_agent_thread(
@@ -4859,7 +4698,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access("shared_session")
+        self.create_provisioned_session_with_access(backend, "shared_session")
         definition = self.definition()
         first = await backend.bind(definition)
         second = await backend.bind(definition)
@@ -4889,7 +4728,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     async def test_pause_disables_invocation_and_reopen_retains_thread(self) -> None:
         definition = self.definition()
         first = AgentBackend(self.workspace, executable=str(self.executable))
-        first.create_session_with_access("story_session")
+        self.create_provisioned_session_with_access(first, "story_session")
         await (await first.bind(definition)).invoke(self.request())
         first.close()
 
@@ -4926,7 +4765,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     async def test_resume_only_attachment_reuses_compatible_thread(self) -> None:
         definition = self.definition()
         first = AgentBackend(self.workspace, executable=str(self.executable))
-        first.create_session_with_access("resume_only_session")
+        self.create_provisioned_session_with_access(first, "resume_only_session")
         await (await first.bind(definition)).invoke(
             self.request(session_id="resume_only_session")
         )
@@ -5031,7 +4870,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         ):
             with self.subTest(phase=phase):
                 session_id = f"rejected_{phase.value}_session"
-                backend.create_session_with_access(session_id)
+                self.create_provisioned_session_with_access(backend, session_id)
                 before = len(self.provider_invocations())
                 with mock.patch.dict(
                     os.environ,
@@ -5056,7 +4895,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access("routing_session")
+        self.create_provisioned_session_with_access(backend, 'routing_session')
         definition = self.definition()
         bound = await backend.bind(definition)
         manifest_path = (
@@ -5116,7 +4955,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         session_id = "output_session"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
         seed_reply = await bound.converse(
             self.conversation_request(session_id=session_id, turn_id="turn_seed")
@@ -5180,7 +5019,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         session_id = "validation_attempts"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
         private = "PRIVATE_VALIDATION_SENTINEL_한🙂"
         responses = [
@@ -5235,7 +5074,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         session_id = "malformed_terminal_code"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
         private = "PRIVATE_MALFORMED_PROVIDER_VALUE_한🙂"
         responses = [f'{{"message":"{private}",', '{"message":']
@@ -5272,9 +5111,16 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         session_id = "decode_taint_session"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         definition = self.definition()
         bound = await backend.bind(definition)
+        execution_workspace = await self.enterAsyncContext(
+            bound._direct_codex_execution_workspace(session_id, None)
+        )
+        continuation_fingerprint = backend._legacy_continuation_fingerprint(
+            bound,
+            execution_workspace,
+        )
         failures: tuple[tuple[str, BaseException], ...] = (
             (
                 "json",
@@ -5306,6 +5152,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     definition,
                     thread_id,
                     tainted=False,
+                    fingerprint=continuation_fingerprint,
                 )
                 invoke = mock.AsyncMock(
                     return_value=ProviderResult(
@@ -5342,10 +5189,15 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                             schema={},
                             payload={},
                             decode=fail_decode,
+                            execution_workspace=execution_workspace,
                         )
 
                 invoke.assert_awaited_once()
-                taint.assert_called_once_with(session_id, definition)
+                taint.assert_called_once_with(
+                    session_id,
+                    definition,
+                    fingerprint=continuation_fingerprint,
+                )
                 write_manifest.assert_called_once()
                 store_thread.assert_not_called()
                 self.assertIs(self.thread(session_id)["tainted"], True)
@@ -5365,9 +5217,14 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         session_id = "provider_error_chain_session"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         definition = self.definition()
         bound = await backend.bind(definition)
+        execution_workspace = await self.direct_execution_workspace(bound, session_id)
+        continuation_fingerprint = backend._legacy_continuation_fingerprint(
+            bound,
+            execution_workspace,
+        )
         unchained = ProviderInvocationError(
             "safe unchained provider failure",
             taint_existing_thread=False,
@@ -5393,6 +5250,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     definition,
                     thread_id,
                     tainted=False,
+                    fingerprint=continuation_fingerprint,
                 )
                 invoke = mock.AsyncMock(side_effect=provider_error)
                 decode = mock.Mock()
@@ -5421,6 +5279,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                             schema={},
                             payload={},
                             decode=decode,
+                            execution_workspace=execution_workspace,
                         )
 
                 self.assertIs(type(caught.exception), BackendProtocolError)
@@ -5433,7 +5292,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 store_thread.assert_not_called()
                 self.assertIs(self.thread(session_id)["tainted"], should_taint)
                 if should_taint:
-                    taint.assert_called_once_with(session_id, definition)
+                    taint.assert_called_once_with(
+                        session_id,
+                        definition,
+                        fingerprint=continuation_fingerprint,
+                    )
                     write_manifest.assert_called_once()
                 else:
                     taint.assert_not_called()
@@ -5445,7 +5308,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         session_id = "transaction_failure"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
         discussion_before = _tree_snapshot(self.workspace.path("discussion_logs"))
         core_before = core_snapshot(self.workspace)
@@ -5503,7 +5366,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         session_id = "cancel_conversation"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
         await bound.converse(
             self.conversation_request(session_id=session_id, turn_id="turn_seed")
@@ -5549,7 +5412,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         session_id = "diagnostic_session"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
         context = _context_window(
             _conversation_pair(
@@ -5643,7 +5506,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         marker = b"PRIVATE_INVALID_UTF8_STDERR"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
         captured_stderr = io.StringIO()
 
@@ -5674,7 +5537,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         context_secret = 'CONTEXT_SECRET\\"한🙂\x1bTAIL'
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
         request = replace(
             self.request(session_id=session_id),
@@ -5723,7 +5586,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         session_id = "fixed_validation_diagnostic_session"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
         duplicate_key = "PRIVATE_DUPLICATE_KEY\x1bTAIL"
         quoted_duplicate_key = json.dumps(duplicate_key)
@@ -5823,7 +5686,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 backend = AgentBackend(self.workspace, executable=executable)
                 accounting_records: list[ProviderCallAccounting] = []
                 backend._context_accounting_sink = accounting_records.append
-                backend.create_session_with_access(session)
+                self.create_provisioned_session_with_access(backend, session)
                 bound = await backend.bind(self.definition())
                 environment = (
                     contextlib.nullcontext()
@@ -5868,6 +5731,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     )
                 backend.close()
 
+
+
     async def test_timeout_terminates_the_codex_process(self) -> None:
         backend = AgentBackend(
             self.workspace,
@@ -5877,7 +5742,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(backend.close)
         accounting_records: list[ProviderCallAccounting] = []
         backend._context_accounting_sink = accounting_records.append
-        backend.create_session_with_access("timeout_session")
+        self.create_provisioned_session_with_access(backend, "timeout_session")
         bound = await backend.bind(self.definition())
         real_wait_for = asyncio.wait_for
         communication_pending = True
@@ -5930,7 +5795,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(backend.close)
         accounting_records: list[ProviderCallAccounting] = []
         backend._context_accounting_sink = accounting_records.append
-        backend.create_session_with_access("cancel_session")
+        self.create_provisioned_session_with_access(backend, "cancel_session")
         bound = await backend.bind(self.definition())
         with mock.patch.dict(
             os.environ,
@@ -6342,7 +6207,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(definition)
         handler = _RecordingRetrievalHandler()
         with mock.patch.dict(
@@ -6588,7 +6453,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     executable=str(self.executable),
                 )
                 self.addCleanup(backend.close)
-                backend.create_session_with_access(session_id)
+                self.create_provisioned_session_with_access(backend, session_id)
                 bound = await backend.bind(self.definition())
                 handler = _RecordingRetrievalHandler()
                 outputs = (
@@ -6672,7 +6537,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
         handler = _RecordingRetrievalHandler()
         with mock.patch.dict(
@@ -6908,16 +6773,13 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(secret, repr(issues))
         self.assertNotIn("private", repr(issues))
 
-    async def test_retrieval_handler_declaration_and_exact_outcome_protocol(
-        self,
-    ) -> None:
+    async def test_retrieval_handler_declaration_and_exact_outcome_protocol(self) -> None:
         session_id = "retrieval_handler_session"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
         request = self.retrieval_request(session_id=session_id)
-
         class AsyncHandler:
             """Declare the forbidden asynchronous handler method."""
 
@@ -6928,168 +6790,15 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 """Return an unreachable direct reply."""
 
                 raise AssertionError
-
         with self.assertRaisesRegex(TypeError, "must be synchronous"):
             await bound.converse_with_retrieval(request, AsyncHandler())
         self.assertEqual(self.provider_invocations(), [])
-
-        answer = _retrieval_action_json(
-            request,
-            kind=ConversationRetrievalActionKind.ANSWER,
-            action_index=1,
-            content="answer",
-            citation_ids=[],
-        )
-
-        class CustomHandlerAwaitable:
-            """Expose a non-coroutine await protocol around one payload."""
-
-            def __init__(
-                self,
-                payload: mock.Mock,
-                await_calls: list[None],
-            ) -> None:
-                self.payload = payload
-                self.await_calls = await_calls
-
-            def __await__(self):
-                """Record forbidden awaiting without creating a coroutine."""
-
-                self.await_calls.append(None)
-                self.payload()
-                return iter(())
-
-        async def forbidden_handler_coroutine(
-            payload: mock.Mock,
-            body_executions: list[None],
-        ) -> None:
-            """Record forbidden coroutine and payload execution."""
-
-            body_executions.append(None)
-            payload()
-
-        for kind in ("coroutine", "custom"):
-            with self.subTest(awaitable=kind):
-                body_executions: list[None] = []
-                await_calls: list[None] = []
-                payload = mock.Mock()
-                if kind == "coroutine":
-                    outcome: object = forbidden_handler_coroutine(
-                        payload,
-                        body_executions,
-                    )
-                else:
-                    outcome = CustomHandlerAwaitable(payload, await_calls)
-                outcome_reference = weakref.ref(outcome)
-                payload_reference = weakref.ref(payload)
-                handler = mock.Mock()
-                handler.handle_conversation_retrieval_action.return_value = outcome
-                with mock.patch.dict(
-                    os.environ,
-                    {"STORY_FAKE_CODEX_OUTPUTS": json.dumps((answer,))},
-                ):
-                    try:
-                        await bound.converse_with_retrieval(request, handler)
-                    except BackendProtocolError as error:
-                        retained_error = error
-                    else:
-                        self.fail(f"{kind} retrieval handler was accepted")
-                self.assertIs(type(retained_error), BackendProtocolError)
-                self.assertEqual(
-                    str(retained_error),
-                    "conversation retrieval handler returned an awaitable",
-                )
-                self.assertIsNone(retained_error.__cause__)
-                self.assertIsNotNone(retained_error.__traceback__)
-                self.assertTrue(inspect.isawaitable(outcome))
-                if kind == "coroutine":
-                    self.assertEqual(
-                        inspect.getcoroutinestate(outcome),  # type: ignore[arg-type]
-                        inspect.CORO_CLOSED,
-                    )
-                else:
-                    self.assertFalse(inspect.iscoroutine(outcome))
-                handler.handle_conversation_retrieval_action.assert_called_once()
-                handler.handle_conversation_retrieval_action.return_value = None
-                payload.assert_not_called()
-                del outcome, payload
-                with warnings.catch_warnings(record=True) as caught_warnings:
-                    warnings.simplefilter("always")
-                    gc.collect()
-                self.assertEqual(caught_warnings, [])
-                self.assertEqual(body_executions, [])
-                self.assertEqual(await_calls, [])
-                self.assertIsNone(outcome_reference())
-                self.assertIsNone(payload_reference())
-                self.assertIs(self.thread(session_id)["tainted"], False)
-
-        class AsyncGeneratorHandler:
-            """Return one forbidden async generator from a sync declaration."""
-
-            def __init__(self) -> None:
-                self.body_executions = 0
-                self.generator_reference: weakref.ReferenceType[object] | None = None
-                self.payload_reference: weakref.ReferenceType[object] | None = None
-
-            def handle_conversation_retrieval_action(
-                self,
-                _action: ConversationRetrievalAction,
-            ) -> object:
-                """Create an async generator for dynamic protocol rejection."""
-
-                class CapturedHandlerPayload:
-                    """Provide weak-referenceable data owned by the generator."""
-
-                payload = CapturedHandlerPayload()
-
-                async def outcomes():
-                    """Record forbidden execution before yielding the payload."""
-
-                    self.body_executions += 1
-                    yield payload
-
-                outcome = outcomes()
-                self.generator_reference = weakref.ref(outcome)
-                self.payload_reference = weakref.ref(payload)
-                return outcome
-
-        async_generator_handler = AsyncGeneratorHandler()
-        with mock.patch.dict(
-            os.environ,
-            {"STORY_FAKE_CODEX_OUTPUTS": json.dumps((answer,))},
-        ):
-            try:
-                await bound.converse_with_retrieval(
-                    request,
-                    async_generator_handler,
-                )
-            except BackendProtocolError as error:
-                retained_error = error
-            else:
-                self.fail("async-generator retrieval handler was accepted")
-        self.assertIs(type(retained_error), BackendProtocolError)
-        self.assertEqual(
-            str(retained_error),
-            "conversation retrieval handler returned an async generator",
-        )
-        self.assertIsNotNone(retained_error.__traceback__)
-        gc.collect()
-        self.assertEqual(async_generator_handler.body_executions, 0)
-        self.assertIsNotNone(async_generator_handler.generator_reference)
-        self.assertIsNotNone(async_generator_handler.payload_reference)
-        assert async_generator_handler.generator_reference is not None
-        assert async_generator_handler.payload_reference is not None
-        self.assertIsNone(async_generator_handler.generator_reference())
-        self.assertIsNone(async_generator_handler.payload_reference())
-        self.assertIs(self.thread(session_id)["tainted"], False)
-
         search = _retrieval_action_json(
             request,
             kind=ConversationRetrievalActionKind.SEARCH_CONVERSATIONS,
             action_index=1,
             query="Needle source",
         )
-
         class WrongKindHandler:
             """Return a reply where the search requires an observation."""
 
@@ -7110,7 +6819,6 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     content="wrong kind",
                     sources=(),
                 )
-
         wrong = WrongKindHandler()
         with mock.patch.dict(
             os.environ,
@@ -7120,33 +6828,6 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 await bound.converse_with_retrieval(request, wrong)
         self.assertEqual(wrong.calls, 1)
         self.assertIs(self.thread(session_id)["tainted"], True)
-
-        class DerivedSearchObservation(ConversationRetrievalSearchObservation):
-            """Represent a forbidden subclass of an otherwise valid observation."""
-
-        class SubclassHandler:
-            """Return a derived observation after exactly one action."""
-
-            def __init__(self) -> None:
-                self.calls = 0
-
-            def handle_conversation_retrieval_action(
-                self,
-                action: ConversationRetrievalAction,
-            ) -> ConversationRetrievalObservation:
-                """Build the valid shape through the forbidden derived type."""
-
-                self.calls += 1
-                assert type(action) is ConversationRetrievalSearchAction
-                return DerivedSearchObservation(
-                    session_id=action.session_id,
-                    conversation_id=action.conversation_id,
-                    turn_id=action.turn_id,
-                    action_index=action.action_index,
-                    hits=(),
-                    truncated=False,
-                )
-
         class CorrelationHandler:
             """Return an exact search observation with changed correlation."""
 
@@ -7169,9 +6850,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     hits=(),
                     truncated=False,
                 )
-
         for invalid_handler, message in (
-            (SubclassHandler(), "invalid observation"),
             (CorrelationHandler(), "correlation changed"),
         ):
             with self.subTest(handler=type(invalid_handler).__name__):
@@ -7193,7 +6872,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         session_id = "retrieval_lock_session"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         definition = self.definition()
         retrieval_bound = await backend.bind(definition)
         conversation_bound = await backend.bind(definition)
@@ -7208,10 +6887,12 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             _handler: object,
             *,
             reference_read: object | None = None,
+            execution_workspace: object | None = None,
         ) -> ConversationRetrievalReply:
             """Hold the retrieval operation inside the shared thread lock."""
 
             self.assertIsNone(reference_read)
+            self.assertIsNotNone(execution_workspace)
             trace.append("retrieval_enter")
             entered.set()
             await release.wait()
@@ -7229,10 +6910,12 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             request: ConversationRequest,
             *,
             reference_read: object | None = None,
+            execution_workspace: object | None = None,
         ) -> ConversationReply:
             """Record legacy conversation entry after lock acquisition."""
 
             self.assertIsNone(reference_read)
+            self.assertIsNotNone(execution_workspace)
             trace.append("conversation_enter")
             return ConversationReply(
                 request.session_id,
@@ -7246,10 +6929,12 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             request: AgentRequest,
             *,
             reference_read: object | None = None,
+            execution_workspace: object | None = None,
         ) -> AgentReply:
             """Record debate entry after lock acquisition."""
 
             self.assertIsNone(reference_read)
+            self.assertIsNotNone(execution_workspace)
             trace.append("invoke_enter")
             return AgentReply.candidate(request.revision_id, "candidate")
 
@@ -7309,7 +6994,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             session_id = f"retrieval_taint_{ordinal}"
             backend = AgentBackend(self.workspace, executable=str(self.executable))
             self.addCleanup(backend.close)
-            backend.create_session_with_access(session_id)
+            self.create_provisioned_session_with_access(backend, session_id)
             bound = await backend.bind(self.definition())
             request = self.retrieval_request(session_id=session_id)
             search = _retrieval_action_json(
@@ -7366,19 +7051,26 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     executable=str(self.executable),
                 )
                 self.addCleanup(backend.close)
-                backend.create_session_with_access(session_id)
+                self.create_provisioned_session_with_access(backend, session_id)
                 bound = await backend.bind(self.definition())
                 staging = bound.staging_directory
                 entered = asyncio.Event()
                 proceed = asyncio.Event()
+                observed_workspaces: list[ProviderExecutionWorkspace] = []
 
                 async def provider(
                     *args: object,
                     reference_read: object | None = None,
+                    execution_workspace: ProviderExecutionWorkspace | None = None,
                 ) -> object:
                     self.assertIsNone(reference_read)
+                    self.assertIsNotNone(execution_workspace)
+                    assert execution_workspace is not None
+                    observed_workspaces.append(execution_workspace)
+                    execution_workspace.require_current()
                     entered.set()
                     await proceed.wait()
+                    execution_workspace.require_current()
                     if label == "invoke":
                         return AgentReply.candidate("r0", "candidate")
                     request = args[1]
@@ -7441,6 +7133,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     proceed.set()
                     await asyncio.wait_for(active, timeout=1)
 
+                with self.assertRaises(SessionArtifactBindingError):
+                    observed_workspaces[0].require_current()
+                self.assertEqual(len(observed_workspaces), 1)
+
                 self.assertFalse(staging.exists())
                 self.assertNotIn(bound, backend._bound_agents)
                 self.assertNotIn(staging, backend._staging_directories)
@@ -7458,17 +7154,17 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         executable=str(self.executable),
                     )
                     self.addCleanup(backend.close)
-                    backend.create_session_with_access(session_id)
+                    self.create_provisioned_session_with_access(backend, session_id)
                     bound = await backend.bind(self.definition())
                     staging = bound.staging_directory
                     entered = asyncio.Event()
                     proceed = asyncio.Event()
 
-                    async def provider(
-                        *_args: object,
-                        reference_read: object | None = None,
-                    ) -> object:
+                    async def provider(*_args: object, reference_read: object | None = None,
+                                       execution_workspace: ProviderExecutionWorkspace | None = None) -> object:
                         self.assertIsNone(reference_read)
+                        self.assertIsInstance(execution_workspace, ProviderExecutionWorkspace)
+                        execution_workspace.require_current()
                         entered.set()
                         await proceed.wait()
                         raise RuntimeError("provider failed")
@@ -7531,7 +7227,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         session_id = "close_active_binding"
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         active_bound = await backend.bind(self.definition())
         idle_bound = await backend.bind(self.definition(CHARACTER_CUSTODIAN))
         active_staging = active_bound.staging_directory
@@ -7542,8 +7238,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         async def provider(
             *_args: object,
             reference_read: object | None = None,
+            execution_workspace: object | None = None,
         ) -> AgentReply:
             self.assertIsNone(reference_read)
+            self.assertIsNotNone(execution_workspace)
             entered.set()
             await proceed.wait()
             return AgentReply.candidate("r0", "candidate")
@@ -7704,7 +7402,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         for index, agent_id in enumerate(ROSTER, 1):
             session_id = f"reference_role_{index}"
             operation_id = f"role_operation_{index}"
-            backend.create_session_with_access(session_id)
+            self.create_provisioned_session_with_access(backend, session_id)
             bound = await backend.bind(self.definition(agent_id))
             request = replace(
                 self.request(
@@ -7801,7 +7499,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         operation_id = "conversation_operation"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
         request = self.conversation_request(session_id=session_id)
         repository, authorization, invocation = self.reference_invocation(
@@ -7849,7 +7547,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     self.log_path.unlink(missing_ok=True)
                     session_id = f"reference_{route}_{outcome}"
                     operation_id = f"reference_operation_{route}_{outcome}"
-                    backend.create_session_with_access(session_id)
+                    self.create_provisioned_session_with_access(backend, session_id)
                     repository, authorization, invocation = self.reference_invocation(
                         operation_id=operation_id,
                         invocation_id=f"reference_invocation_{route}_{outcome}",
@@ -7963,7 +7661,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 operation_id = f"reference_handler_operation_{label}"
                 backend = AgentBackend(self.workspace, executable=str(self.executable))
                 self.addCleanup(backend.close)
-                backend.create_session_with_access(session_id)
+                self.create_provisioned_session_with_access(backend, session_id)
                 bound = await backend.bind(self.definition())
                 repository, authorization, invocation = self.reference_invocation(
                     operation_id=operation_id,
@@ -8004,7 +7702,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     executable=str(self.executable),
                 )
                 self.addCleanup(backend.close)
-                backend.create_session_with_access(session_id)
+                self.create_provisioned_session_with_access(backend, session_id)
                 bound = await backend.bind(self.definition())
                 request = self.retrieval_request(session_id=session_id)
                 repository, authorization, invocation = self.reference_invocation(
@@ -8124,7 +7822,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         operation_id = "failure_operation_drift"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
         repository, authorization, invocation = self.reference_invocation(
             operation_id=operation_id,
@@ -8165,7 +7863,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     executable=str(self.executable),
                 )
                 self.addCleanup(backend.close)
-                backend.create_session_with_access(session_id)
+                self.create_provisioned_session_with_access(backend, session_id)
                 bound = await backend.bind(self.definition())
                 repository, authorization, invocation = self.reference_invocation(
                     operation_id=operation_id,
@@ -8226,7 +7924,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         session_id = "reference_pre_provider"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
+        self.create_provisioned_session_with_access(backend, session_id)
         bound = await backend.bind(self.definition())
         _, authorization, wrong = self.reference_invocation(
             operation_id="wrong_correlation",
@@ -8287,7 +7985,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     self.workspace,
                     executable=str(self.executable),
                 )
-                backend.create_session_with_access(session_id)
+                self.create_provisioned_session_with_access(backend, session_id)
                 bound = await backend.bind(self.definition())
                 repository, authorization, invocation = self.reference_invocation(
                     operation_id=operation_id,
@@ -8394,7 +8092,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         self.workspace,
                         executable=str(self.executable),
                     )
-                    backend.create_session_with_access(session_id)
+                    self.create_provisioned_session_with_access(backend, session_id)
                     bound = await backend.bind(self.definition())
                     call_bound = bound
                     vendor = "codex"
@@ -8503,7 +8201,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
         debate_session = "capture_debate_session"
         debate_id = "capture_debate"
-        backend.create_session_with_access(debate_session)
+        self.create_provisioned_session_with_access(backend, debate_session)
         await bound.invoke(
             self.request(
                 session_id=debate_session,
@@ -8561,7 +8259,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         conversation_session = "capture_conversation_session"
         conversation_id = "capture_conversation"
         conversation_body = "PRIVATE_MALFORMED_CONVERSATION_한🙂"
-        backend.create_session_with_access(conversation_session)
+        self.create_provisioned_session_with_access(backend, conversation_session)
         with mock.patch.dict(
             os.environ,
             {"STORY_FAKE_CODEX_OUTPUT": conversation_body},
@@ -8645,7 +8343,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         retrieval_session = "capture_retrieval_session"
         retrieval_id = "capture_retrieval_conversation"
         retrieval_body = "PRIVATE_RETRIEVAL_MALFORMED"
-        backend.create_session_with_access(retrieval_session)
+        self.create_provisioned_session_with_access(backend, retrieval_session)
         retrieval_handler = _RecordingRetrievalHandler()
         with mock.patch.dict(
             os.environ,
@@ -8676,7 +8374,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         prelude_session = "capture_reference_prelude_session"
         prelude_debate = "capture_reference_prelude_debate"
         prelude_body = "PRIVATE_REFERENCE_PRELUDE_MALFORMED"
-        backend.create_session_with_access(prelude_session)
+        self.create_provisioned_session_with_access(backend, prelude_session)
         _, _, prelude = self.reference_invocation(
             operation_id="capture_prelude_operation",
             invocation_id="capture_prelude_invocation",
@@ -8696,7 +8394,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         substantive_session = "capture_reference_substantive_session"
         substantive_conversation = "capture_reference_substantive_conversation"
         substantive_body = "PRIVATE_REFERENCE_SUBSTANTIVE_MALFORMED"
-        backend.create_session_with_access(substantive_session)
+        self.create_provisioned_session_with_access(backend, substantive_session)
         _, _, substantive = self.reference_invocation(
             operation_id="capture_substantive_operation",
             invocation_id="capture_substantive_invocation",
@@ -8747,7 +8445,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         unicode_failure = UnicodeDecodeError(
             "utf-8", b"\xff", 0, 1, "invalid completed response"
         )
-        backend.create_session_with_access(unicode_session)
+        self.create_provisioned_session_with_access(backend, unicode_session)
+        unicode_workspace = await self.direct_execution_workspace(
+            bound,
+            unicode_session,
+        )
 
         def fail_unicode(_response: str) -> ConversationReply:
             raise unicode_failure
@@ -8772,6 +8474,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 schema={},
                 payload={},
                 decode=fail_unicode,
+                execution_workspace=unicode_workspace,
             )
         self.assertIs(unicode_caught.exception.__cause__, unicode_failure)
         self.assertEqual(
@@ -8801,7 +8504,17 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     suffix = f"{decode_kind}_{storage_type.__name__.lower()}"
                     session_id = f"capture_failure_{suffix}"
                     debate_id = f"capture_debate_{suffix}"
-                    backend.create_session_with_access(session_id)
+                    self.create_provisioned_session_with_access(backend, session_id)
+                    execution_workspace = await self.direct_execution_workspace(
+                        bound,
+                        session_id,
+                    )
+                    continuation_fingerprint = (
+                        backend._legacy_continuation_fingerprint(
+                            bound,
+                            execution_workspace,
+                        )
+                    )
                     stored_thread = f"stored-{suffix}"
                     rejected_thread = f"rejected-{suffix}"
                     backend._store_thread(
@@ -8809,6 +8522,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         definition,
                         stored_thread,
                         tainted=False,
+                        fingerprint=continuation_fingerprint,
                     )
                     prior_cause = RuntimeError(f"prior-cause-{suffix}")
                     if decode_kind == "protocol":
@@ -8874,6 +8588,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                                 schema={},
                                 payload={},
                                 decode=fail_decode,
+                                execution_workspace=execution_workspace,
                             )
                         except BackendProtocolError as raised:
                             caught_exception = raised
@@ -8890,7 +8605,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         response_text=f"PRIVATE_RESPONSE_{suffix}",
                         failure_category=PROVIDER_ERROR_ARTIFACT_FAILURE_CATEGORY,
                     )
-                    taint.assert_called_once_with(session_id, definition)
+                    taint.assert_called_once_with(
+                        session_id,
+                        definition,
+                        fingerprint=continuation_fingerprint,
+                    )
                     store.assert_not_called()
                     self.assertEqual(
                         self.thread(session_id)["thread_id"], stored_thread
@@ -8919,7 +8638,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         bound = await backend.bind(self.definition())
 
         success_session = "capture_noneligible_success"
-        backend.create_session_with_access(success_session)
+        self.create_provisioned_session_with_access(backend, success_session)
+        success_workspace = await self.direct_execution_workspace(
+            bound,
+            success_session,
+        )
         success_reply = AgentReply.candidate("r0", "validated response")
         with (
             mock.patch.object(
@@ -8944,6 +8667,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 schema={},
                 payload={},
                 decode=lambda _response: success_reply,
+                execution_workspace=success_workspace,
             )
         self.assertIs(actual, success_reply)
         record.assert_not_called()
@@ -8961,7 +8685,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         for index, failure in enumerate(decode_controls):
             with self.subTest(decode_control=type(failure).__name__):
                 session_id = f"capture_decode_control_{index}"
-                backend.create_session_with_access(session_id)
+                self.create_provisioned_session_with_access(backend, session_id)
+                execution_workspace = await self.direct_execution_workspace(
+                    bound,
+                    session_id,
+                )
                 invoke = mock.AsyncMock(
                     return_value=ProviderResult(
                         thread_id=f"decode-control-thread-{index}",
@@ -8987,12 +8715,17 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         schema={},
                         payload={},
                         decode=fail_decode,
+                        execution_workspace=execution_workspace,
                     )
                 self.assertIs(caught.exception, failure)
                 record.assert_not_called()
 
         provider_session = "capture_provider_pre_result"
-        backend.create_session_with_access(provider_session)
+        self.create_provisioned_session_with_access(backend, provider_session)
+        provider_workspace = await self.direct_execution_workspace(
+            bound,
+            provider_session,
+        )
         provider_failure = ProviderInvocationError(
             "fixed pre-result failure",
             taint_existing_thread=False,
@@ -9016,12 +8749,17 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 schema={},
                 payload={},
                 decode=lambda _response: success_reply,
+                execution_workspace=provider_workspace,
             )
         self.assertEqual(str(caught.exception), "fixed pre-result failure")
         record.assert_not_called()
 
         adapter_cancel_session = "capture_adapter_cancel"
-        backend.create_session_with_access(adapter_cancel_session)
+        self.create_provisioned_session_with_access(backend, adapter_cancel_session)
+        adapter_cancel_workspace = await self.direct_execution_workspace(
+            bound,
+            adapter_cancel_session,
+        )
         adapter_cancel = asyncio.CancelledError("PRIVATE_ADAPTER_CANCEL")
         with (
             mock.patch.object(
@@ -9042,12 +8780,17 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 schema={},
                 payload={},
                 decode=lambda _response: success_reply,
+                execution_workspace=adapter_cancel_workspace,
             )
         self.assertIs(caught.exception, adapter_cancel)
         record.assert_not_called()
 
         persistence_session = "capture_persistence_failure"
-        backend.create_session_with_access(persistence_session)
+        self.create_provisioned_session_with_access(backend, persistence_session)
+        persistence_workspace = await self.direct_execution_workspace(
+            bound,
+            persistence_session,
+        )
         persistence_failure = OSError("PRIVATE_THREAD_PERSISTENCE_FAILURE")
         with (
             mock.patch.object(
@@ -9078,6 +8821,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 schema={},
                 payload={},
                 decode=lambda _response: success_reply,
+                execution_workspace=persistence_workspace,
             )
         self.assertIs(caught.exception, persistence_failure)
         record.assert_not_called()
@@ -9100,7 +8844,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         executable=str(self.executable),
                     )
                     self.addCleanup(backend.close)
-                    backend.create_session_with_access(session_id)
+                    self.create_provisioned_session_with_access(backend, session_id)
                     bound = await backend.bind(self.definition())
                     with (
                         mock.patch.dict(
@@ -9129,7 +8873,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 timeout_seconds=0.3,
             )
             self.addCleanup(timeout_backend.close)
-            timeout_backend.create_session_with_access(timeout_session)
+            self.create_provisioned_session_with_access(timeout_backend, timeout_session)
             timeout_bound = await timeout_backend.bind(self.definition())
             real_wait_for = asyncio.wait_for
             communication_pending = True
@@ -9168,7 +8912,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 executable=str(self.executable),
             )
             self.addCleanup(cancel_backend.close)
-            cancel_backend.create_session_with_access(cancel_session)
+            self.create_provisioned_session_with_access(cancel_backend, cancel_session)
             cancel_bound = await cancel_backend.bind(self.definition())
             cancel_target = len(self.provider_invocations()) + 1
             with mock.patch.dict(

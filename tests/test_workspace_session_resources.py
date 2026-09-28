@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from contextlib import nullcontext
 import os
 import stat
 import unittest
@@ -11,19 +12,25 @@ from unittest import mock
 import story_writing_agents
 import story_writing_agents.git as git_facade
 import story_writing_agents.workspace as workspace_facade
+import story_writing_agents.writing_artifacts as artifact_facade
 from story_writing_agents import Workspace
 from story_writing_agents.errors import WorkspaceFormatError
 from story_writing_agents.git.session_contracts import GitSessionResourceState
 from story_writing_agents.workspace import initialization as initialization_module
 from story_writing_agents.workspace.core import discover_workspace
 from story_writing_agents.workspace.initialization import (
+    SessionArtifactBinding,
+    SessionArtifactBindingError,
     WorkspaceRootRole,
+    compose_session_artifact_binding,
     discover_workspace_location,
     inspect_session_resources,
     list_session_resources,
     provision_session_resources,
     require_ready_session_resources,
 )
+from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
+from story_writing_agents.writing_artifacts import repository as repository_module
 
 from tests.test_git_session_resources import GitSessionResourceGitTestCase
 
@@ -36,19 +43,34 @@ class WorkspaceSessionResourceCompositionTests(GitSessionResourceGitTestCase):
     ) -> None:
         self.assertEqual(initialization_module.__all__, [])
         expected = {
+            compose_session_artifact_binding: "(root: 'Path', session_id: 'str') -> 'SessionArtifactBinding'",
             inspect_session_resources: "(root: 'Path', session_id: 'str') -> 'GitSessionResourceInspection'",
             list_session_resources: "(root: 'Path') -> 'GitSessionResourceInventory'",
             provision_session_resources: "(root: 'Path', session_id: 'str') -> 'GitSessionResourceInspection'",
             require_ready_session_resources: "(root: 'Path', session_id: 'str') -> 'GitSessionResourceInspection'",
         }
         for operation, signature in expected.items():
-            with self.subTest(operation=operation.__name__):
+            with (self.subTest(operation=operation.__name__) if operation is not compose_session_artifact_binding else nullcontext()):
                 self.assertEqual(str(inspect.signature(operation)), signature)
                 self.assertFalse(hasattr(workspace_facade, operation.__name__))
                 self.assertFalse(hasattr(story_writing_agents, operation.__name__))
         self.assertEqual(len(story_writing_agents.__all__), 106)
         self.assertEqual(len(git_facade.__all__), 24)
         self.assertEqual(len(workspace_facade.__all__), 3)
+        for name in (
+            "SessionArtifactBinding",
+            "SessionArtifactBindingError",
+            "compose_session_artifact_binding",
+        ):
+            self.assertFalse(hasattr(workspace_facade, name))
+            self.assertFalse(hasattr(story_writing_agents, name))
+        guarded_factory = "create_guarded_writing_artifact_repository"
+        self.assertTrue(callable(getattr(repository_module, guarded_factory)))
+        self.assertFalse(hasattr(artifact_facade, guarded_factory))
+        self.assertFalse(hasattr(story_writing_agents, guarded_factory))
+
+
+
 
     def test_main_and_session_discovery_return_nearest_typed_identity(self) -> None:
         root = self.initialize_workspace("discovery")

@@ -6,6 +6,9 @@ import asyncio
 import hashlib
 import inspect
 import json
+import os
+import sys
+import threading
 import uuid
 from .structured_output_validation import (
     validation_failure,
@@ -13,9 +16,10 @@ from .structured_output_validation import (
     carry_validation,
     remap_validation,
 )
-from collections.abc import Callable
-from contextlib import asynccontextmanager
-from dataclasses import asdict, dataclass, replace
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
+from dataclasses import asdict, dataclass, field, replace
+from functools import partial
 from pathlib import Path
 from typing import Any, AsyncContextManager, AsyncIterator, Mapping, cast
 
@@ -83,6 +87,7 @@ from .agent_context.sources import (
     SessionHistorySourceAdapter,
     OwnAgentStateSourceAdapter,
     WritingArtifactSourceAdapter,
+    create_guarded_writing_artifact_source_adapter,
     writing_artifact_source_id,
 )
 from .agent_context.progress import ContextActionProgressSink
@@ -91,8 +96,11 @@ from .backend import (
     BackendRuntimeConfigurationCandidate,
     BoundAgent,
     backend_configuration_snapshot,
+    invoke_story_bound_agent,
+    provider_execution_workspace_manager,
     release_bound_agent,
 )
+from .provider_execution_workspace import ProviderExecutionWorkspace
 from .artifact_proposals import (
     ArtifactCreateIntent,
     ArtifactDeleteIntent,
@@ -232,6 +240,7 @@ from .conversations import (
     ArtifactApplicationResultPayload,
     StoryCommitDecisionPayload,
     StoryCommitDecisionRequest,
+    StoryCommitPreparationRequest,
     StoryCommitDecisionResult,
     StoryCommitNextAction,
     StoryCommitOutcomeKind,
@@ -260,6 +269,7 @@ from .git.story_commit_contracts import (
     StoryCommitRecoveryAction,
 )
 from .models import (
+    AgentDefinition,
     AgentReply,
     AgentReplyKind,
     AgentReplyNextPhase,
@@ -277,7 +287,11 @@ from .debug_log import (
 )
 from .directives import apply_directive as persist_directive
 from .errors import (
-    BackendProtocolError, ConversationNotFoundError, ProviderAuthenticationRequiredError,
+    BackendProtocolError,
+    ConversationNotFoundError,
+    ProviderAuthenticationRequiredError,
+    WorkspaceFormatError,
+    WorkspaceSecurityError,
 )
 from .prompts import PromptAssembler
 from .reply_trace import ReplyTrace, ReplyTraceOrigin
@@ -293,7 +307,15 @@ from .specialist_routing import (
     validate_specialist_routing,
 )
 from .workspace import Workspace
-from .workspace.initialization import compose_story_commit_service
+from .workspace.core import SessionSourceWorkspace
+from .workspace.initialization import (
+    SessionArtifactAccess,
+    SessionArtifactBinding,
+    SessionArtifactBindingError,
+    SessionArtifactGenerationPin,
+    compose_session_artifact_binding,
+    compose_story_commit_service,
+)
 from .writing_artifacts import (
     MAX_REFERENCE_TOTAL_BYTES,
     MAX_REFERENCE_UTF8_BYTES,
@@ -317,9 +339,50 @@ from .writing_artifacts import (
 from .writing_artifacts.repository import WritingArtifactRepository
 from .writing_artifacts.runtime_references import (
     RuntimeReferenceOperation,
-    prepare_runtime_reference_operation,
+    prepare_registered_guarded_runtime_reference_operation,
     reference_operation_belongs_to_session,
+    reference_operation_session_id,
 )
+
+
+@contextmanager
+def _open_session_artifact_repository(
+    binding: SessionArtifactBinding,
+) -> Iterator[WritingArtifactRepository]:
+    """Yield one repository only for a short synchronous guarded operation."""
+
+    with binding.open_ready_resources() as access:
+        yield access.repository
+
+
+def _provider_execution_workspace_manager(
+    bound_agent: BoundAgent,
+    binding: SessionArtifactBinding,
+) -> AbstractContextManager[ProviderExecutionWorkspace] | None:
+    """Return capability acquisition for a workspace-backed story provider."""
+
+    if bound_agent.vendor not in {"codex", "antigravity"}:
+        return None
+    return provider_execution_workspace_manager(bound_agent, binding)
+
+
+def _duplicate_session_worktree_descriptor(
+    binding: SessionArtifactBinding,
+) -> int:
+    """Duplicate only the exact guarded session-root descriptor."""
+
+    descriptor: int | None = None
+    try:
+        with binding.open_ready_resources() as access:
+            descriptor = access.duplicate_worktree_descriptor()
+        return descriptor
+    except BaseException:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        raise
 
 
 _USER_ACTOR = CollaborationActor(CollaborationActorKind.USER)
@@ -835,23 +898,45 @@ class _AccountingContextProvider:
         policy_fingerprint: str,
         *,
         continuation_identity: ContextContinuationIdentity | None = None,
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> AsyncContextManager[None]:
         if continuation_identity is not None:
             return getattr(self._delegate, "invocation")(
                 scope, policy_fingerprint,
                 continuation_identity=continuation_identity,
+                execution_workspace=execution_workspace,
             )
-        return getattr(self._delegate, "invocation")(scope, policy_fingerprint)
+        return getattr(self._delegate, "invocation")(
+            scope,
+            policy_fingerprint,
+            execution_workspace=execution_workspace,
+        )
 
     def inspect_context_thread(
         self,
         scope: ContextScope,
         policy_fingerprint: str,
+        *,
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> str | None:
         return getattr(self._delegate, "inspect_context_thread")(
             scope,
             policy_fingerprint,
+            execution_workspace=execution_workspace,
         )
+
+    def require_current_execution_workspace(
+        self,
+        scope: ContextScope,
+        policy_fingerprint: str,
+    ) -> None:
+        callback = getattr(
+            self._delegate,
+            "require_current_execution_workspace",
+            None,
+        )
+        if callback is not None:
+            callback(scope, policy_fingerprint)
 
     async def prepare_references(
         self,
@@ -996,8 +1081,14 @@ class _AccountingContextProvider:
         self,
         scope: ContextScope,
         policy_fingerprint: str,
+        *,
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> None:
-        getattr(self._delegate, "taint_context_thread")(scope, policy_fingerprint)
+        getattr(self._delegate, "taint_context_thread")(
+            scope,
+            policy_fingerprint,
+            execution_workspace=execution_workspace,
+        )
 
     def _prepare(self, call_id: str, kind: CollaborationProviderCallKind) -> int:
         if call_id in self._ordinals:
@@ -1114,6 +1205,12 @@ class _CollaborationInvocationResult:
     submitted_physical_calls: int
     failure: BaseException | None = None
     submission_uncertain: bool = False
+    artifact_binding: SessionArtifactBinding | None = None
+    generation_pin: SessionArtifactGenerationPin | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
     trace: ReplyTrace | None = None
     pending_validation: tuple[str, tuple[tuple[str, tuple[str, ...]], ...]] | None = None
 
@@ -1134,6 +1231,60 @@ class _ArtifactSynthesisResult:
 class _LeadSynthesisResult:
     collaboration: CollaborationLeadSynthesisPayload
     recommended_action: LeadRecommendedAction | None
+
+
+class _PendingStoryCommit:
+    """Own one exact service and physical-generation pin until publication."""
+
+    __slots__ = ("request", "service", "_generation_pin")
+
+    def __init__(
+        self,
+        request: StoryCommitRequestPayload,
+        service: StoryCommitService,
+        generation_pin: SessionArtifactGenerationPin,
+    ) -> None:
+        if (
+            type(request) is not StoryCommitRequestPayload
+            or type(service) is not StoryCommitService
+            or type(generation_pin) is not SessionArtifactGenerationPin
+        ):
+            raise TypeError("pending story commit is invalid")
+        self.request = request
+        self.service = service
+        self._generation_pin: SessionArtifactGenerationPin | None = generation_pin
+
+    def close(self) -> None:
+        """Release the retained generation exactly once."""
+
+        generation_pin = self._generation_pin
+        if generation_pin is None:
+            return
+        self._generation_pin = None
+        generation_pin.close()
+
+    def __del__(self) -> None:
+        """Best-effort final release when an owning runtime is abandoned."""
+
+        try:
+            self.close()
+        except BaseException:
+            pass
+
+
+def _add_story_commit_cleanup_note(
+    failure: BaseException,
+    cleanup_failure: BaseException,
+) -> None:
+    """Attach only a cleanup exception type without replacing the primary failure."""
+
+    try:
+        failure.add_note(
+            "pending story commit cleanup failed: "
+            f"{type(cleanup_failure).__name__}"
+        )
+    except BaseException:
+        pass
 
 
 class _RecommendationCapability:
@@ -1200,6 +1351,12 @@ class ConsensusArtifactReviewHandoff:
 
 class StoryRuntime:
     """Public management and lead front-channel/confirmation APIs."""
+
+    _reference_operation_registry_lock = threading.RLock()
+    _reference_operation_registry_pid = os.getpid()
+    _reference_operation_registry: dict[
+        tuple[str, str, tuple[int, int], str], RuntimeReferenceOperation
+    ] = {}
 
     def __init__(
         self,
@@ -1281,8 +1438,8 @@ class StoryRuntime:
         self._artifact_application_capabilities: dict[
             tuple[str, str, str], _ArtifactApplicationCapability
         ] = {}
-        self._story_commit_services: dict[
-            tuple[str, str, str], StoryCommitService
+        self._pending_story_commits: dict[
+            tuple[str, str, str], _PendingStoryCommit
         ] = {}
         self._live_execution_markers: set[tuple[str, str, str, str]] = set()
         self._consensus_event_store = ConsensusEventStore(self.workspace)
@@ -1607,7 +1764,32 @@ class StoryRuntime:
         reference_operation: RuntimeReferenceOperation | None = None
         bound_agent: BoundAgent | None = None
         try:
-            input_text, reference_operation = self._resolve_consensus_input(invocation)
+            artifact_input = invocation.input_material.locator.startswith("artifact:")
+            artifact_binding: SessionArtifactBinding | None = None
+            reference_boundary_reconciled = False
+            if artifact_input or self._has_cleanup_pending_reference_operation(
+                invocation.execution_identity.session_id
+            ):
+                artifact_binding = self._session_artifact_binding(
+                    invocation.execution_identity.session_id
+                )
+                repository_access = partial(
+                    _open_session_artifact_repository,
+                    artifact_binding,
+                )
+                self._reconcile_reference_operations_at_boundary(
+                    session_id=invocation.execution_identity.session_id,
+                    physical_workspace_identity=(
+                        artifact_binding.worktree_identity
+                    ),
+                    repository_access=repository_access,
+                )
+                reference_boundary_reconciled = True
+            input_text, reference_operation = self._resolve_consensus_input(
+                invocation,
+                artifact_binding=artifact_binding,
+                reference_boundary_reconciled=reference_boundary_reconciled,
+            )
             candidate_text = self._resolve_consensus_candidate(invocation)
             if invocation.continuation is not None:
                 ruling = self._consensus_material_store.read_text(
@@ -1627,7 +1809,12 @@ class StoryRuntime:
                         ),
                     )
                 )
-            definition = self.prompts.build_contextual_definition(
+            if artifact_binding is None:
+                artifact_binding = self._session_artifact_binding(
+                    invocation.execution_identity.session_id
+                )
+            definition = self._build_guarded_contextual_definition(
+                artifact_binding=artifact_binding,
                 session_id=invocation.execution_identity.session_id,
                 agent_id=invocation.agent_id,
             )
@@ -1666,9 +1853,33 @@ class StoryRuntime:
                 candidate_payload=candidate_text,
                 expected_reviewed_proposal=expected_reviewed_proposal,
             )
-            reply = await bound_agent.invoke(request, reference_read=reference_read)
+            if bound_agent.vendor in {"codex", "antigravity"}:
+                execution_binding = (
+                    artifact_binding
+                    if artifact_binding is not None
+                    else self._session_artifact_binding(
+                        invocation.execution_identity.session_id
+                    )
+                )
+                workspace_manager = _provider_execution_workspace_manager(
+                    bound_agent,
+                    execution_binding,
+                )
+                assert workspace_manager is not None
+                with workspace_manager as workspace:
+                    reply = await invoke_story_bound_agent(
+                        bound_agent,
+                        request,
+                        workspace,
+                        reference_read=reference_read,
+                    )
+            else:
+                reply = await bound_agent.invoke(
+                    request,
+                    reference_read=reference_read,
+                )
             if reference_operation is not None:
-                reference_operation.finish()
+                self._finish_reference_operation(reference_operation)
             authored_material = None
             if (
                 invocation.phase in {ConsensusPhase.DRAFT, ConsensusPhase.REPAIR}
@@ -1689,7 +1900,7 @@ class StoryRuntime:
             )
         except BaseException as exc:
             if reference_operation is not None:
-                reference_operation.failure(exc)
+                self._fail_reference_operation(reference_operation, exc)
             raise
         finally:
             active_tasks.discard(current_task)
@@ -1731,17 +1942,30 @@ class StoryRuntime:
     def _resolve_consensus_input(
         self,
         invocation: ConsensusPhaseInvocation,
+        *,
+        artifact_binding: SessionArtifactBinding | None,
+        reference_boundary_reconciled: bool = False,
     ) -> tuple[str, RuntimeReferenceOperation | None]:
         handle = invocation.input_material
         if handle.locator.startswith("candidate:"):
             return self._consensus_material_store.read_text(handle), None
         if not handle.locator.startswith("artifact:"):
             raise ValueError("consensus input material locator is unsupported")
+        if artifact_binding is None:
+            raise SessionArtifactBindingError(
+                "consensus artifact access is unavailable"
+            )
         path = handle.locator.removeprefix("artifact:")
-        operation = prepare_runtime_reference_operation(
-            self.artifacts,
+        repository_access = partial(
+            _open_session_artifact_repository,
+            artifact_binding,
+        )
+        operation = self._prepare_session_reference_operation(
+            repository_access,
+            artifact_binding=artifact_binding,
             session_id=invocation.execution_identity.session_id,
             text=f"${{{path}}}",
+            reconcile_existing=not reference_boundary_reconciled,
         )
         proofs = operation.reference_proofs
         if (
@@ -1750,7 +1974,10 @@ class StoryRuntime:
             or proofs[0].reference.line_range is not None
             or proofs[0].selected_sha256 != handle.digest
         ):
-            operation.failure(ValueError("artifact material digest changed"))
+            self._fail_reference_operation(
+                operation,
+                ValueError("artifact material digest changed"),
+            )
             raise ValueError("consensus artifact input authorization is stale")
         return operation.provider_text, operation
 
@@ -2155,7 +2382,327 @@ class StoryRuntime:
     ) -> ReferenceOperationHistory | None:
         """Return validated content-free read history for one operation."""
 
-        return self.artifacts.inspect_reference_operation(operation_id)
+        session_id = reference_operation_session_id(operation_id)
+        artifact_binding = self._session_artifact_binding(session_id)
+        with artifact_binding.open_ready_resources() as access:
+            return access.repository.inspect_reference_operation(operation_id)
+
+    def _register_reference_operation(
+        self,
+        operation: RuntimeReferenceOperation,
+    ) -> None:
+        """Retain exact cleanup authority before guarded handle publication."""
+
+        self._require_current_reference_registry()
+        operation_id = operation.operation_id
+        if operation_id is None:
+            return
+        if not reference_operation_belongs_to_session(
+            operation_id,
+            operation.session_id,
+        ):
+            raise BackendProtocolError("reference operation identity is invalid")
+        physical_identity = operation.physical_workspace_identity
+        if physical_identity is None:
+            raise BackendProtocolError(
+                "registered reference operation lacks physical workspace identity"
+            )
+        key = (
+            str(self.workspace.root),
+            operation.session_id,
+            physical_identity,
+            operation_id,
+        )
+        with StoryRuntime._reference_operation_registry_lock:
+            current = StoryRuntime._reference_operation_registry.get(key)
+            if current is not None and current is not operation:
+                raise BackendProtocolError("reference operation is already registered")
+            StoryRuntime._reference_operation_registry[key] = operation
+
+    def _unregister_terminal_reference_operation(
+        self,
+        operation: RuntimeReferenceOperation,
+    ) -> None:
+        self._require_current_reference_registry()
+        operation_id = operation.operation_id
+        if operation_id is None or not operation.finished:
+            return
+        physical_identity = operation.physical_workspace_identity
+        if physical_identity is None:
+            return
+        key = (
+            str(self.workspace.root),
+            operation.session_id,
+            physical_identity,
+            operation_id,
+        )
+        with StoryRuntime._reference_operation_registry_lock:
+            if StoryRuntime._reference_operation_registry.get(key) is operation:
+                StoryRuntime._reference_operation_registry.pop(key)
+
+    def _registered_reference_operation_ids(
+        self,
+        session_id: str,
+        physical_workspace_identity: tuple[int, int],
+    ) -> frozenset[str]:
+        """Snapshot exact live IDs while the caller owns repository access."""
+
+        self._require_current_reference_registry()
+        workspace_root = str(self.workspace.root)
+        with StoryRuntime._reference_operation_registry_lock:
+            return frozenset(
+                operation_id
+                for (
+                    owned_root,
+                    owned_session,
+                    owned_identity,
+                    operation_id,
+                ) in (
+                    StoryRuntime._reference_operation_registry
+                )
+                if (
+                    owned_root == workspace_root
+                    and owned_session == session_id
+                    and owned_identity == physical_workspace_identity
+                )
+            )
+
+    def _has_cleanup_pending_reference_operation(self, session_id: str) -> bool:
+        """Check a workspace/session snapshot without holding its registry lock."""
+
+        self._require_current_reference_registry()
+        workspace_root = str(self.workspace.root)
+        with StoryRuntime._reference_operation_registry_lock:
+            registered = tuple(
+                operation
+                for (
+                    owned_root,
+                    owned_session,
+                    _,
+                    _,
+                ), operation in StoryRuntime._reference_operation_registry.items()
+                if owned_root == workspace_root and owned_session == session_id
+            )
+        return any(operation.cleanup_is_pending() for operation in registered)
+
+    def _reconcile_reference_operations_at_boundary(
+        self,
+        *,
+        session_id: str,
+        physical_workspace_identity: tuple[int, int],
+        repository_access: Callable[
+            [], AbstractContextManager[WritingArtifactRepository]
+        ],
+    ) -> None:
+        """Retry retained and restarted cleanup before new provider work."""
+
+        self._require_current_reference_registry()
+        workspace_root = str(self.workspace.root)
+        reconciled_retained: list[RuntimeReferenceOperation] = []
+        with repository_access() as repository:
+            with StoryRuntime._reference_operation_registry_lock:
+                registered = tuple(
+                    (key, operation)
+                    for key, operation in (
+                        StoryRuntime._reference_operation_registry.items()
+                    )
+                    if key[0] == workspace_root and key[1] == session_id
+                )
+            for key, operation in registered:
+                if operation.defer_if_workspace_replaced(
+                    physical_workspace_identity
+                ):
+                    with StoryRuntime._reference_operation_registry_lock:
+                        if (
+                            StoryRuntime._reference_operation_registry.get(key)
+                            is operation
+                        ):
+                            StoryRuntime._reference_operation_registry.pop(key)
+                    continue
+                if not operation.cleanup_is_pending():
+                    continue
+                operation.reconcile_cleanup(
+                    repository,
+                    physical_workspace_identity=physical_workspace_identity,
+                )
+                reconciled_retained.append(operation)
+            repository.reconcile_incomplete_reference_operations(
+                session_id,
+                excluded_ids_supplier=partial(
+                    self._registered_reference_operation_ids,
+                    session_id,
+                    physical_workspace_identity,
+                ),
+            )
+        for operation in reconciled_retained:
+            operation.complete_reconciled_cleanup()
+            self._unregister_terminal_reference_operation(operation)
+
+    @staticmethod
+    def _require_current_reference_registry() -> None:
+        """Discard inherited process-local handles before registry locking."""
+
+        pid = os.getpid()
+        if StoryRuntime._reference_operation_registry_pid == pid:
+            return
+        StoryRuntime._reset_reference_registry_after_fork()
+
+    @staticmethod
+    def _reset_reference_registry_after_fork() -> None:
+        """Install empty child-owned registry state without inherited locking."""
+
+        StoryRuntime._reference_operation_registry_lock = threading.RLock()
+        StoryRuntime._reference_operation_registry = {}
+        StoryRuntime._reference_operation_registry_pid = os.getpid()
+
+    def _prepare_session_reference_operation(
+        self,
+        repository_access: Callable[
+            [], AbstractContextManager[WritingArtifactRepository]
+        ],
+        *,
+        artifact_binding: SessionArtifactBinding,
+        session_id: str,
+        text: str,
+        reconcile_existing: bool = True,
+    ) -> RuntimeReferenceOperation:
+        if reconcile_existing:
+            self._reconcile_reference_operations_at_boundary(
+                session_id=session_id,
+                physical_workspace_identity=artifact_binding.worktree_identity,
+                repository_access=repository_access,
+            )
+        return prepare_registered_guarded_runtime_reference_operation(
+            repository_access,
+            session_id=session_id,
+            text=text,
+            physical_workspace_identity=artifact_binding.worktree_identity,
+            physical_workspace_pin_factory=partial(
+                _duplicate_session_worktree_descriptor,
+                artifact_binding,
+            ),
+            register=self._register_reference_operation,
+        )
+
+    def _finish_reference_operation(
+        self,
+        operation: RuntimeReferenceOperation,
+    ) -> None:
+        try:
+            operation.finish()
+        finally:
+            self._unregister_terminal_reference_operation(operation)
+
+    def _fail_reference_operation(
+        self,
+        operation: RuntimeReferenceOperation,
+        failure: BaseException,
+        *,
+        default: ReferenceAuthorizationErrorCode = (
+            ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
+        ),
+    ) -> ReferenceOperationFailure | None:
+        try:
+            return operation.failure(failure, default=default)
+        finally:
+            self._unregister_terminal_reference_operation(operation)
+
+    def _session_artifact_binding(self, session_id: str) -> SessionArtifactBinding:
+        """Freshly require and bind one exact session worktree for artifact I/O."""
+
+        return compose_session_artifact_binding(self.workspace.root, session_id)
+
+    def _install_pending_story_commit(
+        self,
+        key: tuple[str, str, str],
+        pending: _PendingStoryCommit,
+    ) -> None:
+        """Install one exact owner and retire only the observed predecessor."""
+
+        previous = self._pending_story_commits.get(key)
+        self._pending_story_commits[key] = pending
+        if previous is not None and previous is not pending:
+            previous.close()
+
+    def _retire_pending_story_commit(
+        self,
+        key: tuple[str, str, str],
+        pending: _PendingStoryCommit,
+        *,
+        failure: BaseException | None = None,
+    ) -> None:
+        """Remove only the exact registered owner, then close it idempotently."""
+
+        if self._pending_story_commits.get(key) is pending:
+            del self._pending_story_commits[key]
+        try:
+            pending.close()
+        except BaseException as cleanup_failure:
+            if failure is None:
+                raise
+            _add_story_commit_cleanup_note(failure, cleanup_failure)
+
+    def retire_archived_conversation(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> None:
+        """Release package-internal Commit owners after a durable archive."""
+
+        self.workspace.validate_identifier(session_id)
+        self.workspace.validate_identifier(conversation_id)
+        failure: BaseException | None = None
+        for key, pending in tuple(self._pending_story_commits.items()):
+            if key[:2] != (session_id, conversation_id):
+                continue
+            try:
+                self._retire_pending_story_commit(
+                    key,
+                    pending,
+                    failure=failure,
+                )
+            except BaseException as cleanup_failure:
+                failure = cleanup_failure
+        if failure is not None:
+            raise failure
+
+    @staticmethod
+    def _close_story_commit_generation_pin(
+        generation_pin: SessionArtifactGenerationPin,
+        failure: BaseException | None = None,
+    ) -> None:
+        """Close untransferred pin ownership without masking a primary failure."""
+
+        try:
+            generation_pin.close()
+        except BaseException as cleanup_failure:
+            if failure is None:
+                raise
+            _add_story_commit_cleanup_note(failure, cleanup_failure)
+
+    def _build_guarded_contextual_definition(
+        self,
+        *,
+        artifact_binding: SessionArtifactBinding,
+        session_id: str,
+        agent_id: str,
+    ) -> AgentDefinition:
+        """Build one definition from policy bytes bound to the session worktree."""
+
+        session_sources = SessionSourceWorkspace.from_artifact_binding(
+            artifact_binding
+        )
+        with artifact_binding.open_ready_resources() as access:
+            if access.resources.identity.session_id != session_id:
+                raise SessionArtifactBindingError(
+                    "context policy binding does not match its session"
+                )
+            policy_snapshot = session_sources.capture_behavior_policy_files(agent_id)
+            return self.prompts.build_contextual_definition_with_policy_snapshot(
+                session_id=session_id,
+                agent_id=agent_id,
+                policy_snapshot=policy_snapshot,
+            )
 
     @classmethod
     def _recommendation_event_digest(cls, event: CollaborationEvent | CollaborationEventDraft) -> str:
@@ -2171,7 +2718,22 @@ class StoryRuntime:
     def _recommendation_source_fingerprint(
         self, session_id: str, conversation_id: str,
         inputs: tuple[CollaborationInputRevision, ...], targets: tuple[str, ...],
+        *,
+        artifact_binding: SessionArtifactBinding | None = None,
+        artifact_access: SessionArtifactAccess | None = None,
     ) -> str:
+        if artifact_access is None:
+            if artifact_binding is None:
+                artifact_binding = self._session_artifact_binding(session_id)
+            with artifact_binding.open_ready_resources() as active:
+                return self._recommendation_source_fingerprint(
+                    session_id,
+                    conversation_id,
+                    inputs,
+                    targets,
+                    artifact_binding=artifact_binding,
+                    artifact_access=active,
+                )
         paths = list(targets)
         for item in inputs:
             if item.kind in {CollaborationInputKind.CORE_DOCUMENT,
@@ -2182,10 +2744,18 @@ class StoryRuntime:
             session_id, ContextSubjectKind.CONVERSATION, conversation_id, LEAD_ORCHESTRATOR,
         )
         selected_paths = tuple(dict.fromkeys(paths))
-        present_paths = {item.path for item in self.artifacts.read_current(selected_paths)} if selected_paths else set()
-        adapter = WritingArtifactSourceAdapter(self.artifacts, scope)
-        descriptors = {path: adapter.capture(path, CONTEXT_SOURCE_POLICY).descriptor
-                       for path in selected_paths if path in present_paths}
+        artifacts = artifact_access.repository
+        present_paths = (
+            {item.path for item in artifacts.read_current(selected_paths)}
+            if selected_paths
+            else set()
+        )
+        adapter = WritingArtifactSourceAdapter(artifacts, scope)
+        descriptors = {
+            path: adapter.capture(path, CONTEXT_SOURCE_POLICY).descriptor
+            for path in selected_paths
+            if path in present_paths
+        }
         return self._canonical_digest([
             "lead-recommendation-sources-v1", [asdict(item) for item in inputs],
             [[path, None if path not in descriptors else asdict(descriptors[path])]
@@ -2196,9 +2766,18 @@ class StoryRuntime:
         self, session_id: str, kind: LeadRecommendationActionKind,
         specialist_ids: tuple[str, ...], inputs: tuple[CollaborationInputRevision, ...],
         evidence: CollaborationLeadEvidence,
+        *,
+        artifact_binding: SessionArtifactBinding,
     ) -> CollaborationProposalBasis:
+        if type(artifact_binding) is not SessionArtifactBinding:
+            raise TypeError("recommendation basis requires an exact artifact binding")
         profiles = tuple(self._collaboration_agent_profile(
-            agent_id, self.prompts.build_contextual_definition(session_id=session_id, agent_id=agent_id),
+            agent_id,
+            self._build_guarded_contextual_definition(
+                artifact_binding=artifact_binding,
+                session_id=session_id,
+                agent_id=agent_id,
+            ),
         ) for agent_id in ROSTER if agent_id in {LEAD_ORCHESTRATOR, *specialist_ids})
         route = "lead_recommendation_" + kind.value
         return CollaborationProposalBasis(
@@ -2214,9 +2793,14 @@ class StoryRuntime:
         self, *, source: CollaborationEventDraft, action: LeadRecommendedAction,
         inputs: tuple[CollaborationInputRevision, ...], evidence: CollaborationLeadEvidence,
         events: tuple[CollaborationEvent, ...], projection: CollaborationHistoryProjection,
+        artifact_binding: SessionArtifactBinding,
         tail_sequence: int, step_id: str | None = None,
         previous: LeadRecommendationRequestPayload | None = None,
     ) -> CollaborationEventDraft:
+        if type(artifact_binding) is not SessionArtifactBinding:
+            raise TypeError(
+                "recommendation requires an exact session artifact binding"
+            )
         objective = next((item for item in projection.artifact_objectives
                           if item.facts.objective_id == action.objective_id), None)
         if action.objective_id is not None and (
@@ -2363,10 +2947,21 @@ class StoryRuntime:
             specialist_ids=action.specialist_ids, objective_id=action.objective_id,
             source_recommendation_event_id=source.event_id,
             source_recommendation_digest=current.content_digest, draft_sources=tuple(drafts),
-            basis=self._recommendation_basis(source.session_id, action.kind, action.specialist_ids,
-                                             selected_inputs, evidence),
+            basis=self._recommendation_basis(
+                source.session_id,
+                action.kind,
+                action.specialist_ids,
+                selected_inputs,
+                evidence,
+                artifact_binding=artifact_binding,
+            ),
             source_fingerprint=self._recommendation_source_fingerprint(
-                source.session_id, source.conversation_id, selected_inputs, action.target_paths),
+                source.session_id,
+                source.conversation_id,
+                selected_inputs,
+                action.target_paths,
+                artifact_binding=artifact_binding,
+            ),
             physical_calls_spent=projection.physical_calls_spent,
             max_preparation_physical_calls=min(_CONTEXT_INVOCATION_CALL_LIMIT, remaining),
             tail_sequence=tail_sequence,
@@ -2482,6 +3077,7 @@ class StoryRuntime:
             stale = False
             if decision.kind is not CollaborationConfirmationDecision.REJECT:
                 try:
+                    artifact_binding = self._session_artifact_binding(session_id)
                     scope = request.authoring_scope
                     current = None if scope is None else self._authoring_tasks(
                         self._session_authoring_events(session_id),
@@ -2493,16 +3089,51 @@ class StoryRuntime:
                     if request.kind is LeadRecommendationActionKind.PREPARE_CONSULTATION:
                         validate_specialist_routing(scope, request.specialist_ids)
                     evidence_inputs = self._validate_current_lead_evidence(
-                        session_id=session_id, events=events, proposal=request,
+                        session_id=session_id,
+                        events=events,
+                        proposal=request,
+                        artifact_binding=artifact_binding,
                     ) if request.basis.evidence.receipts else {}
-                    current_inputs = self._current_lead_inputs(events, request, evidence_inputs=evidence_inputs)
+                    current_inputs = self._current_lead_inputs(
+                        session_id,
+                        events,
+                        request,
+                        evidence_inputs=evidence_inputs,
+                        artifact_binding=artifact_binding,
+                    )
                     if (current_inputs != request.basis.inputs
-                        or self._recommendation_basis(session_id, request.kind, request.specialist_ids,
-                            current_inputs, request.basis.evidence) != request.basis
-                        or self._recommendation_source_fingerprint(session_id, conversation_id,
-                            current_inputs, request.target_paths) != request.source_fingerprint
+                        or self._recommendation_basis(
+                            session_id,
+                            request.kind,
+                            request.specialist_ids,
+                            current_inputs,
+                            request.basis.evidence,
+                            artifact_binding=artifact_binding,
+                        ) != request.basis
+                        or self._recommendation_source_fingerprint(
+                            session_id,
+                            conversation_id,
+                            current_inputs,
+                            request.target_paths,
+                            artifact_binding=artifact_binding,
+                        ) != request.source_fingerprint
                         or projection.physical_calls_spent != request.physical_calls_spent):
                         raise ValueError("recommendation basis drifted")
+                except (
+                    SessionArtifactBindingError,
+                    WorkspaceFormatError,
+                    WorkspaceSecurityError,
+                ):
+                    return self._blocking_lead_result(
+                        session_id,
+                        conversation_id,
+                        CollaborationStepState.RECOVERY_REQUIRED,
+                        "The recommendation's exact session artifact resources "
+                        "are unavailable. Repair them before confirming; no "
+                        "preparation was started or replayed.",
+                        turn_id=turn_id,
+                        step_id=request_event.step_id,
+                    )
                 except Exception:
                     stale = True
             if stale or decision.kind is CollaborationConfirmationDecision.REJECT:
@@ -2656,7 +3287,25 @@ class StoryRuntime:
             operation_id = None if preparation is None else preparation.reference_operation_id
             terminal_proof = False
             if operation_id is not None and reference_operation_belongs_to_session(operation_id, session_id):
-                reference_history = self.artifacts.inspect_reference_operation(operation_id)
+                try:
+                    reference_history = self.inspect_reference_operation(
+                        operation_id
+                    )
+                except (
+                    SessionArtifactBindingError,
+                    WorkspaceFormatError,
+                    WorkspaceSecurityError,
+                ):
+                    return self._blocking_lead_result(
+                        session_id,
+                        conversation_id,
+                        CollaborationStepState.RECOVERY_REQUIRED,
+                        "The Lead failure is durable, but its exact session artifact "
+                        "resources are unavailable. Repair them before continuing; "
+                        "this preparation will not be replayed.",
+                        turn_id=start_event.turn_id,
+                        step_id=start_event.step_id,
+                    )
                 permitted = {None, ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
                              ReferenceAuthorizationErrorCode.PROVIDER_FAILURE}
                 terminal_proof = bool(
@@ -2891,7 +3540,7 @@ class StoryRuntime:
                 return normalized
             turn_id = self._new_id("t")
             step_id = self._new_id("s")
-            inputs = self._provider_free_lead_inputs(turn_id, text)
+            inputs = self._provider_free_lead_inputs(session_id, turn_id, text)
             task_events = self._session_authoring_events(session_id)
             prior_scope = self._authoring_tasks(task_events).get(authoring_scope.task_id)
             if prior_scope is not None:
@@ -2923,7 +3572,13 @@ class StoryRuntime:
             advisory_intent = LeadAssignmentIntent(
                 specialist_id, text, tuple(item.input_id for item in inputs), mode, review_basis,
             )
-            self._validate_review_material((advisory_intent,), inputs, events, user_text=text)
+            self._validate_review_material(
+                session_id,
+                (advisory_intent,),
+                inputs,
+                events,
+                user_text=text,
+            )
             call_limits, synthesis_calls, required_calls = (
                 self._proposal_call_reservations(
                     inputs=inputs,
@@ -2933,7 +3588,9 @@ class StoryRuntime:
                 )
             )
             assert synthesis_calls == 0
-            definition = self.prompts.build_contextual_definition(
+            artifact_binding = self._session_artifact_binding(session_id)
+            definition = self._build_guarded_contextual_definition(
+                artifact_binding=artifact_binding,
                 session_id=session_id,
                 agent_id=specialist_id,
             )
@@ -3137,6 +3794,27 @@ class StoryRuntime:
                         events=events,
                         projection=projection,
                         proposal=proposal,
+                    )
+                except (
+                    SessionArtifactBindingError,
+                    WorkspaceFormatError,
+                    WorkspaceSecurityError,
+                ):
+                    return LeadDecisionResult(
+                        decision.session_id,
+                        decision.conversation_id,
+                        decision.step_id,
+                        decision.kind,
+                        proposal,
+                        self._blocking_lead_result(
+                            decision.session_id,
+                            decision.conversation_id,
+                            CollaborationStepState.RECOVERY_REQUIRED,
+                            "The proposal's exact session artifact resources are "
+                            "unavailable. Repair them before confirming; no "
+                            "provider work was started.",
+                            step_id=decision.step_id,
+                        ),
                     )
                 except BackendProtocolError:
                     if artifact_candidate is None:
@@ -3522,6 +4200,8 @@ class StoryRuntime:
             outcome: ArtifactApplicationOutcomeKind
             next_action: ArtifactApplicationNextAction
             application_result = None
+            artifact_binding: SessionArtifactBinding | None = None
+            generation_pin: SessionArtifactGenerationPin | None = None
             key = (decision.session_id, decision.conversation_id, decision.step_id)
             if decision.kind is ArtifactApplicationDecisionKind.REJECT:
                 self._artifact_application_capabilities.pop(key, None)
@@ -3577,6 +4257,7 @@ class StoryRuntime:
                             "No write occurred; regenerate and review it."
                         )
                     else:
+                        repository_execution_started = False
                         try:
                             consultation = next((event.payload for event in persisted
                                 if type(event.payload) is CollaborationProposal
@@ -3586,31 +4267,72 @@ class StoryRuntime:
                             if consultation is None:
                                 raise ArtifactApplicationError(ArtifactApplicationErrorCode.CORRELATION_MISMATCH)
                             try:
-                                self._validate_exact_candidate_reviews(consultation, reviewed.candidate, persisted)
+                                self._validate_exact_candidate_reviews(
+                                    decision.session_id,
+                                    consultation,
+                                    reviewed.candidate,
+                                    persisted,
+                                )
                             except (ValueError, BackendProtocolError) as exc:
                                 raise ArtifactApplicationError(ArtifactApplicationErrorCode.CORRELATION_MISMATCH) from exc
                             reviewed.__post_init__()
                             reviewed.candidate.__post_init__()
-                            snapshots = self.artifacts.capture_complete_state()
-                            base_state = {item.path: item.content for item in snapshots}
-                            project_artifact_change_set(
-                                base_state, application.change_set
+                            artifact_binding = self._session_artifact_binding(
+                                decision.session_id
                             )
-                            relationship = validate_artifact_relationships(
-                                base_state,
-                                application.change_set,
-                                attached_core_paths=application.attached_core_paths,
-                            )
-                            if (
-                                relationship
-                                != reviewed.candidate.relationship_validation
-                            ):
-                                raise ArtifactApplicationError(
-                                    ArtifactApplicationErrorCode.DRIFT
+                            generation_pin = artifact_binding.acquire_generation_pin()
+                            with artifact_binding.open_ready_resources() as access:
+                                artifacts = access.repository
+                                snapshots = artifacts.capture_complete_state()
+                                base_state = {
+                                    item.path: item.content for item in snapshots
+                                }
+                                project_artifact_change_set(
+                                    base_state, application.change_set
                                 )
-                            application_result = self.artifacts.apply_artifact_changes(
-                                application
-                            )
+                                relationship = validate_artifact_relationships(
+                                    base_state,
+                                    application.change_set,
+                                    attached_core_paths=(
+                                        application.attached_core_paths
+                                    ),
+                                )
+                                if relationship != (
+                                    reviewed.candidate.relationship_validation
+                                ):
+                                    raise ArtifactApplicationError(
+                                        ArtifactApplicationErrorCode.DRIFT
+                                    )
+                                access.require_ready()
+                                repository_execution_started = True
+                                application_result = (
+                                    artifacts.apply_artifact_changes(application)
+                                )
+                        except (
+                            SessionArtifactBindingError,
+                            WorkspaceFormatError,
+                            WorkspaceSecurityError,
+                        ):
+                            if repository_execution_started:
+                                application_result = None
+                                outcome = ArtifactApplicationOutcomeKind.OUTCOME_UNKNOWN
+                                next_action = (
+                                    ArtifactApplicationNextAction.INSPECT_AND_RESOLVE_OUTCOME
+                                )
+                                message = (
+                                    "The artifact application outcome is uncertain. "
+                                    "Inspect the exact application before any new write."
+                                )
+                            else:
+                                outcome = ArtifactApplicationOutcomeKind.RECOVERY_REQUIRED
+                                next_action = (
+                                    ArtifactApplicationNextAction.OPERATOR_RECOVERY
+                                )
+                                message = (
+                                    "The exact session artifact resources are not ready. "
+                                    "Repository execution did not start; operator recovery "
+                                    "is required."
+                                )
                         except ArtifactChangeSetError:
                             outcome = ArtifactApplicationOutcomeKind.STALE
                             next_action = (
@@ -3631,6 +4353,17 @@ class StoryRuntime:
                                 message = (
                                     "Artifact application recovery is required. "
                                     "Do not retry the write."
+                                )
+                            elif repository_execution_started:
+                                outcome = (
+                                    ArtifactApplicationOutcomeKind.OUTCOME_UNKNOWN
+                                )
+                                next_action = (
+                                    ArtifactApplicationNextAction.INSPECT_AND_RESOLVE_OUTCOME
+                                )
+                                message = (
+                                    "The artifact application outcome is uncertain. "
+                                    "Inspect the exact application before any new write."
                                 )
                             elif exc.code in {
                                 ArtifactApplicationErrorCode.DRIFT,
@@ -3655,6 +4388,14 @@ class StoryRuntime:
                                     "The artifact application outcome is uncertain. "
                                     "Inspect the exact application before any new write."
                                 )
+                        except BaseException as failure:
+                            if generation_pin is not None:
+                                self._close_story_commit_generation_pin(
+                                    generation_pin,
+                                    failure,
+                                )
+                                generation_pin = None
+                            raise
                         else:
                             outcome = ArtifactApplicationOutcomeKind(
                                 application_result.state.value
@@ -3667,88 +4408,185 @@ class StoryRuntime:
                                 "atomically. No Git staging or commit occurred."
                             )
 
-            result_payload = ArtifactApplicationResultPayload(
-                confirmation_request_id=request.confirmation_request_id,
-                decision_event_id=decision_event_id,
-                reviewed_proposal_id=reviewed.proposal_id,
-                reviewed_proposal_digest=reviewed.proposal_digest,
-                application_id=application.application_id,
-                application_request_digest=request.application_request_digest,
-                outcome=outcome,
-                next_action=next_action,
-                result=application_result,
-            )
-            post_decision = self.conversation_storage_services.event_store.read(
-                decision.session_id, decision.conversation_id
-            )
-            result_event_id = self._new_id("e")
-            commit_request = None
+            commit_request: StoryCommitRequestPayload | None = None
+            pending_commit: _PendingStoryCommit | None = None
             result_persisted = False
             try:
-                self._append_drafts(
-                    post_decision[-1].sequence,
-                    (self._draft_with_id(
-                        event_id=result_event_id,
-                        session_id=decision.session_id,
-                        conversation_id=decision.conversation_id,
-                        turn_id=post_decision[-1].turn_id,
-                        step_id=decision.step_id,
-                        kind=CollaborationEventKind.ARTIFACT_APPLICATION_RESULT,
-                        sender=CollaborationActor(CollaborationActorKind.ARTIFACT),
-                        recipient=_USER_ACTOR,
-                        payload=result_payload,
-                    ),),
+                post_decision = self.conversation_storage_services.event_store.read(
+                    decision.session_id, decision.conversation_id
                 )
-                result_persisted = True
+                if (
+                    not post_decision
+                    or post_decision[-1].event_id != decision_event_id
+                    or post_decision[-1].payload != decision_payload
+                ):
+                    raise ValueError("artifact application decision tail changed")
+                result_event_id = self._new_id("e")
                 if application_result is not None:
-                    service = compose_story_commit_service(
-                        self.workspace.root, decision.session_id
-                    )
-                    candidate = service.prepare(
-                        StoryCommitApplicationEvidence(
-                            session_id=decision.session_id,
-                            application_id=application.application_id,
-                            proposal_id=reviewed.proposal_id,
-                            correlation_id=request.application_request_digest,
-                            change_set=application.change_set,
-                            applied_state_digest=application.change_set.projected_state_digest,
-                        ),
-                        proposed_message="Apply reviewed artifact changes",
-                        impact_boundary=(
-                            f"commit {len(application_result.affected_paths)} reviewed artifact paths",
-                        ),
-                    )
-                    commit_request = build_story_commit_request_payload(
-                        confirmation_request_id=self._new_id("g"),
-                        application_result_event_id=result_event_id,
-                        candidate=candidate,
-                    )
-                    result_history = self.conversation_storage_services.event_store.read(
-                        decision.session_id, decision.conversation_id
-                    )
-                    self._append_drafts(
-                        result_history[-1].sequence,
-                        (self._draft(
+                    assert artifact_binding is not None
+                    assert generation_pin is not None
+                    try:
+                        service = compose_story_commit_service(
+                            self.workspace.root,
+                            decision.session_id,
+                            artifact_binding,
+                        )
+                        candidate = service.prepare(
+                            StoryCommitApplicationEvidence(
+                                session_id=decision.session_id,
+                                application_id=application.application_id,
+                                proposal_id=reviewed.proposal_id,
+                                correlation_id=request.application_request_digest,
+                                change_set=application.change_set,
+                                applied_state_digest=(
+                                    application.change_set.projected_state_digest
+                                ),
+                            ),
+                            proposed_message="Apply reviewed artifact changes",
+                            impact_boundary=(
+                                f"commit {len(application_result.affected_paths)} "
+                                "reviewed artifact paths",
+                            ),
+                        )
+                        with artifact_binding.open_ready_resources():
+                            commit_request = build_story_commit_request_payload(
+                                confirmation_request_id=self._new_id("g"),
+                                application_result_event_id=result_event_id,
+                                candidate=candidate,
+                            )
+                        pending_commit = _PendingStoryCommit(
+                            commit_request, service, generation_pin
+                        )
+                        generation_pin = None
+                    except Exception:
+                        next_action = (
+                            ArtifactApplicationNextAction.REPREPARE_COMMIT_REQUEST
+                        )
+                        message = (
+                            "The artifact result is known, but an exact commit "
+                            "request could not be prepared. Reprepare it before "
+                            "a separate Commit decision."
+                        )
+                result_payload = ArtifactApplicationResultPayload(
+                    confirmation_request_id=request.confirmation_request_id,
+                    decision_event_id=decision_event_id,
+                    reviewed_proposal_id=reviewed.proposal_id,
+                    reviewed_proposal_digest=reviewed.proposal_digest,
+                    application_id=application.application_id,
+                    application_request_digest=request.application_request_digest,
+                    outcome=outcome,
+                    next_action=next_action,
+                    result=application_result,
+                )
+                result_draft = self._draft_with_id(
+                    event_id=result_event_id,
+                    session_id=decision.session_id,
+                    conversation_id=decision.conversation_id,
+                    turn_id=post_decision[-1].turn_id,
+                    step_id=decision.step_id,
+                    kind=CollaborationEventKind.ARTIFACT_APPLICATION_RESULT,
+                    sender=CollaborationActor(CollaborationActorKind.ARTIFACT),
+                    recipient=_USER_ACTOR,
+                    payload=result_payload,
+                )
+
+                def append_verified(drafts: tuple[CollaborationEventDraft, ...]) -> bool | None:
+                    """Resolve one CAS append by exact batch readback on error."""
+                    batch_id = self._new_id("b")
+                    try:
+                        self._append_drafts(
+                            post_decision[-1].sequence, drafts, batch_id=batch_id
+                        )
+                        return True
+                    except Exception:
+                        try:
+                            observed = self.conversation_storage_services.event_store.read(
+                                decision.session_id, decision.conversation_id
+                            )
+                        except Exception:
+                            return None
+                        expected_sequence = post_decision[-1].sequence
+                        if (
+                            len(observed) == expected_sequence + len(drafts)
+                            and observed[:expected_sequence] == post_decision
+                            and all(
+                                stored.batch_id == batch_id
+                                and stored.batch_ordinal == ordinal
+                                and stored.batch_size == len(drafts)
+                                and stored.sequence == expected_sequence + ordinal + 1
+                                and stored.to_draft() == draft
+                                for ordinal, (stored, draft) in enumerate(
+                                    zip(observed[expected_sequence:], drafts, strict=True)
+                                )
+                            )
+                        ):
+                            return True
+                        if (
+                            observed == post_decision
+                        ):
+                            return False
+                        return None
+
+                drafts = (result_draft,)
+                if commit_request is not None:
+                    drafts += (
+                        self._draft(
                             session_id=decision.session_id,
                             conversation_id=decision.conversation_id,
-                            turn_id=result_history[-1].turn_id,
+                            turn_id=post_decision[-1].turn_id,
                             step_id=decision.step_id,
                             kind=CollaborationEventKind.STORY_COMMIT_REQUEST,
                             sender=_LEAD_ACTOR,
                             recipient=_USER_ACTOR,
                             payload=commit_request,
-                        ),),
+                        ),
                     )
-                    self._story_commit_services[key] = service
-            except Exception:
-                commit_request = None
-                self._story_commit_services.pop(key, None)
+                published = append_verified(drafts)
+                if published is False and commit_request is not None:
+                    assert pending_commit is not None
+                    pending_commit.close()
+                    pending_commit = None
+                    commit_request = None
+                    result_payload = replace(
+                        result_payload,
+                        next_action=(
+                            ArtifactApplicationNextAction.REPREPARE_COMMIT_REQUEST
+                        ),
+                    )
+                    message = (
+                        "The artifact result is known, but the exact commit "
+                        "request was not published. Reprepare it before Commit."
+                    )
+                    published = append_verified(
+                        (replace(result_draft, payload=result_payload),)
+                    )
+                if published is not True:
+                    raise RuntimeError("artifact handoff publication is unproved")
+                result_persisted = True
+                previous_commit = self._pending_story_commits.get(key)
+                if previous_commit is not None:
+                    self._retire_pending_story_commit(key, previous_commit)
+                if pending_commit is not None:
+                    self._install_pending_story_commit(key, pending_commit)
+                    pending_commit = None
+            except BaseException as failure:
+                if pending_commit is not None:
+                    pending_commit.close()
+                if generation_pin is not None:
+                    self._close_story_commit_generation_pin(
+                        generation_pin, failure
+                    )
+                    generation_pin = None
+                if not isinstance(failure, Exception):
+                    raise
                 if result_persisted:
                     message = (
-                        "The artifact result is durable, but a commit request could "
-                        "not be prepared. Inspect the session before preparing again."
+                        "The exact application result is durable, but its "
+                        "process-local commit preparation is unavailable. "
+                        "Inspect the exact request before Commit."
                     )
                 else:
+                    commit_request = None
                     result_payload = ArtifactApplicationResultPayload(
                         confirmation_request_id=request.confirmation_request_id,
                         decision_event_id=decision_event_id,
@@ -3763,8 +4601,12 @@ class StoryRuntime:
                     )
                     message = (
                         "The decision is durable but its visible result could not be "
-                        "persisted. Inspect the exact application; do not retry it."
+                        "verified. Inspect the exact application; do not retry it."
                     )
+            else:
+                if generation_pin is not None:
+                    generation_pin.close()
+                    generation_pin = None
             return ArtifactApplicationDecisionResult(
                 request=request,
                 decision=decision.kind,
@@ -3772,6 +4614,139 @@ class StoryRuntime:
                 message=message,
                 commit_request=commit_request,
             )
+
+    async def reprepare_story_commit(
+        self,
+        request: StoryCommitPreparationRequest,
+    ) -> StoryCommitRequestPayload:
+        """Prepare one fresh exact Commit request for a known Apply result."""
+        if type(request) is not StoryCommitPreparationRequest:
+            raise TypeError("request must be a StoryCommitPreparationRequest")
+        self._validate_lead_identity(request.session_id, request.conversation_id)
+        lock = self._conversation_lock(request.session_id, request.conversation_id)
+        async with lock:
+            events = self.conversation_storage_services.event_store.read(
+                request.session_id, request.conversation_id
+            )
+            projection = project_collaboration_history(events)
+            application_request = projection.current_artifact_application_request
+            application_result = projection.current_artifact_application_result
+            if (
+                not events
+                or events[-1].event_id != request.tail_event_id
+                or events[-1].step_id != request.step_id
+                or projection.next_safe_action
+                is not CollaborationNextAction.REPREPARE_COMMIT_REQUEST
+                or application_request is None
+                or application_result is None
+                or application_result.result is None
+                or application_result.outcome not in {
+                    ArtifactApplicationOutcomeKind.APPLIED,
+                    ArtifactApplicationOutcomeKind.UNCHANGED,
+                }
+                or application_result.application_id != request.application_id
+                or application_result.application_request_digest
+                != request.application_request_digest
+            ):
+                raise ValueError("commit preparation has no exact current Apply tail")
+            result_events = tuple(
+                event
+                for event in events
+                if event.event_id == request.application_result_event_id
+                and event.payload == application_result
+                and event.step_id == request.step_id
+            )
+            if len(result_events) != 1:
+                raise ValueError("commit preparation Apply result is unavailable")
+            revision_count = sum(
+                type(event.payload) is StoryCommitDecisionPayload
+                and event.payload.application_result_event_id
+                == request.application_result_event_id
+                and event.payload.decision is StoryCommitDecision.REVISE
+                for event in events
+            )
+            proposed_message = (
+                "Apply reviewed artifact changes"
+                if revision_count == 0
+                else (
+                    "Apply reviewed artifact changes "
+                    f"(commit request revision {revision_count})"
+                )
+            )
+            reviewed = application_request.reviewed_proposal
+            application = application_request.application_request
+            artifact_binding = self._session_artifact_binding(request.session_id)
+            generation_pin = artifact_binding.acquire_generation_pin()
+            pending_commit: _PendingStoryCommit | None = None
+            try:
+                service = compose_story_commit_service(
+                    self.workspace.root, request.session_id, artifact_binding
+                )
+                candidate = service.prepare(
+                    StoryCommitApplicationEvidence(
+                        session_id=request.session_id,
+                        application_id=application.application_id,
+                        proposal_id=reviewed.proposal_id,
+                        correlation_id=application_request.application_request_digest,
+                        change_set=application.change_set,
+                        applied_state_digest=application.change_set.projected_state_digest,
+                    ),
+                    proposed_message=proposed_message,
+                    impact_boundary=(
+                        f"commit {len(application_result.result.affected_paths)} "
+                        "reviewed artifact paths",
+                    ),
+                )
+                with artifact_binding.open_ready_resources():
+                    commit_request = build_story_commit_request_payload(
+                        confirmation_request_id=self._new_id("g"),
+                        application_result_event_id=request.application_result_event_id,
+                        candidate=candidate,
+                    )
+                request_event_id = self._new_id("e")
+                batch_id = self._new_id("b")
+                draft = self._draft_with_id(
+                    event_id=request_event_id,
+                    session_id=request.session_id,
+                    conversation_id=request.conversation_id,
+                    turn_id=events[-1].turn_id,
+                    step_id=request.step_id,
+                    kind=CollaborationEventKind.STORY_COMMIT_REQUEST,
+                    sender=_LEAD_ACTOR,
+                    recipient=_USER_ACTOR,
+                    payload=commit_request,
+                )
+                try:
+                    self._append_drafts(
+                        events[-1].sequence, (draft,), batch_id=batch_id
+                    )
+                except Exception:
+                    observed = self.conversation_storage_services.event_store.read(
+                        request.session_id, request.conversation_id
+                    )
+                    if not (
+                        len(observed) == events[-1].sequence + 1
+                        and observed[:-1] == events
+                        and observed[-1].batch_id == batch_id
+                        and observed[-1].batch_ordinal == 0
+                        and observed[-1].batch_size == 1
+                        and observed[-1].sequence == events[-1].sequence + 1
+                        and observed[-1].to_draft() == draft
+                    ):
+                        raise
+                pending_commit = _PendingStoryCommit(
+                    commit_request, service, generation_pin
+                )
+                generation_pin = None
+                key = (request.session_id, request.conversation_id, request.step_id)
+                self._install_pending_story_commit(key, pending_commit)
+                pending_commit = None
+                return commit_request
+            finally:
+                if pending_commit is not None:
+                    pending_commit.close()
+                if generation_pin is not None:
+                    generation_pin.close()
 
     async def decide_story_commit(
         self,
@@ -3802,107 +4777,170 @@ class StoryRuntime:
             )
             if not exact:
                 raise ValueError("story commit decision does not match tail")
-            decision_event_id = self._new_id("e")
-            decision_payload = StoryCommitDecisionPayload(
-                confirmation_request_id=request.confirmation_request_id,
-                confirmation_request_event_id=events[-1].event_id,
-                application_result_event_id=request.application_result_event_id,
-                candidate_id=request.candidate.candidate_id,
-                request_digest=request.request_digest,
-                confirmation_id=decision.confirmation_id,
-                decision=decision.kind,
-                revision_request=decision.revision_request,
-            )
-            self._append_drafts(
-                projection.last_sequence,
-                (self._draft_with_id(
-                    event_id=decision_event_id,
-                    session_id=decision.session_id,
-                    conversation_id=decision.conversation_id,
-                    turn_id=self._new_id("t"),
-                    step_id=decision.step_id,
-                    kind=CollaborationEventKind.STORY_COMMIT_DECISION,
-                    sender=_USER_ACTOR,
-                    recipient=_RUNTIME_ACTOR,
-                    payload=decision_payload,
-                ),),
-            )
             key = (decision.session_id, decision.conversation_id, decision.step_id)
-            service = self._story_commit_services.pop(key, None)
-            result = None
-            if service is None:
-                outcome = StoryCommitOutcomeKind.STALE
-                next_action = StoryCommitNextAction.REPREPARE
-                message = "This runtime did not prepare the commit request. No Git mutation occurred; prepare a new request."
-            else:
-                confirmation = StoryCommitConfirmation(
-                    confirmation_id=decision.confirmation_id,
-                    candidate_id=request.candidate.candidate_id,
-                    proposal_id=request.candidate.proposal_id,
-                    correlation_id=request.candidate.correlation_id,
-                    decision=decision.kind,
-                )
-                try:
-                    if decision.kind is StoryCommitDecision.COMMIT:
-                        authority = service.authorize(request.candidate, confirmation)
-                        result = service.execute(authority)
-                        outcome = StoryCommitOutcomeKind.COMMITTED
-                        next_action = StoryCommitNextAction.CONTINUE_WITH_LEAD
-                        message = "The exact prepared artifact paths were staged and committed locally. No remote operation occurred."
-                    elif decision.kind is StoryCommitDecision.REJECT:
-                        result = service.reject(request.candidate, confirmation)
-                        outcome = StoryCommitOutcomeKind.REJECTED
-                        next_action = StoryCommitNextAction.CONTINUE_WITH_LEAD
-                        message = "The local commit was rejected. Applied artifact files and Git state were preserved."
-                    else:
-                        result = service.revise(request.candidate, confirmation)
-                        outcome = StoryCommitOutcomeKind.SUPERSEDED
-                        next_action = StoryCommitNextAction.REPREPARE
-                        message = "The commit request was superseded for revision. Applied artifact files and Git state were preserved."
-                except StoryCommitError as exc:
-                    outcome, next_action = {
-                        StoryCommitRecoveryAction.REPREPARE: (StoryCommitOutcomeKind.STALE, StoryCommitNextAction.REPREPARE),
-                        StoryCommitRecoveryAction.INSPECT: (StoryCommitOutcomeKind.OUTCOME_UNKNOWN, StoryCommitNextAction.INSPECT),
-                        StoryCommitRecoveryAction.OPERATOR_RECOVERY: (StoryCommitOutcomeKind.RECOVERY_REQUIRED, StoryCommitNextAction.OPERATOR_RECOVERY),
-                    }.get(exc.recovery_action, (StoryCommitOutcomeKind.STALE, StoryCommitNextAction.REPREPARE))
-                    message = "The local commit did not complete safely. Follow the single reported recovery action before preparing another request."
-            result_payload = StoryCommitResultPayload(
-                confirmation_request_id=request.confirmation_request_id,
-                decision_event_id=decision_event_id,
-                candidate_id=request.candidate.candidate_id,
-                request_digest=request.request_digest,
-                outcome=outcome,
-                next_action=next_action,
-                result=result,
+            observed_pending = self._pending_story_commits.get(key)
+            pending = (
+                observed_pending
+                if observed_pending is not None
+                and observed_pending.request == request
+                else None
             )
-            post_decision = self.conversation_storage_services.event_store.read(
-                decision.session_id, decision.conversation_id
-            )
+            decision_consumed = False
+            escaping_failure: BaseException | None = None
             try:
+                decision_event_id = self._new_id("e")
+                decision_payload = StoryCommitDecisionPayload(
+                    confirmation_request_id=request.confirmation_request_id,
+                    confirmation_request_event_id=events[-1].event_id,
+                    application_result_event_id=request.application_result_event_id,
+                    candidate_id=request.candidate.candidate_id,
+                    request_digest=request.request_digest,
+                    confirmation_id=decision.confirmation_id,
+                    decision=decision.kind,
+                    revision_request=decision.revision_request,
+                )
                 self._append_drafts(
-                    post_decision[-1].sequence,
-                    (self._draft(
+                    projection.last_sequence,
+                    (self._draft_with_id(
+                        event_id=decision_event_id,
                         session_id=decision.session_id,
                         conversation_id=decision.conversation_id,
-                        turn_id=post_decision[-1].turn_id,
+                        turn_id=self._new_id("t"),
                         step_id=decision.step_id,
-                        kind=CollaborationEventKind.STORY_COMMIT_RESULT,
-                        sender=CollaborationActor(CollaborationActorKind.GIT),
-                        recipient=_USER_ACTOR,
-                        payload=result_payload,
+                        kind=CollaborationEventKind.STORY_COMMIT_DECISION,
+                        sender=_USER_ACTOR,
+                        recipient=_RUNTIME_ACTOR,
+                        payload=decision_payload,
                     ),),
                 )
-            except Exception:
+                decision_consumed = True
+                result = None
+                if pending is None:
+                    outcome = StoryCommitOutcomeKind.STALE
+                    next_action = StoryCommitNextAction.REPREPARE
+                    message = (
+                        "This runtime did not prepare the commit request. No Git "
+                        "mutation occurred; prepare a new request."
+                    )
+                else:
+                    service = pending.service
+                    confirmation = StoryCommitConfirmation(
+                        confirmation_id=decision.confirmation_id,
+                        candidate_id=request.candidate.candidate_id,
+                        proposal_id=request.candidate.proposal_id,
+                        correlation_id=request.candidate.correlation_id,
+                        decision=decision.kind,
+                    )
+                    try:
+                        if decision.kind is StoryCommitDecision.COMMIT:
+                            authority = service.authorize(
+                                request.candidate,
+                                confirmation,
+                            )
+                            result = service.execute(authority)
+                            outcome = StoryCommitOutcomeKind.COMMITTED
+                            next_action = StoryCommitNextAction.CONTINUE_WITH_LEAD
+                            message = (
+                                "The exact prepared artifact paths were staged and "
+                                "committed locally. No remote operation occurred."
+                            )
+                        elif decision.kind is StoryCommitDecision.REJECT:
+                            result = service.reject(request.candidate, confirmation)
+                            outcome = StoryCommitOutcomeKind.REJECTED
+                            next_action = StoryCommitNextAction.CONTINUE_WITH_LEAD
+                            message = (
+                                "The local commit was rejected. Applied artifact files "
+                                "and Git state were preserved."
+                            )
+                        else:
+                            result = service.revise(request.candidate, confirmation)
+                            outcome = StoryCommitOutcomeKind.SUPERSEDED
+                            next_action = StoryCommitNextAction.REPREPARE
+                            message = (
+                                "The commit request was superseded for revision. "
+                                "Applied artifact files and Git state were preserved."
+                            )
+                    except StoryCommitError as exc:
+                        outcome, next_action = {
+                            StoryCommitRecoveryAction.REPREPARE: (
+                                StoryCommitOutcomeKind.STALE,
+                                StoryCommitNextAction.REPREPARE,
+                            ),
+                            StoryCommitRecoveryAction.INSPECT: (
+                                StoryCommitOutcomeKind.OUTCOME_UNKNOWN,
+                                StoryCommitNextAction.INSPECT,
+                            ),
+                            StoryCommitRecoveryAction.OPERATOR_RECOVERY: (
+                                StoryCommitOutcomeKind.RECOVERY_REQUIRED,
+                                StoryCommitNextAction.OPERATOR_RECOVERY,
+                            ),
+                        }.get(
+                            exc.recovery_action,
+                            (
+                                StoryCommitOutcomeKind.STALE,
+                                StoryCommitNextAction.REPREPARE,
+                            ),
+                        )
+                        message = (
+                            "The local commit did not complete safely. Follow the "
+                            "single reported recovery action before preparing another "
+                            "request."
+                        )
                 result_payload = StoryCommitResultPayload(
                     confirmation_request_id=request.confirmation_request_id,
                     decision_event_id=decision_event_id,
                     candidate_id=request.candidate.candidate_id,
                     request_digest=request.request_digest,
-                    outcome=StoryCommitOutcomeKind.OUTCOME_UNKNOWN,
-                    next_action=StoryCommitNextAction.INSPECT,
+                    outcome=outcome,
+                    next_action=next_action,
+                    result=result,
                 )
-                message = "The commit decision is durable but its result is not visible. Inspect the session; do not retry."
-            return StoryCommitDecisionResult(request, decision.kind, result_payload, message)
+                post_decision = self.conversation_storage_services.event_store.read(
+                    decision.session_id, decision.conversation_id
+                )
+                try:
+                    self._append_drafts(
+                        post_decision[-1].sequence,
+                        (self._draft(
+                            session_id=decision.session_id,
+                            conversation_id=decision.conversation_id,
+                            turn_id=post_decision[-1].turn_id,
+                            step_id=decision.step_id,
+                            kind=CollaborationEventKind.STORY_COMMIT_RESULT,
+                            sender=CollaborationActor(CollaborationActorKind.GIT),
+                            recipient=_USER_ACTOR,
+                            payload=result_payload,
+                        ),),
+                    )
+                except Exception:
+                    result_payload = StoryCommitResultPayload(
+                        confirmation_request_id=request.confirmation_request_id,
+                        decision_event_id=decision_event_id,
+                        candidate_id=request.candidate.candidate_id,
+                        request_digest=request.request_digest,
+                        outcome=StoryCommitOutcomeKind.OUTCOME_UNKNOWN,
+                        next_action=StoryCommitNextAction.INSPECT,
+                    )
+                    message = (
+                        "The commit decision is durable but its result is not visible. "
+                        "Inspect the session; do not retry."
+                    )
+                return StoryCommitDecisionResult(
+                    request,
+                    decision.kind,
+                    result_payload,
+                    message,
+                )
+            except BaseException as failure:
+                escaping_failure = failure
+                raise
+            finally:
+                if decision_consumed and observed_pending is not None:
+                    self._retire_pending_story_commit(
+                        key,
+                        observed_pending,
+                        failure=escaping_failure,
+                    )
 
     async def _execute_confirmed_step_locked(
         self,
@@ -3929,13 +4967,80 @@ class StoryRuntime:
             raise BackendProtocolError(
                 "confirmed collaboration authority no longer matches the durable tail"
             )
-        self._validate_current_proposal_authority(
-            session_id=session_id,
-            events=events,
-            projection=projection,
-            proposal=proposal,
-        )
         key = (session_id, conversation_id, proposal.step_id)
+        try:
+            self._validate_current_proposal_authority(
+                session_id=session_id,
+                events=events,
+                projection=projection,
+                proposal=proposal,
+            )
+        except (
+            SessionArtifactBindingError,
+            WorkspaceFormatError,
+            WorkspaceSecurityError,
+        ):
+            if self._confirmed_capabilities.get(key) is not capability:
+                raise BackendProtocolError(
+                    "confirmed collaboration capability is absent"
+                )
+            capability.consume()
+            self._confirmed_capabilities.pop(key, None)
+            turn_id = self._new_id("t")
+            artifact_candidate = self._artifact_candidate_for_proposal(
+                events,
+                proposal,
+            )
+            artifact_recovery = (
+                ()
+                if artifact_candidate is None
+                else (
+                    self._draft(
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        step_id=proposal.step_id,
+                        kind=CollaborationEventKind.ARTIFACT_PROPOSAL_STATE,
+                        sender=_RUNTIME_ACTOR,
+                        recipient=_USER_ACTOR,
+                        payload=self._artifact_state_payload(
+                            artifact_candidate,
+                            ArtifactProposalState.RECOVERY_REQUIRED,
+                        ),
+                    ),
+                )
+            )
+            self._append_drafts(
+                projection.last_sequence,
+                (
+                    *artifact_recovery,
+                    self._draft(
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        step_id=proposal.step_id,
+                        kind=CollaborationEventKind.STEP_STATE,
+                        sender=_RUNTIME_ACTOR,
+                        recipient=_USER_ACTOR,
+                        payload=CollaborationStepStatePayload(
+                            state=CollaborationStepState.RECOVERY_REQUIRED,
+                            proposal_id=proposal.proposal_id,
+                            proposal_revision=proposal.proposal_revision,
+                            proposal_digest=proposal.proposal_digest,
+                        ),
+                    ),
+                ),
+            )
+            return self._blocking_lead_result(
+                session_id,
+                conversation_id,
+                CollaborationStepState.RECOVERY_REQUIRED,
+                "The confirmed step could not revalidate its exact session "
+                "artifact resources. Repair them before continuing; no provider "
+                "work was started or replayed.",
+                turn_id=turn_id,
+                step_id=proposal.step_id,
+            )
         if self._confirmed_capabilities.get(key) is not capability:
             raise BackendProtocolError("confirmed collaboration capability is absent")
         capability.consume()
@@ -4155,6 +5260,7 @@ class StoryRuntime:
                 is LeadRecommendationState.PENDING
             ):
                 finalized = self._finalize_known_result_locked(
+                    session_id,
                     persisted,
                     finalized_projection,
                 )
@@ -4224,6 +5330,8 @@ class StoryRuntime:
                     "mandatory consultation synthesis returned no typed payload"
                 ),
                 item.submission_uncertain,
+                item.artifact_binding,
+                item.generation_pin,
             )
         return item
 
@@ -4240,7 +5348,12 @@ class StoryRuntime:
         events: tuple[CollaborationEvent, ...],
         action_progress_sink: ContextActionProgressSink | None,
     ) -> _CollaborationInvocationResult:
-        self._validate_review_material((assignment,), proposal.basis.inputs, events)
+        self._validate_review_material(
+            session_id,
+            (assignment,),
+            proposal.basis.inputs,
+            events,
+        )
         inputs_by_id = {item.input_id: item for item in proposal.basis.inputs}
         try:
             selected = tuple(
@@ -4276,7 +5389,10 @@ class StoryRuntime:
             "workflow": proposal.step_kind.value,
         }
 
-        def decode(answer: str) -> CollaborationSpecialistReplyPayload:
+        def decode(
+            answer: str,
+            _artifact_binding: SessionArtifactBinding,
+        ) -> CollaborationSpecialistReplyPayload:
             return self._decode_specialist_reply(
                 answer,
                 proposal=proposal,
@@ -4407,7 +5523,10 @@ class StoryRuntime:
                 "recommended_action are mutually exclusive. Preserve OPEN authoring objectives."
             )
 
-        def decode(answer: str) -> object:
+        def decode(
+            answer: str,
+            artifact_binding: SessionArtifactBinding,
+        ) -> object:
             if artifact_candidate is not None:
                 return self._decode_artifact_synthesis(
                     answer,
@@ -4442,6 +5561,7 @@ class StoryRuntime:
                     source=source, action=decoded.recommended_action,
                     inputs=(*proposal.basis.inputs, *reply_inputs), evidence=proposal.basis.evidence,
                     events=current_events, projection=current_projection,
+                    artifact_binding=artifact_binding,
                     tail_sequence=current_projection.last_sequence + 2,
                 )
             return decoded
@@ -4628,7 +5748,32 @@ class StoryRuntime:
 
     async def _run_collaboration_invocation(
         self,
+        **arguments: Any,
+    ) -> _CollaborationInvocationResult:
+        """Use short synchronous guards around each lazy specialist source."""
+
+        session_id = cast(str, arguments["session_id"])
+        result: _CollaborationInvocationResult | None = None
+        try:
+            artifact_binding = self._session_artifact_binding(session_id)
+            result = await self._run_collaboration_invocation_guarded(
+                artifact_binding=artifact_binding,
+                **arguments,
+            )
+        except SessionArtifactBindingError as failure:
+            return _CollaborationInvocationResult(
+                None,
+                0 if result is None else result.submitted_physical_calls,
+                failure,
+                False if result is None else result.submission_uncertain,
+            )
+        assert result is not None
+        return result
+
+    async def _run_collaboration_invocation_guarded(
+        self,
         *,
+        artifact_binding: SessionArtifactBinding,
         session_id: str,
         conversation_id: str,
         turn_id: str,
@@ -4643,7 +5788,7 @@ class StoryRuntime:
         result_contract: ContextJsonObjectResultContract,
         physical_call_limit: int,
         round_number: int,
-        decoder: Callable[[str], object],
+        decoder: Callable[[str, SessionArtifactBinding], object],
         fallback_answer: str,
         action_progress_sink: ContextActionProgressSink | None,
         constraints: LeadProviderConstraints | None = None,
@@ -4661,9 +5806,24 @@ class StoryRuntime:
         reference_operation: RuntimeReferenceOperation | None = None
         bound_agent: BoundAgent | None = None
         provider: _AccountingContextProvider | None = None
+        generation_pin: SessionArtifactGenerationPin | None = None
+        execution_workspace_manager: AbstractContextManager[
+            ProviderExecutionWorkspace
+        ] | None = None
+        execution_workspace: ProviderExecutionWorkspace | None = None
         try:
-            reference_operation = prepare_runtime_reference_operation(
-                self.artifacts,
+            if agent_id == LEAD_ORCHESTRATOR:
+                generation_pin = artifact_binding.acquire_generation_pin()
+            repository_access = partial(
+                _open_session_artifact_repository,
+                artifact_binding,
+            )
+            session_sources = SessionSourceWorkspace.from_artifact_binding(
+                artifact_binding
+            )
+            reference_operation = self._prepare_session_reference_operation(
+                repository_access,
+                artifact_binding=artifact_binding,
                 session_id=session_id,
                 text=" ".join(item.locator for item in artifact_inputs),
             )
@@ -4671,11 +5831,26 @@ class StoryRuntime:
                 artifact_inputs,
                 reference_operation,
             )
-            definition = self.prompts.build_contextual_definition(
+            definition = self._build_guarded_contextual_definition(
+                artifact_binding=artifact_binding,
                 session_id=session_id,
                 agent_id=agent_id,
             )
             bound_agent = await self._acquire_bound_agent(definition)
+            execution_workspace_manager = _provider_execution_workspace_manager(
+                bound_agent,
+                artifact_binding,
+            )
+            if execution_workspace_manager is not None:
+                execution_workspace = execution_workspace_manager.__enter__()
+                if agent_id == LEAD_ORCHESTRATOR:
+                    continuation = self._lead_continuations.get(session_id)
+                    if continuation is not None:
+                        continuation.retain_context_manager(
+                            execution_workspace_manager,
+                            validator=execution_workspace.require_current,
+                        )
+                        execution_workspace_manager = None
             reference_read = reference_operation.begin_invocation(
                 agent_id=agent_id,
                 phase=context_invocation_kind.value,
@@ -4714,8 +5889,8 @@ class StoryRuntime:
                 proof.reference.path for proof in reference_operation.reference_proofs
             )
             authorities = (
-                WritingArtifactSourceAdapter(
-                    self.artifacts,
+                create_guarded_writing_artifact_source_adapter(
+                    repository_access,
                     scope,
                     allowed_paths=allowed_paths,
                 ),
@@ -4726,8 +5901,8 @@ class StoryRuntime:
                     conversation_id,
                     captured_context=captured_conversation,
                 ),
-                ActiveDebateSourceAdapter(self.workspace, scope, None),
-                OwnAgentStateSourceAdapter(self.workspace, scope),
+                ActiveDebateSourceAdapter(session_sources, scope, None),
+                OwnAgentStateSourceAdapter(session_sources, scope),
             )
             reference_operation_id, reservations = self._reference_reservations(
                 reference_operation
@@ -4756,10 +5931,50 @@ class StoryRuntime:
                 result_contract=result_contract,
                 physical_call_limit=physical_call_limit,
                 session_state_json=(
-                    self._session_context_state(session_id)
+                    self._session_context_state(
+                        session_id,
+                        artifact_binding=artifact_binding,
+                    )
                     if agent_id == LEAD_ORCHESTRATOR else None
                 ),
+                execution_workspace=execution_workspace,
             )
+            async def finish_invocation(
+                value: object,
+                *,
+                result: ContextInvocationResult | None,
+                origin: ReplyTraceOrigin,
+                reference_failure: BaseException | None = None,
+            ) -> _CollaborationInvocationResult:
+                nonlocal bound_agent, generation_pin
+                if reference_failure is None:
+                    self._finish_reference_operation(reference_operation)
+                else:
+                    self._fail_reference_operation(
+                        reference_operation, reference_failure,
+                    )
+                pending_validation = provider.publish_or_defer_validation_messages()
+                if bound_agent is not None:
+                    releasing_agent = bound_agent
+                    bound_agent = None
+                    await self._release_bound_agent_use(releasing_agent)
+                transferred_pin = generation_pin
+                generation_pin = None
+                return _CollaborationInvocationResult(
+                    value,
+                    provider.submitted_physical_calls,
+                    artifact_binding=artifact_binding,
+                    generation_pin=transferred_pin,
+                    trace=self._collaboration_reply_trace(
+                        role=agent_id,
+                        action=self._collaboration_trace_action(value),
+                        request=request,
+                        result=result,
+                        origin=origin,
+                    ),
+                    pending_validation=pending_validation,
+                )
+
             decoded: object | None = None
             trace_origin = ReplyTraceOrigin.PROVIDER
 
@@ -4780,7 +5995,7 @@ class StoryRuntime:
                     rules = constraints.diagnose(answer)
                     if rules:
                         raise LeadContractError(rules)
-                decoded = decoder(answer)
+                decoded = decoder(answer, artifact_binding)
 
             invocation_arguments = {
                 "writing_artifacts": authorities[0],
@@ -4820,20 +6035,12 @@ class StoryRuntime:
                 if not correctable:
                     raise
                 if remaining < correction_cost:
-                    reference_operation.failure(first_failure)
-                    fallback_value = decoder(fallback_answer)
-                    pending_validation = provider.publish_or_defer_validation_messages()
-                    return _CollaborationInvocationResult(
+                    fallback_value = decoder(fallback_answer, artifact_binding)
+                    return await finish_invocation(
                         fallback_value,
-                        provider.submitted_physical_calls,
-                        trace=self._collaboration_reply_trace(
-                            role=agent_id,
-                            action=self._collaboration_trace_action(fallback_value),
-                            request=request,
-                            result=None,
-                            origin=ReplyTraceOrigin.RUNTIME_FALLBACK,
-                        ),
-                        pending_validation=pending_validation,
+                        result=None,
+                        origin=ReplyTraceOrigin.RUNTIME_FALLBACK,
+                        reference_failure=first_failure,
                     )
                 trace_origin = ReplyTraceOrigin.RECOVERED
                 reference_read = reference_operation.begin_invocation(
@@ -4884,41 +6091,32 @@ class StoryRuntime:
                         or correction_facts.submission_uncertain
                     ):
                         raise
-                    reference_operation.failure(correction_failure)
-                    fallback_value = decoder(fallback_answer)
-                    pending_validation = provider.publish_or_defer_validation_messages()
-                    return _CollaborationInvocationResult(
+                    fallback_value = decoder(fallback_answer, artifact_binding)
+                    return await finish_invocation(
                         fallback_value,
-                        provider.submitted_physical_calls,
-                        trace=self._collaboration_reply_trace(
-                            role=agent_id,
-                            action=self._collaboration_trace_action(fallback_value),
-                            request=request,
-                            result=None,
-                            origin=ReplyTraceOrigin.RUNTIME_FALLBACK,
-                        ),
-                        pending_validation=pending_validation,
+                        result=None,
+                        origin=ReplyTraceOrigin.RUNTIME_FALLBACK,
+                        reference_failure=correction_failure,
                     )
-            value = decoded if decoded is not None else decoder(result.answer)
-            reference_operation.finish()
-            pending_validation = provider.publish_or_defer_validation_messages()
-            return _CollaborationInvocationResult(
+            value = (
+                decoded if decoded is not None
+                else decoder(result.answer, artifact_binding)
+            )
+            return await finish_invocation(
                 value,
-                provider.submitted_physical_calls,
-                trace=self._collaboration_reply_trace(
-                    role=agent_id,
-                    action=self._collaboration_trace_action(value),
-                    request=request,
-                    result=result,
-                    origin=trace_origin,
-                ),
-                pending_validation=pending_validation,
+                result=result,
+                origin=trace_origin,
             )
         except BaseException as failure:
+            cleanup_binding_failure: SessionArtifactBindingError | None = None
             if reference_operation is not None:
-                reference_operation.failure(failure)
+                try:
+                    self._fail_reference_operation(reference_operation, failure)
+                except SessionArtifactBindingError as cleanup_failure:
+                    cleanup_binding_failure = cleanup_failure
             pending_validation = (
-                None if provider is None else provider.publish_or_defer_validation_messages()
+                None if provider is None
+                else provider.publish_or_defer_validation_messages()
             )
             facts = context_provider_failure_facts(failure)
             submitted = (
@@ -4926,16 +6124,86 @@ class StoryRuntime:
                 if provider is not None
                 else len(facts.submitted_accountings)
             )
+            if cleanup_binding_failure is not None:
+                if submitted == 0:
+                    if bound_agent is not None:
+                        releasing_agent = bound_agent
+                        bound_agent = None
+                        try:
+                            await self._release_bound_agent_use(releasing_agent)
+                        except BaseException as release_failure:
+                            cleanup_binding_failure.add_note(
+                                "bound-agent release failed: "
+                                f"{type(release_failure).__name__}"
+                            )
+                    raise cleanup_binding_failure
+                failure = cleanup_binding_failure
+            if bound_agent is not None:
+                releasing_agent = bound_agent
+                bound_agent = None
+                try:
+                    await self._release_bound_agent_use(releasing_agent)
+                except BaseException as release_failure:
+                    failure.add_note(
+                        "bound-agent release failed: "
+                        f"{type(release_failure).__name__}"
+                    )
+            transferred_pin = generation_pin
+            generation_pin = None
             return _CollaborationInvocationResult(
                 None,
                 submitted,
                 failure,
                 facts.submission_uncertain,
+                artifact_binding=artifact_binding,
+                generation_pin=transferred_pin,
                 pending_validation=pending_validation,
             )
         finally:
+            cleanup_failure: BaseException | None = None
+            primary = sys.exception()
+            if generation_pin is not None:
+                try:
+                    self._close_story_commit_generation_pin(
+                        generation_pin,
+                        failure=primary,
+                    )
+                except BaseException as failure:
+                    cleanup_failure = failure
             if bound_agent is not None:
-                await self._release_bound_agent_use(bound_agent)
+                try:
+                    await self._release_bound_agent_use(bound_agent)
+                except BaseException as failure:
+                    cleanup_primary = (
+                        primary if primary is not None else cleanup_failure
+                    )
+                    if cleanup_primary is None:
+                        cleanup_failure = failure
+                    else:
+                        _add_story_commit_cleanup_note(
+                            cleanup_primary,
+                            failure,
+                        )
+            if execution_workspace_manager is not None:
+                try:
+                    execution_workspace_manager.__exit__(
+                        None if primary is None else type(primary),
+                        primary,
+                        None if primary is None else primary.__traceback__,
+                    )
+                except BaseException as failure:
+                    cleanup_primary = (
+                        primary if primary is not None else cleanup_failure
+                    )
+                    if cleanup_primary is None:
+                        cleanup_failure = failure
+                    else:
+                        _add_story_commit_cleanup_note(
+                            cleanup_primary,
+                            failure,
+                        )
+            if primary is None and cleanup_failure is not None:
+                raise cleanup_failure
 
     @staticmethod
     def _validate_assignment_reference_proofs(
@@ -5036,6 +6304,42 @@ class StoryRuntime:
         return value
 
     def _persist_collaboration_results_locked(
+        self,
+        **arguments: Any,
+    ) -> None:
+        """Persist results before releasing transferred synthesis generation."""
+
+        synthesis_result = cast(
+            _CollaborationInvocationResult | None,
+            arguments.get("synthesis_result"),
+        )
+        generation_pin = (
+            None if synthesis_result is None else synthesis_result.generation_pin
+        )
+        artifact_binding = (
+            None if synthesis_result is None else synthesis_result.artifact_binding
+        )
+        try:
+            try:
+                self._persist_collaboration_results_with_generation_pin(**arguments)
+            except BaseException:
+                if generation_pin is not None and artifact_binding is not None:
+                    artifact_binding.require_generation_pin(generation_pin)
+                raise
+            if generation_pin is not None:
+                if artifact_binding is None:
+                    raise BackendProtocolError(
+                        "synthesis generation pin lacks its artifact binding"
+                    )
+                artifact_binding.require_generation_pin(generation_pin)
+        finally:
+            if generation_pin is not None:
+                self._close_story_commit_generation_pin(
+                    generation_pin,
+                    failure=sys.exception(),
+                )
+
+    def _persist_collaboration_results_with_generation_pin(
         self,
         *,
         session_id: str,
@@ -5359,6 +6663,13 @@ class StoryRuntime:
         )
         if recommended_action is not None:
             assert synthesis_draft is not None
+            if (
+                synthesis_result is None
+                or synthesis_result.artifact_binding is None
+            ):
+                raise BackendProtocolError(
+                    "lead synthesis recommendation lacks its artifact binding"
+                )
             terminal = self._terminal_state_draft(events=current_events, turn_id=turn_id,
                 proposal=proposal, result_event_id=result_event_id, state=CollaborationStepState.COMPLETED)
             reply_inputs = tuple(CollaborationInputRevision(
@@ -5370,6 +6681,7 @@ class StoryRuntime:
                 source=synthesis_draft, action=recommended_action,
                 inputs=(*proposal.basis.inputs, *reply_inputs), evidence=proposal.basis.evidence,
                 events=current_events, projection=projection,
+                artifact_binding=synthesis_result.artifact_binding,
                 tail_sequence=projection.last_sequence + len(result_drafts) + 2,
                 step_id=self._deterministic_id("s", result_event_id, "recommendation"),
             )
@@ -5412,6 +6724,7 @@ class StoryRuntime:
 
     def _finalize_known_result_locked(
         self,
+        session_id: str,
         events: tuple[CollaborationEvent, ...],
         projection: CollaborationHistoryProjection,
     ) -> LeadTurnResult:
@@ -5449,6 +6762,7 @@ class StoryRuntime:
         artifact_candidate = self._artifact_candidate_for_proposal(events, proposal)
         if artifact_candidate is not None:
             return self._finalize_artifact_result_locked(
+                session_id=session_id,
                 events=events,
                 projection=projection,
                 proposal=proposal,
@@ -5730,6 +7044,7 @@ class StoryRuntime:
     def _finalize_artifact_result_locked(
         self,
         *,
+        session_id: str,
         events: tuple[CollaborationEvent, ...],
         projection: CollaborationHistoryProjection,
         proposal: CollaborationProposal,
@@ -5740,6 +7055,15 @@ class StoryRuntime:
         validation_details: tuple[str, ...],
     ) -> LeadTurnResult:
         """Finalize known review facts without granting artifact-write authority."""
+
+        if not events or any(event.session_id != session_id for event in events):
+            raise BackendProtocolError(
+                "artifact finalization history has cross-session events"
+            )
+        if projection.session_id not in {None, session_id}:
+            raise BackendProtocolError(
+                "artifact finalization projection has cross-session authority"
+            )
 
         artifact_synthesis_event = next(
             (
@@ -5758,6 +7082,7 @@ class StoryRuntime:
             else cast(ArtifactReviewSynthesisPayload, artifact_synthesis_event.payload)
         )
         state = ArtifactProposalState.FAILED
+        artifact_recovery_required = False
         reviewed_proposal: ArtifactReviewedProposal | None = None
         application_payload: ArtifactApplicationRequestPayload | None = None
         message = (
@@ -5776,11 +7101,30 @@ class StoryRuntime:
             }[artifact_synthesis.decision]
             if state is ArtifactProposalState.REVIEWED:
                 try:
-                    self._validate_exact_candidate_reviews(proposal, candidate.candidate, events)
-                    snapshots = self.artifacts.capture_complete_state()
-                    project_artifact_change_set(
-                        {item.path: item.content for item in snapshots},
-                        candidate.candidate.change_set,
+                    self._validate_exact_candidate_reviews(
+                        session_id,
+                        proposal,
+                        candidate.candidate,
+                        events,
+                    )
+                    artifact_binding = self._session_artifact_binding(session_id)
+                    with artifact_binding.open_ready_resources() as access:
+                        snapshots = access.repository.capture_complete_state()
+                        project_artifact_change_set(
+                            {item.path: item.content for item in snapshots},
+                            candidate.candidate.change_set,
+                        )
+                except (
+                    SessionArtifactBindingError,
+                    WorkspaceFormatError,
+                    WorkspaceSecurityError,
+                ):
+                    artifact_recovery_required = True
+                    state = ArtifactProposalState.RECOVERY_REQUIRED
+                    message = (
+                        "Artifact review results are durable, but the exact session "
+                        "artifact resources were lost before finalization. Repair "
+                        "them before continuing; provider work will not be replayed."
                     )
                 except (ArtifactChangeSetError, ValueError, BackendProtocolError):
                     state = ArtifactProposalState.STALE
@@ -5850,11 +7194,16 @@ class StoryRuntime:
                         ),
                     )
                     attached_core_paths = tuple(
-                        fact.artifact_path
-                        for fact in (
-                            candidate.candidate.relationship_validation.review_facts
+                        sorted(
+                            {
+                                fact.artifact_path
+                                for fact in (
+                                    candidate.candidate.relationship_validation.review_facts
+                                )
+                                if fact.reason is ArtifactReviewReason.ATTACHED_CORE_EVIDENCE
+                            },
+                            key=lambda path: path.encode("utf-8"),
                         )
-                        if fact.reason is ArtifactReviewReason.ATTACHED_CORE_EVIDENCE
                     )
                     application_request = build_artifact_application_request(
                         application_id=self._deterministic_id(
@@ -5969,11 +7318,15 @@ class StoryRuntime:
                 ),
             )
         )
-        core_state = {
-            CollaborationExecutionOutcomeKind.SUCCEEDED: CollaborationStepState.COMPLETED,
-            CollaborationExecutionOutcomeKind.FAILED: CollaborationStepState.FAILED,
-            CollaborationExecutionOutcomeKind.CANCELLED: CollaborationStepState.INTERRUPTED,
-        }[result.overall_outcome]
+        core_state = (
+            CollaborationStepState.RECOVERY_REQUIRED
+            if artifact_recovery_required
+            else {
+                CollaborationExecutionOutcomeKind.SUCCEEDED: CollaborationStepState.COMPLETED,
+                CollaborationExecutionOutcomeKind.FAILED: CollaborationStepState.FAILED,
+                CollaborationExecutionOutcomeKind.CANCELLED: CollaborationStepState.INTERRUPTED,
+            }[result.overall_outcome]
+        )
         final_drafts.append(
             self._terminal_state_draft(
                 events=events,
@@ -6019,6 +7372,15 @@ class StoryRuntime:
                 application_payload.application_request_digest,
                 request_event.event_id,
             )
+        elif artifact_recovery_required:
+            self._artifact_application_capabilities.pop(
+                (
+                    events[-1].session_id,
+                    events[-1].conversation_id,
+                    proposal.step_id,
+                ),
+                None,
+            )
         return LeadTurnResult(
             events[-1].session_id,
             events[-1].conversation_id,
@@ -6030,7 +7392,9 @@ class StoryRuntime:
             core_state,
             None,
             (
-                CollaborationNextAction.SUBMIT_APPLICATION_DECISION
+                CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY
+                if artifact_recovery_required
+                else CollaborationNextAction.SUBMIT_APPLICATION_DECISION
                 if application_payload is not None
                 else CollaborationNextAction.CONTINUE_WITH_LEAD
             ),
@@ -6063,7 +7427,11 @@ class StoryRuntime:
                 proposal_id=proposal.proposal_id,
                 proposal_revision=proposal.proposal_revision,
                 proposal_digest=proposal.proposal_digest,
-                execution_result_event_id=result_event_id,
+                execution_result_event_id=(
+                    None
+                    if state is CollaborationStepState.RECOVERY_REQUIRED
+                    else result_event_id
+                ),
             ),
         )
 
@@ -6113,7 +7481,12 @@ class StoryRuntime:
             for event in reply_events
         )
         inputs = (*proposal.basis.inputs, *reply_inputs)
-        self._validate_review_material(next_intent.assignments, tuple(inputs), events)
+        self._validate_review_material(
+            session_id,
+            next_intent.assignments,
+            tuple(inputs),
+            events,
+        )
         validate_specialist_routing(next_intent.authoring_scope, tuple(item.agent_id for item in next_intent.assignments),
                                     affected_paths=self._authoring_affected_paths(tuple(inputs), proposal.basis.evidence))
         known_ids = {item.input_id for item in inputs}
@@ -6182,8 +7555,10 @@ class StoryRuntime:
             )
         )
         participant_ids = {LEAD_ORCHESTRATOR, *specialist_ids}
+        artifact_binding = self._session_artifact_binding(session_id)
         definitions = {
-            agent_id: self.prompts.build_contextual_definition(
+            agent_id: self._build_guarded_contextual_definition(
+                artifact_binding=artifact_binding,
                 session_id=session_id,
                 agent_id=agent_id,
             )
@@ -6717,7 +8092,11 @@ class StoryRuntime:
                 projection.execution_attempt_id,
             )
             if projection.execution_result is not None:
-                return self._finalize_known_result_locked(events, projection)
+                return self._finalize_known_result_locked(
+                    session_id,
+                    events,
+                    projection,
+                )
             if marker in self._live_execution_markers:
                 return LeadTurnResult(
                     session_id,
@@ -6830,6 +8209,46 @@ class StoryRuntime:
                 None, CollaborationStepState.COMPLETED, None, action,
                 story_commit_request=projection.current_story_commit_request,
             )
+        if action is CollaborationNextAction.REPREPARE_COMMIT_REQUEST:
+            result = projection.current_artifact_application_result
+            result_events = tuple(
+                event
+                for event in events
+                if event.kind is CollaborationEventKind.ARTIFACT_APPLICATION_RESULT
+                and event.payload == result
+                and event.step_id == events[-1].step_id
+            )
+            if result is None or len(result_events) != 1:
+                return self._blocking_lead_result(
+                    session_id,
+                    conversation_id,
+                    CollaborationStepState.RECOVERY_REQUIRED,
+                    "The exact Apply result is unavailable for Commit preparation.",
+                    turn_id=projection.current_turn_id,
+                    step_id=projection.current_step_id,
+                )
+            return LeadTurnResult(
+                session_id,
+                conversation_id,
+                events[-1].turn_id,
+                events[-1].step_id,
+                LeadOutcomeKind.RECOMMENDATION,
+                "The Apply result is known, but there is no current Commit "
+                "request. Reprepare one exact request before Commit.",
+                None,
+                CollaborationStepState.COMPLETED,
+                None,
+                action,
+                story_commit_preparation_request=StoryCommitPreparationRequest(
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    step_id=events[-1].step_id,
+                    application_result_event_id=result_events[0].event_id,
+                    application_id=result.application_id,
+                    application_request_digest=result.application_request_digest,
+                    tail_event_id=events[-1].event_id,
+                ),
+            )
         if action is CollaborationNextAction.SUBMIT_APPLICATION_DECISION:
             request = projection.current_artifact_application_request
             candidate = projection.current_artifact_candidate
@@ -6915,7 +8334,61 @@ class StoryRuntime:
 
     async def _run_lead_provider_locked(
         self,
+        **arguments: Any,
+    ) -> LeadTurnResult:
+        """Use short synchronous guards around each lazy Lead source."""
+
+        session_id = cast(str, arguments["session_id"])
+        try:
+            artifact_binding = self._session_artifact_binding(session_id)
+            return await self._run_lead_provider_guarded(
+                artifact_binding=artifact_binding,
+                **arguments,
+            )
+        except (
+            SessionArtifactBindingError,
+            WorkspaceFormatError,
+            WorkspaceSecurityError,
+        ):
+            return self._blocking_lead_result(
+                session_id,
+                cast(str, arguments["conversation_id"]),
+                CollaborationStepState.RECOVERY_REQUIRED,
+                "The exact session artifact resources became unavailable. "
+                "Repair them before continuing; provider work will not be replayed.",
+                turn_id=cast(str, arguments["turn_id"]),
+                step_id=cast(str, arguments["step_id"]),
+            )
+
+    async def _run_lead_provider_guarded(
+        self,
+        **arguments: Any,
+    ) -> LeadTurnResult:
+        """Retain the exact session generation through all Lead side effects."""
+
+        artifact_binding = cast(
+            SessionArtifactBinding,
+            arguments["artifact_binding"],
+        )
+        generation_pin = artifact_binding.acquire_generation_pin()
+        try:
+            try:
+                result = await self._run_lead_provider_guarded_pinned(**arguments)
+            except BaseException:
+                artifact_binding.require_generation_pin(generation_pin)
+                raise
+            artifact_binding.require_generation_pin(generation_pin)
+            return result
+        finally:
+            self._close_story_commit_generation_pin(
+                generation_pin,
+                failure=sys.exception(),
+            )
+
+    async def _run_lead_provider_guarded_pinned(
+        self,
         *,
+        artifact_binding: SessionArtifactBinding,
         session_id: str,
         conversation_id: str,
         turn_id: str,
@@ -6930,8 +8403,16 @@ class StoryRuntime:
     ) -> LeadTurnResult:
         if self.backend is None:
             raise BackendProtocolError("lead collaboration requires an AgentBackend")
-        reference_operation = prepare_runtime_reference_operation(
-            self.artifacts,
+        repository_access = partial(
+            _open_session_artifact_repository,
+            artifact_binding,
+        )
+        session_sources = SessionSourceWorkspace.from_artifact_binding(
+            artifact_binding
+        )
+        reference_operation = self._prepare_session_reference_operation(
+            repository_access,
+            artifact_binding=artifact_binding,
             session_id=session_id,
             text=text,
         )
@@ -7014,14 +8495,33 @@ class StoryRuntime:
             preparation_specialists=() if preparation_request is None else preparation_request.specialist_ids,
             recommendation_only=is_revision,
         )
-        definition = self.prompts.build_contextual_definition(
+        definition = self._build_guarded_contextual_definition(
+            artifact_binding=artifact_binding,
             session_id=session_id,
             agent_id=LEAD_ORCHESTRATOR,
         )
         bound_agent = await self._acquire_bound_agent(definition)
         reference_read: object | None = None
         provider: _AccountingContextProvider | None = None
+        execution_workspace_manager: AbstractContextManager[
+            ProviderExecutionWorkspace
+        ] | None = None
+        execution_workspace: ProviderExecutionWorkspace | None = None
         try:
+            candidate_workspace_manager = _provider_execution_workspace_manager(
+                bound_agent,
+                artifact_binding,
+            )
+            if candidate_workspace_manager is not None:
+                execution_workspace = candidate_workspace_manager.__enter__()
+                execution_workspace_manager = candidate_workspace_manager
+                continuation = self._lead_continuations.get(session_id)
+                if continuation is not None:
+                    continuation.retain_context_manager(
+                        execution_workspace_manager,
+                        validator=execution_workspace.require_current,
+                    )
+                    execution_workspace_manager = None
             reference_read = reference_operation.begin_invocation(
                 agent_id=LEAD_ORCHESTRATOR,
                 phase=ContextInvocationKind.LEAD.value,
@@ -7053,7 +8553,10 @@ class StoryRuntime:
             )
             services = self.conversation_storage_services
             authorities = (
-                WritingArtifactSourceAdapter(self.artifacts, scope),
+                create_guarded_writing_artifact_source_adapter(
+                    repository_access,
+                    scope,
+                ),
                 FocusedConversationSourceAdapter(
                     services.catalog,
                     services.event_store,
@@ -7062,8 +8565,8 @@ class StoryRuntime:
                     include_same_session_active=True,
                     include_searchable_history=True,
                 ),
-                ActiveDebateSourceAdapter(self.workspace, scope, None),
-                OwnAgentStateSourceAdapter(self.workspace, scope),
+                ActiveDebateSourceAdapter(session_sources, scope, None),
+                OwnAgentStateSourceAdapter(session_sources, scope),
             )
             reference_operation_id, reservations = self._reference_reservations(
                 reference_operation
@@ -7192,7 +8695,11 @@ class StoryRuntime:
                 ),
                 physical_call_limit=physical_call_limit,
                 include_core_statuses=True,
-                session_state_json=self._session_context_state(session_id),
+                session_state_json=self._session_context_state(
+                    session_id,
+                    artifact_binding=artifact_binding,
+                ),
+                execution_workspace=execution_workspace,
             )
             decoded: LeadProviderOutcome | None = None
             decoded_evidence: CollaborationLeadEvidence | None = None
@@ -7336,9 +8843,12 @@ class StoryRuntime:
                                 'lead proposal relation does not match the runtime request',
                             )
                         self._validate_review_material(
+                            session_id,
                             decoded.proposal.assignments,
                             self._materialize_lead_evidence_inputs(inputs, decoded_evidence),
-                            task_events, user_text=text,
+                            task_events,
+                            user_text=text,
+                            artifact_binding=artifact_binding,
                         )
                         self._validate_lead_intent_evidence_inputs(
                             decoded.proposal,
@@ -7385,6 +8895,7 @@ class StoryRuntime:
                                     intent=decoded.artifact_intent,
                                     evidence=decoded_evidence,
                                     authoring_scope=resolved_scope,
+                                    artifact_binding=artifact_binding,
                                 )
                             )
                         except (ArtifactProposalError, ValueError) as validation_cause:
@@ -7427,6 +8938,7 @@ class StoryRuntime:
                         source=source, action=decoded.recommended_action, inputs=inputs,
                         evidence=decoded_evidence, events=objective_events,
                         projection=services.event_store.read_context(session_id, conversation_id),
+                        artifact_binding=artifact_binding,
                         tail_sequence=services.event_store.read_context(session_id, conversation_id).last_sequence + 2,
                     )
 
@@ -7524,7 +9036,10 @@ class StoryRuntime:
                 except asyncio.CancelledError:
                     raise
                 except Exception as correction_setup_failure:
-                    reference_operation.failure(correction_setup_failure)
+                    self._fail_reference_operation(
+                        reference_operation,
+                        correction_setup_failure,
+                    )
                     assert rejected_call_id is not None
                     if provider is not None:
                         provider.publish_validation_messages()
@@ -7578,7 +9093,9 @@ class StoryRuntime:
                         in _LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES
                         and not correction_facts.submission_uncertain
                     ):
-                        reference_operation.failure(correction_failure)
+                        self._fail_reference_operation(
+                            reference_operation, correction_failure,
+                        )
                         if provider is not None:
                             provider.publish_validation_messages()
                         assert correction_failure_code is not None
@@ -7609,7 +9126,10 @@ class StoryRuntime:
                         > submitted_before_correction
                     ):
                         raise
-                    reference_operation.failure(correction_failure)
+                    self._fail_reference_operation(
+                        reference_operation,
+                        correction_failure,
+                    )
                     assert rejected_call_id is not None
                     if provider is not None:
                         provider.publish_validation_messages()
@@ -7660,9 +9180,9 @@ class StoryRuntime:
                     ),
                 ),
             )
-            reference_operation.finish()
+            self._finish_reference_operation(reference_operation)
         except _LeadOutcomeValidationError as failure:
-            reference_operation.failure(failure)
+            self._fail_reference_operation(reference_operation, failure)
             if corrective_rejection_code is not None:
                 if provider is not None:
                     provider.publish_validation_messages()
@@ -7716,10 +9236,22 @@ class StoryRuntime:
             provider.publish_validation_messages()
             return replace(failed, validation_details=provider.validation_details)
         except BaseException as failure:
-            reference_failure = reference_operation.failure(failure)
+            reference_failure = self._fail_reference_operation(
+                reference_operation,
+                failure,
+            )
             if isinstance(failure, SessionContextCapacityError):
                 # Reference cleanup must not erase this safe, actionable exact-
                 # context failure, including preflight before any submission.
+                raise
+            if isinstance(
+                failure,
+                (
+                    SessionArtifactBindingError,
+                    WorkspaceFormatError,
+                    WorkspaceSecurityError,
+                ),
+            ):
                 raise
             facts = context_provider_failure_facts(failure)
             if isinstance(failure, ProviderAuthenticationRequiredError):
@@ -7787,7 +9319,36 @@ class StoryRuntime:
             raise
 
         finally:
-            await self._release_bound_agent_use(bound_agent)
+            primary = sys.exception()
+            cleanup_failure: BaseException | None = None
+            try:
+                await self._release_bound_agent_use(bound_agent)
+            except BaseException as failure:
+                if primary is None:
+                    cleanup_failure = failure
+                else:
+                    _add_story_commit_cleanup_note(primary, failure)
+            if execution_workspace_manager is not None:
+                cleanup_primary = (
+                    primary if primary is not None else cleanup_failure
+                )
+                try:
+                    execution_workspace_manager.__exit__(
+                        None if cleanup_primary is None else type(cleanup_primary),
+                        cleanup_primary,
+                        (
+                            None
+                            if cleanup_primary is None
+                            else cleanup_primary.__traceback__
+                        ),
+                    )
+                except BaseException as failure:
+                    if cleanup_primary is None:
+                        cleanup_failure = failure
+                    else:
+                        _add_story_commit_cleanup_note(cleanup_primary, failure)
+            if primary is None and cleanup_failure is not None:
+                raise cleanup_failure
 
         assert provider is not None
         provider.publish_validation_messages()
@@ -7813,6 +9374,7 @@ class StoryRuntime:
                         objective_events=objective_events,
                         objective_projection=objective_projection,
                         preparation=preparation,
+                        artifact_binding=artifact_binding,
                     ), validation_details=provider.validation_details)
                 except _LeadOutcomeValidationError:
                     assert provider is not None
@@ -7844,6 +9406,7 @@ class StoryRuntime:
                 projection=refreshed,
                 lead_definition=definition,
                 evidence=evidence,
+                artifact_binding=artifact_binding,
             )
             request_id = self._new_id("c")
             message_event = self._draft(
@@ -7946,6 +9509,7 @@ class StoryRuntime:
             request_draft = self._recommendation_request_draft(
                 source=judgment, action=outcome.recommended_action, inputs=inputs,
                 evidence=evidence, events=objective_events, projection=refreshed,
+                artifact_binding=artifact_binding,
                 tail_sequence=refreshed.last_sequence + len(final_drafts) + 1,
                 step_id=self._new_id("s") if refreshed.current_proposal is not None else None,
                 previous=None if preparation is None else preparation.request_event.payload,
@@ -7996,6 +9560,7 @@ class StoryRuntime:
         lead_definition: object,
         objective_events: tuple[CollaborationEvent, ...],
         objective_projection: CollaborationHistoryProjection,
+        artifact_binding: SessionArtifactBinding,
         preparation: _RecommendationCapability | None = None,
     ) -> LeadTurnResult:
         """Construct and disclose one exact candidate without mutating artifacts."""
@@ -8013,7 +9578,8 @@ class StoryRuntime:
                 '$.artifact_intent.operations',
                 'artifact review candidate is missing',
             )
-        snapshots = self.artifacts.capture_complete_state()
+        with artifact_binding.open_ready_resources() as access:
+            snapshots = access.repository.capture_complete_state()
         base_state = {item.path: item.content for item in snapshots}
         try:
             project_artifact_change_set(base_state, candidate.change_set)
@@ -8070,6 +9636,7 @@ class StoryRuntime:
             projection=projection,
             lead_definition=lead_definition,
             evidence=evidence,
+            artifact_binding=artifact_binding,
         )
         request_id = self._new_id("c")
         judgment = self._draft(
@@ -8573,6 +10140,7 @@ class StoryRuntime:
         intent: ArtifactProposalIntent,
         evidence: CollaborationLeadEvidence,
         authoring_scope: AuthoringScope,
+        artifact_binding: SessionArtifactBinding,
     ) -> ArtifactReviewCandidate:
         """Build one exact candidate while a submitted lead answer is validated."""
 
@@ -8580,18 +10148,30 @@ class StoryRuntime:
         intent = replace(intent, additional_review_domains=tuple(
             item for item in ArtifactReviewDomain if item in domains
         ))
-        snapshots = self.artifacts.capture_complete_state()
+        with artifact_binding.open_ready_resources() as access:
+            snapshots = access.repository.capture_complete_state()
         base_state = {item.path: item.content for item in snapshots}
         artifact_evidence = self._artifact_intent_evidence(
             evidence,
             session_id=session_id,
             conversation_id=conversation_id,
+            artifact_binding=artifact_binding,
         )
+        with artifact_binding.open_ready_resources() as access:
+            if access.repository.capture_complete_state() != snapshots:
+                raise _LeadOutcomeValidationError(
+                    "artifact sources changed during candidate construction"
+                )
         attached_core_paths = tuple(
-            item.path
-            for item in artifact_evidence
-            if item.evidence_id.startswith("reference_")
-            and item.path.startswith("core_documents/")
+            sorted(
+                {
+                    item.path
+                    for item in artifact_evidence
+                    if item.evidence_id.startswith("reference_")
+                    and item.path.startswith("core_documents/")
+                },
+                key=lambda path: path.encode("utf-8"),
+            )
         )
         return validation_call(
             '$.artifact_intent',
@@ -8611,6 +10191,7 @@ class StoryRuntime:
         *,
         session_id: str,
         conversation_id: str,
+        artifact_binding: SessionArtifactBinding,
     ) -> tuple[ArtifactIntentEvidence, ...]:
         """Validate current selected receipts before resolving artifact content."""
 
@@ -8620,7 +10201,17 @@ class StoryRuntime:
             conversation_id,
             LEAD_ORCHESTRATOR,
         )
-        writing_adapter = WritingArtifactSourceAdapter(self.artifacts, scope)
+        repository_access = partial(
+            _open_session_artifact_repository,
+            artifact_binding,
+        )
+        writing_adapter = create_guarded_writing_artifact_source_adapter(
+            repository_access,
+            scope,
+        )
+        session_sources = SessionSourceWorkspace.from_artifact_binding(
+            artifact_binding
+        )
         current_statuses: dict[str, CollaborationEvidenceReceipt] | None = None
         empty_digest = "sha256:" + hashlib.sha256(b"").hexdigest()
         result: list[ArtifactIntentEvidence] = []
@@ -8704,6 +10295,7 @@ class StoryRuntime:
                     scope=scope,
                     receipt=receipt,
                     writing_adapter=writing_adapter,
+                    session_sources=session_sources,
                 )
                 source_digest = snapshot.descriptor.content_digest
             result.append(
@@ -8812,7 +10404,23 @@ class StoryRuntime:
 
         # failure() can swallow cleanup I/O and mark its in-memory operation
         # finished. Only the repository's validated terminal history is proof.
-        references = self.artifacts.inspect_reference_operation(operation_id)
+        try:
+            references = self.inspect_reference_operation(operation_id)
+        except (
+            SessionArtifactBindingError,
+            WorkspaceFormatError,
+            WorkspaceSecurityError,
+        ):
+            return self._blocking_lead_result(
+                session_id,
+                conversation_id,
+                CollaborationStepState.RECOVERY_REQUIRED,
+                "The original Lead failure is durable, but its exact session "
+                "reference history is unavailable. Repair the session artifact "
+                "resources before continuing; the provider call will not be replayed.",
+                turn_id=turn_id,
+                step_id=step_id,
+            )
         if (
             type(references) is not ReferenceOperationHistory
             or references.manifest.operation_id != operation_id
@@ -9868,14 +11476,17 @@ class StoryRuntime:
 
     def _validate_exact_candidate_reviews(
         self,
+        session_id: str,
         proposal: CollaborationProposal,
         candidate: ArtifactReviewCandidate,
         events: tuple[CollaborationEvent, ...],
     ) -> None:
+        if not events or any(event.session_id != session_id for event in events):
+            raise ValueError("candidate review history has cross-session events")
         scope = proposal.authoring_scope
         if scope is None or scope.activity is not AuthoringActivity.REVIEW:
             raise ValueError("legacy or unscoped candidate requires fresh specialist review")
-        task_events = self._session_authoring_events(events[-1].session_id)
+        task_events = self._session_authoring_events(session_id)
         current_task = self._authoring_tasks(task_events).get(scope.task_id)
         if current_task is None or current_task.task_revision != scope.task_revision:
             raise ValueError("reviewed authoring task revision is no longer current")
@@ -9914,14 +11525,37 @@ class StoryRuntime:
 
     def _validate_review_material(
         self,
+        session_id: str,
         assignments: tuple[LeadAssignmentIntent | CollaborationAssignment, ...],
         inputs: tuple[CollaborationInputRevision, ...],
         events: tuple[CollaborationEvent, ...],
         *,
         candidate: ArtifactReviewCandidate | None = None,
         user_text: str | None = None,
+        artifact_binding: SessionArtifactBinding | None = None,
+        artifact_access: SessionArtifactAccess | None = None,
     ) -> None:
+        if artifact_access is None:
+            if artifact_binding is None:
+                artifact_binding = self._session_artifact_binding(session_id)
+            with artifact_binding.open_ready_resources() as active:
+                self._validate_review_material(
+                    session_id,
+                    assignments,
+                    inputs,
+                    events,
+                    candidate=candidate,
+                    user_text=user_text,
+                    artifact_binding=artifact_binding,
+                    artifact_access=active,
+                )
+            return
         by_id = {item.input_id: item for item in inputs}
+        if any(event.session_id != session_id for event in events):
+            raise _LeadOutcomeValidationError(
+                "review material has cross-session events"
+            )
+        artifacts = artifact_access.repository
         for assignment in assignments:
             if assignment.mode is None:
                 raise validation_failure(
@@ -9958,7 +11592,7 @@ class StoryRuntime:
                             '$.proposal.assignments',
                             'review input_ids must resolve to a disclosed artifact candidate',
                         )
-                    snapshot = self.artifacts.read_current((path,))[0]
+                    snapshot = artifacts.read_current((path,))[0]
                     selected = self._select_current_reference_bytes(
                         snapshot.content, item.start_line, item.end_line,
                     )
@@ -10017,6 +11651,7 @@ class StoryRuntime:
         projection: CollaborationHistoryProjection,
         lead_definition: object,
         evidence: CollaborationLeadEvidence,
+        artifact_binding: SessionArtifactBinding,
     ) -> CollaborationProposal:
         if intent.authoring_scope is None:
             raise BackendProtocolError("live proposal requires authoring scope")
@@ -10099,7 +11734,8 @@ class StoryRuntime:
         definitions = {LEAD_ORCHESTRATOR: lead_definition}
         definitions.update(
             {
-                agent_id: self.prompts.build_contextual_definition(
+                agent_id: self._build_guarded_contextual_definition(
+                    artifact_binding=artifact_binding,
                     session_id=session_id,
                     agent_id=agent_id,
                 )
@@ -10166,9 +11802,14 @@ class StoryRuntime:
         events: tuple[CollaborationEvent, ...],
         projection: CollaborationHistoryProjection,
         proposal: CollaborationProposal,
+        artifact_binding: SessionArtifactBinding | None = None,
     ) -> None:
         """Re-derive every mutable runtime fact before minting start authority."""
 
+        if artifact_binding is None:
+            artifact_binding = self._session_artifact_binding(session_id)
+        with artifact_binding.open_ready_resources():
+            pass
         try:
             if proposal.authoring_scope is None:
                 raise ValueError("legacy proposal requires fresh scope and confirmation")
@@ -10189,11 +11830,14 @@ class StoryRuntime:
                 session_id=session_id,
                 events=events,
                 proposal=proposal,
+                artifact_binding=artifact_binding,
             )
             inputs = self._current_lead_inputs(
+                session_id,
                 events,
                 proposal,
                 evidence_inputs=evidence_inputs,
+                artifact_binding=artifact_binding,
             )
             specialist_ids = tuple(
                 assignment.specialist_id for assignment in proposal.assignments
@@ -10205,7 +11849,13 @@ class StoryRuntime:
                 raise ValueError("proposal specialist order is no longer canonical")
             validate_specialist_routing(proposal.authoring_scope, specialist_ids,
                                         affected_paths=self._authoring_affected_paths(inputs, proposal.basis.evidence))
-            self._validate_review_material(proposal.assignments, inputs, events)
+            self._validate_review_material(
+                session_id,
+                proposal.assignments,
+                inputs,
+                events,
+                artifact_binding=artifact_binding,
+            )
             self._validate_required_reviewers(inputs, proposal.assignments)
             if projection.rounds_spent >= COLLABORATION_ROUND_LIMIT:
                 raise ValueError("proposal no longer fits the round budget")
@@ -10246,7 +11896,8 @@ class StoryRuntime:
                 else specialist_ids
             )
             definitions = {
-                agent_id: self.prompts.build_contextual_definition(
+                agent_id: self._build_guarded_contextual_definition(
+                    artifact_binding=artifact_binding,
                     session_id=session_id,
                     agent_id=agent_id,
                 )
@@ -10309,6 +11960,12 @@ class StoryRuntime:
                 basis=basis,
                 authoring_scope=proposal.authoring_scope,
             )
+        except (
+            SessionArtifactBindingError,
+            WorkspaceFormatError,
+            WorkspaceSecurityError,
+        ):
+            raise
         except Exception as exc:
             raise BackendProtocolError(
                 "lead proposal authority drift requires regeneration and confirmation"
@@ -10317,6 +11974,8 @@ class StoryRuntime:
             raise BackendProtocolError(
                 "lead proposal authority drift requires regeneration and confirmation"
             )
+        with artifact_binding.open_ready_resources():
+            pass
 
     def _validate_current_lead_evidence(
         self,
@@ -10324,9 +11983,14 @@ class StoryRuntime:
         session_id: str,
         events: tuple[CollaborationEvent, ...],
         proposal: CollaborationProposal | LeadRecommendationRequestPayload,
+        artifact_binding: SessionArtifactBinding | None = None,
     ) -> dict[str, CollaborationInputRevision]:
         """Re-derive selected evidence without replaying provider SEARCH text."""
 
+        if artifact_binding is None:
+            artifact_binding = self._session_artifact_binding(session_id)
+        if any(event.session_id != session_id for event in events):
+            raise ValueError("lead evidence history has cross-session events")
         evidence = proposal.basis.evidence
         if evidence is None:
             return {}
@@ -10350,7 +12014,17 @@ class StoryRuntime:
             conversation_id,
             LEAD_ORCHESTRATOR,
         )
-        writing_adapter = WritingArtifactSourceAdapter(self.artifacts, scope)
+        repository_access = partial(
+            _open_session_artifact_repository,
+            artifact_binding,
+        )
+        writing_adapter = create_guarded_writing_artifact_source_adapter(
+            repository_access,
+            scope,
+        )
+        session_sources = SessionSourceWorkspace.from_artifact_binding(
+            artifact_binding
+        )
         if status_receipts:
             current_statuses = {
                 item.evidence_id: self._durable_core_status_receipt(
@@ -10417,7 +12091,7 @@ class StoryRuntime:
                     current_descriptors.extend(
                         sorted(
                             OwnAgentStateSourceAdapter(
-                                self.workspace,
+                                session_sources,
                                 scope,
                             ).inventory(CONTEXT_SOURCE_POLICY),
                             key=lambda descriptor: descriptor.source_id,
@@ -10445,6 +12119,7 @@ class StoryRuntime:
                 scope=scope,
                 receipt=receipt,
                 writing_adapter=writing_adapter,
+                session_sources=session_sources,
             )
             if receipt.evidence_id in read_inputs:
                 raise ValueError("lead READ evidence identity is duplicated")
@@ -10496,6 +12171,7 @@ class StoryRuntime:
         scope: ContextScope,
         receipt: CollaborationEvidenceReceipt,
         writing_adapter: WritingArtifactSourceAdapter,
+        session_sources: Workspace,
     ) -> CollaborationInputRevision:
         """Capture and compare one cited READ boundary through its source owner."""
 
@@ -10505,6 +12181,7 @@ class StoryRuntime:
             scope=scope,
             receipt=receipt,
             writing_adapter=writing_adapter,
+            session_sources=session_sources,
         )
         assert receipt.source_kind is not None
         assert receipt.locator is not None
@@ -10536,6 +12213,7 @@ class StoryRuntime:
         scope: ContextScope,
         receipt: CollaborationEvidenceReceipt,
         writing_adapter: WritingArtifactSourceAdapter,
+        session_sources: Workspace,
     ) -> ContextSourceSnapshot:
         """Revalidate READ identity and boundary bytes, retaining the whole source."""
 
@@ -10572,7 +12250,7 @@ class StoryRuntime:
             and receipt.locator == f"agent-state/{LEAD_ORCHESTRATOR}"
         ):
             snapshot = OwnAgentStateSourceAdapter(
-                self.workspace,
+                session_sources,
                 scope,
             ).capture(receipt.locator, CONTEXT_SOURCE_POLICY)
         else:
@@ -10638,11 +12316,17 @@ class StoryRuntime:
 
     def _current_lead_inputs(
         self,
+        session_id: str,
         events: tuple[CollaborationEvent, ...],
         proposal: CollaborationProposal | LeadRecommendationRequestPayload,
         *,
         evidence_inputs: dict[str, CollaborationInputRevision] | None = None,
+        artifact_binding: SessionArtifactBinding | None = None,
     ) -> tuple[CollaborationInputRevision, ...]:
+        if artifact_binding is None:
+            artifact_binding = self._session_artifact_binding(session_id)
+        if not events or any(event.session_id != session_id for event in events):
+            raise ValueError("proposal history has cross-session events")
         if evidence_inputs is None:
             evidence_inputs = {}
         proposal_events = tuple(
@@ -10681,7 +12365,8 @@ class StoryRuntime:
         paths = tuple(
             dict.fromkeys(reference.path for _expected, reference in ordered_references)
         )
-        snapshots = self.artifacts.read_current(paths)
+        with artifact_binding.open_ready_resources() as access:
+            snapshots = access.repository.read_current(paths)
         if tuple(snapshot.path for snapshot in snapshots) != paths:
             raise ValueError("proposal reference source is no longer readable")
         by_path = {snapshot.path: snapshot for snapshot in snapshots}
@@ -10773,7 +12458,8 @@ class StoryRuntime:
                     ArtifactReviewCandidatePayload,
                     candidate_events[0].payload,
                 ).candidate
-                snapshots = self.artifacts.capture_complete_state()
+                with artifact_binding.open_ready_resources() as access:
+                    snapshots = access.repository.capture_complete_state()
                 project_artifact_change_set(
                     {item.path: item.content for item in snapshots},
                     candidate.change_set,
@@ -11019,6 +12705,7 @@ class StoryRuntime:
 
     def _provider_free_lead_inputs(
         self,
+        session_id: str,
         turn_id: str,
         text: str,
     ) -> tuple[CollaborationInputRevision, ...]:
@@ -11041,7 +12728,9 @@ class StoryRuntime:
             )
         ]
         paths = tuple(dict.fromkeys(reference.path for reference in batch.references))
-        snapshots = self.artifacts.read_current(paths)
+        artifact_binding = self._session_artifact_binding(session_id)
+        with artifact_binding.open_ready_resources() as access:
+            snapshots = access.repository.read_current(paths)
         if tuple(snapshot.path for snapshot in snapshots) != paths:
             raise BackendProtocolError("advisory reference source is not readable")
         by_path = {snapshot.path: snapshot for snapshot in snapshots}
@@ -11999,13 +13688,22 @@ class StoryRuntime:
             finally:
                 del self._lead_continuations[session_id]
 
-    def _session_context_state(self, session_id: str) -> str:
+    def _session_context_state(
+        self,
+        session_id: str,
+        *,
+        artifact_binding: SessionArtifactBinding | None = None,
+    ) -> str:
         """Capture current instructions and canonical core bytes as context only."""
 
-        snapshots = {
-            item.path: item for item in self.artifacts.capture_complete_state()
-            if item.path in CORE_ARTIFACT_PATHS
-        }
+        if artifact_binding is None:
+            artifact_binding = self._session_artifact_binding(session_id)
+        with artifact_binding.open_ready_resources() as access:
+            snapshots = {
+                item.path: item
+                for item in access.repository.capture_complete_state()
+                if item.path in CORE_ARTIFACT_PATHS
+            }
         value = {
             "runtime_overrides": self.workspace.load_session_overrides(session_id),
             "core_documents": [
@@ -12237,6 +13935,57 @@ class StoryRuntime:
         self._bound_agent_uses[identity] = (bound_agent, current[1] + 1)
 
     async def _release_bound_agent_use(self, bound_agent: BoundAgent) -> None:
+        """Finish one release before propagating caller cancellation."""
+
+        task = asyncio.create_task(
+            self._release_bound_agent_use_once(bound_agent),
+            name="release-bound-agent-use",
+        )
+        cancellation: asyncio.CancelledError | None = None
+        interruption: BaseException | None = None
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError as failure:
+                if cancellation is None:
+                    cancellation = failure
+            except BaseException as failure:
+                if task.done():
+                    break
+                if interruption is None:
+                    interruption = failure
+
+        cleanup_failure: BaseException | None = None
+        if task.cancelled():
+            cleanup_failure = asyncio.CancelledError()
+        else:
+            try:
+                task.result()
+            except BaseException as failure:
+                cleanup_failure = failure
+        if cancellation is not None:
+            if cleanup_failure is not None:
+                cancellation.add_note(
+                    "bound-agent release failed: "
+                    f"{type(cleanup_failure).__name__}"
+                )
+            raise cancellation
+        if interruption is not None:
+            if cleanup_failure is not None:
+                interruption.add_note(
+                    "bound-agent release failed: "
+                    f"{type(cleanup_failure).__name__}"
+                )
+            raise interruption
+        if cleanup_failure is not None:
+            raise cleanup_failure
+
+    async def _release_bound_agent_use_once(
+        self,
+        bound_agent: BoundAgent,
+    ) -> None:
+        """Decrement one retained use exactly once."""
+
         release: BoundAgent | None = None
         async with self._binding_lock:
             identity = id(bound_agent)
@@ -12307,6 +14056,14 @@ class StoryRuntime:
                 continue
             released.add(identity)
             release_bound_agent(bound_agent)
+
+
+_register_at_fork = getattr(os, "register_at_fork", None)
+if _register_at_fork is not None:
+    _register_at_fork(
+        after_in_child=StoryRuntime._reset_reference_registry_after_fork,
+    )
+del _register_at_fork
 
 
 class RuntimeSession:
@@ -12545,6 +14302,17 @@ class RuntimeSession:
         if decision.session_id != self.session_id:
             raise ValueError("artifact decision does not belong to this session")
         return await self.runtime.decide_artifact_application(decision)
+
+    async def reprepare_story_commit(
+        self,
+        request: StoryCommitPreparationRequest,
+    ) -> StoryCommitRequestPayload:
+        """Reprepare only this session's exact known Apply result."""
+        if type(request) is not StoryCommitPreparationRequest:
+            raise TypeError("request must be a StoryCommitPreparationRequest")
+        if request.session_id != self.session_id:
+            raise ValueError("commit preparation does not belong to this session")
+        return await self.runtime.reprepare_story_commit(request)
 
     async def decide_story_commit(
         self,

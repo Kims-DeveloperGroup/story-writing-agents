@@ -746,6 +746,28 @@ class ReferenceInvocationLifecycleTests(ReferenceRepositoryTestCase):
                 ReferenceAuthorizationErrorCode.CAPABILITY_CONSUMED,
             ):
                 self.repository.deliver_authorized_references(capability, references)
+        history = self.repository.inspect_reference_operation("request_shapes")
+        assert history is not None
+        self.assertEqual(
+            tuple(
+                tuple(event.invocation_state for event in events)
+                for events in history.invocation_events
+            ),
+            (
+                (
+                    ReferenceInvocationState.AUTHORIZED,
+                    ReferenceInvocationState.TERMINATED,
+                ),
+            )
+            * len(invalid_requests),
+        )
+        self.assertTrue(
+            all(
+                events[-1].outcome
+                is ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
+                for events in history.invocation_events
+            )
+        )
         self.repository.finish_reference_operation(
             authorization,
             outcome=ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,

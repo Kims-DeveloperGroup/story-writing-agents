@@ -86,13 +86,14 @@ Responsibility: coordinate lead/specialist execution and isolate provider-specif
 authentication, recovery, and diagnostic behavior behind provider-neutral contracts.
 
 - `orchestrator`, `backend`, `provider_adapter`, `antigravity_adapter`, `codex_adapter`
-- `provider_auth`, `provider_auth_recovery`, `provider_catalog`, `provider_process`
+- `provider_auth`, `provider_auth_recovery`, `provider_catalog`, `provider_process`, `provider_execution_workspace`
 - `provider_error_artifacts`, `debug_log`, `structured_output_validation`, `lead_provider_contracts`
 
-`orchestrator` composes domain contracts, storage, consensus, Git story commits, references,
-and provider-neutral backends. `provider_process` owns provider subprocess execution;
-`provider_auth` owns authentication probes; `provider_error_artifacts` and `debug_log` own
-their filesystem outputs. Concrete adapters depend inward on `provider_adapter` contracts.
+`orchestrator` composes domain contracts, storage, consensus, Git story commits, references, and provider-neutral backends. Its Apply handoff prepares the Git candidate before atomically publishing the known result with one exact Commit request; proven absence publishes a reprepare result, while ambiguous publication requires inspection.
+`provider_process` owns confined streamed subprocesses; `provider_auth` owns probes; diagnostic adapters own their files.
+Concrete adapters depend on `provider_adapter`. `provider_execution_workspace` owns the internal exact-worktree capability
+borrowed from the workspace binding for Codex; launch uses its duplicated root descriptor. No Git lease spans provider work.
+Continuation, structured repair, authentication replay, and deferred acceptance retain the same generation authority.
 `structured_output_validation` owns pure, bounded diagnostics from trusted schemas and
 source-authored domain findings. Domain validators identify the rejected property and rule;
 orchestration and adapters retain findings through exception translation and map domain
@@ -139,11 +140,10 @@ search/storage contracts without owning persistence.
 - `conversations.events`, `conversations.session_context`
 - `conversation_search`, `conversation_literal_search`, `conversation_retrieval`
 
-`catalog` owns catalog behavior, `events` owns schema-v2 event contracts, and
-`session_context` derives session-scoped context. Search implementations must return public
+`catalog` owns catalog behavior, `events` owns schema-v2 event contracts, and `context` projects exact Commit authority or typed reprepare from durable Apply history; `session_context` derives session-scoped context. Search implementations must return public
 search/retrieval contracts rather than expose storage internals. Conversation events and
 retrieval may carry bounded validation details associated with the physical provider call;
-older records without them remain valid.
+older records without them remain valid. The `conversations` facade exports the additive structured Commit preparation request; prose cannot authorize Commit.
 
 ### Conversation storage
 
@@ -196,17 +196,14 @@ relationships, read sources, and apply/persist artifacts through a repository bo
 `writing_artifacts` is the supported facade; underscored storage/evidence modules are private.
 
 - `writing_artifacts`, `writing_artifacts.application_contracts`
-- `writing_artifacts.authorization`, `writing_artifacts.catalog`
-- `writing_artifacts.change_sets`, `writing_artifacts.directives`
-- `writing_artifacts.read_actions`, `writing_artifacts.references`
-- `writing_artifacts.relationship_policy`, `writing_artifacts.runtime_references`
-- `writing_artifacts.filesystem_sources`, `writing_artifacts.repository`
-- `writing_artifacts._reference_evidence`, `writing_artifacts._application_store`
-- `writing_artifacts._storage`
+- `writing_artifacts.authorization`, `writing_artifacts.catalog`, `writing_artifacts.change_sets`, `writing_artifacts.directives`
+- `writing_artifacts.read_actions`, `writing_artifacts.references`, `writing_artifacts.relationship_policy`, `writing_artifacts.runtime_references`
+- `writing_artifacts.filesystem_sources`, `writing_artifacts.repository`, `writing_artifacts._reference_evidence`, `writing_artifacts._application_store`, `writing_artifacts._storage`
 
-`repository` owns artifact filesystem mutation and delegates durable metadata to private
-stores. Runtime callers use authorization/application contracts and public references; they
-must not import `_storage`, `_application_store`, or `_reference_evidence`.
+`repository` owns artifact filesystem mutation and strict core absence batches; private stores own durable metadata.
+Session callers borrow descriptor-bound repositories from the workspace binding; root configuration remains the control plane.
+Runtime references retain exact session-owned evidence and release their generation pin at terminal use.
+Callers must not import `_storage`, `_application_store`, or `_reference_evidence`.
 
 ### Git resources, history, checkpoints, and story commits
 
@@ -216,28 +213,35 @@ commits. `git` re-exports the general adapter/contracts; workflow-specific modul
 only their intentional contract paths.
 
 - `git`, `git.contracts`, `git.adapter`, `git.process`, `git.repository_lock`
-- `git.session_contracts`, `git.session_resources`
-- `git.session_history_contracts`, `git.session_history`
-- `git.session_checkpoint_contracts`, `git.session_checkpoints`
-- `git.story_commit_contracts`, `git.story_commit_candidates`, `git.story_commits`
+- `git.session_contracts`, `git.session_resources`, `git.session_history_contracts`, `git.session_history`
+- `git.session_checkpoint_contracts`, `git.session_checkpoints`, `git.story_commit_contracts`, `git.story_commit_candidates`, `git.story_commits`
 
-`git.process` alone executes Git subprocess profiles. `repository_lock` owns cross-process
-serialization; resource/history/checkpoint/commit services depend on those lower-level
-owners and must not be imported by general contracts.
+`git.process` alone executes fixed profiles; `repository_lock` owns cross-process serialization.
+Resource/history/checkpoint/commit services depend inward on these owners; general contracts must not import workflow services.
+Generation capture and pinning remain opaque internal contracts. Bound history and story-commit services validate
+exact generation without exporting descriptors or general mutation authority.
+`git.session_resources` proves the literal top-level `.agents` namespace and every case variant
+absent from the exact linked-worktree index under a retained lease and generation. Its optional
+effective-ignore proof uses fixed `git check-ignore --quiet --no-index -- .agents/`; index and
+generation facts bracket both checks. This owner never mutates Git for role projection.
 
 ### Workspace, runtime state, and session lifecycle
 
 Responsibility: validate workspace schema/security, initialize workspaces, derive runtime
 state paths, manage session lifecycle, and assess/reconcile recovery transitions.
 
-- `workspace`, `workspace.core`, `workspace.schema`, `workspace.initialization`
-- `workspace._policy_baselines`, `runtime_state_paths`, `session_lifecycle`
-- `session_recovery`, `session_recovery.contracts`
-- `session_recovery.transition_assessment`, `session_recovery.reconciliation`
+- `workspace`, `workspace.core`, `workspace.schema`, `workspace.initialization`, `workspace.session_role_projection`, `workspace._policy_baselines`, `runtime_state_paths`, `session_lifecycle`
+- `session_recovery`, `session_recovery.contracts`, `session_recovery.transition_assessment`, `session_recovery.reconciliation`
 
-`workspace.core` owns workspace path validation and access; `initialization` owns creation;
-`schema` owns schema-v2 validation. `_policy_baselines` is private immutable policy data.
-Session recovery contracts point inward and must not depend on interactive presentation.
+`workspace.core` owns path validation and session source/configuration views; `initialization` owns creation,
+session artifact bindings, guarded repositories, and opaque generation-pin composition. Views borrow retained session
+roots through bounded owner contracts. `schema` owns schema-v2 validation; `_policy_baselines` is private immutable policy data.
+The binding calls the Git owner's index and effective-ignore proof after exclusion preparation
+and again after role publication. `session_role_projection` owns create-only, read-only native
+role files and the private Git exclusion: `/.agents/` must be its final nonempty record, and
+bounded positive short writes finish on the retained descriptor before fsync and readback.
+Recovery contracts point inward; reconciliation borrows opaque Git generation authority.
+For known Apply, recovery projects either the exact extant Commit request or typed reprepare, while Commit still requires its single-use structured decision.
 Workspace readers accept optional bounded validation details and legacy entries without them.
 
 ### Interactive controller
@@ -289,12 +293,7 @@ settings modules may use provider/config/workspace owners but must not own their
 
 ## Maintenance checks
 
-When production modules or boundaries change:
-
-1. Compare this inventory with all `*.py` files below `src/story_writing_agents/`, treating
-   each package `__init__.py` as its package import path.
+1. When production module boundaries change, compare the inventory with `src/story_writing_agents/**/*.py`, treating each package `__init__.py` as its package path.
 2. Verify affected `__all__` declarations and `pyproject.toml` entry points.
 3. Inspect runtime imports for cycles, reversed adapter dependencies, and private imports.
-4. Confirm stateful resources still have one owner and import-time code performs no external
-   I/O, authentication, subprocess execution, or application startup.
-5. Update only the implemented current state; design proposals belong in the change brief.
+4. Confirm single ownership of stateful resources and no import-time I/O, authentication, subprocesses, or startup; document only implemented state; put design proposals in the change brief.

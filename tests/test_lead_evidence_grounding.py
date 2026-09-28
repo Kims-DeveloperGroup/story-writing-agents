@@ -480,7 +480,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             for path in self.workspace.root.rglob("*.md")
         }
         self.assertEqual(after, before)
-        self.assertTrue((self.workspace.root / ".git").is_dir())
+        self.assertTrue((self.workspace.root / ".git").is_file())
 
     @staticmethod
     def _confirm_decision():
@@ -925,7 +925,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
 
         restart_backend = _LeadBackend()
         restart_backend.enqueue(_visible_outcome("answer", "Fresh retry answer."))
-        restarted = StoryRuntime(self.workspace, restart_backend)  # type: ignore[arg-type]
+        restarted = StoryRuntime(self.control_workspace, restart_backend)  # type: ignore[arg-type]
         fresh = await restarted.lead_turn(
             self.session_id,
             conversation_id,
