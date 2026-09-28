@@ -1428,7 +1428,7 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
         expected_context_exports = COLLABORATION_CONTEXT_EXPORTS
         self.assertEqual(tuple(events_owner.__all__), expected_event_exports)
         self.assertEqual(tuple(context_owner.__all__), expected_context_exports)
-        self.assertEqual(len(conversations.__all__), 158)
+        self.assertEqual(len(conversations.__all__), 159)
         self.assertNotIn("__getattr__", vars(events_owner))
         self.assertNotIn("__getattr__", vars(context_owner))
         self.assertNotIn("__getattr__", vars(conversations))
@@ -1547,9 +1547,9 @@ import story_writing_agents
 import story_writing_agents.conversations as facade
 import story_writing_agents.conversations.context as context
 import story_writing_agents.conversations.events as events
-assert len(facade.__all__) == 158
+assert len(facade.__all__) == 159
 assert len(events.__all__) == 120
-assert len(context.__all__) == 30
+assert len(context.__all__) == 31
 assert facade.CollaborationProposal is events.CollaborationProposal
 assert facade.CollaborationEventStore is context.CollaborationEventStore
 assert not hasattr(story_writing_agents, "CollaborationProposal")

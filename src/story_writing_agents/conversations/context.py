@@ -84,6 +84,7 @@ from .events import (
     ArtifactApplicationOutcomeKind,
     StoryCommitDecisionPayload,
     StoryCommitOutcomeKind,
+    StoryCommitNextAction,
     StoryCommitRequestPayload,
     StoryCommitResultPayload,
     LeadOutcomeKind,
@@ -439,6 +440,7 @@ class CollaborationNextAction(StrEnum):
     RETRY_LEAD_TURN = "retry_lead_turn"
     SUBMIT_APPLICATION_DECISION = "submit_application_decision"
     SUBMIT_COMMIT_DECISION = "submit_commit_decision"
+    REPREPARE_COMMIT_REQUEST = "reprepare_commit_request"
     SUBMIT_RECOMMENDATION_DECISION = "submit_recommendation_decision"
     FINALIZE_RECOMMENDATION = "finalize_recommendation"
 
@@ -805,6 +807,35 @@ class ArtifactApplicationDecisionResult:
 
 
 @dataclass(frozen=True, slots=True)
+class StoryCommitPreparationRequest:
+    """Reprepare only the exact current known Apply result tail."""
+
+    session_id: str
+    conversation_id: str
+    step_id: str
+    application_result_event_id: str
+    application_id: str
+    application_request_digest: str
+    tail_event_id: str
+
+    def __post_init__(self) -> None:
+        for value, label in (
+            (self.session_id, "session ID"),
+            (self.conversation_id, "conversation ID"),
+            (self.step_id, "step ID"),
+            (self.application_result_event_id, "application result event ID"),
+            (self.application_id, "application ID"),
+            (self.tail_event_id, "commit preparation tail event ID"),
+        ):
+            _validate_identifier(value, label=label)
+        if (
+            type(self.application_request_digest) is not str
+            or _SHA256_DIGEST.fullmatch(self.application_request_digest) is None
+        ):
+            raise ValueError("application request digest is invalid")
+
+
+@dataclass(frozen=True, slots=True)
 class StoryCommitDecisionRequest:
     """One exact structured decision for the current prepared commit tail."""
 
@@ -873,6 +904,7 @@ class LeadTurnResult:
     recommendation_request: LeadRecommendationRequestPayload | None = None
     trace: ReplyTrace | None = None
     validation_details: tuple[str, ...] = ()
+    story_commit_preparation_request: StoryCommitPreparationRequest | None = None
 
     def __post_init__(self) -> None:
         for value, label in (
@@ -1009,6 +1041,12 @@ class LeadTurnResult:
                 or self.story_commit_request.candidate.session_id != self.session_id
             ):
                 raise ValueError("lead result Commit request is inconsistent")
+        if (
+            self.story_commit_preparation_request is not None
+            and self.next_action
+            is not CollaborationNextAction.REPREPARE_COMMIT_REQUEST
+        ):
+            raise ValueError("commit preparation requires reprepare action")
         if self.recommendation_request is not None:
             if (
                 type(self.recommendation_request) is not LeadRecommendationRequestPayload
@@ -1094,6 +1132,21 @@ class LeadTurnResult:
                 )
         elif self.artifact_application_request is not None or self.story_commit_request is not None or self.recommendation_request is not None:
             pass
+        elif self.next_action is CollaborationNextAction.REPREPARE_COMMIT_REQUEST:
+            if (
+                self.kind is not LeadOutcomeKind.RECOMMENDATION
+                or self.state is not CollaborationStepState.COMPLETED
+                or self.proposal is not None
+                or self.artifact_application_request is not None
+                or self.story_commit_request is not None
+                or type(self.story_commit_preparation_request)
+                is not StoryCommitPreparationRequest
+                or self.story_commit_preparation_request.session_id != self.session_id
+                or self.story_commit_preparation_request.conversation_id
+                != self.conversation_id
+                or self.story_commit_preparation_request.step_id != self.step_id
+            ):
+                raise ValueError("commit reprepare result is inconsistent")
         elif self.kind is not LeadOutcomeKind.PROPOSAL and (
             self.next_action is not CollaborationNextAction.CONTINUE_WITH_LEAD
         ):
@@ -3857,6 +3910,27 @@ def _artifact_operation_next_action(
             if type(tail.payload) is StoryCommitRequestPayload and tail.payload == commit_request
             else CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
         )
+    if application_result is not None and application_result.outcome in {
+        ArtifactApplicationOutcomeKind.APPLIED,
+        ArtifactApplicationOutcomeKind.UNCHANGED,
+    }:
+        if commit_request is None:
+            return (
+                CollaborationNextAction.REPREPARE_COMMIT_REQUEST
+                if type(tail.payload) is ArtifactApplicationResultPayload
+                and tail.payload == application_result
+                else CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
+            )
+        if (
+            commit_result is not None
+            and commit_result.next_action is StoryCommitNextAction.REPREPARE
+        ):
+            return (
+                CollaborationNextAction.REPREPARE_COMMIT_REQUEST
+                if type(tail.payload) is StoryCommitResultPayload
+                and tail.payload == commit_result
+                else CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
+            )
     if application_request is not None and application_result is None:
         return (
             CollaborationNextAction.SUBMIT_APPLICATION_DECISION
@@ -3888,6 +3962,7 @@ def _project_artifact_operation_history(
     commit_decision: StoryCommitDecisionPayload | None = None
     commit_decision_event: CollaborationEventV2 | None = None
     commit_result: StoryCommitResultPayload | None = None
+    commit_result_event: CollaborationEventV2 | None = None
     request_ids: set[str] = set()
     application_ids: set[str] = set()
     application_terminals = {
@@ -3925,7 +4000,7 @@ def _project_artifact_operation_history(
             decision = decision_event = result = result_event = None
             # Only a known terminal cycle can be retired by the next Apply request.
             commit_request = commit_request_event = None
-            commit_decision = commit_decision_event = commit_result = None
+            commit_decision = commit_decision_event = commit_result = commit_result_event = None
         elif type(payload) is ArtifactApplicationDecisionPayload:
             if (
                 request is None or request_event is None or decision is not None
@@ -3972,9 +4047,12 @@ def _project_artifact_operation_history(
                 raise ValueError("artifact application result does not match decision")
             result, result_event = payload, event
         elif type(payload) is StoryCommitRequestPayload:
+            predecessor = result_event if commit_request is None else commit_result_event
             if (
-                commit_request is not None or result is None or result_event is None
-                or result_event.sequence + 1 != event.sequence
+                result is None
+                or result_event is None
+                or predecessor is None
+                or event.sequence != predecessor.sequence + 1
                 or event.step_id != result_event.step_id
                 or payload.application_result_event_id != result_event.event_id
                 or result.result is None
@@ -3986,10 +4064,18 @@ def _project_artifact_operation_history(
                 or payload.candidate.proposal_id != result.reviewed_proposal_id
                 or payload.candidate.correlation_id != result.application_request_digest
                 or payload.confirmation_request_id in request_ids
+                or (
+                    commit_request is not None
+                    and (
+                        commit_result is None
+                        or commit_result.next_action is not StoryCommitNextAction.REPREPARE
+                    )
+                )
             ):
-                raise ValueError("story commit request does not follow its exact application")
+                raise ValueError("story commit request does not follow exact application")
             request_ids.add(payload.confirmation_request_id)
             commit_request, commit_request_event = payload, event
+            commit_decision = commit_decision_event = commit_result = commit_result_event = None
         elif type(payload) is StoryCommitDecisionPayload:
             if (
                 commit_request is None or commit_request_event is None
@@ -4024,7 +4110,7 @@ def _project_artifact_operation_history(
                     and payload.outcome is not StoryCommitOutcomeKind.SUPERSEDED)
             ):
                 raise ValueError("story commit result does not match decision")
-            commit_result = payload
+            commit_result, commit_result_event = payload, event
     return request, result, commit_request, commit_result
 
 
@@ -4759,6 +4845,7 @@ __all__ = [
     "ArtifactProposalResult",
     "ArtifactApplicationDecision",
     "ArtifactApplicationDecisionResult",
+    "StoryCommitPreparationRequest",
     "StoryCommitDecisionRequest",
     "StoryCommitDecisionResult",
     "project_collaboration_history",

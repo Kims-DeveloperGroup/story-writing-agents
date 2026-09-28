@@ -532,6 +532,7 @@ LeadTurnResult(
     recommendation_request: LeadRecommendationRequestPayload | None = None,
     trace: ReplyTrace | None = None,
     validation_details: tuple[str, ...] = (),
+    story_commit_preparation_request: StoryCommitPreparationRequest | None = None,
 )
 ```
 
@@ -1108,11 +1109,35 @@ await StoryRuntime.decide_artifact_application(
 await StoryRuntime.decide_story_commit(
     decision: StoryCommitDecisionRequest,
 ) -> StoryCommitDecisionResult
+await StoryRuntime.reprepare_story_commit(
+    request: StoryCommitPreparationRequest,
+) -> StoryCommitRequestPayload
 ```
 
 Import the decision and result values from
-`story_writing_agents.conversations`. `RuntimeSession` exposes the same two
-method signatures and rejects a decision owned by another session.
+`story_writing_agents.conversations`. `RuntimeSession` exposes the same three
+method signatures and rejects a decision or preparation request owned by
+another session.
+
+A result-only successful Apply tail projects
+`reprepare_commit_request` and returns its exact
+`story_commit_preparation_request` before ordinary Lead text appends a
+message or calls a provider. An extant exact Commit request instead
+projects `submit_commit_decision` and has no preparation request.
+
+`reprepare_story_commit()` accepts a structured
+`StoryCommitPreparationRequest` with the session, conversation, step,
+original Apply-result event, application ID and request digest, and current
+tail event IDs. It is available only from a typed reprepare state. It
+revalidates those durable facts, prepares a candidate, and publishes a
+new Commit request without committing; that request needs its own fresh
+structured decision. After a structured Revise, the new candidate carries a
+durable revision ordinal in its proposed local commit message so a retired
+candidate ID is not reused; the applied artifact evidence is unchanged.
+After restart, an extant old request stays visible,
+but a decision without its process-local binding closes stale/reprepare
+before Git mutation; re-preparation then creates a fresh request. Mismatched or
+uncertain owner facts require inspection.
 
 Apply requires the exact authoritative request tail and same-process one-use
 authority. Immediately before any candidate revalidation or write, runtime
@@ -1132,23 +1157,22 @@ only the correlated session worktree and its application ledger. Control-root
 and sibling-session bytes remain outside the operation.
 
 Commit remains a distinct decision and authority boundary. Its internal
-service carries the successful Apply binding's physical worktree identity into
-Commit-request preparation, candidate authorization, and execution. Runtime
-continues with that same invocation binding and acquires one six-descriptor
-physical-generation pin immediately before entering the Apply guard. After a
-successful Apply, the same pin continuously retains that generation through
-result/request preparation and transfers to the in-memory pending request owner
-before the `story_commit_request` is published. The owner retains that
-non-recyclable identity through the
-terminal decision and result publication and closes it exactly once on
-success, failure, cancellation, replacement, or best-effort runtime
-abandonment. A request-preparation or publication failure closes the new owner
-or untransferred pin, but it cannot roll back an append that already became
-durable. This private lifecycle changes no public method signature or payload
-schema, and the pin grants no repository access or exclusion from an external
-Git process.
-Recovery fallback retains and revalidates that opaque pin until it determines
-the ownership result, then closes it unless ownership transferred.
+service carries the successful Apply binding's physical worktree identity
+into candidate preparation, authorization, and execution. Runtime retains
+one six-descriptor physical-generation pin from the Apply guard through
+candidate preparation and result/request publication. Preparation may
+create an immutable candidate but cannot stage or commit. A successful
+handoff publishes the Apply result and exact Commit request in one
+`append_batch` operation. If that append raises, runtime reads back the
+exact batch, event IDs, payloads, prior tail, and final length. A proven
+pair is accepted; proven absence permits a result-only Apply record with
+`reprepare_commit_request`; anything unproved remains
+`outcome_unknown` for inspection, never replay. The result-only fallback
+also requires exact readback. The pin transfers to the process-local
+pending Commit owner only after verified pair publication; otherwise it
+closes. If that owner is lost later, the durable request remains visible,
+but a structured decision closes stale/reprepare before Git mutation.
+The pin grants no repository access or exclusion from external Git.
 
 The retained identity-bound Commit service is creator-process/thread affine.
 Prepare, Authorize, Reject, Revise, Execute, Inspect, Recover, and internal
@@ -1421,9 +1445,12 @@ await RuntimeSession.decide_artifact_application(
 await RuntimeSession.decide_story_commit(
     decision: StoryCommitDecisionRequest,
 ) -> StoryCommitDecisionResult
+await RuntimeSession.reprepare_story_commit(
+    request: StoryCommitPreparationRequest,
+) -> StoryCommitRequestPayload
 ```
 
-The bound decision method rejects a decision for another session. Bound
+The bound methods reject decisions and preparation requests for another session. Bound
 reference inspection likewise rejects an operation ID that does not belong to
 its session.
 

@@ -75,6 +75,7 @@ class SessionRecoveryNextAction(StrEnum):
     REQUEST_APPLICATION_CONFIRMATION = "request_application_confirmation"
     SUBMIT_APPLICATION_DECISION = "submit_application_decision"
     REQUEST_COMMIT_CONFIRMATION = "request_commit_confirmation"
+    REPREPARE_COMMIT_REQUEST = "reprepare_commit_request"
     INSPECT_STORY_COMMIT = "inspect_story_commit"
     INSPECT_OWNER_OUTCOME = "inspect_owner_outcome"
     OPERATOR_RECOVERY = "operator_recovery"
@@ -312,7 +313,10 @@ class SessionRecoveryResult:
             or type(self.failure_code) is not SessionRecoveryFailureCode
         ):
             _raise_error(SessionRecoveryFailureCode.UNSUPPORTED_SHAPE)
-        if self.next_action is not _NEXT_ACTION[self.state]:
+        if self.next_action is not _NEXT_ACTION[self.state] and not (
+            self.state is SessionRecoveryState.APPLIED_NOT_COMMITTED
+            and self.next_action is SessionRecoveryNextAction.REPREPARE_COMMIT_REQUEST
+        ):
             _raise_error(SessionRecoveryFailureCode.INVALID_REQUEST)
         if self.state is SessionRecoveryState.RECOVERY_REQUIRED:
             if self.failure_code in {
@@ -424,6 +428,17 @@ def reconcile_session_recovery(
     if (
         history.current_story_commit_request is not None
         and history.next_safe_action is CollaborationNextAction.SUBMIT_COMMIT_DECISION
+    ):
+        return _result(
+            evidence,
+            SessionRecoveryState.APPLIED_NOT_COMMITTED,
+            SessionRecoveryOwner.STORY_COMMIT,
+            SessionRecoveryFailureCode.NONE,
+        )
+    if (
+        history.current_artifact_application_result is not None
+        and history.next_safe_action
+        is CollaborationNextAction.REPREPARE_COMMIT_REQUEST
     ):
         return _result(
             evidence,
@@ -1137,24 +1152,35 @@ def _result(
     conversation_id = history.conversation_id
     if conversation_id is None:
         _raise_error(SessionRecoveryFailureCode.UNSUPPORTED_SHAPE)
+    next_action = _NEXT_ACTION[state]
+    if (
+        state is SessionRecoveryState.APPLIED_NOT_COMMITTED
+        and history.next_safe_action is CollaborationNextAction.REPREPARE_COMMIT_REQUEST
+    ):
+        next_action = SessionRecoveryNextAction.REPREPARE_COMMIT_REQUEST
+    confirmation_request_id = (
+        commit_request.confirmation_request_id
+        if state is SessionRecoveryState.APPLIED_NOT_COMMITTED
+        and next_action is SessionRecoveryNextAction.REQUEST_COMMIT_CONFIRMATION
+        and commit_request is not None
+        else None
+        if state is SessionRecoveryState.APPLIED_NOT_COMMITTED
+        else reviewed.application_confirmation_request_id
+        if reviewed is not None
+        else application_request.confirmation_request_id
+        if application_request is not None
+        else history.confirmation_request_id
+    )
     return SessionRecoveryResult(
         session_id=evidence.lifecycle_state.session_id,
         conversation_id=conversation_id,
         collaboration_tail_sequence=history.last_sequence,
         state=state,
-        next_action=_NEXT_ACTION[state],
+        next_action=next_action,
         owner=owner,
         failure_code=failure,
         proposal_id=proposal_id,
-        confirmation_request_id=(
-            reviewed.application_confirmation_request_id
-            if reviewed is not None
-            else commit_request.confirmation_request_id
-            if commit_request is not None
-            else application_request.confirmation_request_id
-            if application_request is not None
-            else history.confirmation_request_id
-        ),
+        confirmation_request_id=confirmation_request_id,
         application_id=(
             application.application_result.application_id
             if application is not None
