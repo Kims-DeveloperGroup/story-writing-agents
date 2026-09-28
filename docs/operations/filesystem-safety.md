@@ -283,11 +283,12 @@ identity, so replacing the role with equal bytes still fails closed. Only
 `.agents/agents`, content-qualified canonical-role directories, and their
 `agent.md` leaves are admitted. Selected-role content validation is bounded by
 the exact planned size, while unselected qualified role leaves are validated by
-topology and metadata without content reads. The complete `.agents` tree must
-remain untracked; any tracked path under it fails closed before projection
-mutation or provider submission. A pre-existing empty qualified directory is
-preserved and rejected during preflight, before the Git exclusion or role tree
-is mutated.
+topology and metadata without content reads. The top-level `.agents` namespace
+and its case-folded aliases must remain untracked; any tracked variant fails
+closed before projection mutation or provider submission, including on case-
+sensitive worktrees for portability. A pre-existing empty qualified directory
+is preserved and rejected during preflight, before the Git exclusion or role
+tree is mutated.
 
 Role publication is immutable and create-only. Older supported role versions
 coexist and runtime never replaces or prunes them. A concurrent winner is used

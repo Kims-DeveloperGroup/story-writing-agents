@@ -132,7 +132,7 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
             check=True,
             stdout=subprocess.DEVNULL,
         )
-        self.backend = _LeadBackend()
+        self.backend = _LeadBackend(vendor="fixture")
         self.runtime = StoryRuntime(self.workspace, self.backend)  # type: ignore[arg-type]
 
     async def reviewed_create(self, subject: str = "Reviewed update"):

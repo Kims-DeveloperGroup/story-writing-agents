@@ -152,6 +152,17 @@ class DisposableGitTestCase(unittest.TestCase):
         self.run_git(root, "add", "--all", "--")
         self.run_git(root, "commit", "--quiet", "--no-gpg-sign", "-m", message)
 
+    def commit_fixture_files(
+        self, root: Path, files: Mapping[str, bytes], message: str = "fixture"
+    ) -> None:
+        """Commit exact disposable-worktree fixture bytes."""
+
+        for relative, content in files.items():
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+        self.commit_all(root, message)
+
 
 __all__ = [
     "DisposableGitTestCase",

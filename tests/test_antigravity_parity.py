@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import nullcontext
 import inspect
 import json
 import os
+import shutil
 import signal
 import sys
 import tempfile
@@ -77,7 +77,6 @@ from story_writing_agents.writing_artifacts.repository import (
 
 from tests.helpers import (
     SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE,
-    initialized_workspace, live_provider_execution_workspace,
     pristine_initialized_workspace,
 )
 
@@ -287,8 +286,8 @@ staged_session_id = (
     else None
 )
 staged_agent_id = (
-    provider_parts[sessions_index + 2]
-    if sessions_index >= 0 and sessions_index + 2 < len(provider_parts)
+    provider_parts[sessions_index + 3]
+    if sessions_index >= 0 and sessions_index + 3 < len(provider_parts)
     else None
 )
 logical_session_id = (
@@ -302,7 +301,11 @@ if resumed_id is None:
     counter_path = provider_state / ".fake-counter"
     counter = int(counter_path.read_text(encoding="ascii")) + 1 if counter_path.exists() else 1
     counter_path.write_text(str(counter), encoding="ascii")
-    fingerprint = Path.cwd().parent.name[:8]
+    fingerprint = (
+        provider_parts[sessions_index + 2][:4] + provider_state.parent.name[:4]
+        if sessions_index >= 0 and sessions_index + 2 < len(provider_parts)
+        else Path.cwd().parent.name[:8]
+    )
     conversation_id = (
         f"agy-{logical_session_id or payload.get('session_id', 'session')}-"
         f"{logical_agent_id or payload.get('agent_id', 'agent')}-{fingerprint}-{counter}"
@@ -709,11 +712,8 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
     """Exercise Antigravity through the real shared backend/process boundary."""
 
     def setUp(self) -> None:
-        self.workspace = (
-            pristine_initialized_workspace(self)
-            if self._testMethodName == "test_mixed_provider_dispatch_and_thread_locks_are_independent" or self._testMethodName.endswith("rendered_schema_only_for_antigravity")
-            else initialized_workspace(self)
-        )
+        self.workspace = pristine_initialized_workspace(self)
+        self.session_roots: dict[str, Path] = {}
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.fake_directory = Path(temporary.name)
@@ -745,6 +745,14 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.environment.start()
+        # Transport fakes exercise parity; sandbox policy has separate profile
+        # and launch-boundary coverage.
+        self.sandbox_patch = mock.patch(
+            "story_writing_agents.provider_process._darwin_confined_command",
+            side_effect=lambda command, requirements: tuple(command),
+        )
+        self.sandbox_patch.start()
+        self.addCleanup(self.sandbox_patch.stop)
         os.environ.pop("STORY_FAKE_AGY_FAIL_ACTION", None)
         self.addCleanup(self.environment.stop)
 
@@ -782,6 +790,21 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         )
         self.addCleanup(backend.close)
         return backend
+
+    def ready_session(self, backend: AgentBackend, session_id: str) -> SessionAccessState:
+        state = backend.create_session_with_access(session_id)
+        resources = provision_session_resources(self.workspace.root, session_id)
+        self.session_roots[session_id] = resources.identity.worktree_root
+        return state
+
+    def antigravity_key(self, manifest: dict[str, object], agent_id: str = PLOT_ARCHITECT) -> str:
+        prefix = f"antigravity:{agent_id}:"
+        keys = [key for key in manifest["provider_threads"] if key.startswith(prefix)]
+        self.assertGreaterEqual(len(keys), 1)
+        return max(keys, key=lambda key: manifest["provider_threads"][key]["updated_at"])
+
+    def antigravity_thread(self, manifest: dict[str, object], agent_id: str = PLOT_ARCHITECT) -> dict[str, object]:
+        return manifest["provider_threads"][self.antigravity_key(manifest, agent_id)]
 
     def request(
         self,
@@ -909,7 +932,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 session = "schema-" + vendor + ("-context" if contextual else "-standard")
                 if vendor == "codex": provision_session_resources(self.workspace.root, session)
                 backend = self.backend(backend_overrides={PLOT_ARCHITECT: vendor})
-                backend.create_session_with_access(session)
+                self.ready_session(backend, session)
                 bound = await backend.bind(self.definition(backend=vendor))
                 adapter = backend._adapter_for(vendor)
                 expected = AntigravityAdapter.native_output_schema(schema) if vendor == "antigravity" else schema
@@ -960,7 +983,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(result.accounting.actual_transport_utf8_bytes, len(original_payload))
                         self.assertIs(result.accounting.state, ProviderCallState.SUBMITTED)
                     else:
-                        with (live_provider_execution_workspace(self.workspace.root, session) if vendor == "codex" else nullcontext()) as execution_workspace:
+                        async with bound._direct_execution_workspace(session, None) as execution_workspace:
                             result = await backend._invoke_provider_structured(
                                 bound, session_id=session, conversation_id="schema-conversation",
                                 schema=schema, payload=payload, decode=json.loads, execution_workspace=execution_workspace)
@@ -995,7 +1018,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         session_id = "antigravity-contextual"
         backend = self.backend()
-        backend.create_session_with_access(session_id)
+        self.ready_session(backend, session_id)
         definition = self.definition()
         provider = (await backend.bind(definition))._context_provider()
         scope = ContextScope(
@@ -1097,7 +1120,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         session_id = "antigravity-lead-context"
         backend = self.backend(backend_overrides={LEAD_ORCHESTRATOR: "antigravity"})
-        backend.create_session_with_access(session_id)
+        self.ready_session(backend, session_id)
         definition = self.definition(LEAD_ORCHESTRATOR)
         provider = (await backend.bind(definition))._context_provider()
         scope = ContextScope(
@@ -1399,7 +1422,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         session_id = "antigravity-reference-session"
         operation_id = "antigravity_reference_operation"
         backend = self.backend()
-        backend.create_session_with_access(session_id)
+        self.ready_session(backend, session_id)
         bound = await backend.bind(self.definition())
         repository, authorization, invocation = self.reference_invocation(
             operation_id=operation_id,
@@ -1454,7 +1477,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual(substantive["payload"], expected_payload)
         manifest = self.manifest(session_id)
-        thread = manifest["provider_threads"]["antigravity:plot_architect"]
+        thread = self.antigravity_thread(manifest)
         self.assertIsNone(substantive["resumed_id"])
         self.assertIs(thread["tainted"], False)
 
@@ -1501,7 +1524,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         session_id = "parity-session"
         backend = self.backend()
-        backend.create_session_with_access(session_id)
+        self.ready_session(backend, session_id)
         bound = await backend.bind(self.definition())
 
         phase_replies: dict[Phase, AgentReply] = {}
@@ -1583,6 +1606,9 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             all(item["resumed_id"] == thread_id for item in invocations[1:])
         )
         phase_invocations = invocations[: len(Phase)]
+        selected_agent = invocations[0]["selected_agent"]
+        self.assertRegex(selected_agent, r"^plot_architect-[0-9a-f]{64}$")
+        self.assertTrue(all(item["selected_agent"] == selected_agent for item in invocations))
         self.assertEqual(
             [
                 (
@@ -1643,11 +1669,11 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(set(json.loads(argv[argv.index("--print") + 1])), set(item["payload_keys"]))
             cwd = Path(item["cwd"])
             provider_state = Path(item["provider_state"])
-            self.assertEqual(cwd.name, "workspace")
+            self.assertEqual(cwd, self.session_roots[session_id])
             self.assertEqual(provider_state.name, "provider")
-            self.assertEqual(cwd.parent, provider_state.parent)
-            self.assertTrue(cwd.is_relative_to(self.workspace.root))
+            self.assertFalse(cwd.is_relative_to(self.workspace.root))
             self.assertTrue(provider_state.is_relative_to(self.workspace.root))
+            self.assertFalse(provider_state.is_relative_to(cwd))
             expected_agent_definition = (
                 cwd
                 / ".agents"
@@ -1675,7 +1701,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             "unknown-resume",
         )
         for session_id in sessions:
-            backend.create_session_with_access(session_id)
+            self.ready_session(backend, session_id)
             await bound.invoke(
                 self.request(
                     session_id=session_id,
@@ -1693,10 +1719,28 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         )
         same_state = self.provider_invocations()[-1]
         self.assertIs(same_state["resume_known"], True)
-        known_thread_id = self.manifest("known-resume")["provider_threads"][
-            "antigravity:plot_architect"
-        ]["thread_id"]
+        known_thread_id = self.antigravity_thread(self.manifest("known-resume"))["thread_id"]
         self.assertEqual(same_state["resumed_id"], known_thread_id)
+
+        provider_state = Path(same_state["provider_state"])
+        self.assertEqual(provider_state.name, "provider")
+        self.assertTrue(provider_state.is_relative_to(backend._antigravity_adapter.state_root))
+        self.assertTrue(provider_state.is_dir())
+        shutil.rmtree(provider_state)
+        await bound.invoke(
+            self.request(
+                session_id="known-resume",
+                debate_id="after-loss",
+                phase=Phase.SYNTHESIZE,
+            )
+        )
+        after_state_loss = self.provider_invocations()[-1]
+        self.assertIs(after_state_loss["new_project"], True)
+        self.assertIsNone(after_state_loss["resumed_id"])
+        self.assertIs(
+            self.antigravity_thread(self.manifest("known-resume"))["tainted"],
+            False,
+        )
 
         substitutions = (
             ("foreign-resume", known_thread_id),
@@ -1705,7 +1749,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         for session_id, substituted_thread_id in substitutions:
             with self.subTest(session_id=session_id):
                 manifest = self.manifest(session_id)
-                manifest["provider_threads"]["antigravity:plot_architect"][
+                self.antigravity_thread(manifest)[
                     "thread_id"
                 ] = substituted_thread_id
                 backend._write_manifest(session_id, manifest)
@@ -1725,9 +1769,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(rejected["resumed_id"], substituted_thread_id)
                 self.assertIs(rejected["resume_known"], False)
                 self.assertIs(
-                    self.manifest(session_id)["provider_threads"][
-                        "antigravity:plot_architect"
-                    ]["tainted"],
+                    self.antigravity_thread(self.manifest(session_id))["tainted"],
                     True,
                 )
 
@@ -1735,8 +1777,8 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         backend = self.backend()
-        first_state = backend.create_session_with_access("story-one")
-        backend.create_session_with_access("story-two")
+        first_state = self.ready_session(backend, "story-one")
+        self.ready_session(backend, "story-two")
         self.assertEqual(
             (first_state.durable_state, first_state.access_state),
             (SessionDurableState.READY, SessionAccessState.HELD_HERE),
@@ -1800,11 +1842,11 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             set(manifest["provider_threads"]),
             {
-                "antigravity:plot_architect",
-                "antigravity:character_custodian",
+                self.antigravity_key(manifest),
+                self.antigravity_key(manifest, CHARACTER_CUSTODIAN),
             },
         )
-        plot_thread = manifest["provider_threads"]["antigravity:plot_architect"]
+        plot_thread = self.antigravity_thread(manifest)
         self.assertEqual(
             set(plot_thread),
             {
@@ -1817,7 +1859,8 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(plot_thread["backend"], "antigravity")
-        self.assertEqual(plot_thread["fingerprint"], plot.fingerprint)
+        self.assertRegex(plot_thread["fingerprint"], r"^[0-9a-f]{64}$")
+        self.assertNotEqual(plot_thread["fingerprint"], plot.fingerprint)
         self.assertIs(plot_thread["tainted"], False)
 
         changed_plot = replace(plot, fingerprint="a" * 64)
@@ -1830,10 +1873,9 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 phase=Phase.DRAFT,
             )
         )
-        changed_thread = self.manifest("story-one")["provider_threads"][
-            "antigravity:plot_architect"
-        ]
-        self.assertEqual(changed_thread["fingerprint"], "a" * 64)
+        changed_thread = self.antigravity_thread(self.manifest("story-one"))
+        self.assertNotEqual(changed_thread["fingerprint"], plot_thread["fingerprint"])
+        self.assertNotEqual(changed_thread["fingerprint"], "a" * 64)
         self.assertNotEqual(changed_thread["thread_id"], old_thread_id)
         self.assertIsNone(self.invocations()[-1]["resumed_id"])
 
@@ -1896,7 +1938,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 CHARACTER_CUSTODIAN: "codex",
             }
         )
-        backend.create_session_with_access(session_id)
+        self.ready_session(backend, session_id)
         provision_session_resources(self.workspace.root, session_id)
         antigravity_bound = await backend.bind(self.definition())
         codex_definition = self.definition(
@@ -2008,12 +2050,12 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             set(manifest["provider_threads"]),
             {
-                "antigravity:plot_architect",
+                self.antigravity_key(manifest),
                 codex_key,
             },
         )
         self.assertEqual(
-            manifest["provider_threads"]["antigravity:plot_architect"]["thread_id"],
+            self.antigravity_thread(manifest)["thread_id"],
             "agy-mixed-thread",
         )
         self.assertEqual(
@@ -2042,7 +2084,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             '{"kind":"candidate","revision_id":"other-revision",'
             '"content":"PRIVATE_AGY_REJECTED_한🙂"}'
         )
-        backend.create_session_with_access(debate_session)
+        self.ready_session(backend, debate_session)
         invoke = mock.AsyncMock(
             side_effect=(
                 ProviderResult(
@@ -2094,11 +2136,9 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(rejected_reply.validation_details[1].startswith("Repair response"))
             self.assertNotIn("PRIVATE_AGY_REJECTED", repr(rejected_reply.validation_details))
             taint.assert_called_once_with(
-                debate_session, definition, fingerprint=definition.fingerprint
+                debate_session, definition, fingerprint=self.antigravity_thread(self.manifest(debate_session))["fingerprint"]
             )
-            failed_thread = self.manifest(debate_session)["provider_threads"][
-                "antigravity:plot_architect"
-            ]
+            failed_thread = self.antigravity_thread(self.manifest(debate_session))
             self.assertEqual(
                 {
                     "thread_id": failed_thread["thread_id"],
@@ -2125,9 +2165,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             {
-                key: self.manifest(debate_session)["provider_threads"][
-                    "antigravity:plot_architect"
-                ][key]
+                key: self.antigravity_thread(self.manifest(debate_session))[key]
                 for key in ("thread_id", "tainted")
             },
             {
@@ -2148,7 +2186,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        backend.create_session_with_access(conversation_session)
+        self.ready_session(backend, conversation_session)
         conversation_invoke = mock.AsyncMock(
             return_value=ProviderResult(
                 thread_id="agy-capture-conversation-rejected-thread",
@@ -2332,7 +2370,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         session_id = "runtime-identity"
         backend = self.backend()
-        backend.create_session_with_access(session_id)
+        self.ready_session(backend, session_id)
         definition = self.definition()
         bound = await backend.bind(definition)
         await bound.invoke(
@@ -2374,7 +2412,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             (True, True),
         )
         taint.assert_called_once_with(
-            session_id, definition, fingerprint=definition.fingerprint
+            session_id, definition, fingerprint=self.antigravity_thread(self.manifest(session_id))["fingerprint"]
         )
         failure_calls = self.provider_invocations()[-2:]
         self.assertEqual(len(failure_calls), 2)
@@ -2387,9 +2425,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("conversation_id", call["schema"]["properties"])
             self.assertNotIn("turn_id", call["schema"]["properties"])
         self.assertIs(
-            self.manifest(session_id)["provider_threads"][
-                "antigravity:plot_architect"
-            ]["tainted"],
+            self.antigravity_thread(self.manifest(session_id))["tainted"],
             True,
         )
         await bound.invoke(
@@ -2469,7 +2505,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         for index, (mode, diagnostic) in enumerate(cases):
             with self.subTest(mode=mode):
                 session_id = f"failure-{index}"
-                backend.create_session_with_access(session_id)
+                self.ready_session(backend, session_id)
                 before = len(self.provider_invocations())
                 await bound.invoke(
                     self.request(
@@ -2478,9 +2514,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                         phase=Phase.DRAFT,
                     )
                 )
-                seeded = self.manifest(session_id)["provider_threads"][
-                    "antigravity:plot_architect"
-                ]
+                seeded = self.antigravity_thread(self.manifest(session_id))
                 with (
                     mock.patch.object(
                         backend,
@@ -2551,7 +2585,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                     ):
                         self.assertNotIn(prohibited, malformed_serialized)
                 taint.assert_called_once_with(
-                    session_id, definition, fingerprint=definition.fingerprint
+                    session_id, definition, fingerprint=seeded["fingerprint"]
                 )
                 write_manifest.assert_called_once()
                 external_error = str(caught.exception)
@@ -2563,9 +2597,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                     str(self.fake_directory),
                 ):
                     self.assertNotIn(confidential, external_error)
-                failed = self.manifest(session_id)["provider_threads"][
-                    "antigravity:plot_architect"
-                ]
+                failed = self.antigravity_thread(self.manifest(session_id))
                 self.assertEqual(failed["thread_id"], seeded["thread_id"])
                 self.assertIs(failed["tainted"], True)
 
@@ -2577,9 +2609,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                         revision_id="r2",
                     )
                 )
-                recovered = self.manifest(session_id)["provider_threads"][
-                    "antigravity:plot_architect"
-                ]
+                recovered = self.antigravity_thread(self.manifest(session_id))
                 self.assertIs(recovered["tainted"], False)
                 self.assertNotEqual(recovered["thread_id"], seeded["thread_id"])
                 calls = self.provider_invocations()[before:]
@@ -2591,7 +2621,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_executable_preserves_compatible_thread(self) -> None:
         session_id = "missing-executable"
         first = self.backend()
-        first.create_session_with_access(session_id)
+        self.ready_session(first, session_id)
         definition = self.definition()
         await (await first.bind(definition)).invoke(
             self.request(
@@ -2600,9 +2630,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 phase=Phase.DRAFT,
             )
         )
-        retained = self.manifest(session_id)["provider_threads"][
-            "antigravity:plot_architect"
-        ]
+        retained = self.antigravity_thread(self.manifest(session_id))
         first.close()
 
         missing = AgentBackend(
@@ -2626,7 +2654,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             "Antigravity CLI executable was not found",
         )
         self.assertEqual(
-            self.manifest(session_id)["provider_threads"]["antigravity:plot_architect"],
+            self.antigravity_thread(self.manifest(session_id)),
             retained,
         )
 
@@ -2635,7 +2663,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         session_id = "retrieval-failure"
         backend = self.backend()
-        backend.create_session_with_access(session_id)
+        self.ready_session(backend, session_id)
         bound = await backend.bind(self.definition())
         request = ConversationRetrievalRequest(
             session_id=session_id,
@@ -2669,9 +2697,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         calls = self.provider_invocations()[-2:]
         self.assertIsNone(calls[0]["resumed_id"])
         self.assertIsNotNone(calls[1]["resumed_id"])
-        failed = self.manifest(session_id)["provider_threads"][
-            "antigravity:plot_architect"
-        ]
+        failed = self.antigravity_thread(self.manifest(session_id))
         self.assertIs(failed["tainted"], True)
 
         await bound.invoke(
@@ -2683,7 +2709,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(self.provider_invocations()[-1]["resumed_id"])
         self.assertIs(
-            self.manifest(session_id)["provider_threads"]["antigravity:plot_architect"][
+            self.antigravity_thread(self.manifest(session_id))[
                 "tainted"
             ],
             False,
@@ -2696,7 +2722,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(cleanup=label):
                 session_id = f"cleanup-{label}"
                 backend = self.backend(timeout_seconds=10)
-                backend.create_session_with_access(session_id)
+                self.ready_session(backend, session_id)
                 definition = self.definition()
                 bound = await backend.bind(definition)
                 await bound.invoke(
@@ -2774,9 +2800,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                     ]
                     self.assertEqual(len(termination), 1)
                 self.assert_fake_process_stopped(pid)
-                tainted = self.manifest(session_id)["provider_threads"][
-                    "antigravity:plot_architect"
-                ]
+                tainted = self.antigravity_thread(self.manifest(session_id))
                 self.assertIs(tainted["tainted"], True)
 
                 await bound.invoke(
@@ -2789,9 +2813,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertIsNone(self.provider_invocations()[-1]["resumed_id"])
                 self.assertIs(
-                    self.manifest(session_id)["provider_threads"][
-                        "antigravity:plot_architect"
-                    ]["tainted"],
+                    self.antigravity_thread(self.manifest(session_id))["tainted"],
                     False,
                 )
 
@@ -2801,7 +2823,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
 
         session_id = "cleanup-kill"
         backend = self.backend(timeout_seconds=6)
-        backend.create_session_with_access(session_id)
+        self.ready_session(backend, session_id)
         bound = await backend.bind(self.definition())
         await bound.invoke(
             self.request(
@@ -2864,7 +2886,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertIs(
-            self.manifest(session_id)["provider_threads"]["antigravity:plot_architect"][
+            self.antigravity_thread(self.manifest(session_id))[
                 "tainted"
             ],
             True,

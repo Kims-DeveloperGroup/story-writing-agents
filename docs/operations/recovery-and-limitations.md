@@ -1739,11 +1739,13 @@ before the Git exclusion or role tree is mutated. Exact `0400` role versions
 coexist, publication is create-only, and runtime never replaces or prunes a
 leaf. Selected-role content validation is bounded by the exact planned size;
 unselected qualified leaves are metadata-validated without content reads. Keep
-the complete `.agents` tree untracked: any tracked path fails before projection
-mutation or provider submission and must be removed from the index before
-retry. A concurrent winner is accepted only after full exact validation. A
-failed fresh installation cleans only unchanged empty directories created by
-that call. If effective-user, descriptor-relative, no-follow, nonblocking, or
+the top-level `.agents` namespace and its case-folded aliases untracked: any
+tracked variant fails before projection mutation or provider submission,
+including on case-sensitive worktrees for portability, and must be removed from
+the index before retry. A concurrent winner is accepted only after full exact
+validation. A failed fresh installation cleans only unchanged empty
+directories created by that call. If effective-user, descriptor-relative,
+no-follow, nonblocking, or
 create-only link support is missing, projection fails before path access.
 Staged definitions and mutable native history remain beneath the canonical
 control workspace under generation-qualified state paths. An overlap with the

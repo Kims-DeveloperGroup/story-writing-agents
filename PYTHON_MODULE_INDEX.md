@@ -221,18 +221,26 @@ only their intentional contract paths.
 Resource/history/checkpoint/commit services depend inward on these owners; general contracts must not import workflow services.
 Generation capture and pinning remain opaque internal contracts. Bound history and story-commit services validate
 exact generation without exporting descriptors or general mutation authority.
+`git.session_resources` proves the literal top-level `.agents` namespace and every case variant
+absent from the exact linked-worktree index under a retained lease and generation. Its optional
+effective-ignore proof uses fixed `git check-ignore --quiet --no-index -- .agents/`; index and
+generation facts bracket both checks. This owner never mutates Git for role projection.
 
 ### Workspace, runtime state, and session lifecycle
 
 Responsibility: validate workspace schema/security, initialize workspaces, derive runtime
 state paths, manage session lifecycle, and assess/reconcile recovery transitions.
 
-- `workspace`, `workspace.core`, `workspace.schema`, `workspace.initialization`, `workspace._policy_baselines`, `runtime_state_paths`, `session_lifecycle`
+- `workspace`, `workspace.core`, `workspace.schema`, `workspace.initialization`, `workspace.session_role_projection`, `workspace._policy_baselines`, `runtime_state_paths`, `session_lifecycle`
 - `session_recovery`, `session_recovery.contracts`, `session_recovery.transition_assessment`, `session_recovery.reconciliation`
 
 `workspace.core` owns path validation and session source/configuration views; `initialization` owns creation,
 session artifact bindings, guarded repositories, and opaque generation-pin composition. Views borrow retained session
 roots through bounded owner contracts. `schema` owns schema-v2 validation; `_policy_baselines` is private immutable policy data.
+The binding calls the Git owner's index and effective-ignore proof after exclusion preparation
+and again after role publication. `session_role_projection` owns create-only, read-only native
+role files and the private Git exclusion: `/.agents/` must be its final nonempty record, and
+bounded positive short writes finish on the retained descriptor before fsync and readback.
 Recovery contracts point inward; reconciliation borrows opaque Git generation authority.
 Workspace readers accept optional bounded validation details and legacy entries without them.
 

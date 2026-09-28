@@ -816,9 +816,10 @@ winner may be adopted only after full validation; a differing or unsafe winner
 is preserved and rejected. A pre-existing empty qualified directory is
 preserved and rejected before Git-exclusion or role-tree mutation. Selected-
 role content validation is bounded by the exact planned size; unselected
-qualified leaves are metadata-validated without content reads. The complete
-`.agents` tree must remain untracked; any tracked path fails closed before
-projection mutation or provider submission.
+qualified leaves are metadata-validated without content reads. The top-level
+`.agents` namespace and its case-folded aliases must remain untracked; any
+tracked variant fails closed before projection mutation or provider submission,
+including on case-sensitive worktrees for portability.
 
 The common Git exclusion contains `/.agents/`; its parser recognizes LF and
 CRLF records, not lone CR separators, and fails closed without rewriting when

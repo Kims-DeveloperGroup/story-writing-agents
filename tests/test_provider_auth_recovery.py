@@ -47,6 +47,10 @@ from story_writing_agents.provider_auth_recovery import (
     request_authentication, validate_provider_replay,
 )
 from story_writing_agents.provider_process import ProcessResult
+from story_writing_agents.workspace.initialization import (
+    compose_session_artifact_binding,
+    provision_session_resources,
+)
 from tests import test_agent_context_execution as context
 from tests import test_interactive_controller as interactive_controller_tests
 from tests import test_lead_orchestration as lead
@@ -112,9 +116,9 @@ class AuthClassificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(failure.validate_replay())
 
     async def test_antigravity_partial_timeout_auth_preserves_both_native_facts(self):
-        workspace = initialized_workspace(self)
+        workspace = pristine_initialized_workspace(self)
         adapter = AntigravityAdapter(
-            executable="synthetic-agy",
+            executable=str(Path(sys.executable).resolve(strict=True)),
             timeout_seconds=7,
             state_root=workspace.path("auth-partial-timeout"),
             explicit_model=None,
@@ -129,11 +133,18 @@ class AuthClassificationTests(unittest.IsolatedAsyncioTestCase):
         )
         binding = adapter.bind(definition)
         self.addCleanup(adapter.release, binding)
+        provision_session_resources(workspace.root, "auth-partial-timeout")
+        owner = compose_session_artifact_binding(workspace.root, "auth-partial-timeout")
+        with owner.open_ready_resources() as access:
+            access.install_provider_role(adapter.session_role_projection(binding))
         invocation = ProviderInvocation(
             session_id="auth-partial-timeout",
             schema={"type": "object"},
             payload={"synthetic": "unchanged"},
             thread_id="existing-thread",
+            execution_workspace=self.enterContext(
+                live_provider_execution_workspace(workspace.root, "auth-partial-timeout")
+            ),
         )
         marker = (
             b"[agy] print timeout after 7s with turn in progress; "
@@ -375,10 +386,11 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
         self.assertEqual(len(provider.calls), 1)
 
     async def backend_fixture(self):
-        workspace = initialized_workspace(self)
+        workspace = pristine_initialized_workspace(self)
         backend = AgentBackend(workspace, backend_overrides={PLOT_ARCHITECT: "antigravity"})
         self.addCleanup(backend.close)
         backend.create_session_with_access("replay")
+        provision_session_resources(workspace.root, "replay")
         definition = PromptAssembler(workspace, backend_overrides={PLOT_ARCHITECT: "antigravity"}).build_definition(
             session_id="replay", agent_id=PLOT_ARCHITECT)
         bound = await backend.bind(definition)

@@ -6,6 +6,7 @@ import errno
 import hashlib
 import os
 import stat
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -113,11 +114,14 @@ def install_session_role_projection(
     common_git_descriptor: int,
     *,
     plan: SessionRoleProjectionPlan,
+    require_git_exclusion: Callable[[], None],
 ) -> None:
     """Install one exact role and its Git exclusion through retained roots."""
 
     _require_projection_plan(plan)
     _require_projection_operations()
+    if not callable(require_git_exclusion):
+        raise OSError("session role Git exclusion is unavailable")
     _validate_inputs(worktree_descriptor, common_git_descriptor)
     _preflight_projection(
         worktree_descriptor,
@@ -125,6 +129,7 @@ def install_session_role_projection(
         content=plan.content,
     )
     _ensure_git_exclusion(common_git_descriptor)
+    require_git_exclusion()
     created: list[tuple[tuple[str, ...], tuple[int, int]]] = []
     try:
         root = _open_projection_directory(
@@ -198,6 +203,7 @@ def install_session_role_projection(
             failure=failure,
         )
         raise
+    require_git_exclusion()
 
 
 def require_session_role_projection(
@@ -401,10 +407,10 @@ def _ensure_git_exclusion(common_git_descriptor: int) -> None:
             raise OSError("session role Git exclusion is unsafe") from None
         try:
             lines = _git_exclude_lines(current)
-            if _EXCLUDE_LINE in lines:
-                return
             if current.endswith(b"\r"):
                 raise OSError("session role Git exclusion is unsafe")
+            if next((line for line in reversed(lines) if line), b"") == _EXCLUDE_LINE:
+                return
             separator = b"" if not current or current.endswith(b"\n") else b"\n"
             replacement = current + separator + _EXCLUDE_LINE + b"\n"
             if len(replacement) > _MAX_EXCLUDE_BYTES:
@@ -1115,9 +1121,12 @@ def _install_git_exclusion(
             or value.st_size != len(current)
         ):
             raise OSError("session role Git exclusion changed")
-        written = os.write(descriptor, suffix)
-        if written != len(suffix):
-            raise OSError("session role Git exclusion write failed")
+        remaining = memoryview(suffix)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if type(written) is not int or written <= 0 or written > len(remaining):
+                raise OSError("session role Git exclusion write failed")
+            remaining = remaining[written:]
         os.fsync(descriptor)
         installed = os.fstat(descriptor)
         if (

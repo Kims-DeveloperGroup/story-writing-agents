@@ -296,17 +296,20 @@ class AntigravityAdapter:
         return directory
 
     @classmethod
-    def _prepare_owned_directory(cls, directory: Path) -> None:
-        """Require one no-follow directory and request owner-only access."""
+    def _prepare_owned_directory(cls, directory: Path) -> bool:
+        """Require one no-follow directory; report whether it already existed."""
 
+        existed = True
         try:
             os.mkdir(directory, mode=0o700)
+            existed = False
         except FileExistsError:
             pass
         value = os.lstat(directory)
         if not stat.S_ISDIR(value.st_mode):
             raise NotADirectoryError("Antigravity state directory is unsafe")
         cls._harden_owned_directory(directory)
+        return existed
 
     @staticmethod
     def _harden_owned_directory(directory: Path) -> None:
@@ -1081,8 +1084,22 @@ class AntigravityAdapter:
                 output_format=output_format,
                 native_agent_id=staged_role.native_agent_id,
             )
+            fresh_command = (
+                self.command(
+                    provider_state_directory=provider_state_directory,
+                    schema=transport_schema,
+                    thread_id=None,
+                    agent_id=binding.definition.agent_id,
+                    output_format=output_format,
+                    native_agent_id=staged_role.native_agent_id,
+                )
+                if invocation.thread_id is not None
+                else command
+            )
             prompt = invocation.payload_json.decode("utf-8", errors="strict")
             command.extend(["--print", prompt])
+            if fresh_command is not command:
+                fresh_command.extend(["--print", prompt])
             transport_utf8_bytes = len(invocation.payload_json)
         except (
             ProviderJsonEncodingError,
@@ -1106,7 +1123,14 @@ class AntigravityAdapter:
                 binding.definition.agent_id,
                 binding.definition.fingerprint,
             )
-            self._prepare_owned_directory(provider_state_directory)
+            native_state_existed = self._prepare_owned_directory(
+                provider_state_directory
+            )
+            effective_thread_id = (
+                invocation.thread_id if native_state_existed else None
+            )
+            if effective_thread_id is None:
+                command = fresh_command
             projected_role = require_session_role_projection(
                 execution_workspace,
                 plan=staged_role,
@@ -1139,7 +1163,7 @@ class AntigravityAdapter:
         create_process = self._create_process()
         recovery_baseline = self._native_recovery_baseline(
             provider_state_directory,
-            invocation.thread_id,
+            effective_thread_id,
         )
         captured_result_bytes: list[bytes] = []
         invalid_stream_line: str | None = None
@@ -1570,7 +1594,7 @@ class AntigravityAdapter:
                     )
             provider_result = self._provider_result(
                 effective_stdout,
-                expected_thread_id=invocation.thread_id,
+                expected_thread_id=effective_thread_id,
                 expected_schema=transport_schema,
                 completion_check=lambda thread_id, output, error: self._has_current_finish(
                     provider_state_directory,

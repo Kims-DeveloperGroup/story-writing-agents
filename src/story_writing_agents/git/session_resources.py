@@ -331,8 +331,9 @@ def require_locked_git_session_untracked_prefix(
     expected_generation: GitSessionGenerationIdentity,
     *,
     prefix: str,
+    verify_exclusion: bool = False,
 ) -> None:
-    """Require one literal top-level prefix to be absent from the session index."""
+    """Require an untracked prefix and, when requested, its effective exclusion."""
 
     if (
         type(lease) is not GitRepositoryLease
@@ -341,6 +342,7 @@ def require_locked_git_session_untracked_prefix(
         or type(expected_generation) is not GitSessionGenerationIdentity
         or resources.identity != expected_generation.session
         or prefix != ".agents"
+        or type(verify_exclusion) is not bool
     ):
         raise TypeError("ready locked Git session resources are required")
     expected_generation._require_creator()
@@ -373,13 +375,21 @@ def require_locked_git_session_untracked_prefix(
                 "--cached",
                 "-z",
                 "--",
-                f":(top,literal){prefix}",
+                f":(top,literal,icase){prefix}",
             ),
             expected_identity=expected_generation.worktree_identity,
             read_only=True,
         )
         if result.returncode != 0 or result.stdout:
             raise _generation_error()
+        if verify_exclusion:
+            ignored = GitProcessRunner(resources.identity.worktree_root).run(
+                ("check-ignore", "--quiet", "--no-index", "--", ".agents/"),
+                expected_identity=expected_generation.worktree_identity,
+                read_only=True,
+            )
+            if ignored.returncode != 0 or ignored.stdout:
+                raise _generation_error()
         _require_session_index(
             before_descriptors[2],
             before_index,

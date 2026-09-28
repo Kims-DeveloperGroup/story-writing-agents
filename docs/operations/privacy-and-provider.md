@@ -1250,11 +1250,13 @@ relative, no-follow validation: owner-controlled directories, exact bytes, and
 one singly linked role file with exact mode `0400`. Selected-role content is
 validated within the exact planned size; older unselected qualified leaves are
 metadata-validated without reading their content. Content-qualified versions
-are published create-only, coexist, and are never replaced or pruned. The
-complete `.agents` tree must remain untracked; any tracked path fails closed
-before projection mutation or provider submission. A concurrent winner is
-adopted only after exact validation; differing content, symbolic links, FIFOs,
-other nonregular entries, multiply linked files, writable roles, foreign
+are published create-only, coexist, and are never replaced or pruned. The top-
+level `.agents` namespace and its case-folded aliases must remain untracked;
+any tracked variant fails closed before projection mutation or provider
+submission, including on case-sensitive worktrees for portability. A
+concurrent winner is adopted only after exact validation; differing content,
+symbolic links, FIFOs, other nonregular entries, multiply linked files,
+writable roles, foreign
 topology, and pre-existing empty qualified directories are rejected and
 preserved. If required effective-user, descriptor-relative, no-follow,
 nonblocking, or create-only link support is missing, projection fails before

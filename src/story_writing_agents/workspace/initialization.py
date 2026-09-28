@@ -1065,10 +1065,23 @@ class SessionArtifactAccess:
                 prefix=".agents",
             )
             self.require_active()
+
+            def require_effective_exclusion() -> None:
+                self.require_active()
+                require_locked_git_session_untracked_prefix(
+                    self._lease,
+                    self._binding.resources,
+                    expected_generation,
+                    prefix=".agents",
+                    verify_exclusion=True,
+                )
+                self.require_active()
+
             install_session_role_projection(
                 self._descriptor,
                 self._lease.common_descriptor,
                 plan=plan,
+                require_git_exclusion=require_effective_exclusion,
             )
             self.require_active()
         except _SESSION_ARTIFACT_BINDING_FAILURES:
