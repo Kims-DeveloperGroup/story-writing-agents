@@ -12,6 +12,7 @@ from unittest import mock
 
 from story_writing_agents import StoryRuntime, Workspace
 from story_writing_agents import orchestrator as orchestrator_module
+from story_writing_agents.conversations import context as context_module
 from story_writing_agents.agents import LEAD_ORCHESTRATOR
 from story_writing_agents.conversations import (
     ArtifactApplicationDecision,
@@ -439,6 +440,37 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         self.assertIs(revised.outcome.outcome, StoryCommitOutcomeKind.SUPERSEDED)
         self.assertIs(revised.outcome.next_action, StoryCommitNextAction.REPREPARE)
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), revised_head)
+        history = self.history(revised_apply.request.reviewed_proposal.conversation_id)
+        self.assertIs(type(history[-1].payload), StoryCommitResultPayload)
+        projection = project_collaboration_history(history)
+        for outcome, action in (
+            (StoryCommitOutcomeKind.OUTCOME_UNKNOWN, CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME),
+            (StoryCommitOutcomeKind.RECOVERY_REQUIRED, CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY),
+        ):
+            terminal = replace(revised.outcome, outcome=outcome, result=None)
+            self.assertIs(
+                context_module._artifact_operation_next_action(
+                    replace(history[-1], payload=terminal),
+                    projection.current_artifact_application_request,
+                    projection.current_artifact_application_result,
+                    projection.current_story_commit_request,
+                    terminal,
+                ),
+                action,
+            )
+        rejected_reprepare = replace(
+            revised.outcome, outcome=StoryCommitOutcomeKind.REJECTED, result=None
+        )
+        self.assertIsNot(
+            context_module._artifact_operation_next_action(
+                replace(history[-1], payload=rejected_reprepare),
+                projection.current_artifact_application_request,
+                projection.current_artifact_application_result,
+                projection.current_story_commit_request,
+                rejected_reprepare,
+            ),
+            CollaborationNextAction.REPREPARE_COMMIT_REQUEST,
+        )
         redisclosed = await self.runtime.lead_turn(
             self.session_id, revised_apply.request.reviewed_proposal.conversation_id,
             "Commit the revision now.",

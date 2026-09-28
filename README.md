@@ -461,10 +461,11 @@ indicators. See
   requires repreparation; uncertainty after execution starts requires
   inspection. Identity-bound Commit inspection and recovery also require the
   original Apply root and never advance durable operation state after detecting
-  a replacement. Failure to publish the follow-on Commit request after the
-  Apply result is durable does not yet have its own durable failure-state record;
-  that separate work remains in
-  [Issue #662](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/662).
+  replacement. If follow-on Commit-request publication fails after a durable
+  Apply result, verified result-only history projects
+  `reprepare_commit_request` across restart. Repreparation publishes a fresh
+  request that still needs a structured decision; ambiguous publication
+  readback requires inspection.
 - Smoke is intentionally provider-free and story-free.
 - Workspace configuration, histories, diagnostics, and artifacts are local
   plaintext unless the surrounding environment protects them.

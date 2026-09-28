@@ -1241,15 +1241,12 @@ Commit owner can receive or advance the correlated staged state. Arbitrary
 non-READY dirty or staged state remains a session-resource recovery failure;
 ordinary READY itself is unchanged and strict.
 
-After a successful Apply result is durable, the runtime prepares and publishes
-its follow-on Commit request in a later step under the exact Apply binding.
-That live guard covers the request append and service registration, but if the
-handoff fails, the Apply result remains durable, any already-completed append
-remains durable, and the returned message directs inspection. There is not yet
-a dedicated durable Commit-request publication/failure state, schema, or
-restart projection. That post-Apply
-state-machine work is intentionally outside this change and is tracked by
-[Issue #662](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/662).
+A successful Apply result and its follow-on Commit request are published as
+an exact pair under the Apply binding. If publication fails, exact readback
+proves whether the pair landed. Proven absence permits a durable result-only
+`reprepare_commit_request` state across restart; uncertain readback requires
+inspection. Repreparation publishes a fresh request and does not authorize
+Commit without a fresh structured decision.
 
 Known provider work is not replayed merely because session resources disappear
 during local closure. Binding loss while finalizing a completed artifact review

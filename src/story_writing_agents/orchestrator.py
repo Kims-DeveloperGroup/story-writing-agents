@@ -1809,17 +1809,14 @@ class StoryRuntime:
                         ),
                     )
                 )
-            definition = (
-                self.prompts.build_contextual_definition(
-                    session_id=invocation.execution_identity.session_id,
-                    agent_id=invocation.agent_id,
+            if artifact_binding is None:
+                artifact_binding = self._session_artifact_binding(
+                    invocation.execution_identity.session_id
                 )
-                if artifact_binding is None
-                else self._build_guarded_contextual_definition(
-                    artifact_binding=artifact_binding,
-                    session_id=invocation.execution_identity.session_id,
-                    agent_id=invocation.agent_id,
-                )
+            definition = self._build_guarded_contextual_definition(
+                artifact_binding=artifact_binding,
+                session_id=invocation.execution_identity.session_id,
+                agent_id=invocation.agent_id,
             )
             bound_agent = await self._acquire_bound_agent(definition)
             reference_read = (
@@ -8498,7 +8495,8 @@ class StoryRuntime:
             preparation_specialists=() if preparation_request is None else preparation_request.specialist_ids,
             recommendation_only=is_revision,
         )
-        definition = self.prompts.build_contextual_definition(
+        definition = self._build_guarded_contextual_definition(
+            artifact_binding=artifact_binding,
             session_id=session_id,
             agent_id=LEAD_ORCHESTRATOR,
         )

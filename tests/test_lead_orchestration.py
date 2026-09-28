@@ -44,6 +44,7 @@ from story_writing_agents.agents import (
     EXECUTION_SPECIALIST,
     LEAD_ORCHESTRATOR,
     PLOT_ARCHITECT,
+    behavior_policy_files,
 )
 from story_writing_agents.conversations import (
     COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES,
@@ -937,16 +938,25 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             conversation_id,
             "Create one prior visible answer.",
         )
+        session_policy = self.backend.definitions[-1].runtime_behavior_policy
+        control_policy = self.control_workspace.path(behavior_policy_files(LEAD_ORCHESTRATOR)[-1])
+        legacy_build = self.runtime.prompts.build_contextual_definition
+        def poisoned_legacy_build(*args, **kwargs):
+            control_policy.write_bytes(control_policy.read_bytes() + b"\nCONTROL_ROOT_INJECTION\n")
+            return legacy_build(*args, **kwargs)
         first_call_count = len(self.backend.calls)
         self.backend.enqueue(_search_history, _read_history_hit, _answer_from_history)
 
-        result = await self.runtime.lead_turn(
-            self.session_id,
-            conversation_id,
-            "Use bounded conversation history if needed.",
-        )
+        with mock.patch.object(self.runtime.prompts, "build_contextual_definition", side_effect=poisoned_legacy_build):
+            result = await self.runtime.lead_turn(
+                self.session_id,
+                conversation_id,
+                "Use bounded conversation history if needed.",
+            )
 
         calls = self.backend.calls[first_call_count:]
+        self.assertEqual(self.backend.definitions[-1].runtime_behavior_policy, session_policy)
+        self.assertNotIn(b"CONTROL_ROOT_INJECTION", self.backend.definitions[-1].runtime_behavior_policy)
         self.assertEqual(len(calls), 3)
         self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
         self.assertIsNone(result.proposal)

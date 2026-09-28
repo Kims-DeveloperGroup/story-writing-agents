@@ -1659,6 +1659,23 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
             ],
         )
 
+        class _ExitFailureProvider(_ScriptedProvider):
+            @asynccontextmanager
+            async def invocation(self, *args, **kwargs):
+                async with super().invocation(*args, **kwargs):
+                    yield
+                raise RuntimeError("session-root postvalidation failed")
+
+        exit_request = self.request(session_id="session-exit")
+        exit_provider = _ExitFailureProvider((_answer,))
+        with self.assertRaisesRegex(RuntimeError, "session-root postvalidation failed"):
+            await self.invoke(exit_provider, exit_request)
+        self.assertIsNone(self.inspect(exit_provider, exit_request).record.ready_checkpoint)
+        self.assertEqual(
+            exit_provider.finalizers[0].calls,
+            [("post_response_runtime_failure", ContextProviderTerminalCode.CONTEXT_RUNTIME_FAILED)],
+        )
+
     def test_frozen_failure_mapping_covers_all_service_boundaries(self) -> None:
         cases = (
             (

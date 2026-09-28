@@ -695,12 +695,11 @@ Later Commit inspection and recovery remain bound to the same physical root
 used by Apply. If that root was replaced, they return operator recovery without
 advancing the recorded Commit operation from the replacement's Git state.
 
-The follow-on Commit request is prepared only after the Apply result is
-durable. If request preparation or publication then fails, the Apply remains
-durable and the runtime directs you to inspect the session; the current schema
-does not record a dedicated durable Commit-request publication failure. That
-separate state-machine change remains tracked by
-[Issue #662](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/662).
+The follow-on Commit request is prepared after a successful Apply. If request
+preparation or publication fails, verified result-only Apply history projects
+`reprepare_commit_request` across restart. Repreparation issues a fresh request
+that needs its own structured decision; uncertain publication readback still
+directs you to inspect the session.
 
 ## Scenario 6: ordinary discussion
 

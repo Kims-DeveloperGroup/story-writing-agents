@@ -3924,6 +3924,10 @@ def _artifact_operation_next_action(
         if (
             commit_result is not None
             and commit_result.next_action is StoryCommitNextAction.REPREPARE
+            and commit_result.outcome in {
+                StoryCommitOutcomeKind.STALE,
+                StoryCommitOutcomeKind.SUPERSEDED,
+            }
         ):
             return (
                 CollaborationNextAction.REPREPARE_COMMIT_REQUEST

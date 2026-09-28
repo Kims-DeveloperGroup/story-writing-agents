@@ -4412,6 +4412,8 @@ class AgentContextService:
         )
         key = ContextLedgerKey(checkpoint_scope, provider_id)
         result: ContextInvocationResult | None = None
+        # The terminal response succeeds only after the provider context closes.
+        successful_finalizers: list[ContextProviderCallFinalizer] = []
         try:
             async with AsyncExitStack() as provider_stack:
                 await provider_stack.enter_async_context(context_manager)
@@ -4465,6 +4467,7 @@ class AgentContextService:
                         continuation=continuation,
                         session_history=session_history,
                         publication_validator=publication_validator,
+                        successful_finalizers=successful_finalizers,
                     )
                     if (
                         continuation is not None
@@ -4474,7 +4477,15 @@ class AgentContextService:
                         continuation.retain_async_context_manager(
                             provider_stack.pop_all()
                         )
+            if successful_finalizers and request.execution_workspace is not None:
+                request.execution_workspace.require_current()
+            for finalizer in successful_finalizers:
+                _accept_provider_call_without_replacing(finalizer)
         except BaseException as failure:
+            for finalizer in successful_finalizers:
+                _fail_provider_call_without_replacing(
+                    finalizer, ContextProviderTerminalCode.CONTEXT_RUNTIME_FAILED
+                )
             if result is not None and not result.checkpoint_pending:
                 try:
                     self._ledger.invalidate(
@@ -4516,6 +4527,7 @@ class AgentContextService:
         continuation: ContextContinuationTransaction | None,
         session_history: SessionHistorySnapshot | None,
         publication_validator: Callable[[], bool] | None,
+        successful_finalizers: list[ContextProviderCallFinalizer],
     ) -> ContextInvocationResult:
         policy_fingerprint = self._execution_policy_fingerprint
         operation_id = request.operation_id
@@ -5525,7 +5537,7 @@ class AgentContextService:
                 finalizer = call_finalizer
                 call_finalizer = None
                 if finalizer is not None:
-                    _accept_provider_call_without_replacing(finalizer)
+                    successful_finalizers.append(finalizer)
                 _emit_context_event(
                     event_sink,
                     execution_event(

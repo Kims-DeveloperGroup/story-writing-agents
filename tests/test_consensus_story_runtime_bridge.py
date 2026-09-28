@@ -149,7 +149,8 @@ def _decision(
 
 class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self.workspace = initialized_workspace(self)
+        self.workspace = pristine_initialized_workspace(self)
+        provision_session_resources(self.workspace.root, "story_session")
         self.backend = _Backend()
         self.runtime = StoryRuntime(self.workspace, self.backend)  # type: ignore[arg-type]
         self.session = self.runtime.session("story_session")
@@ -238,6 +239,12 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "authority is unavailable"):
             await restarted.confirm_consensus(_decision(self.runtime, pending))
         self.assertEqual(restarted_backend.requests, [])
+
+        unready_session = self.runtime.session("unready_session")
+        unready = unready_session.submit_consensus_prompt("conversation-unready", "prompt")
+        unready_result = await unready_session.confirm_consensus(_decision(self.runtime, unready))
+        self.assertIs(unready_result.execution.state, ConsensusPhaseState.FAILED)
+        self.assertEqual(self.backend.requests, [])
 
     async def test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails(
         self,
@@ -523,7 +530,8 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
         tasks = tuple(
             asyncio.create_task(runtime.invoke_provider(item)) for item in invocations
         )
-        await asyncio.wait_for(arrived.wait(), timeout=1)
+        await asyncio.wait_for(arrived.wait(), timeout=5)
+        self.assertCountEqual(arrivals, agents)
         self.assertTrue(
             runtime.interrupt_provider(
                 "story_session",

@@ -326,13 +326,11 @@ correlation, and expected branch tip. Replacement or cross-linked records
 become `recovery_required`; neither path advances an operation from those
 facts.
 
-If Apply-result publication succeeds but the later Commit-request preparation,
-publication, or service registration fails, the Apply result remains
-authoritative and no Commit is authorized. The current history has no dedicated
-durable state, schema field, or restart projection for that post-Apply Commit-
-request failure; operators must inspect before preparing again.
-[Issue #662](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/662)
-tracks that separate state-machine work and remains outside this change.
+If a successful Apply has no follow-on Commit request after preparation or
+publication failure, its durable result-only history projects
+`reprepare_commit_request` when exact readback proves the absence. A fresh
+structured Commit decision is still required after repreparation. An
+ambiguous publication outcome requires inspection instead of repreparation.
 This change covers only the #661 Git/session resource path. Conversation-side
 occurrence remains follow-up work in
 [Issue #668](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/668),
