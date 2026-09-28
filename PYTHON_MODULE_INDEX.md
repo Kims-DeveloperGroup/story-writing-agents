@@ -293,12 +293,7 @@ settings modules may use provider/config/workspace owners but must not own their
 
 ## Maintenance checks
 
-When production modules or boundaries change:
-
-1. Compare this inventory with all `*.py` files below `src/story_writing_agents/`, treating
-   each package `__init__.py` as its package import path.
+1. When production module boundaries change, compare the inventory with `src/story_writing_agents/**/*.py`, treating each package `__init__.py` as its package path.
 2. Verify affected `__all__` declarations and `pyproject.toml` entry points.
 3. Inspect runtime imports for cycles, reversed adapter dependencies, and private imports.
-4. Confirm stateful resources still have one owner and import-time code performs no external
-   I/O, authentication, subprocess execution, or application startup.
-5. Update only the implemented current state; design proposals belong in the change brief.
+4. Confirm single ownership of stateful resources and no import-time I/O, authentication, subprocesses, or startup; document only implemented state; put design proposals in the change brief.
