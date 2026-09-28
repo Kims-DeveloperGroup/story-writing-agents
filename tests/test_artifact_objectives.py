@@ -50,7 +50,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         ready = provision_session_resources(main.root, self.session_id)
         self.session_resources = ready
         self.workspace = Workspace(ready.identity.worktree_root).require_ready()
-        self.backend = lead._LeadBackend(persist_context_threads=True)
+        self.backend = lead._LeadBackend(persist_context_threads=True, vendor="fixture")
         self.runtime = StoryRuntime(self.control_workspace, self.backend)
         self.objective_tasks = {}
 

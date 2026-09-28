@@ -263,8 +263,75 @@ continuation. A deleted, replaced, or symlinked named session root cannot
 acquire the old descriptor authority or redirect a call. Unsupported hosts, a
 missing deprecated sandbox facility, an executable mismatch, or a noncanonical
 exception path fail before provider submission; there is no path-only working-
-directory or unconfined fallback. This Codex boundary does not cover the
-separately tracked Antigravity adapter.
+directory or unconfined fallback. This Codex boundary requires no Codex
+configuration file in the session worktree.
+
+Antigravity story calls use the same descriptor-selected exact session CWD and
+generation checks, not the adapter's control directory. Before capability
+entry, the host prepares and independently revalidates an immutable plan that
+ties the semantic story-agent ID, content-qualified native selector, and exact
+final role bytes. The adapter recomputes that plan and binding-component byte
+accounting from the immutable definition snapshot, then requires its staged
+file and retained accounting to match. The exact selector is the role's YAML
+name, `.agents/agents/<native-selector>/agent.md` directory, and `--agent`
+value; the semantic ID remains the runtime state and accounting identity.
+Projection traversal through the live READY binding is descriptor-relative and
+no-follow. Directories must be owner-controlled with no group or other writes;
+the selected role must be regular, singly linked, byte-exact, and have exact
+mode `0400`. Pre-launch and post-return checks require that same exact file
+identity, so replacing the role with equal bytes still fails closed. Only
+`.agents/agents`, content-qualified canonical-role directories, and their
+`agent.md` leaves are admitted. Selected-role content validation is bounded by
+the exact planned size, while unselected qualified role leaves are validated by
+topology and metadata without content reads. The top-level `.agents` namespace
+and its case-folded aliases must remain untracked; any tracked variant fails
+closed before projection mutation or provider submission, including on case-
+sensitive worktrees for portability. A pre-existing empty qualified directory
+is preserved and rejected during preflight, before the Git exclusion or role
+tree is mutated.
+
+Role publication is immutable and create-only. Older supported role versions
+coexist and runtime never replaces or prunes them. A concurrent winner is used
+only when complete validation proves the exact requested bytes and safe leaf;
+a differing or unsafe winner is preserved and rejected. If effective-user,
+descriptor-relative, no-follow, nonblocking, create-only link, or link-no-follow
+support is missing, projection fails before path access or mutation.
+
+When `/.agents/` must be appended to the common Git exclusion, records are
+split only on LF; one CR immediately before LF is treated as CRLF, while every
+other CR remains data. A terminal lone CR therefore fails closed when insertion
+is required, preserving the original bytes. The intended final bytes—including
+any separator and the appended line—must remain at or below 64 KiB. An absent
+`exclude` is published create-only. An existing safe file that its effective
+owner can read is opened no-follow and retained. After exact initial identity,
+size, and named-path checks, that inode may be normalized to `0600` before the
+suffix append; it is synced and accepted only after exact final named-path
+content and identity readback. A normal append therefore preserves its inode.
+If another actor replaces the pathname, runtime never
+replaces that winner; it preserves the winner and fails closed. Differing
+bytes, unsafe or foreign entries, symlinks, hard links, FIFOs, devices,
+identity replacement, an oversized intended exclusion, and topology drift
+fail closed and are preserved. Nonblocking reads reject FIFOs and other special
+files promptly.
+
+A failed fresh projection removes only directories created by that call that
+still have their recorded identity and remain empty, walking leaf first.
+Existing, changed, replaced, or nonempty paths are preserved. Cleanup failure
+does not replace the primary setup failure and is recorded only as content-free
+context. The read-only role projection is persistent runtime control data, not
+mutable provider residue or story content; Git, artifact, reference, and SEARCH/
+READ selection exclude it.
+
+Antigravity's Darwin sandbox allows literal reads only for the executable,
+session-root/role traversal, selected role, and required system resources. It
+denies direct session story-file reads, the session `.git` path, and all writes
+beneath the session root. Mutable native continuation state is external and
+partitioned beneath the canonical control workspace by session physical
+generation, session, agent, and definition fingerprint; staged definitions are
+rooted there as well. Before any invocation-state directories are created,
+runtime rejects overlap between native state and the exact session worktree.
+Schema/request arguments and stdout/stderr transport remain external as well.
+Unsupported or unavailable confinement fails closed.
 
 Ordinary artifact access retains the stronger semantic boundary: one outer
 synchronous transaction performs a complete READY validation before and after

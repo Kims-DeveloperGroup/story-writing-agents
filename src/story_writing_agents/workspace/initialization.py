@@ -68,6 +68,7 @@ from ..git.session_resources import (
     inspect_git_session_resources as _inspect_git_session_resources,
     list_git_session_resources as _list_git_session_resources,
     provision_git_session_resources as _provision_git_session_resources,
+    require_locked_git_session_untracked_prefix,
     require_ready_git_session_resources as _require_ready_git_session_resources,
     require_ready_locked_git_session_resources as _require_ready_locked_git_session_resources,
 )
@@ -88,6 +89,10 @@ from .schema import (
     encode_initialization_journal,
     validate_workspace_identifier,
     validate_workspace_template_name,
+)
+from .session_role_projection import (
+    SessionRoleProjectionPlan,
+    install_session_role_projection,
 )
 
 
@@ -1035,6 +1040,54 @@ class SessionArtifactAccess:
         except BaseException as failure:
             _close_untransferred_artifact_descriptor(descriptor, failure)
             raise
+
+    def install_provider_role(
+        self,
+        plan: SessionRoleProjectionPlan,
+    ) -> None:
+        """Project one provider role through live Git and worktree authority."""
+
+        self.require_active()
+        if self._lease is None:
+            raise SessionArtifactBindingError(
+                "session artifact resources are unavailable"
+            )
+        try:
+            expected_generation = self._binding._generation_identity
+            if expected_generation is None:
+                raise SessionArtifactBindingError(
+                    "session artifact resources are unavailable"
+                )
+            require_locked_git_session_untracked_prefix(
+                self._lease,
+                self._binding.resources,
+                expected_generation,
+                prefix=".agents",
+            )
+            self.require_active()
+
+            def require_effective_exclusion() -> None:
+                self.require_active()
+                require_locked_git_session_untracked_prefix(
+                    self._lease,
+                    self._binding.resources,
+                    expected_generation,
+                    prefix=".agents",
+                    verify_exclusion=True,
+                )
+                self.require_active()
+
+            install_session_role_projection(
+                self._descriptor,
+                self._lease.common_descriptor,
+                plan=plan,
+                require_git_exclusion=require_effective_exclusion,
+            )
+            self.require_active()
+        except _SESSION_ARTIFACT_BINDING_FAILURES:
+            raise SessionArtifactBindingError(
+                "session artifact resources are unavailable"
+            ) from None
 
     def require_active(self) -> None:
         """Require the live lease, descriptor, and named worktree identity."""

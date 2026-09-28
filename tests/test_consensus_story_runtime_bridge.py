@@ -98,7 +98,7 @@ class _BoundAgent:
 class _Backend:
     backend_overrides: dict[str, str] = {}
 
-    def __init__(self, handler=None, *, vendor="antigravity") -> None:
+    def __init__(self, handler=None, *, vendor="fixture") -> None:
         self.vendor = vendor
         self.handler = handler
         self.requests = []
@@ -348,9 +348,15 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
             for path in self.workspace.path("manuscript").rglob("*")
             if path.is_file()
         }
-        with mock.patch(
-            "story_writing_agents.orchestrator.invoke_story_bound_agent",
-            side_effect=invoke_with_workspace,
+        with (
+            mock.patch(
+                "story_writing_agents.orchestrator.invoke_story_bound_agent",
+                side_effect=invoke_with_workspace,
+            ),
+            mock.patch(
+                "story_writing_agents.orchestrator._provider_execution_workspace_manager",
+                side_effect=lambda _agent, binding: binding.open_provider_execution_workspace(),
+            ),
         ):
             for phase, (
                 agent_id,

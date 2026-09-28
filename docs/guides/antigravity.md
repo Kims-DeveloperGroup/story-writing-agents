@@ -361,15 +361,22 @@ access, account quota, response quality, or a provider turn.
 
 For each turn, the runtime launches `agy` directly without shell evaluation. It:
 
-- installs one verified custom main-agent definition at
-  `.agents/agents/<agent-id>/agent.md` in an isolated provider working
-  directory and selects it explicitly with `--agent <agent-id>`;
+- enters the descriptor-selected exact session worktree as physical CWD and
+  native project root, with no adapter-control fallback;
+- derives a content-qualified native selector from the semantic story-agent ID
+  and deterministic base role bytes, then uses that exact selector as the role
+  YAML name, the unversioned read-only
+  `.agents/agents/<native-selector>/agent.md` directory, and
+  `--agent <native-selector>` value;
 - adds `--new-project` for a fresh provider thread, or resumes only the exact
-  retained ID with `--conversation <id>`; it never registers the canonical
-  story workspace root as an Antigravity project;
+  compatible generation-bound ID with `--conversation <id>`; it never passes
+  `--project`;
 - passes the exact confidential story request JSON as one `--print` argument,
   selects `--input-format text --output-format json` (or `--output-format stream-json` when an active stream sink is bound for capable advisory progress), and sends empty stdin;
 - enables the CLI sandbox, selects plan mode, and disables slash commands;
+- applies a fail-closed Darwin sandbox that permits only literal project/role
+  traversal and the selected role file, denies direct story-file reads, and
+  denies `.git` plus every session write;
 - does not pass an approval-bypass or unrestricted-execution option; and
 - drains stdout and stderr, validates one JSON envelope (extracting the terminal result from stream-json events when streaming) with a safe conversation
   ID, root-object structured output, and an exact rendered-schema echo, then
@@ -430,34 +437,36 @@ fixed start-failure diagnostic. Such a call has no submitted transport count.
 
 ### Sanitized provider call and JSON result
 
-For a session named `novel`, the process working directory has this exact
-adapter-owned structure (the root and fingerprint are sanitized):
+For a session named `novel`, the process working directory is the exact
+descriptor-selected session worktree (the container path is sanitized):
 
 ```text
-/workspace/agent_states/orchestrator_state/provider_sessions/.antigravity/
-  sessions/novel/lead_orchestrator/<definition-sha256>/workspace
+/workspace-sibling-worktrees/novel
+  .agents/agents/lead_orchestrator-<selector-sha256>/agent.md  # protected role
 ```
 
-The provider-state directory is its sibling `provider`. A fresh non-streaming
-or fallback Lead call is equivalent to this shell-free argument vector (interactive
-turns on capable raw terminals select `--output-format stream-json`); wrapping is
-only for readability:
+Mutable provider state remains external and generation-qualified at
+`<control>/agent_states/orchestrator_state/provider_sessions/.antigravity/sessions/novel/<generation-sha256>/lead_orchestrator/<definition-sha256>/provider`.
+A fresh non-streaming or fallback Lead call uses this shell-free argument vector
+(interactive turns on capable raw terminals select `--output-format stream-json`);
+wrapping is only for readability:
 
 ```text
-cwd=/workspace/agent_states/orchestrator_state/provider_sessions/.antigravity/sessions/novel/lead_orchestrator/<definition-sha256>/workspace
+cwd=/workspace-sibling-worktrees/novel
 agy --gemini_dir=<runtime-root>/provider \
   --input-format text --output-format json \
   --json-schema '<exact Antigravity-rendered wire-v8 schema>' \
-  --agent lead_orchestrator --sandbox --mode plan \
+  --agent lead_orchestrator-<selector-sha256> --sandbox --mode plan \
   --disable-slash-commands --print-timeout 900s --new-project \
   --print '<exact confidential wire-v8 payload JSON, one argument>'
 ```
 
-On a compatible later call, the adapter keeps `--agent lead_orchestrator` and
-replaces `--new-project` with `--conversation agy-c-1`. Antigravity reopens the
-project associated with that exact conversation. Story never supplies
-`--project` and never lets Antigravity infer the outer story Git root as its
-project. This matches the provider's documented
+On a compatible later call, the adapter keeps the exact content-qualified
+`--agent` selector and replaces `--new-project` with
+`--conversation agy-c-1`. Antigravity reopens the project associated with that
+exact conversation. Story never supplies
+`--project`; the exact correlated session CWD is the project root. This matches
+the provider's documented
 [project and conversation behavior](https://antigravity.google/docs/cli/projects/).
 
 The payload is the exact UTF-8 inner JSON string, without a native event wrapper
@@ -657,7 +666,7 @@ projected as `outcome_unknown` during recovery.
 
 | Before | Current implementation |
 | --- | --- |
-| Provider default agent and project could be selected from the outer story Git root. | Runtime selects its bound custom Lead agent in an isolated nested workspace and creates or resumes only that provider project. |
+| Provider default agent and project could be selected from an unrelated outer story Git root. | Runtime selects its bound role and exact correlated session worktree; compatible generation-bound history resumes, while foreign or unproved history boots fresh. |
 | An attempted `ListDir` could end in request-review denial without a valid terminal result. | A successful JSON object must contain object `structured_output` and an exact schema echo; this output cannot attest tool behavior. |
 | The user saw a coarse invocation failure and recovery could find a submitted unknown outcome. | Eligible read-only Lead failures and rejected results expose `retry_lead_turn`; uncertain specialist/synthesis or authoritative write outcomes retain their recovery gates. |
 
@@ -681,10 +690,15 @@ or write outcomes remain uncertain, follow their recovery action. See the
 Story session lifecycle is provider-neutral: create or reopen makes durable
 state ready, pause makes it paused, and process access is held only while a
 backend is attached. Antigravity additionally keeps a stable, workspace-owned
-state root beneath provider-session storage. Bound definitions are partitioned
-by agent and definition fingerprint; provider-native invocation state is
-isolated by story session, agent, and definition fingerprint. This state is
-plaintext and should be included in workspace backup and exposure decisions.
+state root beneath the canonical control workspace's provider-session storage,
+including when a backend was opened from a session worktree. Bound definitions
+are partitioned by agent and definition fingerprint; provider-native invocation
+state is isolated by story session, physical session generation, agent, and
+definition fingerprint. These definition and state paths remain external to
+the session worktree, while the provider's physical CWD remains that exact
+session worktree. An overlap is rejected before any per-invocation state
+directory or provider process is created. Mutable state is plaintext and should
+be included in workspace backup and exposure decisions.
 
 On supported POSIX systems, the adapter best-effort requests owner-only
 (`0700`) modes for its Antigravity state root and adapter-owned definition and
@@ -693,24 +707,80 @@ symbolic link or non-directory in those components. It does not recursively
 change the backend-owned containing directory, capability-probe scratch path,
 or files created by `agy`; provider-native retention is unchanged.
 
-Adapter-owned staged and workspace custom-agent definition leaves are verified as
-regular and singly linked when present. Canonical bytes are installed through
-an exclusively created same-directory temporary with requested `0600` mode and
-atomic replacement. A detected symbolic link, non-regular entry, or multiply
-linked leaf is preserved and rejected before provider launch.
+Adapter-owned staged definitions remain external. For each immutable bound
+definition snapshot, runtime recomputes the deterministic base role and
+component-byte accounting. Projection owns and independently revalidates one
+immutable plan tying the semantic ID, domain-separated SHA-256 selector of the
+form `<semantic-agent-id>-<64 lowercase hex>`, and exact final bytes. Runtime
+requires the staged file and binding accounting to match that plan, substitutes
+the selector as the YAML `name`, and projects the final bytes through the live
+session binding to the persistent, Git-excluded
+`.agents/agents/<native-selector>/agent.md`. The same selector is passed to
+`--agent`; the semantic agent ID still owns routing, settings, accounting, and
+external state. Projection traversal is descriptor-relative and no-follow;
+directories must be owner-controlled and the role must be regular, singly
+linked, byte-exact, and have exact mode `0400`. Selected-role content
+validation is bounded by the exact planned size; older unselected qualified
+roles are validated through topology and metadata without reading their
+content.
 
-These directory-mode and definition-leaf protections do not descriptor-anchor
-parent-directory traversal and are not application access control or race-proof
-containment. Unsupported platforms, including Windows, and ordinary
-mode-setting failures retain platform behavior. Keep the complete workspace
-and provider-state paths protected through OS-level controls; the runtime does
-not encrypt or securely erase them.
+Each content-qualified leaf is published create-only. Supported role versions
+coexist and are never replaced or pruned. If another publisher wins, runtime
+adopts the winner only after its selector, topology, ownership, mode, single-
+link status, and exact bytes all validate; a differing or unsafe winner is
+preserved and rejected. The top-level `.agents` namespace and its case-folded
+aliases must remain untracked and are excluded from story references,
+SEARCH/READ sources, and artifacts. Any tracked variant fails closed before
+projection mutation or provider submission, including on case-sensitive
+worktrees for portability. Symbolic links, nonregular or multiply linked
+leaves, writable roles, and foreign topology are likewise preserved and reject
+the call. Any pre-existing qualified role directory must already contain
+its one valid `agent.md`; an empty qualified directory is preserved and rejects
+setup before the Git exclusion or role tree is mutated. Nonblocking reads
+reject FIFOs and other special files promptly, and missing `O_NONBLOCK` support
+fails before projection path access.
 
-The runtime manifest keys threads by story session, backend, and agent. A
-compatible, untainted record is resumed automatically with its exact
-Antigravity conversation ID. Conversation focus and debate IDs do not create
-private provider channels; one provider thread can span them. A different
-backend, session, agent, or definition fingerprint starts separate history.
+The common Git exclusion recognizes only LF records and CRLF records, treating
+the CR immediately before LF as the line ending. A lone CR elsewhere is data,
+not a separator. If a missing `/.agents/` entry would need to be appended after
+a terminal lone CR, setup fails closed and preserves the exclusion bytes;
+otherwise the intended final bytes remain limited to 64 KiB. An absent
+`exclude` is published create-only. An existing safe file that its effective
+owner can read is opened no-follow; its exact retained inode may be normalized
+to `0600` before the suffix append, after identity, size, and named-path checks.
+Exact final readback is required, and a normal append preserves the inode. A
+concurrent pathname replacement is never
+overwritten: its winner is preserved and the projection fails. Projection also
+fails before opening or mutating paths when required effective-user,
+descriptor-relative, no-follow, nonblocking, link, or link-no-follow
+capabilities are unavailable.
+
+The exclusion is accepted only when `/.agents/` is the final nonempty record;
+a later negation causes a guarded append. Before publishing a role file and
+again afterward, the Git owner proves the current generation, checks that no
+`.agents` path is staged, and asks Git whether `.agents/` is effectively
+ignored. A higher-priority `.gitignore` override or a concurrent index change
+fails the call closed.
+
+On failed fresh installation, cleanup removes only call-created directories
+that still match their recorded identity and remain empty. It preserves
+existing, changed, replaced, and nonempty paths, and cleanup failure cannot
+replace the primary setup failure. The role projection is protected unversioned
+control data, so “no provider residue” means no mutable provider state, schema,
+or output in the session tree. Keep the complete workspace and external
+provider-state paths protected through OS-level controls; the runtime does not
+encrypt or securely erase them.
+
+The runtime manifest keys threads by story session, backend, agent, and
+effective continuation fingerprint. Antigravity's fingerprint includes the
+physical session generation. A compatible, untainted record is resumed
+automatically with its exact Antigravity conversation ID. Conversation focus
+and debate IDs do not create private provider channels; one provider thread can
+span them. A different backend, session, physical generation, agent, or
+definition fingerprint starts separate history. Foreign or unproved native
+history is retained but is not adopted as the current conversation. A
+generation-qualified lookup or taint operation uses only its exact qualified
+key and never falls back to the legacy base key.
 
 Every provider change advances the agent's durable route generation. The
 nonzero generation participates in the definition fingerprint, so Codex →
@@ -726,7 +796,7 @@ Generation zero preserves the legacy definition fingerprint.
 | `/session pause` | Persists `paused`, releases access, and preserves provider history. |
 | `/session resume` or `story session reopen` | Makes paused state ready and resumes a still-compatible provider conversation. |
 | Ambiguous failure or cancellation after launch | Marks existing compatible history tainted; the next call starts fresh. |
-| Definition fingerprint change | Starts fresh for that agent without deleting older provider-native data. |
+| Definition fingerprint or session physical generation change | Starts fresh for that agent without deleting older provider-native data. |
 | Provider change, including A→B→A | Advances route generation and starts a fresh target-provider thread. |
 | Same-provider model/effort change | Retains route generation and remains eligible for native-thread reuse. |
 
@@ -735,6 +805,9 @@ context engine starts a new epoch by bootstrapping current role-relevant
 authoritative sources; compatible later calls can use exact deltas.
 Provider-private hidden history is optional acceleration and never correctness
 authority. Python and interactive Lead turns enter this path.
+The worktree boundary does not relax existing cancellation, timeout,
+authentication-replay, accounting, diagnostic-capture, or taint rules; each
+still uses its established prepared/submitted and safe-replay classification.
 See [Story sessions](story-sessions.md) and
 [Agent-context design](../design/agent-context.md).
 

@@ -519,12 +519,28 @@ in
 [Privacy and provider exposure](../operations/privacy-and-provider.md#provider-processes-and-credentials).
 
 The Antigravity adapter binds the same verified definition and request models
-to an isolated session/agent/fingerprint provider root. It installs the bound
-definition as `.agents/agents/<agent-id>/agent.md`, selects that custom main
-agent with `--agent`, and launches `agy` without a shell from the nested
-adapter-owned workspace. A fresh thread uses `--new-project`; exact resume uses
-`--conversation <id>`, whose associated project Antigravity reopens. Story
-does not register the canonical story workspace root or pass `--project`.
+to the invocation-local session-generation capability. Before launch, runtime
+prepares and independently revalidates one immutable projection plan tying the
+semantic story-agent ID, its content-qualified native selector, and the exact
+final role bytes. The selector is derived from deterministic base definition
+bytes and substituted as the role's YAML name. The adapter also recomputes the
+final file and complete component-byte accounting from the immutable bound
+definition snapshot and requires both the staged file and binding accounting to
+match before provider workspace setup. Runtime projects the final bytes as
+protected, unversioned control data at
+`.agents/agents/<native-selector>/agent.md` and supplies the same selector
+through `--agent`. The semantic ID continues to own runtime settings, state,
+and accounting.
+
+Adapter definitions and provider-native state are rooted under the canonical
+control workspace, even when a backend was constructed from a session
+worktree. Before it creates any per-invocation state directory, runtime rejects
+that state path if it overlaps the selected session root. `agy` then launches
+without a shell from the descriptor-selected exact session worktree. That CWD
+is Antigravity's native project root; there is no adapter-owned working-
+directory fallback and Story does not pass `--project`.
+A fresh thread uses `--new-project`; exact compatible generation-bound resume
+uses `--conversation <id>`.
 Story passes the exact payload as one `--print` argument with empty stdin,
 selecting `--input-format text --output-format json`. The adapter-rendered
 canonical per-call schema is passed inline with `--json-schema`. Exactly one
@@ -542,9 +558,13 @@ shared correlation, domain, evidence, and authority validation. See the
 [recovery gates](../guides/antigravity.md#recover-a-completed-native-error).
 
 This output has no `init` or step metadata to attest agent, cwd, permission
-mode, or tool behavior. The selected custom agent, isolated state/cwd,
-sandbox, plan-mode, and disabled-slash flags remain configured, without an
-approval bypass. Their presence does not prove provider capability removal;
+mode, or tool behavior. The selected custom agent, exact session CWD, external
+generation-qualified state, sandbox, plan-mode, and disabled-slash flags remain
+configured, without an approval bypass. The outer sandbox permits literal
+project traversal and the selected role file but denies direct story-file reads,
+all session writes, and `.git`; story evidence remains runtime-mediated through
+context and SEARCH/READ. These controls do not make provider output an
+attestation;
 CLI 1.1.27 warns that plan mode has no effect with slash commands disabled.
 The full payload, schema, state path, optional model/effort, and conversation
 ID are process-visible arguments. Exact setup and privacy limits are in the
@@ -589,8 +609,9 @@ Neither boundary makes a provider or executable trusted. Hashes detect change
 but do not encrypt or authorize content. Provider transcripts may be retained,
 and ending a story session keeps local thread references. The schema-v2
 provider-session manifest can retain a legacy base record and multiple
-fingerprint-qualified generations; qualified state takes precedence and
-ordinary thread updates do not prune the older records. Antigravity-native state
+fingerprint-qualified generations. A generation-qualified load or taint
+addresses only its exact qualified key and never falls back to the base key;
+ordinary thread updates do not prune older records. Antigravity-native state
 is retained on backend close; a tainted thread or changed definition starts a
 fresh provider conversation without deleting prior provider data.
 

@@ -325,6 +325,126 @@ def acquire_locked_git_session_generation_pin(
         raise
 
 
+def require_locked_git_session_untracked_prefix(
+    lease: GitRepositoryLease,
+    resources: GitSessionResourceInspection,
+    expected_generation: GitSessionGenerationIdentity,
+    *,
+    prefix: str,
+    verify_exclusion: bool = False,
+) -> None:
+    """Require an untracked prefix and, when requested, its effective exclusion."""
+
+    if (
+        type(lease) is not GitRepositoryLease
+        or type(resources) is not GitSessionResourceInspection
+        or resources.state is not GitSessionResourceState.READY
+        or type(expected_generation) is not GitSessionGenerationIdentity
+        or resources.identity != expected_generation.session
+        or prefix != ".agents"
+        or type(verify_exclusion) is not bool
+    ):
+        raise TypeError("ready locked Git session resources are required")
+    expected_generation._require_creator()
+    before_descriptors: tuple[int, ...] = ()
+    after_descriptors: tuple[int, ...] = ()
+    before_index = -1
+    after_index = -1
+    failure: BaseException | None = None
+    try:
+        lease.require_active()
+        if lease.main_root != resources.identity.main_root:
+            raise _generation_error()
+        observed_generation, before_descriptors = _capture_git_session_generation(
+            lease,
+            resources.identity,
+        )
+        if observed_generation != expected_generation:
+            raise _generation_error()
+        before_index, index_facts = _open_session_index(
+            before_descriptors[2]
+        )
+        _require_retained_generation_descriptors(
+            expected_generation,
+            before_descriptors,
+        )
+        lease.require_active()
+        result = GitProcessRunner(resources.identity.worktree_root).run(
+            (
+                "ls-files",
+                "--cached",
+                "-z",
+                "--",
+                f":(top,literal,icase){prefix}",
+            ),
+            expected_identity=expected_generation.worktree_identity,
+            read_only=True,
+        )
+        if result.returncode != 0 or result.stdout:
+            raise _generation_error()
+        if verify_exclusion:
+            ignored = GitProcessRunner(resources.identity.worktree_root).run(
+                ("check-ignore", "--quiet", "--no-index", "--", ".agents/"),
+                expected_identity=expected_generation.worktree_identity,
+                read_only=True,
+            )
+            if ignored.returncode != 0 or ignored.stdout:
+                raise _generation_error()
+        _require_session_index(
+            before_descriptors[2],
+            before_index,
+            index_facts,
+        )
+        _require_retained_generation_descriptors(
+            expected_generation,
+            before_descriptors,
+        )
+        lease.require_active()
+        observed_after, after_descriptors = _capture_git_session_generation(
+            lease,
+            resources.identity,
+        )
+        if observed_after != expected_generation:
+            raise _generation_error()
+        after_index, after_index_facts = _open_session_index(
+            after_descriptors[2]
+        )
+        if after_index_facts != index_facts:
+            raise _generation_error()
+        _require_session_index(
+            after_descriptors[2],
+            after_index,
+            index_facts,
+        )
+        lease.require_active()
+    except (GitRepositoryLockFailure, GitSessionResourceError) as exc:
+        failure = exc
+        raise
+    except (GitProcessFailure, OSError, UnicodeError, ValueError):
+        failure = _generation_error()
+        raise failure from None
+    except BaseException as exc:
+        failure = exc
+        raise
+    finally:
+        try:
+            _close_generation_descriptors(
+                (
+                    *after_descriptors,
+                    *((after_index,) if after_index >= 0 else ()),
+                ),
+                failure=failure,
+            )
+        finally:
+            _close_generation_descriptors(
+                (
+                    *before_descriptors,
+                    *((before_index,) if before_index >= 0 else ()),
+                ),
+                failure=failure,
+            )
+
+
 @dataclass(frozen=True, slots=True)
 class GitSessionRecoveryTopology:
     """Exact session topology whose only deferred fact is index cleanliness."""
@@ -1996,6 +2116,63 @@ def _open_generation_file(
         raise
 
 
+def _open_session_index(
+    administrative_descriptor: int,
+) -> tuple[int, _GenerationFileFacts]:
+    """Bind the linked worktree index through its retained administrative root."""
+
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    nonblocking = getattr(os, "O_NONBLOCK", None)
+    if (
+        type(no_follow) is not int
+        or no_follow <= 0
+        or type(nonblocking) is not int
+        or nonblocking <= 0
+    ):
+        raise OSError
+    flags = os.O_RDONLY | no_follow | nonblocking
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    descriptor = -1
+    try:
+        descriptor = os.open("index", flags, dir_fd=administrative_descriptor)
+        os.set_inheritable(descriptor, False)
+        opened = os.fstat(descriptor)
+        facts = _generation_file_facts(opened)
+        _require_session_index(
+            administrative_descriptor,
+            descriptor,
+            facts,
+        )
+        return descriptor, facts
+    except BaseException as failure:
+        _close_generation_descriptor(descriptor, failure)
+        raise
+
+
+def _require_session_index(
+    administrative_descriptor: int,
+    descriptor: int,
+    facts: _GenerationFileFacts,
+) -> None:
+    """Revalidate one retained linked-worktree index descriptor and pathname."""
+
+    opened = os.fstat(descriptor)
+    named = os.stat(
+        "index",
+        dir_fd=administrative_descriptor,
+        follow_symlinks=False,
+    )
+    if (
+        _generation_file_facts(opened) != facts
+        or _generation_file_facts(named) != facts
+        or not stat.S_ISREG(opened.st_mode)
+        or opened.st_nlink != 1
+        or opened.st_size < 0
+        or os.get_inheritable(descriptor)
+    ):
+        raise OSError
+
+
 def _require_named_generation_file(
     parent: int,
     name: str,
@@ -2584,6 +2761,7 @@ __all__ = [
     "inspect_locked_git_session_resources",
     "list_git_session_resources",
     "provision_git_session_resources",
+    "require_locked_git_session_untracked_prefix",
     "require_ready_git_session_resources",
     "require_ready_locked_git_session_resources",
 ]

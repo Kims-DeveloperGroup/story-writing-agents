@@ -97,6 +97,7 @@ from .backend import (
     BoundAgent,
     backend_configuration_snapshot,
     invoke_story_bound_agent,
+    provider_execution_workspace_manager,
     release_bound_agent,
 )
 from .provider_execution_workspace import ProviderExecutionWorkspace
@@ -353,15 +354,15 @@ def _open_session_artifact_repository(
         yield access.repository
 
 
-def _codex_execution_workspace_manager(
+def _provider_execution_workspace_manager(
     bound_agent: BoundAgent,
     binding: SessionArtifactBinding,
 ) -> AbstractContextManager[ProviderExecutionWorkspace] | None:
-    """Return capability acquisition only for a concretely bound Codex call."""
+    """Return capability acquisition for a workspace-backed story provider."""
 
-    if bound_agent.vendor != "codex":
+    if bound_agent.vendor not in {"codex", "antigravity"}:
         return None
-    return binding.open_provider_execution_workspace()
+    return provider_execution_workspace_manager(bound_agent, binding)
 
 
 def _duplicate_session_worktree_descriptor(
@@ -1854,7 +1855,7 @@ class StoryRuntime:
                 candidate_payload=candidate_text,
                 expected_reviewed_proposal=expected_reviewed_proposal,
             )
-            if bound_agent.vendor == "codex":
+            if bound_agent.vendor in {"codex", "antigravity"}:
                 execution_binding = (
                     artifact_binding
                     if artifact_binding is not None
@@ -1862,7 +1863,7 @@ class StoryRuntime:
                         invocation.execution_identity.session_id
                     )
                 )
-                workspace_manager = _codex_execution_workspace_manager(
+                workspace_manager = _provider_execution_workspace_manager(
                     bound_agent,
                     execution_binding,
                 )
@@ -5637,7 +5638,7 @@ class StoryRuntime:
                 agent_id=agent_id,
             )
             bound_agent = await self._acquire_bound_agent(definition)
-            execution_workspace_manager = _codex_execution_workspace_manager(
+            execution_workspace_manager = _provider_execution_workspace_manager(
                 bound_agent,
                 artifact_binding,
             )
@@ -8267,7 +8268,7 @@ class StoryRuntime:
         ] | None = None
         execution_workspace: ProviderExecutionWorkspace | None = None
         try:
-            candidate_workspace_manager = _codex_execution_workspace_manager(
+            candidate_workspace_manager = _provider_execution_workspace_manager(
                 bound_agent,
                 artifact_binding,
             )

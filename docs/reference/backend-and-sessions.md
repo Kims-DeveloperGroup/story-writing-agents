@@ -113,14 +113,27 @@ and exhausted repair retains both attempts' details. The tuple is empty when
 there are no findings. It contains no raw response values or unknown property
 names and grants no action authority.
 
-For Antigravity, runtime installs the selected definition at
-`.agents/agents/<agent-id>/agent.md` beneath the isolated
-session/agent/fingerprint working directory and always supplies `--agent`.
-Fresh history uses `--new-project`; compatible history resumes the exact
-`--conversation` ID and its associated project. Runtime never passes
-`--project` or makes the canonical story root the Antigravity project. The exact
-request is one `--print` argument with empty stdin and
-`--input-format text --output-format json` (or `--output-format stream-json` when an active stream sink is bound for capable advisory progress). Its single JSON result (or terminal result extracted from stream-json events) must report
+For Antigravity, runtime projects the selected definition's exact bytes to the
+protected, unversioned `.agents/agents/<native-selector>/agent.md` beneath the
+exact session worktree. Projection owns and independently authenticates one
+immutable plan tying the semantic story-agent ID, domain-separated native
+selector, and exact final bytes. The selector is derived from deterministic
+base role bytes, then used as the role YAML name and `--agent` value. Before
+workspace setup, the adapter recomputes the plan and component-byte accounting
+from the immutable bound definition snapshot and requires the staged file and
+binding accounting to match. The semantic ID remains the runtime state,
+settings, and accounting identity. Definitions and provider-native state are
+rooted beneath the canonical control workspace, even when the backend was
+opened from a session worktree. State overlap with the session root is rejected
+before per-invocation directories are created. The descriptor-selected session
+root remains both physical CWD and native project root; there is no adapter-
+control CWD fallback. Fresh history uses `--new-project`; compatible generation-
+bound history resumes the exact `--conversation` ID and its associated project.
+Runtime never passes `--project`. The exact request is one `--print` argument
+with empty stdin and
+`--input-format text --output-format json` (or `--output-format stream-json`
+when an active stream sink is bound for capable advisory progress). Its single
+JSON result (or terminal result extracted from stream-json events) must report
 `SUCCESS` and a safe `conversation_id` matching the retained ID on resume.
 Duplicate fields, non-finite numbers, trailing data, missing or non-object
 structured output, and a different schema echo fail transport validation;
@@ -133,7 +146,7 @@ including process-argument visibility and plan-mode limitations.
 
 <a id="codex-session-execution-boundary"></a>
 
-## Codex session execution boundary
+## Codex and Antigravity session execution boundary
 
 Every Codex story invocation uses the exact READY session named by its request.
 This includes `BoundAgent.invoke()`, `converse()`,
@@ -210,8 +223,45 @@ mismatch fails before provider submission; there is no path-only or unconfined
 fallback. Authentication,
 model-catalog discovery, help, and other management probes are not story
 invocations and retain their separately documented process boundaries.
-Antigravity is intentionally unchanged here and remains tracked by
-[Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
+Antigravity uses the same call-local session-generation capability and exact
+descriptor CWD, without Codex's `--cd` option. Its default-deny Darwin profile
+admits only literal reads of the canonical executable, session root and
+`.agents/agents/<native-selector>/agent.md` traversal, plus required system
+resources;
+it denies session `.git`, every session write, and direct reads of manuscript,
+core-document, reference, SEARCH/READ-source, and artifact files. The selected
+role is exact runtime-owned control data: directories are owner-controlled, the
+role is singly linked with exact mode `0400`, and the top-level `.agents`
+namespace and its case-folded aliases are untracked and excluded from Git and
+story data paths. Any tracked variant fails closed before projection mutation
+or provider submission, including on case-sensitive worktrees for portability.
+Pre-launch and post-return validation require the same exact role-file identity
+as well as the same bytes, so even a same-byte replacement fails closed.
+Selected-role content validation is bounded by the exact planned size;
+unselected qualified leaves receive metadata-only validation without content
+reads. Content-qualified role versions are published create-only, coexist, and
+are never replaced or pruned. A concurrent winner is adopted only after full
+exact validation; a differing or unsafe
+winner is preserved and rejected. If effective-user, descriptor-relative,
+no-follow, nonblocking, or create-only link support is absent, projection fails
+before access. A pre-existing empty qualified directory is preserved and
+rejected during preflight, before the Git exclusion or role tree is mutated.
+If the runtime must add `/.agents/` to the common Git exclusion, it recognizes
+only LF and CRLF records; a terminal lone CR fails closed when insertion is
+required. Intended final bytes—including any inserted separator and the new
+line—must remain at or below 64 KiB. An absent `exclude` is published create-
+only. An existing safe file that its effective owner can read is opened no-
+follow. After exact identity, size, and named-path checks, its retained inode
+may be normalized to `0600` before the suffix append, then synced and accepted
+only after exact final named-path readback. A normal append preserves the inode;
+a concurrent pathname winner is never overwritten and is
+preserved when the projection fails. Differing bytes, unsafe entries, foreign
+topology, identity replacement, or an oversized intended exclusion fail closed
+and are preserved. Mutable authentication, schema/output
+transport, and provider-native continuation state remain external to the
+session tree; native state is qualified by physical generation, session, agent,
+and definition fingerprint. Codex retains direct developer-instruction
+injection and needs no worktree role file.
 
 Context-ledger publication is generation-checked immediately before and after
 checkpoint commit. For deferred publication, retained provider and execution
@@ -237,14 +287,14 @@ scoped. The new session namespace bootstraps while old conversation namespace
 bytes remain untouched. See [Lead session memory](../guides/agent-context.md#lead-session-memory)
 for exact history/current-state delivery and capacity limits.
 
-For Codex, the compatibility fingerprints also include a domain-separated
-digest of the exact session physical generation. Replacing the worktree at the
-same pathname therefore makes the retained continuation incompatible and
+For Codex and Antigravity, the compatibility fingerprints also include a
+domain-separated digest of the exact session physical generation. Replacing
+the worktree at the same pathname therefore makes the retained continuation incompatible and
 selects a fresh bootstrap without rewriting the old record. The schema-v2
 provider-session manifest retains legacy base and generation-qualified records;
-qualified lookup and taint take precedence, and an exact-fingerprint base
-record is fallback only when its qualified key is absent. Ordinary thread
-updates do not prune earlier generation records. Missing, tainted, or otherwise
+generation-qualified lookup and taint address only the exact qualified key and
+never fall back to the base record. Ordinary thread updates do not prune
+earlier generation records. Missing, tainted, or otherwise
 incompatible continuation bootstraps on the next safe authorized work. If
 generation authority is lost after submission, the apparent provider success
 is not accepted, the exact continuation is tainted where present, and the
@@ -662,11 +712,11 @@ and rejects backend reuse. If calls are active, per-binding release and cleanup
 of backend-wide access claims and thread locks wait until the last call exits;
 otherwise cleanup proceeds immediately. Per-binding release and claim
 cleanup remain best-effort filesystem operations. A Codex release removes one
-exact retired staging directory; an Antigravity release retains definitions,
-isolated working directories, and provider-native state. Closing never pauses
-durable state, deletes provider-thread references, adds a cleanup status or
-error contract, or permits backend reuse. There is no user-facing session
-close/delete method.
+exact retired staging directory; an Antigravity release retains staged
+definitions, the protected session role projection, and generation-qualified
+provider-native state. Closing never pauses durable state, deletes provider-
+thread references, adds a cleanup status or error contract, or permits backend
+reuse. There is no user-facing session close/delete method.
 
 V1 manifests, access sidecars, and guards raise
 `WorkspaceVersionUnsupportedError` without migration, deletion, or rewriting.

@@ -846,7 +846,10 @@ class CallEvidence:
                 'Setup-only guard blocked a model invocation')
         number, directory = self.reserve()
         argv = list(request.command)
-        agent = argv[argv.index('--agent') + 1] if '--agent' in argv else 'lead_orchestrator'
+        native_agent = argv[argv.index('--agent') + 1] if '--agent' in argv else 'lead_orchestrator'
+        agent = next((semantic_id for semantic_id in ROSTER
+                      if native_agent == semantic_id or native_agent.startswith(semantic_id + '-')),
+                     native_agent)
         payload = argv[argv.index('--print') + 1].encode() if '--print' in argv else request.stdin
         record = dict(number=number, vendor=vendor, agent=agent, directory=str(directory), payload_bytes=len(payload), submitted=False, fault=None, model=argv[argv.index('--model') + 1] if '--model' in argv else None, resumed='--conversation' in argv or 'resume' in argv)
         schema = (json.loads(argv[argv.index('--json-schema') + 1])
@@ -858,14 +861,19 @@ class CallEvidence:
         record['prior_thread_id'] = (argv[argv.index('--conversation') + 1]
                                      if '--conversation' in argv else
                                      argv[-2] if 'resume' in argv else None)
+        execution_workspace = request.execution_workspace
+        effective_cwd = (execution_workspace.worktree_root
+                         if vendor == 'antigravity' and execution_workspace is not None
+                         else request.cwd)
         self.calls.append(record)
         save(directory / 'summary.sanitized.json', record)
-        save(directory / 'command.private.json', dict(argv=argv, cwd=str(request.cwd), timeout=request.timeout_seconds))
+        save(directory / 'command.private.json', dict(argv=argv, cwd=str(effective_cwd), timeout=request.timeout_seconds))
         (directory / 'stdin.bin').write_bytes(request.stdin)
         if vendor == 'antigravity':
             require(argv[argv.index('--output-format') + 1] == 'json', 'Antigravity JSON transport absent')
             require(request.stdin == b'', 'Unexpected Antigravity stdin transport')
-            staged = Path(request.cwd) / '.agents/agents' / agent / 'agent.md'
+            require(execution_workspace is not None, 'Antigravity execution workspace absent')
+            staged = effective_cwd / '.agents/agents' / native_agent / 'agent.md'
             body = staged.read_bytes()
             require(b'through finish' in body, 'Current provider-local finish prompt absent')
             save(directory / 'staged.sanitized.json', {'sha256': digest(body), 'bytes': len(body)})
@@ -1377,6 +1385,7 @@ class ConversationCase:
     async def diagnostic_cases(self):
         from story_writing_agents.prompts import PromptAssembler
         from story_writing_agents.provider_adapter import ProviderInvocation, ProviderInvocationError
+        from story_writing_agents.workspace.initialization import compose_session_artifact_binding
         schema = {'additionalProperties': False,
          'properties': {'correlation': {'description': 'Echo the exact correlation token from this '
                                                        'call.',
@@ -1417,49 +1426,57 @@ class ConversationCase:
          'description': 'Return exactly one schema-selected context action with its exact '
                         'correlation token.'}
         definition = PromptAssembler(self.workspace, backend_overrides={'plot_architect': 'antigravity'}).build_contextual_definition(session_id='diagnostics', agent_id='plot_architect')
+        session_binding = compose_session_artifact_binding(
+            self.workspace.root,
+            self.session,
+        )
         outcomes = []
         for index, fault in enumerate((None, 'known_error', 'utf8', 'json', 'unrelated_error', 'schema')):
             adapter = antigravity_adapter.AntigravityAdapter(executable=os.environ.get('STORY_ANTIGRAVITY_EXECUTABLE', 'agy'), timeout_seconds=180, state_root=self.directory / f'diagnostic-state-{index}', explicit_model=self.model, explicit_effort=None)
             binding = adapter.bind(definition)
-            payload = {'c': 'synthetic-correlation', 'q': 'Return exactly the schema-selected outer answer. action.result must contain assessment supports, assignment_id synthetic-assignment, input_ids [synthetic-input], and a short visible message. Set used_handles to [].'}
-            invocation = ProviderInvocation(session_id='diagnostics', schema=antigravity_adapter.AntigravityAdapter.native_output_schema(schema), payload=payload, thread_id=None, binding_components=binding.binding_components)
-            self.observer.fault = fault
-            self.observer.fault_agent = 'plot_architect'
-            self.observer.fault_consumed = False
-            from story_writing_agents.agent_exchanges import AgentExchangeProvider, AgentExchangeScopeKind
-            capture = self.backend._agent_exchange_capture.begin(session_id=self.session, scope_kind=AgentExchangeScopeKind.CONVERSATION, scope_id=self.conversation, agent_id='plot_architect', provider=AgentExchangeProvider.ANTIGRAVITY, invocation=invocation)
-            try:
-                result = await adapter.invoke(binding, invocation)
-            except ProviderInvocationError as exc:
-                from story_writing_agents.agent_exchanges.capture import AgentExchangeTerminalCode
-                self.backend._capture_provider_failure_without_replacing(capture, AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, failure=exc)
-                require(fault not in (None, 'known_error'), 'Expected real/positively proven recovered completion failed')
-                require(exc.response_diagnostic is not None, 'Completed failure diagnostics missing')
-                outcomes.append({'fault': fault, 'accepted': False, 'diagnostic': str(exc)})
-            else:
-                capture.record_response(result)
-                capture.accepted()
-                require(fault in (None, 'known_error'), 'Injected malformed/error result accepted')
-                answer = json.loads(result.response_text)
-                require(type(answer) is dict and set(answer) == {'correlation', 'action'}
-                        and answer['correlation'] == 'synthetic-correlation',
-                        'Direct diagnostic answer has incorrect outer identity')
-                action = answer['action']
-                require(type(action) is dict and set(action) == {'kind', 'result', 'used_handles'}
-                        and action['kind'] == 'answer' and type(action['used_handles']) is list
-                        and action['used_handles'] == [], 'Direct diagnostic action differs')
-                assessment = action['result']
-                require(type(assessment) is dict
-                        and set(assessment) == {'assessment', 'assignment_id', 'input_ids', 'message'}
-                        and assessment['assessment'] == 'supports'
-                        and assessment['assignment_id'] == 'synthetic-assignment'
-                        and type(assessment['input_ids']) is list
-                        and assessment['input_ids'] == ['synthetic-input']
-                        and type(assessment['message']) is str and bool(assessment['message'].strip()),
-                        'Direct diagnostic specialist result differs')
-                if fault == 'known_error':
-                    require(result.response_diagnostic is not None, 'Recovered native envelope not retained')
-                outcomes.append({'fault': fault, 'accepted': True})
+            role = adapter.session_role_projection(binding)
+            with session_binding.open_ready_resources() as access:
+                access.install_provider_role(role)
+            with session_binding.open_provider_execution_workspace() as execution_workspace:
+                payload = {'c': 'synthetic-correlation', 'q': 'Return exactly the schema-selected outer answer. action.result must contain assessment supports, assignment_id synthetic-assignment, input_ids [synthetic-input], and a short visible message. Set used_handles to [].'}
+                invocation = ProviderInvocation(session_id=self.session, schema=antigravity_adapter.AntigravityAdapter.native_output_schema(schema), payload=payload, thread_id=None, binding_components=binding.binding_components, execution_workspace=execution_workspace)
+                self.observer.fault = fault
+                self.observer.fault_agent = 'plot_architect'
+                self.observer.fault_consumed = False
+                from story_writing_agents.agent_exchanges import AgentExchangeProvider, AgentExchangeScopeKind
+                capture = self.backend._agent_exchange_capture.begin(session_id=self.session, scope_kind=AgentExchangeScopeKind.CONVERSATION, scope_id=self.conversation, agent_id='plot_architect', provider=AgentExchangeProvider.ANTIGRAVITY, invocation=invocation)
+                try:
+                    result = await adapter.invoke(binding, invocation)
+                except ProviderInvocationError as exc:
+                    from story_writing_agents.agent_exchanges.capture import AgentExchangeTerminalCode
+                    self.backend._capture_provider_failure_without_replacing(capture, AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED, failure=exc)
+                    require(fault not in (None, 'known_error'), 'Expected real/positively proven recovered completion failed')
+                    require(exc.response_diagnostic is not None, 'Completed failure diagnostics missing')
+                    outcomes.append({'fault': fault, 'accepted': False, 'diagnostic': str(exc)})
+                else:
+                    capture.record_response(result)
+                    capture.accepted()
+                    require(fault in (None, 'known_error'), 'Injected malformed/error result accepted')
+                    answer = json.loads(result.response_text)
+                    require(type(answer) is dict and set(answer) == {'correlation', 'action'}
+                            and answer['correlation'] == 'synthetic-correlation',
+                            'Direct diagnostic answer has incorrect outer identity')
+                    action = answer['action']
+                    require(type(action) is dict and set(action) == {'kind', 'result', 'used_handles'}
+                            and action['kind'] == 'answer' and type(action['used_handles']) is list
+                            and action['used_handles'] == [], 'Direct diagnostic action differs')
+                    assessment = action['result']
+                    require(type(assessment) is dict
+                            and set(assessment) == {'assessment', 'assignment_id', 'input_ids', 'message'}
+                            and assessment['assessment'] == 'supports'
+                            and assessment['assignment_id'] == 'synthetic-assignment'
+                            and type(assessment['input_ids']) is list
+                            and assessment['input_ids'] == ['synthetic-input']
+                            and type(assessment['message']) is str and bool(assessment['message'].strip()),
+                            'Direct diagnostic specialist result differs')
+                    if fault == 'known_error':
+                        require(result.response_diagnostic is not None, 'Recovered native envelope not retained')
+                    outcomes.append({'fault': fault, 'accepted': True})
         save(self.directory / 'diagnostic-outcomes.sanitized.json', outcomes)
 
     async def budget_finalization(self):

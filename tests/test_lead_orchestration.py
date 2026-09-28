@@ -873,6 +873,13 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
             encoding="utf-8",
         )
         self.backend = _LeadBackend()
+        # This orchestration fake has no native provider process or role file.
+        boundary_patch = mock.patch(
+            "story_writing_agents.orchestrator._provider_execution_workspace_manager",
+            return_value=None,
+        )
+        boundary_patch.start()
+        self.addCleanup(boundary_patch.stop)
         self.runtime = StoryRuntime(  # type: ignore[arg-type]
             self.control_workspace,
             self.backend,

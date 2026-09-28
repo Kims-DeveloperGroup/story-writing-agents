@@ -340,11 +340,9 @@ and is not shipped behavior here. Direct recovery-topology validation now
 normalizes a delegated session-resource failure to the history-owned
 `recovery_required` / `operator_recovery` contract, without mutation or an
 exposed lower-layer exception chain.
-The same session binding now mints the call-local Codex execution-worktree
-capability described in
-[Codex execution-worktree recovery](#codex-execution-worktree-recovery).
-Antigravity adoption remains separately tracked by
-[Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
+The same session binding now mints the call-local Codex and Antigravity
+execution-worktree capability described in
+[Provider execution-worktree recovery](#codex-execution-worktree-recovery).
 
 Resource loss during local closure does not replay known provider work. A
 completed artifact-review result that cannot be finalized against its bound
@@ -1678,31 +1676,31 @@ uncertain cleanup or corrupt accounting keeps the existing recovery block.
 
 <a id="codex-execution-worktree-recovery"></a>
 
-## Codex execution-worktree recovery
+## Codex and Antigravity execution-worktree recovery
 
-Every Codex story call binds its provider continuation to a domain-separated
-digest of the exact session physical generation. If the named worktree is
-missing, replaced, symlinked, or otherwise no longer matches before launch,
-the call fails without a provider process and without falling back to the
-control root, current directory, staging, or another session. Restore or
+Every Codex or Antigravity story call binds its provider continuation to a
+domain-separated digest of the exact session physical generation. If the named
+worktree is missing, replaced, symlinked, or otherwise no longer matches before
+launch, the call fails without a provider process and without falling back to
+the control root, current directory, staging, or another session. Restore or
 reopen the exact READY session resources, then submit fresh authorized work;
 the runtime does not replay the failed call automatically. The descriptor CWD
-does not authorize session filesystem reads: host-owned context, reference,
-SEARCH, and READ services remain the only story-content delivery path.
+does not authorize manuscript or core-document reads: host-owned context,
+reference, SEARCH, and READ services remain the story-content delivery path.
 
 A valid replacement generation at the same pathname is intentionally
-incompatible with prior Codex continuation state. The next safe authorized
-call bootstraps a fresh provider thread while retaining the old content-free
-record for history. It does not relabel the old checkpoint or treat path
-equality as generation equality.
+incompatible with prior Codex or Antigravity continuation state. The next safe
+authorized call bootstraps a fresh provider thread while retaining the old
+content-free record and Antigravity-native history. Compatible history for the
+same proved generation resumes. The runtime does not relabel the old checkpoint,
+adopt foreign native history, or treat path equality as generation equality.
 
 The schema-v2 provider-session manifest retains legacy base records and
 fingerprint-qualified records for successive generations. For an effective
-generation fingerprint, lookup and taint use its qualified record first and
-fall back to an exact-fingerprint base record only when that qualified key is
-absent. A fallback taint materializes the qualified tainted record without
-deleting the base, and ordinary thread updates do not prune any earlier
-generation record. Once a qualified key has been written, the manifest is
+generation fingerprint, lookup and taint address only its exact qualified key;
+they never fall back to or mutate the legacy base record. Ordinary thread
+updates do not prune any earlier generation record. Once a qualified key has
+been written, the manifest is
 forward-only: an older binary that accepts base keys alone rejects it. Do not
 downgrade in place or hand-delete retained records; stop all writers and restore
 a verified pre-upgrade workspace backup, or use a compatible newer runtime.
@@ -1727,10 +1725,36 @@ session), staging, or response-output directory. Apple's underlying
 deprecated, so deployment checks must treat its absence as loss of Codex story-
 call capability. Authentication, catalog, help, and other management probes
 are outside this story boundary.
-Antigravity recovery remains unchanged until
-[Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
 
-Treat a missing, symlinked, multiply linked, non-regular, changing, oversized,
+For Antigravity, verify the exact protected
+`.agents/agents/<native-selector>/agent.md` projection. The selector is derived
+from the semantic agent ID and deterministic base role bytes and must match the
+role YAML name and `--agent` value. Runtime independently revalidates that
+semantic/native/final-byte plan and recomputes the staged file and binding
+accounting from the immutable definition snapshot before setup. Differing
+bytes or accounting, unsafe modes, links, FIFOs/devices, foreign entries, or a
+pre-existing empty qualified directory block provider work and are preserved;
+do not overwrite or normalize them as retry. The empty-directory case fails
+before the Git exclusion or role tree is mutated. Exact `0400` role versions
+coexist, publication is create-only, and runtime never replaces or prunes a
+leaf. Selected-role content validation is bounded by the exact planned size;
+unselected qualified leaves are metadata-validated without content reads. Keep
+the top-level `.agents` namespace and its case-folded aliases untracked: any
+tracked variant fails before projection mutation or provider submission,
+including on case-sensitive worktrees for portability, and must be removed from
+the index before retry. A concurrent winner is accepted only after full exact
+validation. A failed fresh installation cleans only unchanged empty
+directories created by that call. If effective-user, descriptor-relative,
+no-follow, nonblocking, or
+create-only link support is missing, projection fails before path access.
+Staged definitions and mutable native history remain beneath the canonical
+control workspace under generation-qualified state paths. An overlap with the
+session worktree rejects the call before per-invocation directories are
+created. Unproved history is retained but never resumed; restore the exact
+READY generation or allow a fresh bootstrap. Missing Darwin confinement fails
+closed without an adapter-control CWD fallback.
+
+For Codex, treat a missing, symlinked, multiply linked, non-regular, changing, oversized,
 or invalid-UTF-8 response output as a failed submitted call, not as recoverable
 transport to follow or reread. The runtime opens the exact result name without
 following links, verifies one stable singly linked regular-file identity and
