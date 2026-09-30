@@ -6707,13 +6707,10 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
 
     class _Output:
         def __init__(self) -> None:
-            self.components: list[object] = []; self.events: list[object] = []
+            self.components: list[object] = []
 
         def write_component(self, component: object) -> None:
-            self.components.append(component); self.events.append(component)
-
-        def write_accepted_input(self, component: object) -> None:
-            self.events.append(component)
+            self.components.append(component)
 
     @staticmethod
     def _commit(text: str) -> ControlOutcome: return ControlOutcome(ControlOutcomeKind.COMMIT, text=text)
@@ -6871,43 +6868,42 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         self.assertEqual(output.components[-1].text, "Elapsed: 00:00:00")
 
     def test_provider_invocation_failure_writes_error_notice_without_crashing(self) -> None:
-        session = RuntimeSession.__new__(RuntimeSession)
-        runner = asyncio.Runner(); self.addCleanup(runner.close)
-        progress, output = self._Progress(), self._Output()
-
-        async def failing_turn(_session, _cid, _text, *, action_progress_sink=None):
-            self.assertEqual(output.events[-1], terminal_module.Message("User", _text, presentation=terminal_module.MessagePresentation.CHAT_BLOCK))
-            if _text != "test prompt": return self._terminal_turn(CollaborationStepState.COMPLETED)
-            raise BackendProtocolError("Antigravity CLI failed (status 1): 503 Overloaded")
-
-        with mock.patch.object(RuntimeSession, "lead_turn", failing_turn):
-            adapter = lead_policy_module.InteractiveLeadAdapter(
-                session, runner, progress,
-                self._Picker(), self._Prompt(), output,
-            )
-            texts = ("  first\nsecond  ", "next reply")
-            for text in texts:
-                start = len(output.events)
-                self.assertFalse(adapter.submit(_UNIQUE_C, text))
-                self.assertIsInstance(output.events[start], terminal_module.Message)
-                self.assertTrue(any(isinstance(item, terminal_module.Panel) and item.title == "Lead" for item in output.events[start + 1:]))
-            output.components.clear()
-            result = adapter.submit(_UNIQUE_C, "test prompt")
-            retained = [item for item in output.events if isinstance(item, terminal_module.Message)]
-            self.assertEqual([item.content for item in retained], [*texts, "test prompt"])
-            self.assertTrue(all(item.sender == "User" and item.presentation is terminal_module.MessagePresentation.CHAT_BLOCK for item in retained))
-
-        self.assertFalse(result); self.assertEqual(len(output.components), 3)
-        panel = output.components[0]; self.assertIsInstance(panel, terminal_module.Panel)
-        self.assertEqual(panel.title, "Lead"); self.assertEqual(panel.state, terminal_module.ViewState.ERROR)
-        self.assertEqual(panel.items[0].label, "Outcome")
-        self.assertEqual(panel.items[0].value, "failed")
-        self.assertEqual(panel.items[1].sender, "Lead")
-        self.assertIn("Antigravity CLI failed (status 1): 503 Overloaded", panel.items[1].content)
-        notice = output.components[1]; self.assertIsInstance(notice, terminal_module.Notice)
-        self.assertEqual(notice.label, "provider failure")
-        self.assertIn("Antigravity CLI failed (status 1): 503 Overloaded", notice.text)
-        self.assertEqual(output.components[2].text, "Elapsed: 00:00:00")
+        import io
+        from story_writing_agents.interactive_terminal._input_lifecycle import inspect_live_decoder_spec
+        session = RuntimeSession.__new__(RuntimeSession); runner = asyncio.Runner(); self.addCleanup(runner.close)
+        texts = ("  first\nsecond  ", "next reply", "test prompt")
+        for mode in ("callback", "fallback", "live"):
+            stream = io.StringIO()
+            terminal = (terminal_module.InteractiveTerminal(lambda _: "", stream.write) if mode == "callback"
+                        else terminal_module.build_stream_terminal(lambda _: "", io.StringIO(), stream))
+            driver = None if mode == "callback" else terminal._write_text.__self__
+            if mode == "fallback": driver._input_latch.latch_fallback()
+            if mode == "live": driver._input_latch.latch_live(inspect_live_decoder_spec(io.TextIOWrapper(io.BytesIO())))
+            progress = self._Progress()
+            async def run(operation):
+                if driver is not None: driver._draw_progress_frame(lambda _: "working")
+                try: return await operation
+                finally:
+                    if driver is not None: driver._clear_progress_frame()
+            progress.run = run
+            async def lead_turn(_session, cid, text, *, action_progress_sink):
+                self.assertEqual(cid, _UNIQUE_C); self.assertIn(text, texts)
+                rendered = stream.getvalue()
+                self.assertEqual(rendered.count("User"), texts.index(text) + 1)
+                self.assertIn(text.strip().splitlines()[0], rendered)
+                if text == texts[-1]: raise BackendProtocolError("Antigravity CLI failed (status 1): 503 Overloaded")
+                return self._terminal_turn(CollaborationStepState.COMPLETED)
+            with mock.patch.object(RuntimeSession, "lead_turn", lead_turn):
+                adapter = lead_policy_module.InteractiveLeadAdapter(session, runner, progress, self._Picker(), self._Prompt(), terminal_module.InteractiveSemanticOutput(terminal))
+                for text in texts:
+                    start = len(stream.getvalue())
+                    self.assertFalse(adapter.submit(_UNIQUE_C, text))
+                    rendered = stream.getvalue()[start:]
+                    self.assertEqual(rendered.count("User"), 1); self.assertLess(rendered.index("User"), rendered.index("Lead"))
+                    for line in text.splitlines(): self.assertIn(line.strip(), rendered)
+                    if driver is not None:
+                        self.assertLess(rendered.index("User"), rendered.index("working")); self.assertEqual(driver._progress_rows, 0)
+            self.assertEqual(stream.getvalue().count("User"), 3); self.assertIn("503 Overloaded", rendered); self.assertIn("provider failure", rendered); self.assertIn("Elapsed: 00:00:00", rendered)
 
     def test_provider_invocation_failure_surfaces_transient_stream_error_in_final_output(self) -> None:
         session = RuntimeSession.__new__(RuntimeSession)
@@ -6927,12 +6923,12 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             result = adapter.submit(_UNIQUE_C, "test prompt")
 
         self.assertFalse(result)
-        self.assertEqual(len(output.components), 3)
-        panel = output.components[0]
+        self.assertEqual(len(output.components), 4)
+        panel = output.components[1]
         self.assertIsInstance(panel, terminal_module.Panel)
         self.assertEqual(panel.state, terminal_module.ViewState.ERROR)
         self.assertIn("No capacity available for model gpt-oss-120b-medium on the server", panel.items[1].content)
-        notice = output.components[1]
+        notice = output.components[2]
         self.assertIn("No capacity available for model gpt-oss-120b-medium on the server", notice.text)
 
     def test_confirmed_execution_writes_specialists_then_lead_then_elapsed(self) -> None:
@@ -7119,7 +7115,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                     self.assertFalse(adapter.submit(_UNIQUE_C, label))
 
                     self.assertEqual(calls, [(_UNIQUE_C, label)])
-                    self.assertEqual(len(output.components), 2)
+                    self.assertEqual(len(output.components), 3)
 
     def test_retry_lead_turn_keeps_fixed_diagnostic_copy_and_renders_error_role(self) -> None:
         session = RuntimeSession.__new__(RuntimeSession)
@@ -7149,7 +7145,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 session, runner, progress, self._Picker(), self._Prompt(), output,
             )
             self.assertFalse(adapter.submit(_UNIQUE_C, "test prompt"))
-            panel = output.components[0]
+            panel = output.components[1]
             self.assertIsInstance(panel, terminal_module.Panel)
             self.assertIs(panel.state, terminal_module.ViewState.ERROR)
             message_item = next(item for item in panel.items if isinstance(item, terminal_module.Message))
