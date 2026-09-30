@@ -595,10 +595,12 @@ so its frame remains active and no history entry exists yet. See the exact
 [composition](../reference/interactive-terminal.md#composition-live-suggestions)
 tokens.
 
-The historical schema-v1 accepted-input seam emitted persistent semantic
-records only after cleanup. The current controller instead maps ordinary input
-to one literal Lead turn and renders its typed progress/result through the
-structured workflow. Removed slash execution forms never start that path.
+Ordinary accepted Lead submissions use the persistent semantic writer to emit
+one attributed User block before provider work in live, fallback, and callback
+terminals. The block remains above the reply or error after progress cleanup.
+Fallback readers may also retain their original typed-input echo; that echo is
+independent of the attributed block. The generic accepted-input seam keeps its
+existing mode gating. Removed slash execution forms never start this path.
 
 Retained local read records identify normalized search/filtered-list scope and
 resolved transcript handle/start/count without reprinting a raw submitted

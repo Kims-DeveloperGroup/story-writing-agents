@@ -176,7 +176,7 @@ class InteractiveLeadAdapter:
     def submit(self, conversation_id: str, text: str) -> bool:
         """Run one literal lead turn; return true only for call-local EOF."""
 
-        self._semantic_output.write_accepted_input(
+        self._semantic_output.write_component(
             Message("User", text, presentation=MessagePresentation.CHAT_BLOCK)
         )
         try:
