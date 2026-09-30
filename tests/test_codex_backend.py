@@ -6370,10 +6370,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     "answer",
                     {
                         "message": {"type": "string"},
-                        "citation_ids": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
+                        "citation_ids": {"type": "array", "items": {"type": "string"}, "minItems": 0},
                     },
                 ),
             ]
@@ -6578,10 +6575,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         forbidden_keywords = {"oneOf", "minLength", "uniqueItems"}
 
         def assert_supported(value: object) -> None:
-            """Check only the strict-object invariants used by this schema."""
-
             if type(value) is dict:
                 self.assertTrue(forbidden_keywords.isdisjoint(value))
+                if value.get("type") == "array":
+                    self.assertIs(type(value.get("minItems")), int)
                 if value.get("type") == "object":
                     properties = value.get("properties")
                     self.assertIs(type(properties), dict)
