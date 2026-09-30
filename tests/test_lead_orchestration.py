@@ -1196,6 +1196,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertNotIn(f'"{metadata}"', encoded)
         def assert_strict(node):
             if isinstance(node, Mapping):
+                if node.get("type") == "array":
+                    self.assertIs(type(node.get("minItems")), int)
                 if node.get("type") == "object":
                     self.assertEqual(set(node["required"]), set(node["properties"]))
                     self.assertIs(node["additionalProperties"], False)

@@ -491,15 +491,15 @@ def _closed_result_object(
 def _string_array_result_schema(
     *,
     allowed_values: tuple[str, ...] = (),
-    min_items: int | None = None,
+    min_items: int = 0,
     max_items: int | None = None,
 ) -> dict[str, object]:
     item_schema: dict[str, object] = {"type": "string"}
     if allowed_values:
         item_schema["enum"] = list(allowed_values)
-    schema: dict[str, object] = {"items": item_schema, "type": "array"}
-    if min_items is not None:
-        schema["minItems"] = min_items
+    schema: dict[str, object] = {
+        "items": item_schema, "type": "array", "minItems": min_items,
+    }
     if max_items is not None:
         schema["maxItems"] = max_items
     return schema

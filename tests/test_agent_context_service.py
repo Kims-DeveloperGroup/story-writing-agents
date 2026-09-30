@@ -96,7 +96,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
                 "many": {"type": "array", "maxItems": 1},
                 "mode": {"type": "string", "enum": ["draft", "review"]},
                 "items": {
-                    "type": "array", "items": {"type": "string", "minLength": 1},
+                    "type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 0,
                 },
                 "required_note": {"type": "string"},
             },
@@ -134,7 +134,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
             {"type": "object", "properties": {
                 "kind": {"type": "string", "enum": ["answer"]},
                 "message": {"type": "string", "minLength": 1},
-                "citation_ids": {"type": "array"},
+                "citation_ids": {"type": "array", "minItems": 0},
             }, "required": ["kind", "message", "citation_ids"],
                 "additionalProperties": False},
         ]}

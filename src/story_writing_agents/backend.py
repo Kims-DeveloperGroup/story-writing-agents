@@ -6060,6 +6060,7 @@ class AgentBackend:
                     "citation_ids": {
                         "type": "array",
                         "items": {"type": "string"},
+                        "minItems": 0,
                     },
                 },
             ),
