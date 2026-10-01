@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import stat
+import sys
 import tempfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -1023,7 +1024,19 @@ class CodexAdapter:
             )
         sandbox = DarwinSandboxRequirements(
             executable=executable,
-            read_paths=(executable, schema),
+            read_paths=(
+                executable,
+                schema,
+                session_root,
+                *self._system_config_paths(
+                    protected_paths=(
+                        self._control_root,
+                        session_container,
+                        staging,
+                        output.parent,
+                    ),
+                ),
+            ),
             write_subpaths=(native_state,),
             write_paths=(output,),
             deny_subpaths=(session_root / ".git", staging),
@@ -1080,6 +1093,30 @@ class CodexAdapter:
         command.append("-")
         execution_workspace.require_current()
         return command, sandbox
+
+    @staticmethod
+    def _system_config_paths(*, protected_paths: tuple[Path, ...]) -> tuple[Path, ...]:
+        """Admit only Codex's fixed system configuration files, including absence."""
+        system_root = Path("/private/etc") if sys.platform == "darwin" else Path("/etc")
+        paths = tuple(
+            system_root / "codex" / name
+            for name in ("requirements.toml", "managed_config.toml", "config.toml")
+        )
+        if Path(os.path.realpath("/etc")) != system_root or any(
+            Path(os.path.realpath(path)) != path
+            or any(
+                path == protected
+                or protected in path.parents
+                or path in protected.parents
+                for protected in protected_paths
+            )
+            for path in paths
+        ):
+            raise ProviderInvocationError(
+                "Codex system configuration paths are unsafe",
+                taint_existing_thread=False,
+            )
+        return paths
 
     def _native_state_directory(
         self,

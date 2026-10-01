@@ -1151,17 +1151,27 @@ Codex story calls run without shell evaluation from the descriptor-selected
 exact READY session worktree, with native project root `--cd .`: read-only
 sandbox, no approvals, ignored project/user configuration, and disabled shell,
 web, app, and multi-agent tools. On Darwin, a second default-deny process
-sandbox grants no reads or writes beneath the session worktree and explicitly
+sandbox permits opening only the exact session root directory, which can expose
+its top-level filenames. It grants no descendant story-file reads and explicitly
 denies `.git`, every session write, and prompt staging. It also denies
 unspecified locations such as the initialization and control roots, sibling
 worktrees, traversal targets, and symlink escape targets. Host-owned context
 capture, explicit-reference delivery, and SEARCH/READ handlers perform guarded
 story reads and place only selected content in request payloads or observations;
-the provider receives no session filesystem read authority from its CWD.
+the provider receives no story-file content authority from its CWD.
 
 Exact external exceptions admit only the literal canonical resolved Codex
 executable, schema/result transport, required system files, outbound
 network/system sockets, and one validated provider-native state subtree.
+Metadata permissions are literal, covering those admitted resources and their
+canonical ancestors; they do not grant directory contents or descendant-file
+reads. The fixed `/etc` alias has metadata permission so native configuration
+lookups can resolve it. Codex can read only the three exact system configuration
+files `requirements.toml`, `managed_config.toml`, and `config.toml` beneath
+`/private/etc/codex` on Darwin. Missing files can be checked; canonical targets
+that escape that fixed location or overlap protected runtime roots are rejected
+before submission. System configuration can still apply when project/user
+configuration is ignored.
 Configured `CODEX_HOME` must be absolute before canonical resolution. Its
 resolved path must already be a directory owned by the effective user without
 group/other write bits. It cannot be the filesystem root or user home, and it
