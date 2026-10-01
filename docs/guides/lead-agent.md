@@ -787,7 +787,7 @@ Do not treat every provider-related failure as the same recovery case:
 For example, the former Codex failure was caused by a response schema whose
 array `items` node had no explicit supported type. Codex rejected that schema
 before returning a valid `ProviderResult`, so the exchange could show only
-`provider_invocation_failed`. Typed wire v8 uses a closed
+`provider_invocation_failed`. Typed wire v9 uses a closed
 `{action}` root and embeds every action/result object directly. Runtime derives
 correlation from the active call.
 Conversely, an Antigravity result that adds undeclared bookkeeping fields or
@@ -927,7 +927,7 @@ Initial-payload samples below omit the separate required `h` session-context
 object for readability; they are excerpts, not complete on-wire payloads.
 SEARCH/READ continuation frames carry only their new observation.
 
-Codex and Antigravity receive byte-identical provider-neutral wire-v8 schema
+Codex and Antigravity receive byte-identical provider-neutral wire-v9 schema
 and payload semantics; only their native transport differs. The provider root
 requires only `action`; runtime derives correlation and action-index facts from
 the active invocation. This sanitized structural sample shows all three action
@@ -1010,9 +1010,10 @@ Does the planned reveal conflict with the current opening?
 
 the initial compact call includes required workflow material and four
 content-free canonical-core statuses. The status inventory itself grants no
-story-body receipt. Separate required `h` context includes retained history and
-complete current core bytes even for a meta turn without references or
-SEARCH/READ; those bytes do not satisfy the current evidence contract.
+story-body receipt. Required `h` context includes exact retained history and
+current session directives. Relevant core content requires host-owned SEARCH/READ
+or explicit references; remembered content does not satisfy current evidence
+requirements.
 
 ```json
 {
@@ -1020,32 +1021,21 @@ SEARCH/READ; those bytes do not satisfy the current evidence contract.
   "q": ["lead", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead", "lead-outcome-v5"]],
   "i": {
     "workflow": "lead_front_channel",
-    "contract_version": "lead-outcome-v5",
+    "conversation_id": "<conversation-id>",
     "command": "Does the planned reveal conflict with the current opening?",
-    "identity": {"agent_id": "lead_orchestrator", "session_id": "novel", "conversation_id": "<conversation-id>", "turn_id": "<turn-id>", "step_id": "<step-id>"},
-    "authoring_tasks": [{"task_id":"task_demo","task_revision":1,"current_scope":null}],
-    "input_aliases": [{"input_id": "user_input", "kind": "user_input", "locator": "conversation/<turn-id>/user_input", "revision_digest": "sha256:<digest>", "start_line": null, "end_line": null}],
-    "answer_contract": {
-      "assignments": {"agent_id": "canonical specialist ID", "input_ids": "nonempty runtime-supplied aliases", "instruction": "complete visible assignment", "mode":"draft | review", "review_basis":"null for draft; schema 1 candidate_input_ids and criteria for review"},
-      "direct_answer": "message and authoring_scope; add kind only for question or critique",
-      "authoring_scope": "always required: activity, target_paths, domains, and exact offered task token",
-      "kind": "question | critique | recommendation | proposal when selected; omit for the default answer",
-      "message": "nonempty user-visible text",
-      "proposal": {"assignments": "required only for an ordinary consultation proposal"},
-      "artifact_intent": "create/patch/replace/rename/delete operations for an artifact proposal",
-      "objective_intent": "strict start/continue/cancel intent when transitioning an objective",
-      "recommended_action": "strict prepare_artifact/prepare_consultation action for a recommendation"
-    }
+    "authoring_tasks": [{"task_id": "task_demo", "task_revision": 1}],
+    "input_aliases": [{"input_id": "user_input", "kind": "user_input", "locator": "conversation/<turn-id>/user_input", "revision_digest": "sha256:<digest>"}]
   },
   "core_statuses": [
-    {"evidence_id": "status_1", "locator": "core_documents/global_outline.md", "status": "present", "utf8_bytes": 428, "source_id": "<source-id>", "manifest_digest": "sha256:<digest>", "revision": "sha256:<digest>", "source_digest": "sha256:<digest>"},
-    {"evidence_id": "status_2", "locator": "core_documents/part_outlines.md", "status": "empty", "utf8_bytes": 0, "source_id": "<source-id>", "manifest_digest": "sha256:<digest>", "revision": "sha256:<digest>", "source_digest": "sha256:<empty-digest>"}
+    {"evidence_id": "status_1", "locator": "core_documents/global_outline.md", "status": "present"},
+    {"evidence_id": "status_2", "locator": "core_documents/part_outlines.md", "status": "empty"}
   ]
 }
+
 ```
 
-The sample abbreviates the remaining two status rows and the
-`runtime_contract_overlay` and `artifact_objectives` material. The latter
+The sample abbreviates `h`, provider constraints, the remaining two status rows
+and `artifact_objectives` material. The latter
 contains the owner conversation, current objectives, and exact offered draft
 source IDs/digests. The illustrated review involves plot, motivation, and prose,
 and offers `task_demo`/`1`; real output must select an exact pair offered by that
@@ -1132,7 +1122,7 @@ canonical path/range, captures the complete artifact state, builds an exact
 change set, validates projected relationships, derives mandatory review
 domains, unions the explicitly requested additional domains in canonical
 order, and computes the candidate digest. An unknown or authority-bearing
-provider field violates the closed wire-v8 result schema, so the response is
+provider field violates the closed wire-v9 result schema, so the response is
 repaired once before candidate construction. If repair also fails, runtime
 emits a visible safe no-action Lead answer and continues the conversation. A
 schema-valid intent that cannot satisfy runtime artifact semantics instead

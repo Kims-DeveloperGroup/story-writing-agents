@@ -35,8 +35,8 @@ recovered-final path uses the same completion boundary. See the
 This section records the immutable historical #381 accounting baseline. Later
 children implemented selection, omission, a typed compact action wire, a
 content-free ledger, and live progress without changing the encoder or baseline
-workload. Current wire-v8 behavior is described in
-[Agent-context design](agent-context.md#typed-provider-wire-v8).
+workload. Current wire-v9 behavior is described in
+[Agent-context design](agent-context.md#typed-provider-wire-v9).
 
 ### Model-input boundary and canonical encoding
 
@@ -189,7 +189,7 @@ described next.
 The preceding byte table is the immutable historical #381 baseline. The
 built-in runtime now constructs definitions with `provider_managed_context=True`
 and no mutable `context_document_files`. Role prompt, persona, language,
-provider restrictions, and typed wire-v8 protocol remain stable binding material.
+provider restrictions, and typed wire-v9 protocol remain stable binding material.
 Prompt assembly captures ordered common/family/role file components and appends
 runtime-owned specialist routing policy v1. The effective `system_prompt_file`
 retains the role path but contains the full composition, so its bytes/hash
@@ -260,7 +260,7 @@ identity, route, input, and current storage authorities into the
 provider-neutral context service. It does not consume the optional
 conversation-RAG collaborator. The service captures current material, builds a
 content-free manifest, and plans bootstrap/delta. If selected material is
-insufficient, typed wire-v8 SEARCH/READ actions can add exact authorized evidence
+insufficient, typed wire-v9 SEARCH/READ actions can add exact authorized evidence
 from route-permitted sources. Focused Lead input and confirmed collaboration in
 the current shell enter this same provider-context flow.
 
@@ -322,7 +322,7 @@ validated, without a synthetic user message. See the
 
 Live result contracts are `lead-outcome-v5`, `specialist-reply-v2`,
 `lead-synthesis-v3`, and `artifact-review-synthesis-v3`. Routing scope and review
-basis use schema 1, independently of wire v8, runtime policy v1, and durable
+basis use schema 1, independently of wire v9, runtime policy v1, and durable
 collaboration history schema v2. Historical omitted routing fields remain
 readable; they cannot authorize a new unscoped consultation.
 
@@ -359,19 +359,21 @@ bounded complete conversation pairs, invoking-agent owner outcomes, and current
 core identities. It is not the current built-in provider payload.
 
 The contextual service translates authoritative capture into
-`agent-context-wire-v8`: compact required input/candidate and selected P2
-material, content-free catalog/record changes, and bounded observations. Optional
-P3 history and invoking-agent state remain SEARCH-first. Separately, ordinary
-Lead turns and consultation/artifact-review synthesis carry required `h`:
-exact retained active/archived session history plus current directives and
-complete core bytes, even for `workflow_meta` or a zero P3 budget. Compatible
-calls share the session's Lead thread and send unseen events; a fresh thread
-receives all retained history. Neither form supplies current receipts or
-confirmation authority. Other source deltas use revisions,
-record changes, tombstones, and an exact candidate pointer or beneficial
-lossless single-splice. Invocation and evidence scope stays conversation-bound;
-specialists and consensus retain their separate scopes. See
-[Agent-context design](agent-context.md#typed-provider-wire-v8).
+`agent-context-wire-v9`: required input/candidate and selected P2 material,
+content-free catalog/record changes, and bounded observations. Optional P3
+history and invoking-agent state remain SEARCH-first.
+
+Ordinary Lead turns and consultation/artifact-review synthesis carry required `h`:
+retained active/archived history and current directives, including `workflow_meta` or
+zero P3 budgets. Compatible calls use the verified session Lead thread and deliver
+missing turn content and new host/specialist facts. Fresh threads receive complete
+retained history. Core documents arrive through host-owned SEARCH/READ and exact
+references, with fresh status evidence. Neither memory form supplies current receipts or
+confirmation authority. Other source deltas use revisions, record changes,
+tombstones, and an exact candidate pointer or beneficial lossless single-splice.
+Invocation and evidence scope stays conversation-bound; specialists and
+consensus retain their separate scopes. See
+[Agent-context design](agent-context.md#typed-provider-wire-v9).
 
 Retained session history includes objective origin, transitions, and exact
 candidate bindings. Visibility across conversation switches does not transfer
@@ -596,7 +598,7 @@ validation, confirmation authority, and process-launch controls remain
 unchanged. Existing workspace prompt files are not migrated or rewritten; these
 transformations apply to the Antigravity staged definition.
 
-Runtime-built contextual debate calls use typed wire v8 for task/input,
+Runtime-built contextual debate calls use typed wire v9 for task/input,
 candidate pointer/splice/full fallback, selected sources, and record changes.
 They do not repeat stable role prompts, persona, language directives, or
 unchanged core-document text. `story_session_context` is an internal capture

@@ -133,7 +133,7 @@ lead invocation with the direct story-artifact inputs and all typed replies.
 
 ## Typed context action contract
 
-Every built-in contextual physical call supplies one generated wire-v8 JSON
+Every built-in contextual physical call supplies one generated wire-v9 JSON
 Schema. The schema's root is a closed required object with only `action`.
 Runtime derives the invocation correlation and action index locally. `action`
 is one or more of these closed variants, narrowed to the
@@ -173,7 +173,7 @@ from the invocation and durable history.
 No action or result object is encoded as JSON text. Runtime still checks the closed schema,
 issued handles, result-domain contract, and current source
 authority after a provider returns the object. See
-[Agent-context design](../design/agent-context.md#typed-provider-wire-v8).
+[Agent-context design](../design/agent-context.md#typed-provider-wire-v9).
 
 ## Lead judgment and evidence contracts
 
@@ -475,7 +475,7 @@ compatibility value. It must match the request's session and agent. The current
 built-in runtime translates authoritative capture into typed contextual wire
 v7; it does not send this object as the provider envelope. Direct noncontextual
 callers may still use the established request field. The context types are not
-package-root exports; see [Agent-context design](../design/agent-context.md#typed-provider-wire-v8).
+package-root exports; see [Agent-context design](../design/agent-context.md#typed-provider-wire-v9).
 
 ```python
 DebateMessage(sender: str, phase: str, round: int, revision: str,
@@ -517,7 +517,7 @@ their two trailing context fields default to `None`, and their reply adds
 ordered validated sources without changing the one-step pair.
 When present, story-session capture must match the request session, agent, and
 any focused conversation identity. Current built-in execution converts it to
-typed contextual wire v8; omitting it retains direct-request compatibility. An
+typed contextual wire v9; omitting it retains direct-request compatibility. An
 omitted `rag_context` means there was no attempted RAG envelope.
 See [Conversation transcripts](conversation-transcripts.md) for windows and
 [Bounded retrieval](conversation-retrieval.md) for actions and persistence.

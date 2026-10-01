@@ -431,6 +431,15 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.assertIsNone(result.artifact_proposal)
         self.assertEqual(calls, 1)
         self.assertIn("current_state", self.backend.calls[0].payload["h"])
+        payload = self.backend.calls[0].payload
+        self.assertEqual(set(payload["h"]["current_state"]), {"runtime_overrides"})
+        self.assertTrue(payload["core_statuses"])
+        self.assertTrue(all(set(item) == {"locator", "status", "evidence_id"}
+                            for item in payload["core_statuses"]))
+        self.assertNotIn("answer_contract", payload["i"])
+        self.assertNotIn("runtime_contract_overlay", payload["i"])
+        self.assertNotIn("authoring_rules", payload["i"])
+        self.assertNotIn("Outline first line.", json.dumps(dict(payload)))
         self.assertEqual(
             tuple(agent_id for agent_id, _call in self.backend.call_records),
             (LEAD_ORCHESTRATOR,),
@@ -1037,8 +1046,11 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.assertNotIn("o", self.backend.calls[-3].payload)
         self.assertEqual(self.backend.calls[-2].payload["o"][0], "s")
         self.assertEqual(self.backend.calls[-1].payload["o"][0], "r")
-        initial_material = _workflow_material(self.backend.calls[-3].payload)
-        self.assertIn("artifact_intent", initial_material["answer_contract"])
+        actions = self.backend.calls[-3].schema["properties"]["action"]["anyOf"]
+        answer = next(variant for variant in actions
+                      if variant["properties"]["kind"]["enum"] == ["answer"])
+        self.assertTrue(any("artifact_intent" in variant["properties"]
+                            for variant in answer["properties"]["result"]["anyOf"]))
         read_evidence_id = self.backend.calls[-1].payload["o"][1][0][5]
         self.assertIn(
             read_evidence_id,

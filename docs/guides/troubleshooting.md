@@ -298,7 +298,7 @@ current-call finish evidence plus normal validation before accepting it.
 One fixed Codex defect produced the first row when the compact output schema
 contained an array `items` node without an explicit supported type. Codex
 rejected the output schema before returning a valid provider result. Current
-typed wire v8 instead uses a closed required `{action}` root and
+typed wire v9 instead uses a closed required `{action}` root and
 closed SEARCH/READ/ANSWER variants with explicitly typed arrays and nested
 objects, consistent with
 [Codex Structured Outputs requirements](https://developers.openai.com/api/docs/guides/structured-outputs).

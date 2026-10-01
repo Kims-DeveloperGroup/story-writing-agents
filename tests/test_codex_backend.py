@@ -2893,6 +2893,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             ("h",): ContextComponentKind.CONVERSATION_CONTEXT,
         })
         payload.update({"c": "A" * 43, "q": ["conversation", "sa", "wco", [4, 2, 2, 4, 8, 8, 16, 200], "text"]})
+        schema = {"type": "object", "properties": {"action": {"anyOf": [
+            {"type": "string", "enum": ["answer"]}, {"type": "string", "enum": ["clarify"]}]}},
+            "required": ["action"], "additionalProperties": False}
         captured = []
         async def invoke(_binding, invocation):
             captured.append(invocation)
@@ -2904,11 +2907,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNone(provider.inspect_context_thread(scope, policy))
                 first = await provider.invoke_context(ContextProviderCallRequest(
                     scope, policy, "context-call-1", ProviderCallKind.COLLABORATION_INITIAL,
-                    {"type": "object"}, payload, component_paths))
+                    schema, payload, component_paths))
                 first.finalizer.accepted()
                 second = await provider.invoke_context(ContextProviderCallRequest(
                     scope, policy, "context-call-2", ProviderCallKind.COLLABORATION_CONTINUATION,
-                    {"type": "object"}, payload, component_paths, expected_thread_id=first.thread_id))
+                    schema, payload, component_paths, expected_thread_id=first.thread_id))
                 second.finalizer.accepted()
                 self.assertEqual(provider.inspect_context_thread(scope, policy), first.thread_id)
                 self.assertEqual(second.thread_id, first.thread_id)
@@ -2923,6 +2926,13 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         exchanges = _agent_exchange_records(self.workspace)
         self.assertEqual(len(exchanges), 6)
         self.assertEqual(sum(record["request_type"] == "request" for record in exchanges), 2)
+        schemas = [json.loads(record["content"])["schema"] for record in exchanges
+                   if record["request_type"] == "request"]
+        self.assertEqual(schemas, [invocation.schema for invocation in captured])
+        self.assertEqual(schemas, [schema, schema])
+        self.assertEqual(diagnose_json_text('{"action":"answer"}', schemas[0]), ())
+        for invalid in ('{}', '{"action":"unknown"}', '{"action":"answer","extra":null}'):
+            self.assertTrue(diagnose_json_text(invalid, schemas[0]))
         manifest = self.workspace.read_json(f"agent_states/orchestrator_state/provider_sessions/{session_id}.json")
         self.assertEqual(manifest["provider_threads"], {})
         async with provider.invocation(replace(scope, subject_id="other-conversation"), policy):

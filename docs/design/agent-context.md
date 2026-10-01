@@ -23,7 +23,7 @@ cycle:
 | `agent_context.continuation` | Shared process-local Lead session transaction; defer coverage commitment until authoritative result publication. |
 | `agent_context.actions` | SEARCH/READ/ANSWER values, policies, correlations, opaque handles, evidence authorization, and provider observations. |
 | `agent_context.sources` | Bounded searchable source capture and drift checks; separate exact retained-session-history capture for Lead continuation. |
-| `agent_context.service` | Provider-neutral typed wire-v8 call loop, local reference loading, lifecycle authority, source/action orchestration, checkpoint commit, usage aggregation, and optional progress observer. |
+| `agent_context.service` | Provider-neutral typed wire-v9 call loop, local reference loading, lifecycle authority, source/action orchestration, checkpoint commit, usage aggregation, and optional progress observer. |
 
 The retained execution entry points are backend/provider component interfaces,
 plus the runtime's lead-turn and confirmed-consultation composition.
@@ -161,21 +161,22 @@ provider-mismatched, or excessive-depth non-session state selects bootstrap.
 Ambiguous provider failure taints the continuation; it never authorizes later
 omission or replay of unresolved submitted work.
 
-Ordinary Lead turns and consultation/artifact-review synthesis use a separate
-`SESSION` continuation/checkpoint identity for one workspace/session/agent.
-Invocation correlation, reference/evidence authority, exchanges, and progress
-remain `CONVERSATION` scoped. Specialists and consensus keep their existing
-exact scopes. The new session namespace bootstraps without reading, migrating,
-or rewriting old conversation-scoped namespace bytes.
+Ordinary Lead turns and consultation/artifact-review synthesis use a separate `SESSION`
+continuation/checkpoint identity for one workspace/session/agent. Invocation
+correlation, reference/evidence authority, exchanges, and progress remain `CONVERSATION`
+scoped. Specialists and consensus keep their existing exact scopes. The new session
+namespace bootstraps without reading, migrating, or rewriting old conversation-scoped
+namespace bytes.
 
-Lead bootstrap sends all retained active and archived conversation histories;
-a compatible delta sends unseen events. `conversations.session_context` owns
-the exact visible projection and a coverage vector of conversation ID,
-sequence, and prefix digest, with original event timestamps. It invents no
-global session event sequence. A changed valid prefix invalidates continuation
-and bootstraps from current authority; corrupt canonical history fails closed.
-Current directives and complete current core bytes accompany both modes.
-Neither remembered decisions nor visible workflow facts grant capabilities.
+Lead bootstrap sends all retained active and archived history. Compatible deltas deliver
+missing turn content and new host/specialist semantic material regardless of originating
+turn. Provider-origin Lead text demonstrably known to a verified thread and text present
+in current input are suppressed without dropping new workflow facts.
+`conversations.session_context` owns the provider-visible projection. Canonical records,
+original timestamps and the coverage vector of conversation ID, sequence and prefix
+digest remain host-owned. No global session sequence is invented. Changed valid prefixes
+invalidate continuation and bootstrap current authority; corrupt canonical history fails
+closed.
 
 Required history also carries exact recommendation requests, decisions, starts,
 and results. A source alias such as `current_response` is resolved to the whole
@@ -344,23 +345,29 @@ distinct from the recaptured whole-file digest and selected-boundary digest.
 <a id="compact-provider-wire-v5"></a>
 <a id="typed-provider-wire-v7"></a>
 <a id="typed-provider-wire-v8"></a>
-## Typed provider wire v8
+<a id="typed-provider-wire-v9"></a>
+## Typed provider wire v9
 
-Contextual bindings define `agent-context-wire-v8`. The initial compact
-payload uses `c` (correlation), `q` (phase/result contract), and `i` (required
-current input), with required Lead session memory `h`, applicable compact
-candidate `n`, selected documents `docs`, projection `p`, and tombstone/record
-`t` data. Mandatory reference
-bodies appear as locally authorized
-`untrusted_writing_artifact_context`. Continuations contain only correlation,
-contract, and the new observation (`c`, `q`, `o`). The Lead `h` object contains
-exact visible history, `delivery_mode`, and `current_state` with session
-directives and complete current canonical core bytes. It is mandatory even
-with P3 budget zero or a `workflow_meta` answer contract, but cannot satisfy
-invocation-local evidence or reference obligations.
+Contextual bindings define `agent-context-wire-v9`. Initial payloads use `c`
+(correlation), `q` (phase/result contract), and `i` (required current input),
+with required Lead session memory `h`, applicable compact candidate `n`, selected
+documents `docs`, projection `p`, and tombstone/record `t` data. Mandatory
+reference bodies appear as locally authorized
+`untrusted_writing_artifact_context`. Continuations contain correlation,
+contract, and the new observation (`c`, `q`, `o`).
 
-Wire v8 shares repeated runtime-owned dictionaries within an initial request.
-When the complete encoded payload becomes smaller, `context_encoding` declares
+The Lead `h` object contains required visible history, `delivery_mode` and
+`current_state` session directives. Its projection removes storage bookkeeping and
+absent optional fields while preserving exact readable content, selectable identities
+and necessary workflow facts. Verified continuations omit empty unchanged conversations
+and text present in current input. Core-status objects contain only `locator`, `status`
+and current `evidence_id`; full integrity metadata stays host-owned. Remembered history
+never satisfies current evidence or reference obligations, even for zero P3 budgets or
+`workflow_meta` calls.
+
+Wire v9 shares repeated runtime-owned dictionaries within an initial request.
+Only when both the complete encoded payload and its recursive property count
+become smaller, `context_encoding` declares
 `shared-objects-v1` and its substitution instructions, and `context_objects`
 stores literal objects under request-local aliases such as `o1`. An exact
 `{"context_ref":"o1"}` at an eligible slot substitutes that table value. Every
@@ -453,7 +460,7 @@ submitted outcome instead remains
 Uncertain cleanup or closure remains recovery-gated.
 
 The runtime supplies a deterministic Lead v5 overlay. Fresh defaults use v5. The
-context action envelope stays wire v8. Ordinary synthesis uses `lead-synthesis-v3`
+context action envelope stays wire v9. Ordinary synthesis uses `lead-synthesis-v3`
 with a nullable action, mutually exclusive with `next_intent`; its durable
 historical codec is unchanged. Specialist and artifact-review synthesis results
 retain their own contracts.

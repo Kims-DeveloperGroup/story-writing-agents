@@ -166,7 +166,7 @@ __all__ = [
     "record_context_provider_failure",
 ]
 
-_CONTEXT_WIRE_VERSION = "agent-context-wire-v8"
+_CONTEXT_WIRE_VERSION = "agent-context-wire-v9"
 _ACTION_WIRE_CODES = {
     "search": "s",
     "read": "r",
@@ -3660,6 +3660,84 @@ def _action_query(
     ]
 
 
+def _history_current_fields(
+    history: SessionHistorySnapshot,
+    request: ContextInvocationRequest,
+) -> dict[str, frozenset[str]]:
+    """Find exact visible messages already carried in runtime-owned current input."""
+    workflows = {
+        ContextInvocationKind.LEAD: "lead_front_channel",
+        ContextInvocationKind.LEAD_SYNTHESIS: "lead_synthesis",
+    }
+    if request.invocation_kind not in workflows:
+        return {}
+    supplied_by_locator: dict[str, str] = {}
+    supplied_by_event: dict[str, str] = {}
+    for material in request.materials:
+        if material.entry.semantic_channel is not ContextSemanticChannel.CURRENT_INPUT:
+            continue
+        current = _wire_projected_content((material.entry,), material.body_utf8)
+        if type(current) is not dict:
+            continue
+        if current.get("workflow") != workflows[request.invocation_kind]:
+            continue
+        command = current.get("command")
+        aliases = current.get("input_aliases")
+        if type(command) is str and type(aliases) is list:
+            for alias in aliases:
+                if (
+                    type(alias) is dict
+                    and alias.get("kind") == "user_input"
+                    and type(alias.get("locator")) is str
+                ):
+                    supplied_by_locator[alias["locator"]] = command
+        input_values = current.get("inputs")
+        inputs = list(input_values) if type(input_values) in {list, tuple} else []
+        execution = current.get("structured_recommendation_execution")
+        if type(execution) is dict:
+            selected = execution.get("selected_inputs")
+            if type(selected) in {list, tuple}:
+                inputs.extend(selected)
+        for item in inputs:
+            if type(item) is not dict or type(item.get("locator")) is not str:
+                continue
+            if type(item.get("text")) is str:
+                supplied_by_locator[item["locator"]] = item["text"]
+            reply = item.get("reply")
+            if type(reply) is dict and type(reply.get("message")) is str:
+                supplied_by_locator[item["locator"]] = reply["message"]
+        replies = current.get("replies", ())
+        if type(replies) not in {list, tuple}:
+            continue
+        for reply in replies:
+            if (
+                type(reply) is dict
+                and type(reply.get("reply_event_id")) is str
+                and type(reply.get("message")) is str
+            ):
+                supplied_by_event[reply["reply_event_id"]] = reply["message"]
+    result: dict[str, frozenset[str]] = {}
+    for conversation in history.conversations:
+        for record in conversation.records:
+            supplied = supplied_by_event.get(record.event_id)
+            if supplied is None:
+                supplied = supplied_by_locator.get(f"conversation/{record.event_id}")
+            if supplied is None and record.sender.kind.value == "user":
+                supplied = supplied_by_locator.get(
+                    f"conversation/{record.turn_id}/user_input",
+                )
+            if supplied is None:
+                continue
+            fields = frozenset(
+                item.key.value for item in record.fields
+                if item.key.value in {"message.content", "specialist_reply.content"}
+                and item.text == supplied
+            )
+            if fields:
+                result[record.event_id] = fields
+    return result
+
+
 def _initial_payload(
     binding: ContextInvocationBinding,
     projection: ContextProjection,
@@ -3671,6 +3749,9 @@ def _initial_payload(
     action_index: int,
     allowed_actions: tuple[str, ...],
     reference_context: tuple[Mapping[str, object], ...],
+    session_history_records: Mapping[
+        str, Mapping[str, Mapping[str, object]]
+    ] | None = None,
 ) -> tuple[
     dict[str, object],
     dict[JsonPath, ContextComponentKind],
@@ -3757,6 +3838,29 @@ def _initial_payload(
     for source_alias in group_aliases:
         records = records_by_alias.get(source_alias, [])
         source = catalog_by_alias[source_alias]
+        represented_records = (session_history_records or {}).get(
+            source.entry.provenance.locator,
+        )
+        if (
+            source.entry.source_kind is ContextSourceKind.CONVERSATION
+            and represented_records is not None
+        ):
+            unrepresented_records = []
+            for record in records:
+                expected = represented_records.get(record.cursor.record_id)
+                actual = _wire_projected_content(
+                    (source.entry,),
+                    projected_by_key[(source_alias, record.record_alias)].body_utf8,
+                )
+                if (
+                    expected is None
+                    or type(actual) is not dict
+                    or any(actual.get(key) != value for key, value in expected.items())
+                ):
+                    unrepresented_records.append(record)
+            records = unrepresented_records
+            if not records:
+                continue
         record_values = [
             _wire_record_value(
                 source.entry,
@@ -3827,12 +3931,7 @@ def _initial_payload(
             {
                 "evidence_id": item.evidence_id,
                 "locator": item.locator,
-                "manifest_digest": item.manifest_digest,
-                "revision": item.revision,
-                "source_digest": item.source_digest,
-                "source_id": item.source_id,
                 "status": item.status.value,
-                "utf8_bytes": item.source_utf8_bytes,
             }
             for item in session.core_statuses
         ]
@@ -4696,11 +4795,56 @@ class AgentContextService:
                 fresh=request.fresh,
             )
             history_delivery = None
+            history_records = None
             if session_history is not None:
+                history_records = {
+                    f"conversation/{item.metadata.conversation_id}": {
+                        record.event_id: {
+                            "event_id": record.event_id,
+                            "batch_digest": record.batch_digest,
+                            "turn_id": record.turn_id,
+                            "kind": record.kind.value,
+                            "sender": {
+                                "kind": record.sender.kind.value,
+                                "agent_id": record.sender.agent_id,
+                            },
+                            "recipient": {
+                                "kind": record.recipient.kind.value,
+                                "agent_id": record.recipient.agent_id,
+                            },
+                            "fields": [
+                                {"key": value.key.value, "text": value.text,
+                                 "assignment_ordinal": value.assignment_ordinal,
+                                 "input_ordinal": value.input_ordinal}
+                                for value in record.fields
+                            ],
+                        }
+                        for record in item.records
+                    }
+                    for item in session_history.conversations
+                }
+                native_operation_id = None
+                record = inspection.record
+                if (
+                    projection.mode is ContextDeliveryMode.DELTA
+                    and record is not None
+                    and record.attempt is not None
+                    and record.attempt.outcome is ContextLedgerAttemptOutcome.COMMITTED
+                ):
+                    native_operation_id = record.attempt.plan.operation_id
                 try:
                     history_delivery = session_history.delivery(
                         planning_checkpoint.session_history_coverage
-                        if projection.mode is ContextDeliveryMode.DELTA else ()
+                        if projection.mode is ContextDeliveryMode.DELTA else (),
+                        known_native_operation_id=native_operation_id,
+                        native_agent_id=(
+                            request.agent_id
+                            if projection.mode is ContextDeliveryMode.DELTA else None
+                        ),
+                        included_fields=(
+                            _history_current_fields(session_history, request)
+                            if projection.mode is ContextDeliveryMode.DELTA else None
+                        ),
                     )
                 except SessionContextHistoryChangedError:
                     inspection = self._ledger.invalidate(
@@ -4764,6 +4908,7 @@ class AgentContextService:
                         after=None, search_had_hits=False,
                     ),
                     reference_context=(),
+                    session_history_records=history_records,
                 )
                 known_payload["h"] = history_delivery
                 known_component_paths[("h",)] = ContextComponentKind.CONVERSATION_CONTEXT
@@ -4917,6 +5062,7 @@ class AgentContextService:
                         action_index=action_index,
                         allowed_actions=allowed_actions,
                         reference_context=reference_context,
+                        session_history_records=history_records,
                     )
                     if history_delivery is not None:
                         payload["h"] = history_delivery

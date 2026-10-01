@@ -74,6 +74,20 @@ def _is_prefix(prefix: JsonPath, path: JsonPath) -> bool:
     return path[: len(prefix)] == prefix
 
 
+def _property_count(value: object) -> int:
+    """Count JSON object members, including objects nested inside arrays."""
+    count = 0
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, dict):
+            count += len(item)
+            pending.extend(item.values())
+        elif isinstance(item, (list, tuple)):
+            pending.extend(item)
+    return count
+
+
 def _protected_slot(
     path: JsonPath,
     component_paths: Mapping[JsonPath, ContextComponentKind],
@@ -154,7 +168,12 @@ def compact_context_payload(
         group_size = len(occurrences) * len(identity)
         shared_size = len(canonical_provider_json({alias: original}))
         shared_size += len(occurrences) * len(canonical_provider_json(reference))
-        if shared_size >= group_size:
+        original_properties = _property_count(original)
+        shared_properties = 1 + original_properties + len(occurrences)
+        if (
+            shared_size >= group_size
+            or shared_properties >= len(occurrences) * original_properties
+        ):
             continue
         shared[alias] = original
         replacements.extend((path, reference) for path, _ in occurrences)
@@ -174,7 +193,10 @@ def compact_context_payload(
         "format": "shared-objects-v1",
         "instruction": _CONTEXT_ENCODING_INSTRUCTION,
     }
-    if len(canonical_provider_json(projected)) >= len(canonical_provider_json(payload)):
+    if (
+        len(canonical_provider_json(projected)) >= len(canonical_provider_json(payload))
+        or _property_count(projected) >= _property_count(payload)
+    ):
         return payload, paths
     paths[("context_objects",)] = ContextComponentKind.CONTROL
     paths[("context_encoding",)] = ContextComponentKind.CONTROL

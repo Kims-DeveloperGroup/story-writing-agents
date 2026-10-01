@@ -416,47 +416,6 @@ _LEAD_RESPONSE_CORRECTION_INSTRUCTION = (
     "recommended_action only when that variant requires it. Preserve a selected objective PREPARE as an exact "
     "artifact proposal; do not downgrade it into advice or claim completion."
 )
-_LEAD_OBJECTIVE_INSTRUCTION = (
-    "Runtime contract overlay: lead-outcome-v5 supersedes every older retained "
-    "lead_front_channel field list, including older retained instructions in "
-    "workspace prompts. Return only the required fields for the selected semantic "
-    "variant; the runtime derives evidence and bookkeeping. Interpret "
-    "the user's instruction contextually with current artifact objectives and "
-    "offered draft sources, including abbreviated Korean or English approval "
-    "after a visible draft. Continue the selected draft or objective authoring task; "
-    "selected draft sources never bypass required current-task specialist drafts. "
-    "Use CONSULT until those drafts cover every affected domain. "
-    "Selecting PREPARE creates an exact artifact proposal "
-    "for separately confirmed review, never Apply or Commit authority. "
-    "START requires nonempty exact canonical target_paths; if target "
-    "scope is unresolved ask a focused question and omit objective_intent first. "
-    "CONTINUE uses an OPEN objective ID from this origin conversation. Both use "
-    "next_step clarify (question only), consult (ordinary consultation proposal), "
-    "or prepare (kind=proposal with artifact_intent and no proposal field). "
-    "The runtime resolves eligible exact visible draft sources from the conversation. "
-    "CANCEL explicitly names the objective and proposes no work. Omitted intent, prose, "
-    "consultation/review success and step rejection never complete or cancel an "
-    "objective. Only runtime's exact successful structured Apply result satisfies "
-    "it. A selected exact status receipt for a currently empty canonical core "
-    "document can support replace after runtime revalidation. Nonempty artifacts "
-    "require attached-reference or READ evidence. An existing empty core document "
-    "requires replace, not create. An empty status proves absence of content, not "
-    "complete story knowledge; obey the closed evidence matrix. If required "
-    "evidence is unavailable select a focused clarification before PREPARE. "
-    "Once PREPARE is selected, "
-    "return the exact candidate or the established validation failure, not advice."
-    " Every fresh RECOMMENDATION requires one recommended_action and no objective_intent. "
-    "Use exactly prepare_artifact or prepare_consultation, with purpose, instruction, "
-    "expected_result, ordered source_ids, its action-specific selector, and optional objective_id. "
-    "prepare_artifact requires complete canonical targets; prepare_consultation requires the exact canonical specialist set. "
-    "Source aliases may name offered draft events, input/evidence IDs, or current_response "
-    "for this exact visible message; current_response is not extracted draft prose. "
-    "Other outcome kinds omit recommended_action. An ordinary contextual "
-    "authoring instruction can still directly select A PREPARE without recommendation confirmation. "
-    "Recommendation Confirm authorizes one bounded Lead preparation only, never specialists, "
-    "review, Apply or Commit. A confirmed preparation must honor its exact disclosed "
-    "action and must not produce another recommendation or request the same confirmation again."
-)
 _SAFE_STRUCTURED_FALLBACK_MESSAGE = (
     "I couldn't validate the provider's structured reply after one repair attempt, "
     "so no action was taken. You can continue the conversation or try again."
@@ -5364,23 +5323,14 @@ class StoryRuntime:
                 "assignment contains an unknown input alias"
             ) from exc
         value = {
-            "answer_contract": {
-                "assessment": [
-                    item.value for item in CollaborationSpecialistAssessment
-                    if (item in {CollaborationSpecialistAssessment.DRAFTED,
-                                 CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE}
-                        if assignment.mode is SpecialistAssignmentMode.DRAFT
-                        else item is not CollaborationSpecialistAssessment.DRAFTED)
-                ],
-                "message": "nonempty visible specialist assessment",
-            },
             "assignment": {
                 "mode": assignment.mode.value,
                 "assignment_id": assignment.assignment_id,
                 "instruction": assignment.instruction,
                 "input_ids": list(assignment.input_ids),
                 "round": assignment.round,
-                "review_basis": None if assignment.review_basis is None else review_basis_to_dict(assignment.review_basis),
+                **({"review_basis": review_basis_to_dict(assignment.review_basis)}
+                   if assignment.review_basis is not None else {}),
             },
             "inputs": [
                 self._collaboration_input_value(item, events, evidence=proposal.basis.evidence) for item in selected
@@ -5471,21 +5421,8 @@ class StoryRuntime:
         )
         value = {
             "provider_constraints": constraints.prompt_facts(),
+            "conversation_id": conversation_id,
             "artifact_objectives": artifact_objective_context(project_collaboration_history(events)),
-            "objective_instruction": (
-                "This consultation/review synthesis leaves its artifact objective OPEN. "
-                "Use the originating request and selected draft sources when synthesizing. "
-                "State the remaining authoring step when useful; never report objective "
-                "completion unless its runtime state is SATISFIED by exact Apply."
-            ),
-            "answer_contract": {
-                "message": "nonempty visible synthesis",
-                "next_intent": (
-                    "omit or provide an exact same-lineage proposal intent"
-                    if proposal.budget.rounds_spent == 0
-                    else "omit"
-                ),
-            },
             "inputs": [
                 self._collaboration_input_value(item, events, evidence=proposal.basis.evidence)
                 for item in proposal.basis.inputs
@@ -5504,23 +5441,8 @@ class StoryRuntime:
             "workflow": "lead_synthesis",
         }
         if artifact_candidate is not None:
-            value["answer_contract"] = {
-                "decision": [item.value for item in ArtifactReviewDecision],
-                "message": "nonempty visible review synthesis",
-            }
             value["artifact_candidate"] = json.loads(
                 serialize_artifact_review_candidate(artifact_candidate.candidate)
-            )
-        else:
-            cast(dict[str, object], value["answer_contract"])["recommended_action"] = (
-                _recommended_action_result_schema(constraints)
-            )
-            value["recommendation_instruction"] = (
-                "Omit recommended_action for an answer. An actionable synthesis may select exactly "
-                "prepare_artifact or prepare_consultation with purpose, instruction, expected_result, source_ids, "
-                "the fields for that action, and optional objective_id. current_response names this exact visible synthesis; "
-                "other sources use the supplied input IDs or offered draft event IDs. next_intent and "
-                "recommended_action are mutually exclusive. Preserve OPEN authoring objectives."
             )
 
         def decode(
@@ -6233,13 +6155,14 @@ class StoryRuntime:
         *, evidence: CollaborationLeadEvidence | None = None,
     ) -> dict[str, object]:
         value: dict[str, object] = {
-            "end_line": item.end_line,
             "input_id": item.input_id,
             "kind": item.kind.value,
             "locator": item.locator,
             "revision_digest": item.revision_digest,
-            "start_line": item.start_line,
         }
+        if item.start_line is not None:
+            value["start_line"] = item.start_line
+            value["end_line"] = item.end_line
         if item.kind is CollaborationInputKind.USER_INPUT:
             turn_id = item.locator.removeprefix("conversation/").removesuffix(
                 "/user_input"
@@ -8457,8 +8380,8 @@ class StoryRuntime:
                 "kind": item.kind.value,
                 "locator": item.locator,
                 "revision_digest": item.revision_digest,
-                "start_line": item.start_line,
-                "end_line": item.end_line,
+                **({"start_line": item.start_line, "end_line": item.end_line}
+                   if item.start_line is not None else {}),
             }
             for item in inputs
         ]
@@ -8572,61 +8495,17 @@ class StoryRuntime:
                 reference_operation
             )
             current_value: dict[str, object] = {
-                "contract_version": "lead-outcome-v5",
+                "conversation_id": conversation_id,
                 "provider_constraints": constraints.prompt_facts(),
-                "runtime_contract_overlay": _LEAD_OBJECTIVE_INSTRUCTION,
                 "artifact_objectives": artifact_objective_context(objective_projection),
-                "answer_contract": {
-                    "assignments": {
-                        "agent_id": "canonical specialist ID",
-                        "input_ids": "nonempty runtime-supplied aliases",
-                        "instruction": "complete visible assignment",
-                        "mode": "draft | review",
-                        "review_basis": "omit for draft; concrete candidate_input_ids and criteria for review",
-                    },
-                    "direct_answer": (
-                        "message and authoring_scope; add kind only for question or critique"
-                    ),
-                    "authoring_scope": (
-                        "always required; include activity, targets, domains, and exact "
-                        "offered task token"
-                    ),
-                    "kind": "required only when selecting a non-default semantic variant",
-                    "message": "always required nonempty user-visible text",
-                    "proposal": {
-                        "assignments": "required only for proposal",
-                        "purpose": "visible purpose",
-                    },
-                    "artifact_intent": (
-                        "omit or provide provider-neutral create/patch/replace/rename/"
-                        "delete operations with optional review domains"
-                    ),
-                    "objective_intent": "omit unless selecting an objective transition",
-                    "recommended_action": "omit unless kind is recommendation",
-                },
                 "command": reference_operation.provider_text,
-                "identity": {
-                    "agent_id": LEAD_ORCHESTRATOR,
-                    "conversation_id": conversation_id,
-                    "session_id": session_id,
-                    "step_id": step_id,
-                    "turn_id": turn_id,
-                },
                 "input_aliases": input_aliases,
                 "authoring_tasks": [
                     {"task_id": key[0], "task_revision": key[1],
-                     "current_scope": None if item is None else authoring_scope_to_dict(item)}
+                     **({"current_scope": authoring_scope_to_dict(item)}
+                        if item is not None else {})}
                     for key, item in offered_tasks.items()
                 ],
-                "authoring_rules": (
-                    "Choose the new task for unrelated work; explicitly select a prior task only to continue it. "
-                    "Workflow/status/clarification can be direct; substantive story work must propose all "
-                    "affected specialists. Drafting works from a sufficient brief even with empty targets. "
-                    "Review requires concrete nonempty input material and criteria, not merely a brief. "
-                    "A selected authoring task retains draft obligations before exact candidate review. "
-                    "Fresh supplied-draft review must visibly identify the current user-supplied material. "
-                    "Specialists draft; Lead integrates. Candidate review and Apply remain separate."
-                ),
                 "workflow": "lead_front_channel",
                 "recommended_action_source_aliases": [
                     "current_response", *(item.event_id for item in objective_projection.offered_draft_sources),
@@ -13694,26 +13573,9 @@ class StoryRuntime:
         *,
         artifact_binding: SessionArtifactBinding | None = None,
     ) -> str:
-        """Capture current instructions and canonical core bytes as context only."""
-
-        if artifact_binding is None:
-            artifact_binding = self._session_artifact_binding(session_id)
-        with artifact_binding.open_ready_resources() as access:
-            snapshots = {
-                item.path: item
-                for item in access.repository.capture_complete_state()
-                if item.path in CORE_ARTIFACT_PATHS
-            }
+        """Capture current instructions; artifact content requires SEARCH/READ."""
         value = {
             "runtime_overrides": self.workspace.load_session_overrides(session_id),
-            "core_documents": [
-                {"path": path, "present": path in snapshots,
-                 "content": (
-                     snapshots[path].content.decode("utf-8", errors="strict")
-                     if path in snapshots else None
-                 )}
-                for path in CORE_ARTIFACT_PATHS
-            ],
         }
         return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 

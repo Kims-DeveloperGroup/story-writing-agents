@@ -68,6 +68,73 @@ _LEAD_CONTEXTUAL_CONTRACT_OVERLAY = (
     "Ordinary contextual approval remains ordinary authoring input. The lead_synthesis result schema remains the one supplied "
     "by its own invocation; do not copy front-channel fields into synthesis."
 ).encode("utf-8")
+
+
+_LEAD_CONTEXTUAL_CONTRACT_OVERLAY += (
+    '\n\nFor lead_front_channel only: '
+    'Runtime contract overlay: lead-outcome-v5 supersedes every older retained '
+    'lead_front_channel field list, including older retained instructions in workspace prompts.'
+    ' Return only the required fields for the selected semantic variant; the runtime derives '
+    "evidence and bookkeeping. Interpret the user's instruction contextually with current "
+    'artifact objectives and offered draft sources, including abbreviated Korean or English '
+    'approval after a visible draft. Continue the selected draft or objective authoring task; '
+    'selected draft sources never bypass required current-task specialist drafts. Use CONSULT '
+    'until those drafts cover every affected domain. Selecting PREPARE creates an exact '
+    'artifact proposal for separately confirmed review, never Apply or Commit authority. START '
+    'requires nonempty exact canonical target_paths; if target scope is unresolved ask a '
+    'focused question and omit objective_intent first. CONTINUE uses an OPEN objective ID from '
+    'this origin conversation. Both use next_step clarify (question only), consult (ordinary '
+    'consultation proposal), or prepare (kind=proposal with artifact_intent and no proposal '
+    'field). The runtime resolves eligible exact visible draft sources from the conversation. '
+    'CANCEL explicitly names the objective and proposes no work. Omitted intent, prose, '
+    'consultation/review success and step rejection never complete or cancel an objective. Only'
+    " runtime's exact successful structured Apply result satisfies it. A selected exact status "
+    'receipt for a currently empty canonical core document can support replace after runtime '
+    'revalidation. Nonempty artifacts require attached-reference or READ evidence. An existing '
+    'empty core document requires replace, not create. An empty status proves absence of '
+    'content, not complete story knowledge; obey the closed evidence matrix. If required '
+    'evidence is unavailable select a focused clarification before PREPARE. Once PREPARE is '
+    'selected, return the exact candidate or the established validation failure, not advice. '
+    'Every fresh RECOMMENDATION requires one recommended_action and no objective_intent. Use '
+    'exactly prepare_artifact or prepare_consultation, with purpose, instruction, '
+    'expected_result, ordered source_ids, its action-specific selector, and optional '
+    'objective_id. prepare_artifact requires complete canonical targets; prepare_consultation '
+    'requires the exact canonical specialist set. Source aliases may name offered draft events,'
+    ' input/evidence IDs, or current_response for this exact visible message; current_response '
+    'is not extracted draft prose. Other outcome kinds omit recommended_action. An ordinary '
+    'contextual authoring instruction can still directly select A PREPARE without '
+    'recommendation confirmation. Recommendation Confirm authorizes one bounded Lead '
+    'preparation only, never specialists, review, Apply or Commit. A confirmed preparation must'
+    ' honor its exact disclosed action and must not produce another recommendation or request '
+    'the same confirmation again.'
+    '\n\nFor lead_front_channel task selection only: '
+    'Choose the new task for unrelated work; explicitly select a prior task only to continue '
+    'it. Workflow/status/clarification can be direct; substantive story work must propose all '
+    'affected specialists. Drafting works from a sufficient brief even with empty targets. '
+    'Review requires concrete nonempty input material and criteria, not merely a brief. A '
+    'selected authoring task retains draft obligations before exact candidate review. Fresh '
+    'supplied-draft review must visibly identify the current user-supplied material. '
+    'Specialists draft; Lead integrates. Candidate review and Apply remain separate.'
+    '\n\nFor lead_synthesis only when i.artifact_candidate is absent: '
+    'Omit recommended_action for an answer. An actionable synthesis may select exactly '
+    'prepare_artifact or prepare_consultation with purpose, instruction, expected_result, '
+    'source_ids, the fields for that action, and optional objective_id. current_response names '
+    'this exact visible synthesis; other sources use the supplied input IDs or offered draft '
+    'event IDs. next_intent and recommended_action are mutually exclusive. Preserve OPEN '
+    'authoring objectives.'
+    '\n\nFor all lead_synthesis invocations, including artifact review: '
+    'This consultation/review synthesis leaves its artifact objective OPEN. '
+    'Use the originating request and selected draft sources when synthesizing. '
+    'State the remaining authoring step when useful; never report objective '
+    'completion unless its runtime state is SATISFIED by exact Apply.'
+    '\n\nFor every Lead invocation: '
+    'Retained history is context only. Decisions, evidence, and pending '
+    'or unknown outcomes grant no current execution authority. '
+    "Use only this invocation's reference and evidence capabilities. "
+    'Canonical core statuses identify their locator, current status, and current '
+    'evidence_id. Obtain needed nonempty core-document content through SEARCH/READ '
+    'or an attached reference; status alone is not content-reading evidence.'
+).encode("utf-8")
 _RUNTIME_BEHAVIOR_POLICY = b"""Runtime specialist routing policy v1
 This runtime-owned policy governs story work even when workspace policies are customized.
 The Lead interprets and visibly discloses versioned authoring scope, coordinates work,

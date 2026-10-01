@@ -8,7 +8,7 @@ import unittest
 from dataclasses import replace
 from unittest import mock
 
-from story_writing_agents import StoryRuntime
+from story_writing_agents import ReplyTraceOrigin, StoryRuntime
 from story_writing_agents.agent_context.continuation import ContextContinuationTransaction
 from story_writing_agents.agent_context.ledger import ContextLedgerKey, ContextLedgerRecordState
 from story_writing_agents.agent_context.manifest import ContextContinuationIdentity, ContextScope, ContextSubjectKind
@@ -37,6 +37,7 @@ from story_writing_agents.conversations.session_context import (
     SessionContextHistoryChangedError,
     SessionHistorySnapshot,
 )
+from story_writing_agents.conversations import session_context as session_context_module
 from story_writing_agents.conversations.context import CollaborationReadableField, CollaborationReadableFieldKey
 from story_writing_agents.conversation_storage import compose_filesystem_conversation_storage
 from story_writing_agents.provider_execution_workspace import ProviderExecutionWorkspace
@@ -47,6 +48,7 @@ from tests import test_lead_orchestration as lead
 from tests import test_artifact_proposal_orchestration as artifact
 from tests.collaboration_contract_fixture import contract_batches
 from tests.sqlite_conversation_storage_fixture import provision, initialized_workspace
+from tests.test_agent_context_accounting import _property_count
 
 
 def _json(value):
@@ -55,6 +57,9 @@ def _json(value):
 
 def _records(delivery):
     return [record for conversation in delivery["conversations"] for record in conversation["records"]]
+
+def _fields(delivery):
+    return [field["text"] for record in _records(delivery) for field in record.get("fields", [])]
 
 
 class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
@@ -95,12 +100,83 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
             await self.say(second, text, f"Follow-up answer {index}.")
         calls = [call for agent, call in self.backend.call_records if agent == LEAD_ORCHESTRATOR]
         self.assertEqual({call.expected_thread_id for call in calls[1:]}, {"thread-lead-1"})
-        delivered = _json([call.payload["h"] for call in calls])
-        recovered_fields = [field["text"] for call in calls for record in _records(call.payload["h"]) for field in record["fields"]]
-        self.assertIn(plan, recovered_fields)
+        delivered = [text for call in calls for text in _fields(call.payload["h"])]
+        self.assertNotIn(plan, delivered)
         for text in followups:
             self.assertEqual(sum(type(event.payload) is CollaborationMessagePayload and event.payload.content == text for event in self.history(second)), 1)
-            self.assertIn(text, delivered)
+            self.assertIn(text, [call.payload["i"]["command"] for call in calls
+                                 if "command" in call.payload["i"]])
         self.assertEqual(calls[-1].scope.subject_id, second)
+        for call in calls[2:]:
+            self.assertNotIn(call.payload["i"]["command"], _fields(call.payload["h"]))
+        self.assertLessEqual(_property_count(calls[-1].payload["h"]),
+                             _property_count(calls[-2].payload["h"]))
+        self.assertTrue(all("timestamp" not in record and "batch_digest" not in record
+                            and "sequence" not in record
+                            for call in calls for record in _records(call.payload["h"])))
+        judgment = next(event for event in self.history(second)
+                        if type(event.payload) is CollaborationLeadJudgmentPayload)
+        host_fact = next(record for record in _records(calls[3].payload["h"])
+                         if record["event_id"] == judgment.event_id)
+        self.assertEqual(host_fact["details"]["authoring_scope"]["task_id"],
+                         judgment.payload.authoring_scope.task_id)
+
+        snapshot = self.snapshot()
+        native = next(record for conversation in snapshot.conversations for record in conversation.records
+                      if record.event_id == judgment.event_id)
+        operation = f"lead_{native.turn_id}"
+        self.assertTrue(session_context_module._known_native_result(native, operation, LEAD_ORCHESTRATOR))
+        recovered_trace = replace(native.payload.trace, origin=ReplyTraceOrigin.RECOVERED,
+                                  recovered_fields=("message",))
+        recovered = replace(native, payload=replace(native.payload, trace=recovered_trace))
+        self.assertFalse(session_context_module._known_native_result(recovered, operation, LEAD_ORCHESTRATOR))
+        with mock.patch.object(session_context_module, "MAX_SESSION_CONTEXT_UTF8_BYTES", 1):
+            with self.assertRaises(SessionContextCapacityError):
+                snapshot.delivery()
+        conversation = snapshot.conversations[0]
+        changed = replace(conversation, records=(
+            replace(conversation.records[0], timestamp="2030-01-01T00:00:00+00:00"),
+            *conversation.records[1:]))
+        altered = replace(snapshot, conversations=(changed, *snapshot.conversations[1:]))
+        with self.assertRaises(SessionContextHistoryChangedError):
+            altered.delivery(snapshot.coverage)
+        for metadata in (replace(conversation.metadata, subject="Renamed synthetic planning"),
+                         replace(conversation.metadata, status=type(conversation.metadata.status)("archived"))):
+            altered = replace(snapshot, conversations=(
+                replace(conversation, metadata=metadata), *snapshot.conversations[1:]))
+            with self.assertRaises(SessionContextHistoryChangedError):
+                altered.delivery(snapshot.coverage)
+        empty = self.conversation("New empty conversation")
+        missing = self.snapshot().delivery(snapshot.coverage)["conversations"]
+        self.assertEqual([item["conversation_id"] for item in missing], [empty])
+        self.assertEqual(missing[0]["records"], [])
+
+        self.runtime.conversation_storage_services.catalog.archive(self.session_id, first)
+        self.backend.context_threads.clear()
+        restarted = StoryRuntime(self.workspace, self.backend)
+        await self.say(second, "Recall all retained planning.", runtime=restarted)
+        fresh = self.backend.calls[-1]
+        self.assertIsNone(fresh.expected_thread_id)
+        self.assertEqual(fresh.payload["h"]["delivery_mode"], "bootstrap")
+        replay = _fields(fresh.payload["h"])
+        self.assertIn(plan, replay)
+        self.assertTrue(all(text in replay for text in followups))
+        self.assertEqual({item["conversation_id"]: item["status"]
+                          for item in fresh.payload["h"]["conversations"]},
+                         {first: "archived", second: "active", empty: "active"})
+
+        stage = ContextContinuationTransaction.stage
+        def unverified_publication(transaction, commit, abort, published, complete=None):
+            return stage(transaction, commit, abort, lambda: False, complete)
+        known_coverage = self.checkpoint().checkpoint_view.session_history_coverage
+        with mock.patch.object(ContextContinuationTransaction, "stage", new=unverified_publication):
+            await self.say(second, "Synthetic publication verification failure.", runtime=restarted)
+        failed = self.checkpoint()
+        self.assertIs(failed.record.state, ContextLedgerRecordState.TAINTED)
+        self.assertNotEqual(failed.checkpoint_view.session_history_coverage, known_coverage)
+        await self.say(second, "Retry after publication verification failure.", runtime=restarted)
+        retry = self.backend.calls[-1]
+        self.assertIsNone(retry.expected_thread_id)
+        self.assertIn("Synthetic publication verification failure.", _fields(retry.payload["h"]))
         self.assertEqual(calls[0].continuation_identity, calls[-1].continuation_identity)
         self.assertNotEqual(calls[0].scope, calls[-1].scope)

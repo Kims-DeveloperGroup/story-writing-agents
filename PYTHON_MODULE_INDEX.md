@@ -117,8 +117,8 @@ Dependencies flow from `service`, `sources`, and `progress` toward manifest/acti
 contracts. Filesystem source access is delegated to writing-artifact and workspace owners. Optional
 validation diagnostics preserve rejection, repair, checkpoint, and authority decisions.
 
-`service` owns pure, call-local request compaction before provider accounting; the
-projection depends only on accounting contracts and owns no durable state or resources.
+`service` owns provider delivery and verified native continuity; host retains integrity receipts and complete-history coverage.
+`request_compaction` shares only when properties and bytes decrease before accounting; it owns no durable state or resources.
 
 ### Agent exchange capture
 
@@ -140,7 +140,8 @@ search/storage contracts without owning persistence.
 - `conversations.events`, `conversations.session_context`
 - `conversation_search`, `conversation_literal_search`, `conversation_retrieval`
 
-`catalog` owns catalog behavior, `events` owns schema-v2 event contracts, and `context` projects exact Commit authority or typed reprepare from durable Apply history; `session_context` derives session-scoped context. Search implementations must return public
+`catalog` owns catalog behavior, `events` owns schema-v2 event contracts, and `context` projects exact Commit authority or typed reprepare from durable Apply history; `session_context` projects exact session history without storage bookkeeping or native-thread ownership;
+fresh delivery is complete, while compatible continuation carries unseen facts. Search implementations must return public
 search/retrieval contracts rather than expose storage internals. Conversation events and
 retrieval may carry bounded validation details associated with the physical provider call;
 older records without them remain valid. The `conversations` facade exports the additive structured Commit preparation request; prose cannot authorize Commit.

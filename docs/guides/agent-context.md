@@ -12,7 +12,7 @@ every physical provider call. It separates context by purpose:
 | Category | Examples | Component behavior |
 | --- | --- | --- |
 | Required work | Current instruction and complete logical candidate | Always present; omission fails validation. |
-| Lead session memory | Retained session history, current directives, and complete current core documents | Required independently of optional source budgets; exact bootstrap or unseen-history delta. |
+| Lead session memory | Retained session history and current directives | Complete fresh-thread replay or missing turn content and new host/specialist material on a verified native thread. |
 | Stable identity | Agent role, persona, language, and protocol | Reused only while its fingerprint remains compatible. |
 | Working knowledge | Current constraints and focused records | Selected within explicit byte budgets. |
 | Additive knowledge | Older conversation, manuscript passage, debate record, or the invoking agent's state | Remains available through bounded lexical search and exact read actions. |
@@ -59,12 +59,12 @@ must identify the handles it used.
 
 ## Lead session memory
 
-Ordinary Lead turns and consultation/artifact-review synthesis share one
-compatible provider thread across conversations in the same workspace and
-story session. Compatibility includes the agent, provider, definition, and
-context policy. Pause/reopen and process restart preserve compatible
-continuation; the Lead thread does not rotate after an arbitrary 16 turns.
-Specialists and consensus retain their separate invocation scopes.
+Ordinary Lead turns and consultation/artifact-review synthesis share one compatible
+provider thread across conversations in the same workspace and story session.
+Compatibility includes the agent, provider, definition, and context policy. Pause/reopen
+and process restart preserve compatible continuation; the Lead thread does not rotate
+after an arbitrary 16 turns. Specialists and consensus retain their separate invocation
+scopes.
 
 Before a direct Lead or Lead-synthesis invocation reads session-derived policy
 or context, runtime acquires an opaque physical-generation pin for the exact
@@ -82,13 +82,16 @@ process authority. See the
 Neither provider reads story evidence from that placement; runtime-mediated
 context and SEARCH/READ supply selected content.
 
-The initial substantive payload of each Lead invocation includes required
-session context (`h`). Bootstrap supplies all retained active and archived
-conversation histories with exact readable text and visible workflow/review
-details. A compatible continuation supplies unseen events. Both include
-current session directives and complete current canonical core-document bytes,
-including for `workflow_meta` turns. A zero optional P3 budget does not omit
-this material. See the [provider disclosure details](../operations/privacy-and-provider.md#provider-disclosure).
+Each initial Lead payload includes required session context (`h`). Fresh threads receive
+complete retained active and archived history as exact readable text and necessary
+workflow/review facts. A verified compatible thread receives missing turn content and
+newly produced host/specialist material, without repeating model-known Lead text or
+current input. Storage timestamps, batches and prefix digests stay host-owned. Current
+directives accompany both modes, including `workflow_meta` turns. Relevant core content
+arrives through host-owned SEARCH/READ or explicit references; current core-status
+evidence remains explicit. Optional P3 budgets do not remove required history or state.
+See [provider disclosure
+details](../operations/privacy-and-provider.md#provider-disclosure).
 
 Archiving a conversation only changes its catalog status: it does not remove
 its history from Lead memory or prevent provider disclosure. Memory grants no
