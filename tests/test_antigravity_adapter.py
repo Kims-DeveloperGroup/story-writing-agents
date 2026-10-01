@@ -2482,6 +2482,9 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.actual_transport_utf8_bytes, len(invocation.payload_json))
 
     async def test_shared_default_and_explicit_timeouts_keep_native_and_outer_deadlines_distinct(self):
+        native_state = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        native_state.chmod(0o700)
+        self.enterContext(mock.patch.dict(os.environ, {"CODEX_HOME": str(native_state)}))
         from story_writing_agents.provider_process import ProcessTimedOut
 
         for configured in (None, 12.5):
@@ -2489,7 +2492,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 expected = 900 if configured is None else configured
                 for vendor in ("codex", "antigravity"):
                     with self.subTest(vendor=vendor):
-                        backend = AgentBackend(self.workspace, backend_overrides={PLOT_ARCHITECT: vendor},
+                        backend = AgentBackend(self.workspace, executable=sys.executable, backend_overrides={PLOT_ARCHITECT: vendor},
                                                antigravity_executable=sys.executable,
                                                **({} if configured is None else {"timeout_seconds": configured}))
                         self.addCleanup(backend.close)

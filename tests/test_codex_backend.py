@@ -9,6 +9,7 @@ import hashlib
 import inspect
 import io
 import json
+import logging
 import os
 import sys
 import tempfile
@@ -1907,6 +1908,10 @@ class CodexBackendDefaultsTests(unittest.TestCase):
 
 class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
+        asyncio_diagnostics = logging.StreamHandler(sys.stderr)
+        logging.getLogger("asyncio").addHandler(asyncio_diagnostics)
+        self.addCleanup(asyncio_diagnostics.close)
+        self.addCleanup(logging.getLogger("asyncio").removeHandler, asyncio_diagnostics)
         self.workspace = pristine_initialized_workspace(self)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
