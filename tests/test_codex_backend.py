@@ -1911,13 +1911,15 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.fake_directory = Path(temporary.name)
+        native_state = self.fake_directory / "codex-home"
+        native_state.mkdir(mode=0o700)
         self.executable = self.fake_directory / "fake-codex"
         self.executable.write_text(_FAKE_CODEX, encoding="utf-8")
         self.executable.chmod(0o755)
         self.log_path = self.fake_directory / "invocations.jsonl"
         self.environment = mock.patch.dict(
             os.environ,
-            {"STORY_FAKE_CODEX_LOG": str(self.log_path)},
+            {"STORY_FAKE_CODEX_LOG": str(self.log_path), "CODEX_HOME": str(native_state)},
         )
         self.environment.start()
         self.addCleanup(self.environment.stop)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -227,6 +228,9 @@ class AuthClassificationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(AntigravityAdapter._authentication_failure(incident_bytes(**changes), 1))
 
     def codex(self):
+        native_state = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        native_state.chmod(0o700)
+        self.enterContext(mock.patch.dict(os.environ, {"CODEX_HOME": str(native_state)}))
         workspace = pristine_initialized_workspace(self)
         adapter = CodexAdapter(executable=str(Path(sys.executable).resolve(strict=True)), timeout_seconds=2,
                                configuration=ConfigManager(workspace).load_configuration_baseline().configuration, explicit_model=None, control_root=workspace.root)
