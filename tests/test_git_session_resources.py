@@ -123,6 +123,23 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
     def test_create_reopen_and_inventory_are_exact_and_root_invariant(self) -> None:
         root = self.initialize_workspace("Story Space 한글")
         baseline = self.run_git(root, "rev-parse", "HEAD").stdout.decode().strip()
+        row = b"refs/heads/main\0" + baseline.encode() + b"\0*\n"
+        repository = object.__new__(_Repository)
+        query = ("for-each-ref", "--format=%(refname)%00%(objectname)%00%(HEAD)")
+        with mock.patch.object(_Repository, "_required", return_value=GitProcessResult(row, 0)) as required:
+            self.assertEqual(repository._read_refs().rows, (("refs/heads/main", baseline, True),))
+        required.assert_called_once_with(query, read_only=True)
+        invalid = (
+            row[:-1], row + row, row + row.replace(b"main", b"other"),
+            row.replace(b"\0*", b""), row.replace(b"\0*", b"\0?"), row.replace(baseline.encode(), b"bad"),
+        )
+        for output in invalid:
+            with mock.patch.object(
+                _Repository, "_required", return_value=GitProcessResult(output, 0)
+            ):
+                with self.assertRaises(GitSessionResourceError) as caught:
+                    repository._read_refs()
+            self.assertIs(caught.exception.code, GitSessionFailureCode.RECOVERY_REQUIRED)
         root_before = self.repository_snapshot(root)
 
         with mock.patch.dict(os.environ, self.session_environment(), clear=True):
@@ -312,7 +329,9 @@ class GitSessionResourceRestartTests(GitSessionResourceGitTestCase):
 
         with mock.patch.dict(os.environ, self.session_environment(), clear=True):
             recovered = provision_session_resources(root, "novel")
+            inspected = inspect_session_resources(root, "novel")
         self.assertIs(recovered.state, GitSessionResourceState.READY)
+        self.assertEqual(inspected, recovered)
         self.assertEqual(recovered.seed_commit_id, interrupted.seed_commit_id)
 
 
