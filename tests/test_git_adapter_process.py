@@ -150,81 +150,44 @@ class GitAdapterProcessTests(unittest.TestCase):
             )
         return result, popen
 
-    def test_exact_argv_cwd_environment_stdin_and_shell_false(self) -> None:
-        caller_text = b"prose; git push --all\n$HOME"
-        identity_environment = {
-            "GIT_AUTHOR_NAME": "Exact Author",
-            "GIT_AUTHOR_EMAIL": "author@example.invalid",
-            "GIT_COMMITTER_NAME": "Exact Committer",
-            "GIT_COMMITTER_EMAIL": "committer@example.invalid",
-        }
-        process = _FakeProcess(stdout=(b"bounded", b""), stderr=(b"private", b""))
-        hostile = {
-            "PATH": os.environ.get("PATH", ""),
-            "GIT_DIR": "/escape",
-            "GIT_WORK_TREE": "/escape",
-            "GIT_CONFIG_SYSTEM": "/hostile",
-            "GIT_CONFIG_GLOBAL": "/hostile",
-            "GIT_SSH_COMMAND": "touch escaped",
-            **identity_environment,
-        }
-        with mock.patch.dict(os.environ, hostile, clear=True):
-            result, popen = self._run_with_process(
-                process,
-                arguments=("hash-object", "-w", "--no-filters", "--stdin"),
-                stdin=caller_text,
-                identity_environment=identity_environment,
-            )
+    def _pipe_process(self, stdout=b"bounded", stderr=b"private", *, hold=False):
+        process = _FakeProcess()
+        for name, payload in (("stdout", stdout), ("stderr", stderr)):
+            reader, writer = os.pipe()
+            stream = os.fdopen(reader, "rb", buffering=0)
+            setattr(process, name, stream)
+            self.addCleanup(stream.close)
+            os.write(writer, payload)
+            if hold:
+                self.addCleanup(os.close, writer)
+            else:
+                os.close(writer)
+        return process
 
+    def test_exact_argv_cwd_environment_stdin_and_shell_false(self) -> None:
+        caller_text = b'prose; git push --all\n$HOME'
+        identity_environment = {'GIT_AUTHOR_NAME': 'Exact Author', 'GIT_AUTHOR_EMAIL': 'author@example.invalid', 'GIT_COMMITTER_NAME': 'Exact Committer', 'GIT_COMMITTER_EMAIL': 'committer@example.invalid'}
+        process = _FakeProcess(stdout=(b'bounded', b''), stderr=(b'private', b''))
+        hostile = {'PATH': os.environ.get('PATH', ''), 'GIT_DIR': '/escape', 'GIT_WORK_TREE': '/escape', 'GIT_CONFIG_SYSTEM': '/hostile', 'GIT_CONFIG_GLOBAL': '/hostile', 'GIT_SSH_COMMAND': 'touch escaped', **identity_environment}
+        with mock.patch.dict(os.environ, hostile, clear=True):
+            result, popen = self._run_with_process(process, arguments=('hash-object', '-w', '--no-filters', '--stdin'), stdin=caller_text, identity_environment=identity_environment)
         command = popen.call_args.args[0]
         options = popen.call_args.kwargs
-        self.assertEqual(
-            command,
-            (
-                "git",
-                "--no-pager",
-                "-c",
-                f"core.hooksPath={os.devnull}",
-                "-c",
-                "commit.gpgSign=false",
-                "-c",
-                "tag.gpgSign=false",
-                "-c",
-                "core.fsmonitor=false",
-                "-c",
-                "diff.external=",
-                "-c",
-                "pager.status=false",
-                "-c",
-                "pager.diff=false",
-                "-c",
-                "pager.log=false",
-                "hash-object",
-                "-w",
-                "--no-filters",
-                "--stdin",
-            ),
-        )
+        self.assertEqual(command, ('git', '--no-pager', '-c', f'core.hooksPath={os.devnull}', '-c', 'commit.gpgSign=false', '-c', 'tag.gpgSign=false', '-c', 'core.fsmonitor=false', '-c', 'diff.external=', '-c', 'pager.status=false', '-c', 'pager.diff=false', '-c', 'pager.log=false', 'hash-object', '-w', '--no-filters', '--stdin'))
         self.assertNotIn(caller_text.decode(), command)
-        self.assertEqual(options["cwd"], os.fspath(self.root))
-        self.assertIs(options["shell"], False)
-        self.assertIs(options["stdin"], subprocess.PIPE)
-        self.assertIs(options["stdout"], subprocess.PIPE)
-        self.assertIs(options["stderr"], subprocess.PIPE)
-        environment = options["env"]
+        self.assertEqual(options['cwd'], os.fspath(self.root))
+        self.assertIs(options['shell'], False)
+        self.assertIs(options['stdin'], subprocess.PIPE)
+        self.assertIs(options['stdout'], subprocess.PIPE)
+        self.assertIs(options['stderr'], subprocess.PIPE)
+        environment = options['env']
         self.assertTrue(set(identity_environment).issubset(environment))
-        for forbidden in (
-            "GIT_DIR",
-            "GIT_WORK_TREE",
-            "GIT_CONFIG_SYSTEM",
-            "GIT_CONFIG_GLOBAL",
-            "GIT_SSH_COMMAND",
-        ):
+        for forbidden in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_GLOBAL', 'GIT_SSH_COMMAND'):
             self.assertNotIn(forbidden, environment)
-        self.assertEqual(environment["GIT_TERMINAL_PROMPT"], "0")
-        self.assertEqual(environment["GIT_ASKPASS"], os.devnull)
-        self.assertEqual(environment["GIT_PAGER"], "cat")
-        self.assertEqual(environment["GIT_OPTIONAL_LOCKS"], "0")
+        self.assertEqual(environment['GIT_TERMINAL_PROMPT'], '0')
+        self.assertEqual(environment['GIT_ASKPASS'], os.devnull)
+        self.assertEqual(environment['GIT_PAGER'], 'cat')
+        self.assertEqual(environment['GIT_OPTIONAL_LOCKS'], '0')
         self.assertEqual(bytes(process.stdin.data), caller_text)
         self.assertTrue(process.stdin.closed)
         self.assertTrue(process.stdout.closed)
@@ -232,20 +195,47 @@ class GitAdapterProcessTests(unittest.TestCase):
         self.assertEqual(process.wait_timeouts, [None])
         self.assertEqual(process.stdout.close_calls, 1)
         self.assertEqual(process.stderr.close_calls, 1)
-        self.assertEqual(result.stdout, b"bounded")
+        self.assertEqual(result.stdout, b'bounded')
         self.assertEqual(result.returncode, 0)
 
-    def test_read_write_call_omits_optional_locks_and_empty_stdin_uses_devnull(
-        self,
-    ) -> None:
+    def test_read_write_call_omits_optional_locks_and_empty_stdin_uses_devnull(self) -> None:
         process = _FakeProcess()
         _, popen = self._run_with_process(process, read_only=False)
         options = popen.call_args.kwargs
-        self.assertNotIn("GIT_OPTIONAL_LOCKS", options["env"])
-        self.assertIs(options["stdin"], subprocess.DEVNULL)
+        self.assertNotIn('GIT_OPTIONAL_LOCKS', options['env'])
+        self.assertIs(options['stdin'], subprocess.DEVNULL)
         self.assertFalse(process.stdin.closed)
         self.assertTrue(process.stdout.closed)
         self.assertTrue(process.stderr.closed)
+
+        if os.name != "posix":
+            return
+        process = self._pipe_process(b"x" * 96, b"y" * 64)
+        descriptors = (process.stdout.fileno(), process.stderr.fileno())
+        self.assertEqual(process_module._read_only_pipe_descriptors(process.stdout, process.stderr), descriptors)
+        for first, second in ((process.stdout, process.stdout), (mock.Mock(fileno=lambda: True), process.stderr), (mock.Mock(), process.stderr)):
+            self.assertIsNone(process_module._read_only_pipe_descriptors(first, second))
+        with tempfile.TemporaryFile() as regular:
+            self.assertIsNone(process_module._read_only_pipe_descriptors(regular, process.stderr))
+        with mock.patch.object(process_module.os, "name", "nt"):
+            self.assertIsNone(process_module._read_only_pipe_descriptors(process.stdout, process.stderr))
+        before = len(self.threads)
+        with mock.patch.object(process_module, "_READ_CHUNK_BYTES", 16), mock.patch.object(process_module.os, "read", wraps=os.read) as reads:
+            result, _ = self._run_with_process(process)
+        self.assertEqual(result.stdout, b"x" * 96)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(len(self.threads), before)
+        self.assertEqual({call.args[0] for call in reads.call_args_list[:2]}, set(descriptors))
+        self.assertTrue(all(call.args[1] == 16 for call in reads.call_args_list))
+        self.assertEqual(len(process.wait_timeouts), 1)
+        self.assertTrue(0 < process.wait_timeouts[0] <= process_module._PROCESS_TIMEOUT_SECONDS)
+        self.assertTrue(process.stdout.closed and process.stderr.closed)
+        for read_only, stdin in ((False, b""), (True, b"payload")):
+            process = self._pipe_process()
+            before = len(self.threads)
+            result, _ = self._run_with_process(process, read_only=read_only, stdin=stdin)
+            self.assertEqual((result.stdout, len(self.threads) - before, process.wait_timeouts), (b"bounded", 3, [None]))
+            self.assertEqual(bytes(process.stdin.data), stdin)
 
     def test_arguments_stdin_and_identity_environment_are_strictly_bounded(
         self,
@@ -272,23 +262,13 @@ class GitAdapterProcessTests(unittest.TestCase):
         self.assertIs(caught.exception.code, GitFailureCode.IDENTITY_INVALID)
 
     def test_start_failures_map_to_content_free_public_errors(self) -> None:
-        secret = "caller-secret-path-and-output"
-        cases = (
-            (FileNotFoundError(secret), GitFailureCode.EXECUTABLE_UNAVAILABLE),
-            (OSError(secret), GitFailureCode.PROCESS_START_FAILED),
-        )
+        secret = 'caller-secret-path-and-output'
+        cases = ((FileNotFoundError(secret), GitFailureCode.EXECUTABLE_UNAVAILABLE), (OSError(secret), GitFailureCode.PROCESS_START_FAILED))
         for failure, expected in cases:
             with self.subTest(code=expected.value):
-                with mock.patch.object(
-                    process_module.subprocess, "Popen", side_effect=failure
-                ):
+                with mock.patch.object(process_module.subprocess, 'Popen', side_effect=failure):
                     with self.assertRaises(GitOperationError) as caught:
-                        self.adapter._public_call(  # noqa: SLF001
-                            GitOperationKind.STATUS,
-                            lambda: self.adapter._run_git(  # noqa: SLF001
-                                ("status", "--"), identity=self.identity
-                            ),
-                        )
+                        self.adapter._public_call(GitOperationKind.STATUS, lambda: self.adapter._run_git(('status', '--'), identity=self.identity))
                 error = caught.exception
                 self.assertIs(error.code, expected)
                 self.assertIs(error.operation, GitOperationKind.STATUS)
@@ -297,41 +277,24 @@ class GitAdapterProcessTests(unittest.TestCase):
                 self.assertNotIn(secret, repr(error))
 
     def test_nonzero_required_command_preserves_only_bounded_exit_code(self) -> None:
-        process = _FakeProcess(stdout=(b"secret output", b""), wait_results=(17,))
-        with mock.patch.object(
-            process_module.subprocess, "Popen", return_value=process
-        ):
+        process = _FakeProcess(stdout=(b'secret output', b''), wait_results=(17,))
+        with mock.patch.object(process_module.subprocess, 'Popen', return_value=process):
             with self.assertRaises(GitOperationError) as caught:
-                self.adapter._public_call(  # noqa: SLF001
-                    GitOperationKind.STATUS,
-                    lambda: self.adapter._required_git(  # noqa: SLF001
-                        ("status", "--"), identity=self.identity
-                    ),
-                )
+                self.adapter._public_call(GitOperationKind.STATUS, lambda: self.adapter._required_git(('status', '--'), identity=self.identity))
         self.assertIs(caught.exception.code, GitFailureCode.COMMAND_FAILED)
         self.assertEqual(caught.exception.exit_code, 17)
-        self.assertNotIn("secret output", repr(caught.exception))
+        self.assertNotIn('secret output', repr(caught.exception))
         self.assertEqual(exception_graph(caught.exception), (caught.exception,))
         self.assertTrue(process.stdout.closed)
         self.assertTrue(process.stderr.closed)
 
     def test_timeout_terminates_then_kills_and_returns_bounded_error(self) -> None:
-        stop_timeout = subprocess.TimeoutExpired(("git", "status"), 2)
-        process = _FakeProcess(
-            wait_results=(stop_timeout, 0),
-            poll_results=(None,),
-        )
+        stop_timeout = subprocess.TimeoutExpired(('git', 'status'), 2)
+        process = _FakeProcess(wait_results=(stop_timeout, 0), poll_results=(None,))
         process.wait_gate = Event()
-        with mock.patch.object(process_module, "_PROCESS_TIMEOUT_SECONDS", 0.01), mock.patch.object(
-            process_module.subprocess, "Popen", return_value=process
-        ):
+        with mock.patch.object(process_module, '_PROCESS_TIMEOUT_SECONDS', 0.01), mock.patch.object(process_module.subprocess, 'Popen', return_value=process):
             with self.assertRaises(GitOperationError) as caught:
-                self.adapter._public_call(  # noqa: SLF001
-                    GitOperationKind.STATUS,
-                    lambda: self.adapter._run_git(  # noqa: SLF001
-                        ("status", "--"), identity=self.identity
-                    ),
-                )
+                self.adapter._public_call(GitOperationKind.STATUS, lambda: self.adapter._run_git(('status', '--'), identity=self.identity))
         self.assertIs(caught.exception.code, GitFailureCode.PROCESS_TIMED_OUT)
         self.assertEqual(process.terminate_calls, 1)
         self.assertEqual(process.kill_calls, 1)
@@ -339,14 +302,23 @@ class GitAdapterProcessTests(unittest.TestCase):
         self.assertEqual(process.returncode, 0)
         self.assertTrue(process.stdout.closed)
         self.assertTrue(process.stderr.closed)
-        self.assertEqual(
-            process.wait_timeouts,
-            [
-                None,
-                process_module._PROCESS_STOP_TIMEOUT_SECONDS,  # noqa: SLF001
-                process_module._PROCESS_STOP_TIMEOUT_SECONDS,  # noqa: SLF001
-            ],
-        )
+        self.assertEqual(process.wait_timeouts, [None, process_module._PROCESS_STOP_TIMEOUT_SECONDS, process_module._PROCESS_STOP_TIMEOUT_SECONDS])
+
+        if os.name != "posix":
+            return
+        for hold, exited in ((True, False), (True, True), (False, False)):
+            process = self._pipe_process(hold=hold)
+            if exited:
+                process.poll_results, process.returncode = [0], 0
+            process.wait_results = [stop_timeout, 0] if hold else [stop_timeout, stop_timeout, 0]
+            with mock.patch.object(process_module.time, "monotonic", side_effect=(0, 30) if hold else (0, 1, 2, 3)), self.assertRaises(adapter_module._AdapterFailure) as caught:
+                self._run_with_process(process)
+            self.assertIs(caught.exception.code, GitFailureCode.PROCESS_TIMED_OUT)
+            self.assertEqual((process.terminate_calls, process.kill_calls, process.returncode), (0, 0, 0) if exited else (1, 1, 0))
+            self.assertTrue(process.stdout.closed and process.stderr.closed)
+            self.assertEqual(process.wait_timeouts[-2:], [] if exited else [process_module._PROCESS_STOP_TIMEOUT_SECONDS] * 2)
+            if not hold:
+                self.assertTrue(0 < process.wait_timeouts[0] < process_module._PROCESS_TIMEOUT_SECONDS)
 
     def test_oversized_or_invalid_streams_fail_without_exposing_bytes(self) -> None:
         oversized = b"s" * (process_module._MAX_STDERR_BYTES + 1)  # noqa: SLF001
@@ -420,116 +392,129 @@ class GitAdapterProcessTests(unittest.TestCase):
                     self.assertIs(caught.exception.code, resources_module.GitSessionFailureCode.RECOVERY_REQUIRED)
                     self.assertNotIn("PRIVATE", repr(caught.exception))
 
+        if os.name == "posix":
+            for stdout, stderr in ((b"x" * 80, b""), (b"", b"y" * 48)):
+                process = self._pipe_process(stdout, stderr)
+                with (
+                    mock.patch.object(process_module, "_MAX_STDOUT_BYTES", 64),
+                    mock.patch.object(process_module, "_MAX_STDERR_BYTES", 32),
+                    mock.patch.object(process_module, "_READ_CHUNK_BYTES", 16),
+                    mock.patch.object(process_module.os, "read", wraps=os.read) as reads,
+                    self.assertRaises(GitOperationError) as caught,
+                ):
+                    self.adapter._public_call(GitOperationKind.STATUS, lambda: self._run_with_process(process))
+                self.assertIs(caught.exception.code, GitFailureCode.PROCESS_OUTPUT_EXCEEDED)
+                self.assertEqual(process.returncode, 0)
+                self.assertGreaterEqual(reads.call_count, 4)
+                self.assertTrue(process.stdout.closed and process.stderr.closed)
+                self.assertEqual(exception_graph(caught.exception), (caught.exception,))
+
     def test_keyboard_interrupt_owns_process_and_maps_all_recovery_states(self) -> None:
-        process = _FakeProcess(
-            wait_results=(KeyboardInterrupt(), 0),
-            poll_results=(None,),
-        )
-        with mock.patch.object(
-            process_module.subprocess, "Popen", return_value=process
-        ):
+        process = _FakeProcess(wait_results=(KeyboardInterrupt(), 0), poll_results=(None,))
+        with mock.patch.object(process_module.subprocess, 'Popen', return_value=process):
             with self.assertRaises(KeyboardInterrupt):
-                self.adapter._run_git(  # noqa: SLF001
-                    ("status", "--"), identity=self.identity
-                )
+                self.adapter._run_git(('status', '--'), identity=self.identity)
         self.assertEqual(process.terminate_calls, 1)
         self.assertTrue(process.stdout.closed)
         self.assertTrue(process.stderr.closed)
-
         main_process = _FakeProcess()
         original_join = Thread.join
         interrupted = False
-        def join(thread: Thread, timeout: float | None = None) -> None:
+
+        def join(thread: Thread, timeout: float | None=None) -> None:
             nonlocal interrupted
-            if timeout == process_module._PROCESS_TIMEOUT_SECONDS and not interrupted:
+            if timeout == process_module._PROCESS_TIMEOUT_SECONDS and (not interrupted):
                 interrupted = True
                 raise KeyboardInterrupt()
             original_join(thread, timeout)
-        with mock.patch.object(Thread, "join", join), mock.patch.object(process_module.subprocess, "Popen", return_value=main_process):
+        with mock.patch.object(Thread, 'join', join), mock.patch.object(process_module.subprocess, 'Popen', return_value=main_process):
             with self.assertRaises(KeyboardInterrupt):
-                self.adapter._run_git(("status", "--"), identity=self.identity)
+                self.adapter._run_git(('status', '--'), identity=self.identity)
         self.assertTrue(interrupted)
         self.assertEqual(main_process.terminate_calls, 1)
         self.assertTrue(main_process.stdout.closed and main_process.stderr.closed)
-
-        manifest = GitBaselineManifest((GitManifestEntry("outline.md", digest(b"x")),))
+        manifest = GitBaselineManifest((GitManifestEntry('outline.md', digest(b'x')),))
         for state in GitRepositoryState:
             with self.subTest(state=state.value):
-                with mock.patch.object(
-                    GitRepositoryAdapter,
-                    "_recover_state",
-                    return_value=state,
-                ):
+                with mock.patch.object(GitRepositoryAdapter, '_recover_state', return_value=state):
                     with self.assertRaises(GitOperationError) as caught:
-                        self.adapter._public_call(  # noqa: SLF001
-                            GitOperationKind.CREATE_BASELINE,
-                            lambda: (_ for _ in ()).throw(KeyboardInterrupt()),
-                            recovery_manifest=manifest,
-                        )
+                        self.adapter._public_call(GitOperationKind.CREATE_BASELINE, lambda: (_ for _ in ()).throw(KeyboardInterrupt()), recovery_manifest=manifest)
                 self.assertIs(caught.exception.code, GitFailureCode.CANCELLED)
                 self.assertIs(caught.exception.repository_state, state)
                 self.assertEqual(exception_graph(caught.exception), (caught.exception,))
 
+        if os.name == "posix":
+            process = self._pipe_process()
+            with mock.patch.object(process_module.os, "read", side_effect=KeyboardInterrupt), self.assertRaises(KeyboardInterrupt):
+                self._run_with_process(process)
+            self.assertEqual(process.terminate_calls, 1)
+            self.assertTrue(process.stdout.closed and process.stderr.closed)
+            process = self._pipe_process()
+            with mock.patch.object(process_module, "_read_only_pipe_descriptors", side_effect=KeyboardInterrupt), self.assertRaises(KeyboardInterrupt):
+                self._run_with_process(process)
+            self.assertEqual(process.terminate_calls, 1)
+            self.assertTrue(process.stdout.closed and process.stderr.closed)
+
     def test_root_identity_change_is_rejected_before_process_start(self) -> None:
-        with mock.patch.object(process_module.subprocess, "Popen") as popen:
-            with self.assertRaises(adapter_module._AdapterFailure) as caught:  # noqa: SLF001
-                self.adapter._run_git(  # noqa: SLF001
-                    ("status", "--"), identity=(self.identity[0], self.identity[1] + 1)
-                )
+        with mock.patch.object(process_module.subprocess, 'Popen') as popen:
+            with self.assertRaises(adapter_module._AdapterFailure) as caught:
+                self.adapter._run_git(('status', '--'), identity=(self.identity[0], self.identity[1] + 1))
         self.assertIs(caught.exception.code, GitFailureCode.UNSAFE_ROOT)
         popen.assert_not_called()
 
-    def test_partial_process_start_and_close_failure_are_owned_and_fail_closed(
-        self,
-    ) -> None:
+        if os.name == "posix":
+            process = self._pipe_process(b"x" * 80)
+            unsafe = process_module.GitProcessFailure(GitFailureCode.UNSAFE_ROOT)
+            with mock.patch.object(process_module.GitProcessRunner, "_verify_root", side_effect=(None, unsafe)), mock.patch.object(process_module, "_MAX_STDOUT_BYTES", 64), self.assertRaises(adapter_module._AdapterFailure) as caught:
+                self._run_with_process(process)
+            self.assertIs(caught.exception.code, GitFailureCode.UNSAFE_ROOT)
+            self.assertTrue(process.stdout.closed and process.stderr.closed)
+
+    def test_partial_process_start_and_close_failure_are_owned_and_fail_closed(self) -> None:
         partial = _FakeProcess()
-        partial.stderr = None  # type: ignore[assignment]
-        with mock.patch.object(
-            process_module.subprocess, "Popen", return_value=partial
-        ):
+        partial.stderr = None
+        with mock.patch.object(process_module.subprocess, 'Popen', return_value=partial):
             with self.assertRaises(GitOperationError) as caught:
-                self.adapter._public_call(  # noqa: SLF001
-                    GitOperationKind.STATUS,
-                    lambda: self.adapter._run_git(  # noqa: SLF001
-                        ("status", "--"), identity=self.identity, stdin=b"input"
-                    ),
-                )
+                self.adapter._public_call(GitOperationKind.STATUS, lambda: self.adapter._run_git(('status', '--'), identity=self.identity, stdin=b'input'))
         self.assertIs(caught.exception.code, GitFailureCode.PROCESS_START_FAILED)
         self.assertTrue(partial.stdin.closed)
         self.assertTrue(partial.stdout.closed)
         self.assertEqual(partial.terminate_calls, 1)
-
         close_failure = _FakeProcess()
-        close_failure.stdout.close_failure = OSError("private close error")
-        with mock.patch.object(
-            process_module.subprocess,
-            "Popen",
-            return_value=close_failure,
-        ):
+        close_failure.stdout.close_failure = OSError('private close error')
+        with mock.patch.object(process_module.subprocess, 'Popen', return_value=close_failure):
             with self.assertRaises(GitOperationError) as caught:
-                self.adapter._public_call(  # noqa: SLF001
-                    GitOperationKind.STATUS,
-                    lambda: self.adapter._run_git(  # noqa: SLF001
-                        ("status", "--"), identity=self.identity
-                    ),
-                )
+                self.adapter._public_call(GitOperationKind.STATUS, lambda: self.adapter._run_git(('status', '--'), identity=self.identity))
         self.assertIs(caught.exception.code, GitFailureCode.PROCESS_START_FAILED)
         self.assertEqual(exception_graph(caught.exception), (caught.exception,))
         self.assertTrue(close_failure.stdout.closed)
         self.assertTrue(close_failure.stderr.closed)
-
         for position in (1, 2, 3):
             failed_start = _FakeProcess()
             self.thread_start_failure = len(self.threads) + position
-            with mock.patch.object(process_module.subprocess, "Popen", return_value=failed_start):
+            with mock.patch.object(process_module.subprocess, 'Popen', return_value=failed_start):
                 with self.assertRaises(GitOperationError) as caught:
-                    self.adapter._public_call(GitOperationKind.STATUS, lambda: self.adapter._run_git(("status", "--"), identity=self.identity))
+                    self.adapter._public_call(GitOperationKind.STATUS, lambda: self.adapter._run_git(('status', '--'), identity=self.identity))
             self.assertIs(caught.exception.code, GitFailureCode.PROCESS_START_FAILED)
             self.assertEqual(exception_graph(caught.exception), (caught.exception,))
-            self.assertNotIn("private thread start", repr(caught.exception))
+            self.assertNotIn('private thread start', repr(caught.exception))
             self.assertEqual(failed_start.terminate_calls, 1)
             self.assertTrue(failed_start.stdout.closed and failed_start.stderr.closed)
         self.thread_start_failure = None
+
+        if os.name == "posix":
+            for seam in ("register", "read", "close"):
+                process = self._pipe_process()
+                selector = process_module.selectors.DefaultSelector()
+                self.addCleanup(selector.close)
+                target = process_module.os if seam == "read" else selector
+                with mock.patch.object(process_module.selectors, "DefaultSelector", return_value=selector), mock.patch.object(target, seam, side_effect=OSError("private selector failure")), self.assertRaises(GitOperationError) as caught:
+                    self.adapter._public_call(GitOperationKind.STATUS, lambda: self._run_with_process(process))
+                self.assertIs(caught.exception.code, GitFailureCode.PROCESS_START_FAILED)
+                self.assertTrue(process.stdout.closed and process.stderr.closed)
+                self.assertEqual(exception_graph(caught.exception), (caught.exception,))
+                self.assertNotIn("private", repr(caught.exception))
+                self.assertEqual(process.terminate_calls, 0 if seam == "close" else 1)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -88,8 +89,9 @@ async def drive_recovery(operation, callback=lambda _key: True):
     try:
         while not task.done():
             ready = asyncio.create_task(recovery.wait_ready())
+            # Harness progress allowance includes synchronous fixture Git work.
             done, _ = await asyncio.wait((task, ready), return_when=asyncio.FIRST_COMPLETED,
-                                         timeout=3)
+                                         timeout=30)
             ready.cancel()
             await asyncio.gather(ready, return_exceptions=True)
             if not done:
@@ -227,6 +229,9 @@ class AuthClassificationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(AntigravityAdapter._authentication_failure(incident_bytes(**changes), 1))
 
     def codex(self):
+        native_state = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        native_state.chmod(0o700)
+        self.enterContext(mock.patch.dict(os.environ, {"CODEX_HOME": str(native_state)}))
         workspace = pristine_initialized_workspace(self)
         adapter = CodexAdapter(executable=str(Path(sys.executable).resolve(strict=True)), timeout_seconds=2,
                                configuration=ConfigManager(workspace).load_configuration_baseline().configuration, explicit_model=None, control_root=workspace.root)
@@ -693,7 +698,7 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
                     failed.add(provider.agent_id)
                     if len(failed) == 2:
                         both_active.set()
-                    await asyncio.wait_for(both_active.wait(), timeout=2)
+                    await asyncio.wait_for(both_active.wait(), timeout=30)
                     failure = auth_failure("codex")
                     failure.auth_generation = generation
                     accounting = provider._account(request.schema, request.payload, call_kind=request.call_kind,

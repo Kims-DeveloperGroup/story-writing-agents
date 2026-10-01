@@ -52,6 +52,7 @@ class DarwinSandboxRequirements:
     deny_subpaths: tuple[Path, ...] = ()
     deny_write_subpaths: tuple[Path, ...] = ()
     network: bool = False
+    metadata_paths: tuple[Path, ...] = ()
 
     def __post_init__(self) -> None:
         paths = (
@@ -62,6 +63,7 @@ class DarwinSandboxRequirements:
             *self.write_paths,
             *self.deny_subpaths,
             *self.deny_write_subpaths,
+            *self.metadata_paths,
         )
         if (
             not isinstance(self.executable, Path)
@@ -72,6 +74,7 @@ class DarwinSandboxRequirements:
                 self.write_paths,
                 self.deny_subpaths,
                 self.deny_write_subpaths,
+                self.metadata_paths,
             ))
             or any(not isinstance(path, Path) for path in paths)
             or any(not path.is_absolute() for path in paths)
@@ -374,12 +377,32 @@ def _darwin_sandbox_profile(
     rules.extend(
         (
             "(allow file-read-data (literal \"/\"))",
+            # Resolving Darwin's system configuration alias needs lstat access
+            # to the alias itself, not only its canonical /private/etc target.
+            "(allow file-read-metadata (literal \"/etc\"))",
             "(allow file-read* (subpath \"/System\"))",
             "(allow file-read* (subpath \"/usr/lib\"))",
             "(allow file-read* (literal \"/dev/null\"))",
             "(allow file-write* (literal \"/dev/null\"))",
             "(allow file-read* (literal \"/dev/urandom\"))",
         )
+    )
+    resources = (
+        requirements.executable,
+        *requirements.read_subpaths,
+        *requirements.read_paths,
+        *requirements.write_subpaths,
+        *requirements.write_paths,
+        *requirements.metadata_paths,
+    )
+    metadata_paths = {
+        ancestor
+        for resource in resources
+        for ancestor in (resource, *resource.parents)
+    }
+    rules.extend(
+        "(allow file-read-metadata (literal " + literal(path) + "))"
+        for path in sorted(metadata_paths)
     )
     rules.extend(
         "(allow file-read* (subpath " + literal(path) + "))"

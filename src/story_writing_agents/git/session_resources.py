@@ -639,8 +639,10 @@ def require_story_commit_recovery_locked_git_session_resources(
             manifest,
             session_id,
         )
+        refs = repository._read_refs()
         baseline = repository._verify_main(
             expected_manifest,
+            refs,
             allowed_worktree_changes=allowed_worktree_changes,
         )
         main_status_sha256 = repository._main_status_sha256(
@@ -649,9 +651,10 @@ def require_story_commit_recovery_locked_git_session_resources(
         resources = repository._classify(
             identity,
             baseline,
-            repository._facts(),
+            repository._facts(refs),
             require_clean_session_index=False,
         )
+        repository._require_refs_current(refs)
         if resources.state is not GitSessionResourceState.READY:
             raise _resource_error(
                 GitSessionFailureCode.RECOVERY_REQUIRED,
@@ -663,6 +666,13 @@ def require_story_commit_recovery_locked_git_session_resources(
     except GitSessionResourceError as exc:
         failure = _clear_resource_error(exc)
     raise failure
+
+
+@dataclass(frozen=True, slots=True)
+class _RefSnapshot:
+    """One immutable ref observation, never retained as repository authority."""
+
+    rows: tuple[tuple[str, str, bool], ...]
 
 
 class _Repository:
@@ -688,12 +698,16 @@ class _Repository:
         *,
         allowed_worktree_changes: tuple[str, ...] = (),
     ) -> GitSessionResourceInspection:
+        refs = self._read_refs()
         baseline = self._verify_main(
             manifest,
+            refs,
             allowed_worktree_changes=allowed_worktree_changes,
         )
-        facts = self._facts()
-        return self._classify(identity, baseline, facts)
+        facts = self._facts(refs)
+        result = self._classify(identity, baseline, facts)
+        self._require_refs_current(refs)
+        return result
 
     def list(
         self,
@@ -701,11 +715,13 @@ class _Repository:
         *,
         allowed_worktree_changes: tuple[str, ...] = (),
     ) -> GitSessionResourceInventory:
+        refs = self._read_refs()
         baseline = self._verify_main(
             manifest,
+            refs,
             allowed_worktree_changes=allowed_worktree_changes,
         )
-        facts = self._facts()
+        facts = self._facts(refs)
         session_ids = self._inventory_session_ids(facts)
         sessions = tuple(
             self._classify(
@@ -714,6 +730,7 @@ class _Repository:
             for session_id in session_ids
         )
         self._require_exhaustive(facts, sessions)
+        self._require_refs_current(refs)
         return GitSessionResourceInventory(baseline, sessions)
 
     def provision(
@@ -723,13 +740,16 @@ class _Repository:
         *,
         allowed_worktree_changes: tuple[str, ...] = (),
     ) -> GitSessionResourceInspection:
+        refs = self._read_refs()
         baseline = self._verify_main(
             manifest,
+            refs,
             allowed_worktree_changes=allowed_worktree_changes,
         )
-        before = self._facts()
+        before = self._facts(refs)
         self._require_other_sessions_exact(identity, baseline, before)
         current = self._classify(identity, baseline, before)
+        self._require_refs_current(refs)
         if current.state is GitSessionResourceState.READY:
             return current
         if current.state not in {
@@ -751,6 +771,7 @@ class _Repository:
                 seed_timestamp_seconds=int(time.time()),
                 session_id=identity.session_id,
             )
+            self._require_refs_current(refs)
             self._write_journal(journal)
         elif (
             journal.baseline_commit_id != baseline
@@ -759,11 +780,14 @@ class _Repository:
             return _recovery(identity, baseline)
 
         try:
-            observed = self._facts()
+            prefix_refs = self._read_refs()
+            observed = self._facts(prefix_refs)
             prefix = self._classify(identity, baseline, observed, journal=journal)
+            self._require_refs_current(prefix_refs)
             if prefix.state is not GitSessionResourceState.PROVISIONING:
                 return prefix
             seed = self._seed(journal)
+            self._require_refs_current(refs)
             self._create_seed(seed, journal)
             observed = self._facts()
             branch_tip = observed.branches.get(identity.branch)
@@ -793,13 +817,15 @@ class _Repository:
                         identity.branch,
                     )
                 )
-            completed_facts = self._facts()
+            completed_refs = self._read_refs()
+            completed_facts = self._facts(completed_refs)
             completed = self._classify(
                 identity,
                 baseline,
                 completed_facts,
                 journal=journal,
             )
+            self._require_refs_current(completed_refs)
             if (
                 completed.state is not GitSessionResourceState.PROVISIONING
                 or completed_facts.internal_refs.get(identity.internal_ref) is None
@@ -808,21 +834,27 @@ class _Repository:
             ):
                 return completed
             self._remove_journal(identity)
+            refs = self._read_refs()
             final_baseline = self._verify_main(
                 manifest,
+                refs,
                 allowed_worktree_changes=allowed_worktree_changes,
             )
             if final_baseline != baseline:
                 return _recovery(identity, baseline)
-            return self._classify(identity, baseline, self._facts())
+            result = self._classify(identity, baseline, self._facts(refs))
+            self._require_refs_current(refs)
+            return result
         except BaseException as exc:
             after: GitSessionResourceInspection | None = None
             try:
+                recovery_refs = self._read_refs()
                 after = self._classify(
-                    identity, baseline, self._facts(), journal=journal
+                    identity, baseline, self._facts(recovery_refs), journal=journal
                 )
+                self._require_refs_current(recovery_refs)
             except BaseException:
-                pass
+                after = None
             if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                 raise
             if after is not None and after.state is GitSessionResourceState.READY:
@@ -884,19 +916,19 @@ class _Repository:
     def _verify_main(
         self,
         manifest: GitBaselineManifest,
+        refs: _RefSnapshot,
         *,
         allowed_worktree_changes: tuple[str, ...] = (),
     ) -> str:
-        baseline = _object_id(
-            self._required(
-                ("rev-parse", "--verify", f"refs/heads/{GIT_BASELINE_BRANCH}"),
-                read_only=True,
-            ).stdout
+        baseline = next(
+            (
+                oid
+                for name, oid, is_head in refs.rows
+                if name == f"refs/heads/{GIT_BASELINE_BRANCH}" and is_head
+            ),
+            None,
         )
-        symbolic = _line(
-            self._required(("symbolic-ref", "--quiet", "HEAD"), read_only=True).stdout
-        )
-        if symbolic != f"refs/heads/{GIT_BASELINE_BRANCH}":
+        if baseline is None:
             raise _resource_error(
                 GitSessionFailureCode.RECOVERY_REQUIRED,
                 GitSessionOperationKind.INSPECT,
@@ -1091,29 +1123,68 @@ class _Repository:
             )
         raise failure
 
-    def _facts(self) -> _Facts:
-        branches: dict[str, str] = {}
-        internal: dict[str, str] = {}
-        refs = self._required(
-            ("for-each-ref", "--format=%(refname)%00%(objectname)"), read_only=True
-        )
-        for row in refs.stdout.splitlines():
-            if not row:
-                continue
-            malformed = False
-            try:
-                raw_name, raw_oid = row.split(b"\x00", 1)
-            except ValueError:
-                malformed = True
-            if malformed:
+    def _read_refs(self) -> _RefSnapshot:
+        """Read bounded, freshly correlated ref IDs and symbolic HEAD identity."""
+        output = self._required(
+            ("for-each-ref", "--format=%(refname)%00%(objectname)%00%(HEAD)"),
+            read_only=True,
+        ).stdout
+        if type(output) is not bytes or (output and not output.endswith(b"\n")):
+            raise _resource_error(
+                GitSessionFailureCode.RECOVERY_REQUIRED,
+                GitSessionOperationKind.INSPECT,
+                GitSessionResourceState.RECOVERY_REQUIRED,
+                GitSessionRecoveryAction.OPERATOR_RECOVERY,
+            )
+        rows: list[tuple[str, str, bool]] = []
+        names: set[str] = set()
+        has_head = False
+        for row in output[:-1].split(b"\n") if output else ():
+            fields = row.split(b"\x00")
+            if len(fields) != 3 or fields[2] not in (b"*", b" "):
                 raise _resource_error(
                     GitSessionFailureCode.RECOVERY_REQUIRED,
                     GitSessionOperationKind.INSPECT,
                     GitSessionResourceState.RECOVERY_REQUIRED,
                     GitSessionRecoveryAction.OPERATOR_RECOVERY,
                 )
+            raw_name, raw_oid, marker = fields
             name = _utf8(raw_name)
             oid = _object_id(raw_oid)
+            is_head = marker == b"*"
+            if (
+                name in names
+                or raw_oid != oid.encode("ascii")
+                or (is_head and has_head)
+                or len(rows) >= _MAX_REFS
+            ):
+                raise _resource_error(
+                    GitSessionFailureCode.RECOVERY_REQUIRED,
+                    GitSessionOperationKind.INSPECT,
+                    GitSessionResourceState.RECOVERY_REQUIRED,
+                    GitSessionRecoveryAction.OPERATOR_RECOVERY,
+                )
+            names.add(name)
+            has_head |= is_head
+            rows.append((name, oid, is_head))
+        return _RefSnapshot(tuple(rows))
+
+    def _require_refs_current(self, opening: _RefSnapshot) -> None:
+        """Reject ref changes during a completed logical observation."""
+        if self._read_refs() != opening:
+            raise _resource_error(
+                GitSessionFailureCode.RECOVERY_REQUIRED,
+                GitSessionOperationKind.INSPECT,
+                GitSessionResourceState.RECOVERY_REQUIRED,
+                GitSessionRecoveryAction.OPERATOR_RECOVERY,
+            )
+
+    def _facts(self, refs: _RefSnapshot | None = None) -> _Facts:
+        if refs is None:
+            refs = self._read_refs()
+        branches: dict[str, str] = {}
+        internal: dict[str, str] = {}
+        for name, oid, _is_head in refs.rows:
             if name.startswith("refs/heads/"):
                 branches[name.removeprefix("refs/heads/")] = oid
             elif name.startswith(GIT_SESSION_INTERNAL_REF_PREFIX):
@@ -1121,13 +1192,6 @@ class _Repository:
             else:
                 raise _resource_error(
                     GitSessionFailureCode.RESOURCE_COLLISION,
-                    GitSessionOperationKind.INSPECT,
-                    GitSessionResourceState.RECOVERY_REQUIRED,
-                    GitSessionRecoveryAction.OPERATOR_RECOVERY,
-                )
-            if len(branches) + len(internal) > _MAX_REFS:
-                raise _resource_error(
-                    GitSessionFailureCode.RECOVERY_REQUIRED,
                     GitSessionOperationKind.INSPECT,
                     GitSessionResourceState.RECOVERY_REQUIRED,
                     GitSessionRecoveryAction.OPERATOR_RECOVERY,

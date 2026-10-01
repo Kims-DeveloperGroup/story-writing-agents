@@ -22,6 +22,7 @@ jobs:
       runtime: ${{ steps.paths.outputs.runtime }}
       policy_only: ${{ steps.paths.outputs.policy_only }}
       full: ${{ steps.paths.outputs.full }}
+      wall_time_exception: ${{ steps.paths.outputs.wall_time_exception }}
       base_sha: ${{ steps.paths.outputs.base_sha }}
       head_sha: ${{ steps.paths.outputs.head_sha }}
       checkout_sha: ${{ steps.paths.outputs.checkout_sha }}
@@ -75,11 +76,13 @@ jobs:
               path === ".github/workflows/pr-validation.yml" || path === "TEST_POLICY.md";
             const testPaths = truncated || paths.some(isTest);
             const fullRequested = labels.includes("test:full");
+            const wallTimeException = context.eventName === "pull_request" && labels.includes("test:wall-time-exception");
             const runtime = runtimePaths || testPaths || fullRequested;
             const full = runtime;
             core.setOutput("runtime", String(runtime));
             core.setOutput("policy_only", String(!runtimePaths && !testPaths));
             core.setOutput("full", String(full));
+            core.setOutput("wall_time_exception", String(wallTimeException));
             core.setOutput("base_sha", baseSha);
             core.setOutput("head_sha", headSha);
             // Event SHA is the PR test merge or merge-group commit, pinned across jobs.
@@ -91,6 +94,7 @@ jobs:
                 [{data: "Policy/config only", header: true}, String(!runtimePaths)],
                 [{data: "Run runtime lanes", header: true}, String(runtime)],
                 [{data: "Full suite", header: true}, String(full)],
+                [{data: "Wall-time exception", header: true}, String(wallTimeException)],
               ])
               .write();
 
@@ -298,7 +302,7 @@ jobs:
       matrix:
         shard: [1, 2]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: ${{ needs.classify.outputs.wall_time_exception == 'true' && 60 || 15 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -350,11 +354,16 @@ jobs:
       - name: Enforce frozen suite inventory and wall-time budget
         env:
           BASE_SHA: ${{ needs.classify.outputs.base_sha }}
-        run: >-
-          PYTHONPATH=src python -m tests.suite_budget
-          --base-ref "$BASE_SHA"
-          --report full-reports/full-1/full-1.json
-          --report full-reports/full-2/full-2.json
+          WALL_TIME_EXCEPTION: ${{ needs.classify.outputs.wall_time_exception }}
+        run: |
+          budget_args=(--base-ref "$BASE_SHA"
+            --report full-reports/full-1/full-1.json
+            --report full-reports/full-2/full-2.json)
+          if [[ "$WALL_TIME_EXCEPTION" == "true" ]]; then
+            echo "Maintainer-authorized wall-time exception: measured durations remain visible."
+            budget_args+=(--allow-wall-time-overage)
+          fi
+          PYTHONPATH=src python -m tests.suite_budget "${budget_args[@]}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

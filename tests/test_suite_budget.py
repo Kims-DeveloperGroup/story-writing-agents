@@ -22,6 +22,13 @@ class SuiteBudgetTests(unittest.TestCase):
             "subtest_caps": {"a.test": 2, "b.test": 0},
         }
 
+    def _reports(self, directory, counts):
+        paths = [str(Path(directory) / f"{index}.json") for index in (1, 2)]
+        for path, identifier, count in zip(paths, self.budget["subtest_caps"], counts):
+            row = {"canonical_id": identifier, "subtest_count": count}
+            Path(path).write_text(json.dumps({"tests": [row]}), encoding="utf-8")
+        return paths
+
     def test_new_id_increased_subtests_and_relaxed_time_are_rejected(self) -> None:
         for change in (
             lambda value: value["subtest_caps"].update({"c.test": 0}),
@@ -49,41 +56,37 @@ class SuiteBudgetTests(unittest.TestCase):
             ],
         }
         with tempfile.TemporaryDirectory() as directory:
-            paths = [str(Path(directory) / f"{index}.json") for index in (1, 2)]
-            for path, identifier, count in zip(paths, ("a.test", "b.test"), (2, 0)):
-                Path(path).write_text(json.dumps({"tests": [
-                    {"canonical_id": identifier, "subtest_count": count}
-                ]}), encoding="utf-8")
+            paths = self._reports(directory, (2, 0))
             with patch.object(suite_budget.runner, "_reconcile_reports", return_value=reconciliation):
                 self.assertIs(suite_budget.check_reports(self.budget, paths), reconciliation)
                 reconciliation["shards"][0]["durations"]["wall_seconds"] = 540.001
                 with self.assertRaisesRegex(suite_budget.BudgetError, "shard 1/2"):
                     suite_budget.check_reports(self.budget, paths)
+                self.assertIs(
+                    suite_budget.check_reports(self.budget, paths, allow_wall_time_overage=True), reconciliation)
                 reconciliation["shards"][0]["durations"]["wall_seconds"] = 540
                 reconciliation["durations"]["sequential_equivalent_wall_seconds"] = 1080.001
                 with self.assertRaisesRegex(suite_budget.BudgetError, "sequential"):
                     suite_budget.check_reports(self.budget, paths)
+                self.assertIs(
+                    suite_budget.check_reports(self.budget, paths, allow_wall_time_overage=True), reconciliation)
 
     def test_subtest_expansion_and_incomplete_shards_fail(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            paths = [str(Path(directory) / f"{index}.json") for index in (1, 2)]
-            Path(paths[0]).write_text(json.dumps({"tests": [
-                {"canonical_id": "a.test", "subtest_count": 3}
-            ]}), encoding="utf-8")
-            Path(paths[1]).write_text(json.dumps({"tests": [
-                {"canonical_id": "b.test", "subtest_count": 0}
-            ]}), encoding="utf-8")
+            paths = self._reports(directory, (3, 0))
             result = {
                 "outcome": "success",
                 "durations": {"sequential_equivalent_wall_seconds": 1},
                 "shards": [{"identity": "1/2", "durations": {"wall_seconds": 1}}],
             }
-            with patch.object(suite_budget.runner, "_reconcile_reports", return_value=result):
-                with self.assertRaisesRegex(suite_budget.BudgetError, "subtest scope"):
-                    suite_budget.check_reports(self.budget, paths)
-            with patch.object(suite_budget.runner, "_reconcile_reports", side_effect=suite_budget.runner.RunnerError("incomplete")):
-                with self.assertRaisesRegex(suite_budget.runner.RunnerError, "incomplete"):
-                    suite_budget.check_reports(self.budget, paths)
+            for allowed in (False, True):
+                with patch.object(suite_budget.runner, "_reconcile_reports", return_value=result):
+                    with self.assertRaisesRegex(suite_budget.BudgetError, "subtest scope"):
+                        suite_budget.check_reports(self.budget, paths, allow_wall_time_overage=allowed)
+                with patch.object(suite_budget.runner, "_reconcile_reports",
+                                  side_effect=suite_budget.runner.RunnerError("incomplete")):
+                    with self.assertRaisesRegex(suite_budget.runner.RunnerError, "incomplete"):
+                        suite_budget.check_reports(self.budget, paths, allow_wall_time_overage=allowed)
 
     def test_runner_counts_successful_subtests_in_parent_record(self) -> None:
         class Synthetic(unittest.TestCase):
@@ -95,8 +98,6 @@ class SuiteBudgetTests(unittest.TestCase):
                         self.assertGreater(value, 0)
 
         case = Synthetic()
-        result = suite_budget.runner.TimedTextTestResult(
-            io.StringIO(), descriptions=False, verbosity=0
-        )
+        result = suite_budget.runner.TimedTextTestResult(io.StringIO(), descriptions=False, verbosity=0)
         unittest.TestSuite([case]).run(result)
         self.assertEqual(result.records([case.id()])[0]["subtest_count"], 2)

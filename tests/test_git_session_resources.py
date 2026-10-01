@@ -123,6 +123,23 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
     def test_create_reopen_and_inventory_are_exact_and_root_invariant(self) -> None:
         root = self.initialize_workspace("Story Space 한글")
         baseline = self.run_git(root, "rev-parse", "HEAD").stdout.decode().strip()
+        row = b"refs/heads/main\0" + baseline.encode() + b"\0*\n"
+        repository = object.__new__(_Repository)
+        query = ("for-each-ref", "--format=%(refname)%00%(objectname)%00%(HEAD)")
+        with mock.patch.object(_Repository, "_required", return_value=GitProcessResult(row, 0)) as required:
+            self.assertEqual(repository._read_refs().rows, (("refs/heads/main", baseline, True),))
+        required.assert_called_once_with(query, read_only=True)
+        invalid = (
+            row[:-1], row + row, row + row.replace(b"main", b"other"),
+            row.replace(b"\0*", b""), row.replace(b"\0*", b"\0?"), row.replace(baseline.encode(), b"bad"),
+        )
+        for output in invalid:
+            with mock.patch.object(
+                _Repository, "_required", return_value=GitProcessResult(output, 0)
+            ):
+                with self.assertRaises(GitSessionResourceError) as caught:
+                    repository._read_refs()
+            self.assertIs(caught.exception.code, GitSessionFailureCode.RECOVERY_REQUIRED)
         root_before = self.repository_snapshot(root)
 
         with mock.patch.dict(os.environ, self.session_environment(), clear=True):
@@ -132,25 +149,13 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
         self.assertEqual(created.initial_branch_tip, baseline)
         identity = created.identity
         self.assertTrue(identity.worktree_root.is_dir())
-        self.assertEqual(
-            self.run_git(root, "rev-parse", f"refs/heads/{identity.branch}").stdout,
-            (baseline + "\n").encode(),
-        )
-        self.assertEqual(
-            self.run_git(identity.worktree_root, "symbolic-ref", "HEAD").stdout,
-            f"refs/heads/{identity.branch}\n".encode(),
-        )
-        self.assertEqual(
-            self.run_git(root, "status", "--porcelain=v2", "--").stdout,
-            b"",
-        )
-        self.assertEqual(
-            self.run_git(root, "symbolic-ref", "HEAD").stdout,
-            root_before[2],
-        )
-        self.assertEqual(
-            self.run_git(root, "rev-parse", "HEAD^{tree}").stdout, root_before[3]
-        )
+        self.assertEqual(self.run_git(root, "rev-parse", f"refs/heads/{identity.branch}").stdout,
+                         (baseline + "\n").encode())
+        self.assertEqual(self.run_git(identity.worktree_root, "symbolic-ref", "HEAD").stdout,
+                         f"refs/heads/{identity.branch}\n".encode())
+        self.assertEqual(self.run_git(root, "status", "--porcelain=v2", "--").stdout, b"")
+        self.assertEqual(self.run_git(root, "symbolic-ref", "HEAD").stdout, root_before[2])
+        self.assertEqual(self.run_git(root, "rev-parse", "HEAD^{tree}").stdout, root_before[3])
         self.assertEqual((root / ".git" / "index").read_bytes(), root_before[5])
 
         seed = created.seed_commit_id
@@ -158,21 +163,15 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
         payload = self.run_git(root, "cat-file", "commit", seed).stdout
         header, message = payload.split(b"\n\n", 1)
         self.assertIn(b"author Session Author <session-author@example.invalid>", header)
-        self.assertIn(
-            b"committer Session Committer <session-committer@example.invalid>", header
-        )
+        self.assertIn(b"committer Session Committer <session-committer@example.invalid>", header)
         self.assertNotIn(b"parent ", header)
-        self.assertEqual(
-            message, f"{GIT_SESSION_SEED_MESSAGE_PREFIX}Novel_01\n".encode()
-        )
+        self.assertEqual(message, f"{GIT_SESSION_SEED_MESSAGE_PREFIX}Novel_01\n".encode())
         empty_tree = self.run_git(
             root, "hash-object", "-t", "tree", "--stdin", input_bytes=b""
         ).stdout.strip()
         self.assertIn(b"tree " + empty_tree, header)
-        self.assertEqual(
-            self.run_git(root, "rev-parse", identity.internal_ref).stdout,
-            (seed + "\n").encode(),
-        )
+        self.assertEqual(self.run_git(root, "rev-parse", identity.internal_ref).stdout,
+                         (seed + "\n").encode())
 
         after_create = self.repository_snapshot(root)
         with mock.patch.dict(os.environ, self.session_environment(), clear=True):
@@ -312,8 +311,36 @@ class GitSessionResourceRestartTests(GitSessionResourceGitTestCase):
 
         with mock.patch.dict(os.environ, self.session_environment(), clear=True):
             recovered = provision_session_resources(root, "novel")
+            inspected = inspect_session_resources(root, "novel")
         self.assertIs(recovered.state, GitSessionResourceState.READY)
+        self.assertEqual(inspected, recovered)
         self.assertEqual(recovered.seed_commit_id, interrupted.seed_commit_id)
+        baseline = recovered.baseline_commit_id
+        advanced = self.run_git(
+            root, "commit-tree", f"{baseline}^{{tree}}", "-p", baseline,
+            input_bytes=b"Concurrent main advance\n", environment=self.session_environment(),
+        ).stdout.decode().strip()
+        for hook, ref, target in (
+            ("_verify_main", "refs/heads/main", advanced),
+            ("_classify", recovered.identity.internal_ref, baseline),
+        ):
+            previous = self.run_git(root, "rev-parse", ref).stdout.decode().strip()
+            original = getattr(_Repository, hook)
+
+            def drift(repository, *args, **kwargs):
+                self.run_git(root, "update-ref", ref, target, previous)
+                return original(repository, *args, **kwargs)
+
+            with mock.patch.dict(os.environ, self.session_environment(), clear=True):
+                with mock.patch.object(_Repository, hook, drift):
+                    with self.assertRaises(GitSessionResourceError) as caught:
+                        inspect_session_resources(root, "novel")
+            self.assertIs(caught.exception.code, GitSessionFailureCode.RECOVERY_REQUIRED)
+            self.assertIs(caught.exception.operation, GitSessionOperationKind.INSPECT)
+            self.assertIs(caught.exception.state, GitSessionResourceState.RECOVERY_REQUIRED)
+            self.assertIs(caught.exception.recovery_action, GitSessionRecoveryAction.OPERATOR_RECOVERY)
+            self.assertEqual(self.run_git(root, "rev-parse", ref).stdout.decode().strip(), target)
+            self.run_git(root, "update-ref", ref, previous, target)
 
 
 
@@ -348,10 +375,7 @@ class GitSessionResourceSafetyTests(GitSessionResourceGitTestCase):
                 self.assertEqual(self.repository_snapshot(root), before)
                 self.assertEqual(outside.read_bytes(), b"private target bytes\n")
                 if kind == "file":
-                    self.assertEqual(
-                        identity.worktree_root.read_bytes(),
-                        b"private sibling bytes\n",
-                    )
+                    self.assertEqual(identity.worktree_root.read_bytes(), b"private sibling bytes\n")
                 else:
                     self.assertTrue(identity.worktree_root.is_symlink())
 
@@ -399,10 +423,8 @@ class GitSessionResourceSafetyTests(GitSessionResourceGitTestCase):
             self.assertTrue(staged)
             self.assertEqual(str(caught.exception), "session artifact resources are unavailable")
             self.assertEqual(selected.read_bytes(), role.content)
-            self.assertIn(
-                selected.relative_to(session).as_posix().encode() + b"\0",
-                self.run_git(session, "ls-files", "-z").stdout,
-            )
+            self.assertIn(selected.relative_to(session).as_posix().encode() + b"\0",
+                          self.run_git(session, "ls-files", "-z").stdout)
 
         real_write = os.write
         root = self.initialize_workspace("role-exclude-short-write")
@@ -461,10 +483,8 @@ class GitSessionResourceSafetyTests(GitSessionResourceGitTestCase):
                 ):
                     access.install_provider_role(role)
             self.assertEqual(attempts, 2 if failure == "partial-error" else 1)
-            self.assertEqual(
-                failed_exclude.read_bytes(),
-                b"preexisting\n" + (b"/.a" if failure == "partial-error" else b""),
-            )
+            self.assertEqual(failed_exclude.read_bytes(),
+                             b"preexisting\n" + (b"/.a" if failure == "partial-error" else b""))
             self.assertFalse((failed_session / ".agents").exists())
             self.assertEqual(str(caught.exception), "session artifact resources are unavailable")
             self.assertNotIn("PRIVATE", repr(caught.exception))

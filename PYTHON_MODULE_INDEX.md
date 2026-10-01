@@ -90,9 +90,10 @@ authentication, recovery, and diagnostic behavior behind provider-neutral contra
 - `provider_error_artifacts`, `debug_log`, `structured_output_validation`, `lead_provider_contracts`
 
 `orchestrator` composes domain contracts, storage, consensus, Git story commits, references, and provider-neutral backends. Its Apply handoff prepares the Git candidate before atomically publishing the known result with one exact Commit request; proven absence publishes a reprepare result, while ambiguous publication requires inspection.
-`provider_process` owns confined streamed subprocesses; `provider_auth` owns probes; diagnostic adapters own their files.
+`provider_process` owns confined streamed subprocesses and literal Darwin metadata permissions for admitted resources and ancestors.
+Adapters select exact content resources; `provider_auth` owns probes; diagnostic adapters own their files.
 Concrete adapters depend on `provider_adapter`. `provider_execution_workspace` owns the internal exact-worktree capability
-borrowed from the workspace binding for Codex; launch uses its duplicated root descriptor. No Git lease spans provider work.
+borrowed from the workspace binding for both providers; launch uses its duplicated root descriptor. No Git lease spans provider work.
 Continuation, structured repair, authentication replay, and deferred acceptance retain the same generation authority.
 `structured_output_validation` owns pure, bounded diagnostics from trusted schemas and
 source-authored domain findings. Domain validators identify the rejected property and rule;
@@ -216,7 +217,7 @@ only their intentional contract paths.
 - `git.session_contracts`, `git.session_resources`, `git.session_history_contracts`, `git.session_history`
 - `git.session_checkpoint_contracts`, `git.session_checkpoints`, `git.story_commit_contracts`, `git.story_commit_candidates`, `git.story_commits`
 
-`git.process` alone executes fixed profiles; `repository_lock` owns cross-process serialization.
+`git.process` owns fixed-profile children, bounded pipes and call-local selectors; `repository_lock` owns cross-process serialization.
 Resource/history/checkpoint/commit services depend inward on these owners; general contracts must not import workflow services.
 Generation capture and pinning remain opaque internal contracts. Bound history and story-commit services validate
 exact generation without exporting descriptors or general mutation authority.

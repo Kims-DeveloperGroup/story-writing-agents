@@ -717,6 +717,8 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.fake_directory = Path(temporary.name)
+        native_state = self.fake_directory / "codex-home"
+        native_state.mkdir(mode=0o700)
         self.fake_script = self.fake_directory / "fake-agy.py"
         self.fake_script.write_text(_FAKE_AGY, encoding="utf-8")
         self.windows_launcher = self.fake_directory / "fake-agy-windows-launcher.py"
@@ -739,6 +741,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         self.environment = mock.patch.dict(
             os.environ,
             {
+                "CODEX_HOME": str(native_state),
                 "STORY_FAKE_AGY_LOG": str(self.log_path),
                 "STORY_FAKE_AGY_MODE": "ok",
                 "STORY_PRIVATE_CREDENTIAL": "CONFIDENTIAL_CREDENTIAL",
