@@ -9,6 +9,7 @@ import hashlib
 import inspect
 import io
 import json
+import logging
 import os
 import sys
 import tempfile
@@ -1907,17 +1908,23 @@ class CodexBackendDefaultsTests(unittest.TestCase):
 
 class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
+        asyncio_diagnostics = logging.StreamHandler(sys.stderr)
+        logging.getLogger("asyncio").addHandler(asyncio_diagnostics)
+        self.addCleanup(asyncio_diagnostics.close)
+        self.addCleanup(logging.getLogger("asyncio").removeHandler, asyncio_diagnostics)
         self.workspace = pristine_initialized_workspace(self)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.fake_directory = Path(temporary.name)
+        native_state = self.fake_directory / "codex-home"
+        native_state.mkdir(mode=0o700)
         self.executable = self.fake_directory / "fake-codex"
         self.executable.write_text(_FAKE_CODEX, encoding="utf-8")
         self.executable.chmod(0o755)
         self.log_path = self.fake_directory / "invocations.jsonl"
         self.environment = mock.patch.dict(
             os.environ,
-            {"STORY_FAKE_CODEX_LOG": str(self.log_path)},
+            {"STORY_FAKE_CODEX_LOG": str(self.log_path), "CODEX_HOME": str(native_state)},
         )
         self.environment.start()
         self.addCleanup(self.environment.stop)
@@ -2408,7 +2415,39 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(bound.staging_directory, resources.identity.worktree_root)
         self.assertIn(definition.system_prompt_file.read_text(), staged)
         self.assertIn(definition.persona_file.read_text(), staged)
-        reply = await bound.invoke(self.request(session_id=session_id))
+        with mock.patch("story_writing_agents.codex_adapter.run_process",
+                        wraps=sys.modules["story_writing_agents.codex_adapter"].run_process) as run:
+            reply = await bound.invoke(self.request(session_id=session_id))
+        request = run.call_args.args[0]
+        sandbox = request.darwin_sandbox
+        self.assertIsNotNone(sandbox)
+        configs = backend._codex_adapter._system_config_paths(protected_paths=())
+        self.assertEqual(sandbox.read_paths, (self.executable.resolve(),
+            Path(request.command[request.command.index("--output-schema") + 1]), resources.identity.worktree_root, *configs))
+        self.assertEqual(sandbox.write_paths, (Path(request.command[request.command.index("--output-last-message") + 1]),))
+        self.assertEqual(sandbox.deny_subpaths, (resources.identity.worktree_root / ".git", bound.staging_directory.resolve()))
+        self.assertEqual(sandbox.deny_write_subpaths, (resources.identity.worktree_root,))
+        self.assertEqual((sandbox.read_subpaths, sandbox.metadata_paths), ((), ()))
+        self.assertEqual(sandbox.write_subpaths, (Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).resolve(),))
+        self.assertIs(sandbox.network, True)
+        for platform, system_root in (("darwin", Path("/private/etc")), ("linux", Path("/etc"))):
+            expected = tuple(system_root / "codex" / name for name in ("requirements.toml", "managed_config.toml", "config.toml"))
+            def canonical(path):
+                return str(system_root) if str(path) == "/etc" else str(path)
+            with mock.patch("story_writing_agents.codex_adapter.sys.platform", platform), mock.patch(
+                "story_writing_agents.codex_adapter.os.path.realpath", side_effect=canonical):
+                for present in (False, True):
+                    with mock.patch.object(Path, "exists", return_value=present):
+                        self.assertEqual(backend._codex_adapter._system_config_paths(protected_paths=()), expected)
+                for protected in (system_root, expected[0], expected[0] / "nested"):
+                    with self.assertRaisesRegex(ProviderInvocationError, "system configuration paths are unsafe") as unsafe:
+                        backend._codex_adapter._system_config_paths(protected_paths=(protected,))
+                    self.assertFalse(unsafe.exception.taint_existing_thread)
+            escaped = lambda path: str(self.workspace.root / "private-config") if Path(path) == expected[0] else canonical(path)
+            with mock.patch("story_writing_agents.codex_adapter.sys.platform", platform), mock.patch(
+                "story_writing_agents.codex_adapter.os.path.realpath", side_effect=escaped), self.assertRaisesRegex(
+                    ProviderInvocationError, "system configuration paths are unsafe"):
+                backend._codex_adapter._system_config_paths(protected_paths=())
         self.assertEqual(reply.content, "generated candidate")
         invocation = self.invocations()[0]
         argv = invocation["argv"]

@@ -498,8 +498,10 @@ Replies still pass Story's correlation, handle, evidence, semantic, and phase
 checks.
 On Darwin, a default-deny outer sandbox admits only the literal canonical Codex
 executable, exact transport, validated provider-native state, required system
-resources, and network access. It grants the provider no session-tree file
-reads or writes and explicitly denies session `.git`, staging, the
+resources, and network access. Literal metadata permissions cover admitted
+resources and their ancestors, including the system `/etc` alias. Opening the
+exact session directory can expose its top-level filenames but grants no
+descendant story-file reads or session writes. The policy denies session `.git`, staging, the
 control/initialization roots, siblings, traversal, and symlink escapes.
 Runtime-owned context capture,
 explicit references, and SEARCH/READ handlers deliver selected story content

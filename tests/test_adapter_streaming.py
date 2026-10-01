@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -30,7 +31,10 @@ from tests.helpers import live_provider_execution_workspace, pristine_initialize
 class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.workspace = pristine_initialized_workspace(self)
-        self.backend = AgentBackend(self.workspace)
+        native_state = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        native_state.chmod(0o700)
+        self.enterContext(mock.patch.dict(os.environ, {"CODEX_HOME": str(native_state)}))
+        self.backend = AgentBackend(self.workspace, executable=sys.executable)
         self.addCleanup(self.backend.close)
         self.codex_adapter = self.backend._codex_adapter
         self.antigravity_adapter = self.backend._antigravity_adapter

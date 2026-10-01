@@ -7,6 +7,8 @@ import os
 import sys
 import tempfile
 import unittest
+import json
+from dataclasses import replace
 from pathlib import Path
 
 from story_writing_agents import provider_process as process_module
@@ -39,31 +41,86 @@ class TestProviderProcessStreaming(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.stderr, b"err\n")
         self.assertEqual(result.returncode, 0)
         with tempfile.TemporaryDirectory(prefix="provider-replacement-") as temporary:
-            root = Path(temporary).resolve() / "session"
-            root.mkdir()
+            fixture = Path(temporary).resolve()
+            root, state, staging = (fixture / name for name in ("session", "state", "staging"))
+            for directory in (root, state, staging):
+                directory.mkdir()
+            schema, output, metadata, missing = (fixture / name for name in ("schema", "output", "metadata", "absent"))
+            denied = (root / "story.md", root / ".git", fixture / "sibling.md", staging / "private.md", metadata)
+            schema.write_bytes(b"SCHEMA\n")
+            for path in denied:
+                path.write_bytes(b"PRIVATE_PROTECTED_BYTES\n")
+            executable = Path("/usr/bin/perl" if sys.platform == "darwin" else "/bin/cat").resolve(strict=True)
+            requirements = process_module.DarwinSandboxRequirements(
+                executable=executable, read_paths=(schema, root), write_paths=(output,),
+                write_subpaths=(state,), metadata_paths=(metadata, missing),
+                deny_subpaths=(root / ".git", staging), deny_write_subpaths=(root,))
+            linked = fixture / "linked"
+            linked.symlink_to(metadata)
+            for invalid in ([], ("not-a-path",), (Path("relative"),), (linked,)):
+                with self.assertRaises(ValueError):
+                    replace(requirements, metadata_paths=invalid)
+            profile = process_module._darwin_sandbox_profile(requirements)
+            literal = lambda path: json.dumps(str(path), ensure_ascii=True)
+            resources = (executable, schema, root, output, state, metadata, missing)
+            for resource in resources:
+                for ancestor in (resource, *resource.parents):
+                    self.assertIn("(allow file-read-metadata (literal " + literal(ancestor) + "))", profile)
+            self.assertIn('(allow file-read-metadata (literal "/etc"))', profile)
+            self.assertIn("(allow file-read* (literal " + literal(root) + "))", profile)
+            for path in (root, metadata, missing, fixture, staging, root / ".git"):
+                self.assertNotIn("(allow file-read* (subpath " + literal(path) + "))", profile)
+            self.assertNotIn("(allow file-read* (literal " + literal(metadata) + "))", profile)
+            self.assertNotIn("(allow network-outbound)", profile)
             descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
             try:
-                root.rename(root.with_name("moved"))
-                root.mkdir()
-                replacement = root / "replacement.txt"
-                replacement.write_bytes(b"PRIVATE_REPLACEMENT_BYTES")
-                requirements = process_module.DarwinSandboxRequirements(
-                    executable=(cat_executable := Path("/bin/cat").resolve(strict=True)), read_subpaths=(cat_executable.parent,),
-                    deny_subpaths=(root / ".git",), deny_write_subpaths=(root,))
                 if sys.platform != "darwin":
                     with self.assertRaises(process_module.ProcessStartFailed):
-                        process_module._darwin_confined_command((str(cat_executable), str(replacement)), requirements)
+                        process_module._darwin_confined_command((str(executable), str(schema)), requirements)
                 else:
-                    sandboxed = process_module._darwin_confined_command((str(cat_executable), str(replacement)), requirements)
-                    command = (os.path.realpath(sys.executable), "-I", "-c",
-                               process_module._DESCRIPTOR_EXEC_HELPER, str(descriptor), *sandboxed)
-                    process = await asyncio.create_subprocess_exec(
-                        *command, pass_fds=(descriptor,), stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE)
-                    stdout, stderr = await asyncio.wait_for(process.communicate(), 5)
-                    self.assertNotEqual(process.returncode, 0)
+                    probe = (
+                        'my ($schema,$output,$state,$meta,$absent,@denied)=@ARGV; '
+                        'opendir(my $d,".") or die "directory: $!"; '
+                        'my @cwd=stat("."); print "cwd:$cwd[1]\\n"; '
+                        'open(my $r,"<",$schema) or die "schema: $!"; '
+                        'my $v=<$r>; $v eq "SCHEMA\\n" or die "schema bytes"; '
+                        'open(my $o,">",$output) or die "output: $!"; print $o "OUTPUT"; close($o); '
+                        'open(my $s,">","$state/cache") or die "state: $!"; print $s "STATE"; close($s); '
+                        'stat($meta) or die "metadata: $!"; stat($absent); $!{ENOENT} or die "absence: $!"; '
+                        'for my $p (@denied) { '
+                        'open(my $r,"<",$p) and die "protected read admitted"; '
+                        '($!{EPERM} || $!{EACCES}) or die "read errno: $!"; '
+                        'open(my $w,">>",$p) and die "protected write admitted"; '
+                        '($!{EPERM} || $!{EACCES}) or die "write errno: $!"; } '
+                        'open(my $w,">","new-story.md") and die "new story write admitted"; '
+                        '($!{EPERM} || $!{EACCES}) or die "create errno: $!"; print "confined\\n";')
+                    async def execute(command, policy):
+                        sandboxed = process_module._darwin_confined_command(command, policy)
+                        process = await asyncio.create_subprocess_exec(
+                            os.path.realpath(sys.executable), "-I", "-c", process_module._DESCRIPTOR_EXEC_HELPER,
+                            str(descriptor), *sandboxed, pass_fds=(descriptor,),
+                            env=os.environ | {"LC_ALL": "C", "LC_CTYPE": "C", "LANG": "C"},
+                            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                        stdout, stderr = await asyncio.wait_for(process.communicate(), 5)
+                        return process.returncode, stdout, stderr
+                    command = (str(executable), "-e", probe, *(str(path) for path in (schema, output, state, metadata, missing, *denied)))
+                    status, stdout, stderr = await execute(command, requirements)
+                    self.assertEqual((status, stdout, stderr), (0, f"cwd:{root.stat().st_ino}\nconfined\n".encode(), b""))
+                    self.assertEqual(output.read_bytes(), b"OUTPUT")
+                    self.assertEqual((state / "cache").read_bytes(), b"STATE")
+                    self.assertFalse((root / "new-story.md").exists())
+                    root.rename(root.with_name("moved"))
+                    root.mkdir()
+                    replacement = root / "replacement.txt"
+                    replacement.write_bytes(b"PRIVATE_REPLACEMENT_BYTES")
+                    cat = Path("/bin/cat").resolve(strict=True)
+                    status, stdout, stderr = await execute((str(cat), str(replacement)), replace(requirements, executable=cat))
+                    self.assertNotEqual(status, 0)
                     self.assertEqual(stdout, b"")
                     self.assertNotIn(b"PRIVATE_REPLACEMENT_BYTES", stderr)
+                for path in denied:
+                    checked = root.with_name("moved") / path.name if path.parent == root and sys.platform == "darwin" else path
+                    self.assertEqual(checked.read_bytes(), b"PRIVATE_PROTECTED_BYTES\n")
             finally:
                 os.close(descriptor)
 

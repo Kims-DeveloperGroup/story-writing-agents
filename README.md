@@ -324,13 +324,15 @@ capability from that binding. The child enters the descriptor-selected exact
 session worktree, so its OS working directory is the same pinned generation,
 never provider staging or the control workspace. Codex also uses `--cd .`;
 Antigravity treats that exact CWD as its native project root without an adapter-
-control fallback. On Darwin, a second default-deny sandbox gives Codex no
-session-tree reads and gives Antigravity only literal project traversal plus
-its selected protected role file. Neither provider receives direct manuscript
+control fallback. On Darwin, a second default-deny sandbox gives Codex literal
+startup metadata and access to the exact session directory, and gives Antigravity
+literal project traversal plus its selected protected role file. Opening the
+session directory can expose its top-level filenames; descendant story-file
+contents remain inaccessible. Neither provider receives direct manuscript
 or core-document access; session writes and `.git` are denied. Host-owned
 context, explicit-reference, SEARCH, and READ services select and deliver story
 content through the provider payload instead. Codex exceptions admit only its
-literal canonical executable, required system runtime files, transport,
+literal canonical executable, required system runtime/configuration files, transport,
 outbound network access, and an existing absolute owner-controlled `CODEX_HOME`
 that cannot overlap the control root, the schema-derived sibling-worktree
 container, staging, or output transport. Bound instructions, schema, and

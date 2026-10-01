@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import os
 import re
+import selectors
 import stat
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -154,13 +156,88 @@ class _BoundedCapture:
                 if not isinstance(chunk, bytes):
                     self.failed = True
                     return
-                remaining = self._maximum - len(self.data)
-                if remaining > 0:
-                    self.data.extend(chunk[:remaining])
-                if len(chunk) > remaining:
-                    self.exceeded = True
+                self.retain(chunk)
         except BaseException:
             self.failed = True
+
+    def retain(self, chunk: bytes) -> None:
+        remaining = self._maximum - len(self.data)
+        if remaining > 0:
+            self.data.extend(chunk[:remaining])
+        if len(chunk) > remaining:
+            self.exceeded = True
+
+
+def _read_only_pipe_descriptors(
+    stdout: object,
+    stderr: object,
+) -> tuple[int, int] | None:
+    """Admit real POSIX pipes while preserving the injected-stream fallback."""
+    if os.name != "posix":
+        return None
+    try:
+        descriptors = (stdout.fileno(), stderr.fileno())  # type: ignore[attr-defined]
+        if (
+            any(type(descriptor) is not int or descriptor < 0 for descriptor in descriptors)
+            or descriptors[0] == descriptors[1]
+            or any(not stat.S_ISFIFO(os.fstat(descriptor).st_mode) for descriptor in descriptors)
+        ):
+            return None
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+    return descriptors
+
+
+def _capture_read_only_pipes(
+    process: subprocess.Popen[bytes],
+    stdout: _BoundedCapture,
+    stderr: _BoundedCapture,
+    descriptors: tuple[int, int],
+) -> tuple[int, bool]:
+    """Fairly drain bounded outputs and reap under one call-local deadline."""
+    selector: selectors.BaseSelector | None = None
+    close_failed = False
+    try:
+        deadline = time.monotonic() + _PROCESS_TIMEOUT_SECONDS
+        selector = selectors.DefaultSelector()
+        for descriptor, capture in zip(descriptors, (stdout, stderr), strict=True):
+            os.set_blocking(descriptor, False)
+            selector.register(descriptor, selectors.EVENT_READ, capture)
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _process_failure(GitFailureCode.PROCESS_TIMED_OUT)
+            for key, _events in selector.select(remaining):
+                try:
+                    chunk = os.read(key.fd, _READ_CHUNK_BYTES)
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    selector.unregister(key.fd)
+                else:
+                    key.data.retain(chunk)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise _process_failure(GitFailureCode.PROCESS_TIMED_OUT)
+        try:
+            returncode = process.wait(timeout=remaining)
+        except subprocess.TimeoutExpired:
+            raise _process_failure(GitFailureCode.PROCESS_TIMED_OUT) from None
+        if returncode is None:
+            raise _process_failure(GitFailureCode.PROCESS_START_FAILED)
+    except BaseException as failure:
+        try:
+            _stop_process(process)
+        except BaseException:
+            failure.add_note("Git process cleanup did not finish")
+        if isinstance(failure, GitProcessFailure) or not isinstance(failure, Exception):
+            raise
+        raise _process_failure(GitFailureCode.PROCESS_START_FAILED) from None
+    finally:
+        close_failed |= not _close_stream(selector)
+        close_failed |= not _close_stream(stdout._stream)
+        close_failed |= not _close_stream(stderr._stream)
+    return returncode, close_failed
 
 
 class GitProcessRunner:
@@ -246,6 +323,28 @@ class GitProcessRunner:
             raise _process_failure(GitFailureCode.PROCESS_START_FAILED)
         stdout = _BoundedCapture(process_stdout, _MAX_STDOUT_BYTES)
         stderr = _BoundedCapture(process_stderr, _MAX_STDERR_BYTES)
+        if selected_profile is GitProcessProfile.READ_ONLY and not stdin:
+            try:
+                descriptors = _read_only_pipe_descriptors(process_stdout, process_stderr)
+            except BaseException as failure:
+                try:
+                    _stop_process(process)
+                except BaseException:
+                    failure.add_note("Git process cleanup did not finish")
+                _close_streams(process_stdout, process_stderr)
+                raise
+            if descriptors is not None:
+                returncode, close_failed = _capture_read_only_pipes(
+                    process, stdout, stderr, descriptors
+                )
+                return self._capture_result(
+                    expected_identity,
+                    alternate_index,
+                    stdout,
+                    stderr,
+                    returncode,
+                    transport_failed=close_failed,
+                )
         readers = (
             threading.Thread(target=stdout.read, daemon=True),
             threading.Thread(target=stderr.read, daemon=True),
@@ -317,14 +416,34 @@ class GitProcessRunner:
                 worker.is_alive() for worker in started
             ):
                 body_failure.add_note("Git process worker cleanup did not finish")
+        return self._capture_result(
+            expected_identity,
+            alternate_index,
+            stdout,
+            stderr,
+            returncode,
+            transport_failed=(
+                close_failed or any(worker.is_alive() for worker in (*readers, waiter))
+            ),
+        )
+
+    def _capture_result(
+        self,
+        expected_identity: tuple[int, int],
+        alternate_index: GitAlternateIndex | None,
+        stdout: _BoundedCapture,
+        stderr: _BoundedCapture,
+        returncode: int,
+        *,
+        transport_failed: bool,
+    ) -> GitProcessResult:
         self._verify_root(expected_identity)
         if alternate_index is not None:
             self._verify_alternate_index(alternate_index)
         if (
-            any(worker.is_alive() for worker in (*readers, waiter))
+            transport_failed
             or stdout.failed
             or stderr.failed
-            or close_failed
         ):
             raise _process_failure(GitFailureCode.PROCESS_START_FAILED)
         if stdout.exceeded or stderr.exceeded:

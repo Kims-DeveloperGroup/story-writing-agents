@@ -93,7 +93,9 @@ def check_source_scope(current: dict[str, Any]) -> None:
         raise BudgetError(f"test source grew to {lines} lines")
 
 
-def check_reports(current: dict[str, Any], paths: Sequence[str]) -> dict[str, Any]:
+def check_reports(
+    current: dict[str, Any], paths: Sequence[str], *, allow_wall_time_overage: bool = False,
+) -> dict[str, Any]:
     reconciliation = runner._reconcile_reports(paths)
     if reconciliation["outcome"] != "success":
         raise BudgetError("shard tests did not all pass")
@@ -115,11 +117,12 @@ def check_reports(current: dict[str, Any], paths: Sequence[str]) -> dict[str, An
     if expanded:
         raise BudgetError("subtest scope increased: " + ", ".join(expanded))
     durations = reconciliation["durations"]
-    if durations["sequential_equivalent_wall_seconds"] > current["max_sequential_wall_seconds"]:
-        raise BudgetError("sequential-equivalent wall time exceeds budget")
-    for shard in reconciliation["shards"]:
-        if shard["durations"]["wall_seconds"] > current["max_shard_wall_seconds"]:
-            raise BudgetError(f"shard {shard['identity']} wall time exceeds budget")
+    if not allow_wall_time_overage:
+        if durations["sequential_equivalent_wall_seconds"] > current["max_sequential_wall_seconds"]:
+            raise BudgetError("sequential-equivalent wall time exceeds budget")
+        for shard in reconciliation["shards"]:
+            if shard["durations"]["wall_seconds"] > current["max_shard_wall_seconds"]:
+                raise BudgetError(f"shard {shard['identity']} wall time exceeds budget")
     return reconciliation
 
 
@@ -127,6 +130,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-ref", required=True)
     parser.add_argument("--report", action="append", required=True)
+    parser.add_argument(
+        "--allow-wall-time-overage", action="store_true",
+        help="Allow measured wall-time overage; retain all non-time budget checks.",
+    )
     args = parser.parse_args(argv)
     try:
         current = load_budget()
@@ -134,11 +141,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         if base is not None:
             check_monotonic(current, base)
         check_source_scope(current)
-        result = check_reports(current, args.report)
+        result = check_reports(
+            current, args.report, allow_wall_time_overage=args.allow_wall_time_overage,
+        )
     except (BudgetError, runner.RunnerError, OSError, KeyError, TypeError, ValueError) as error:
         parser.exit(1, f"test budget: {error}\n")
+    allowance = " (wall-time overage explicitly allowed)" if args.allow_wall_time_overage else ""
     print(
-        "test budget passed: "
+        f"test budget passed{allowance}: "
         f"{result['totals']['completed']} IDs, "
         f"{result['durations']['sequential_equivalent_wall_seconds']:.1f}s sequential, "
         f"{result['durations']['concurrent_wall_seconds']:.1f}s longest shard"
