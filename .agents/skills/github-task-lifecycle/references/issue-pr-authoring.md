@@ -43,6 +43,65 @@ A status comment states what works, what remains, the practical blocker or decis
 owned next action. A comment does not update Project state. Evidence records exact observations
 and limitations; it does not authorize checks or risk acceptance.
 
+## PR implementation descriptions
+
+Write for a developer who has not read the Issue or earlier discussion. In What changed,
+explain the problem, necessary background, and delivered outcome. Define unfamiliar terms
+and component names on first use. In Before and after, compare the same concrete action
+under the same relevant conditions; distinguish the expected result from what verification
+actually demonstrated. Keep the Implementation section focused on how the change works.
+
+Use one Implementation subsection per major changed component. A component is a meaningful
+responsibility, not necessarily a file: it may span several modules. Include changes that
+materially affect behavior, interfaces, data flow, persistence, security, performance, or
+internal responsibilities. Group supporting helpers with that component. Do not give trivial
+renames, formatting, import cleanup, or incidental documentation edits their own subsections.
+Put supporting test results in Verification rather than listing every changed test file.
+
+Each component subsection keeps these four explanations:
+
+- **Purpose:** Explain its job and how it fits into the affected workflow.
+- **Previous behavior:** Describe how it handled the relevant scenario and its limitation.
+- **New behavior:** Describe the resulting behavior and the conditions under which it applies.
+- **Major code changes:** Identify significant additions, removals, or reorganizations and
+  explain how they produce that behavior. Link useful entry points or name relevant symbols;
+  avoid an exhaustive file or helper inventory. Explain interactions between major components
+  and material tradeoffs when they help the reader understand the result.
+
+Scale the detail to the change; one component subsection is enough for a single-component PR.
+For a substantial refactor, explain the responsibility or structure change and explicitly
+state when observable behavior is unchanged. For a documentation or policy PR, use document
+or contributor-workflow components and describe the significant rule, instruction, or
+template edits under Major code changes without inventing runtime changes. Routine supporting
+edits need no standalone component. Preserve the template's six top-level headings and its
+review/evidence fields while repeating component subsections as needed.
+
+### Illustrative component example: Git command runner
+
+This example uses [PR #757](https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/757)
+at revision `7e6ab429786ba0bf03e9a7fee6ac09a3f94d58bd`. It illustrates one component subsection,
+not the complete PR or its current review and verification status. Do not copy its historical
+facts into an unrelated PR.
+
+**Purpose:** Runs Git commands, collects their normal and error output, and handles timeouts
+and process cleanup during repository checks.
+
+**Previous behavior:** Each call started three helper threads: one for each output stream
+and one to wait for the Git process to finish.
+
+**New behavior:** Eligible read-only calls collect both output streams and wait for completion
+in the calling thread, within one deadline. This applies to calls with no input data and real
+operating-system pipes on POSIX platforms such as macOS and Linux. Calls that change Git
+state, supply input, or use unsupported streams retain the existing threaded path.
+
+**Major code changes:** In
+[git/process.py at the example revision](https://github.com/Kims-DeveloperGroup/story-writing-agents/blob/7e6ab429786ba0bf03e9a7fee6ac09a3f94d58bd/src/story_writing_agents/git/process.py),
+add a selector-based capture path: the selector waits until either output stream has data
+available, allowing one thread to handle both streams. Both paths share result validation,
+preserving output limits, repository checks, timeout handling, and child-process cleanup.
+This reduces helper-thread creation for eligible calls; it does not by itself demonstrate
+faster recovery or passing full-suite verification.
+
 ## Verification records
 
 Runtime and test changes require complete shard CI under [TEST_POLICY.md](../../../../TEST_POLICY.md).
