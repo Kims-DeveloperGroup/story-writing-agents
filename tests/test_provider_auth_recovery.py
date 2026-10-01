@@ -89,8 +89,9 @@ async def drive_recovery(operation, callback=lambda _key: True):
     try:
         while not task.done():
             ready = asyncio.create_task(recovery.wait_ready())
+            # Harness progress allowance includes synchronous fixture Git work.
             done, _ = await asyncio.wait((task, ready), return_when=asyncio.FIRST_COMPLETED,
-                                         timeout=3)
+                                         timeout=30)
             ready.cancel()
             await asyncio.gather(ready, return_exceptions=True)
             if not done:
@@ -697,7 +698,7 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
                     failed.add(provider.agent_id)
                     if len(failed) == 2:
                         both_active.set()
-                    await asyncio.wait_for(both_active.wait(), timeout=2)
+                    await asyncio.wait_for(both_active.wait(), timeout=30)
                     failure = auth_failure("codex")
                     failure.auth_generation = generation
                     accounting = provider._account(request.schema, request.payload, call_kind=request.call_kind,
