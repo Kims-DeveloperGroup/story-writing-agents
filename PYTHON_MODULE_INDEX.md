@@ -118,8 +118,7 @@ Dependencies flow from `service`, `sources`, and `progress` toward manifest/acti
 contracts. Filesystem source access is delegated to writing-artifact and workspace owners. Optional
 validation diagnostics preserve rejection, repair, checkpoint, and authority decisions.
 
-`service` owns provider delivery and verified native continuity; host retains integrity receipts and complete-history coverage.
-`request_compaction` shares only when properties and bytes decrease before accounting; it owns no durable state or resources.
+`service` owns provider delivery and verified native continuity; host retains integrity receipts and complete-history coverage. `request_compaction` shares only when properties and bytes decrease before accounting; it owns no durable state or resources.
 
 ### Agent exchange capture
 
