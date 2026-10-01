@@ -37,12 +37,29 @@ work also runs affected exact test IDs or modules before the PR. CI reconciles
 complete, disjoint shards and checks their test outcomes, exact IDs, per-ID
 subtest counts, test source size, measured wall times, and the base-commit
 budget. A cancelled,
-incomplete, failed, or over-budget run does not pass.
+incomplete, or failed run does not pass. A time overage also fails unless the
+maintainer-authorized exception below applies.
 
 The timing-weight manifest balances shards; it is not evidence of actual run
 time. The budget gate uses the wall time in the current Python 3.11 runner
 reports. Report the observed full and shard times and any platform limitation
 when recalibrating weights.
+
+## Explicit wall-time exception
+
+A maintainer may authorize extra validation time for a specific PR and record the
+reason and authorization in its owning Issue and PR. The root then applies
+`test:wall-time-exception`. On that PR, CI allows each full shard up to 60 minutes
+including setup, and passes `--allow-wall-time-overage` to the budget checker.
+The checker still reports actual durations; only the measured sequential and
+per-shard time comparisons are waived. Local validation may use the same option
+under the recorded authorization.
+
+The checked-in ceilings and strict default remain unchanged. Merge-group runs
+and PRs without the label retain the 15-minute job limit and both time checks.
+This exception never permits failed or incomplete reports, inventory expansion,
+increased subtest counts or test source, budget-file increases, skipped required
+checks, or bypassed approvals or branch protection.
 
 ## Initial calibration
 

@@ -229,6 +229,15 @@ Post-merge verification checks Issue closure, Project `Done`, Development links,
 branch cleanup; failures remain visible for repair. Managed post-merge verification needs
 `PROJECT_STATUS_TOKEN` with organization ProjectV2 read access.
 
+### Explicit validation time allowance
+
+A maintainer's recorded authorization to exceed validation time budgets may use
+[the per-PR wall-time exception](TEST_POLICY.md#explicit-wall-time-exception).
+Record the authorization and reason in the owning Issue and PR before applying
+`test:wall-time-exception`. This changes time allowances only: complete successful
+reports and every non-time verification, review, approval, and integration gate
+remain mandatory. Keep actual durations and earlier failures visible.
+
 ### Actions non-execution fallback
 
 When annotations, logs, or service status establish that Actions cannot execute because of
