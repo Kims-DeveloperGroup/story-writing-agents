@@ -287,8 +287,11 @@ and ANSWER are inner actions of one provider invocation.
 
 1. Runtime gives the lead identity, assignment, conversation input, reference
    identities, content-free core-document status, and required session memory:
-   retained active/archived history plus current directives and complete core
-   documents. This also applies to workflow/meta turns and Lead synthesis.
+   retained active/archived history plus current directives. Fresh threads replay
+   full history; compatible threads receive missing turn content and new
+   host/specialist facts. Relevant core content arrives through host-owned
+   SEARCH/READ or explicit references. This also applies to workflow/meta turns
+   and Lead synthesis.
 2. The lead may ask runtime for a bounded SEARCH. A search result is only a
    locator.
 3. The lead asks runtime to READ a selected locator. READ produces the content

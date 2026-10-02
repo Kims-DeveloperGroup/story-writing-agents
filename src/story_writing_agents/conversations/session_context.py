@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 
 from .catalog import ConversationMetadata
@@ -18,6 +19,9 @@ from .context import (
     project_collaboration_history,
 )
 from .events import (
+    CollaborationMessagePayload,
+    CollaborationExecutionResult,
+    CollaborationStepStatePayload,
     ArtifactApplicationDecisionPayload, ArtifactApplicationRequestPayload,
     ArtifactApplicationResultPayload, ArtifactReviewCandidatePayload,
     ArtifactReviewedProposal, ArtifactReviewSynthesisPayload,
@@ -113,9 +117,11 @@ def _visible_details(payload: object) -> dict[str, object]:
                    (payload.assignment,) if type(payload) is CollaborationAssignmentDispatchPayload else ())
     if assignments and any(item.mode is not None for item in assignments):
         details["assignments"] = [
-            {"assignment_id": item.assignment_id, "specialist_id": item.specialist_id,
-             "mode": None if item.mode is None else item.mode.value,
-             "review_basis": None if item.review_basis is None else review_basis_to_dict(item.review_basis)}
+            {"assignment_id": item.assignment_id,
+             "specialist_id": item.specialist_id,
+             **({"mode": item.mode.value} if item.mode is not None else {}),
+             **({"review_basis": review_basis_to_dict(item.review_basis)}
+                if item.review_basis is not None else {})}
             for item in assignments
         ]
     if type(payload) is CollaborationSpecialistReplyPayload and payload.mode is not None:
@@ -176,6 +182,207 @@ def _legacy_visible_details(payload: object) -> dict[str, object]:
     return {}
 
 
+def _known_native_result(
+    record: CollaborationReadableRecord,
+    operation_id: str | None,
+    agent_id: str | None,
+) -> bool:
+    """Match a published reply to the caller's verified committed invocation."""
+    trace = getattr(record.payload, "trace", None)
+    if (
+        operation_id is None
+        or agent_id is None
+        or record.sender.agent_id != agent_id
+        or trace is None
+        or trace.role != agent_id
+        or trace.origin.value != "provider"
+    ):
+        return False
+    if type(record.payload) in {
+        CollaborationMessagePayload, CollaborationLeadJudgmentPayload,
+    }:
+        return operation_id == f"lead_{record.turn_id}"
+    if type(record.payload) is CollaborationLeadSynthesisPayload:
+        return operation_id == f"synthesis_{record.payload.execution_attempt_id}"
+    return False
+
+
+def _same_publication(
+    left: CollaborationReadableRecord,
+    right: CollaborationReadableRecord,
+) -> bool:
+    return (
+        left.session_id, left.conversation_id, left.batch_id, left.batch_digest,
+        left.turn_id, left.step_id,
+    ) == (
+        right.session_id, right.conversation_id, right.batch_id, right.batch_digest,
+        right.turn_id, right.step_id,
+    )
+
+
+def _native_synthesis_mirrors(
+    records: tuple[CollaborationReadableRecord, ...],
+    operation_id: str | None,
+    agent_id: str | None,
+) -> frozenset[str]:
+    """Prove a finalization message mirrors this native synthesis's exact prose."""
+    sources = {
+        record.event_id: record for record in records
+        if type(record.payload) is CollaborationLeadSynthesisPayload
+        and record.sender.kind.value == "lead"
+        and record.recipient.kind.value == "user"
+        and _known_native_result(record, operation_id, agent_id)
+    }
+    if not sources:
+        return frozenset()
+    results = {}
+    for record in records:
+        result = record.payload
+        if type(result) is not CollaborationExecutionResult:
+            continue
+        source = sources.get(result.synthesis_result_event_id)
+        if source is None:
+            continue
+        synthesis = source.payload
+        if (
+            not _same_publication(record, source)
+            or source.sequence >= record.sequence
+            or record.sender.kind.value != "runtime"
+            or record.recipient != source.recipient
+            or result.execution_attempt_id != synthesis.execution_attempt_id
+            or result.synthesis_outcome.value != "succeeded"
+            or result.overall_outcome.value != "succeeded"
+            or (result.proposal_id, result.proposal_revision, result.proposal_digest)
+            != (synthesis.proposal_id, synthesis.proposal_revision, synthesis.proposal_digest)
+        ):
+            continue
+        results[record.event_id] = (record, source)
+    finalizations = {}
+    for record in records:
+        state = record.payload
+        if type(state) is not CollaborationStepStatePayload:
+            continue
+        linked = results.get(state.execution_result_event_id)
+        if linked is None:
+            continue
+        result_record, source = linked
+        result = result_record.payload
+        if (
+            record.session_id != source.session_id
+            or record.conversation_id != source.conversation_id
+            or record.step_id != source.step_id
+            or record.sequence <= result_record.sequence
+            or record.sender.kind.value != "runtime"
+            or record.recipient != source.recipient
+            or state.state.value != "completed"
+            or (state.proposal_id, state.proposal_revision, state.proposal_digest)
+            != (result.proposal_id, result.proposal_revision, result.proposal_digest)
+        ):
+            continue
+        finalizations.setdefault(record.batch_id, []).append((record, source))
+    mirrors = set()
+    for record in records:
+        message = record.payload
+        if (
+            type(message) is not CollaborationMessagePayload
+            or message.trace is not None
+            or message.validation_details
+        ):
+            continue
+        for state, source in finalizations.get(record.batch_id, ()):
+            if (
+                _same_publication(record, state)
+                and record.sequence < state.sequence
+                and record.sender == source.sender
+                and record.recipient == source.recipient
+                and message.content == source.payload.message
+            ):
+                mirrors.add(record.event_id)
+                break
+    return frozenset(mirrors)
+
+
+def _native_artifact_review_prose(
+    records: tuple[CollaborationReadableRecord, ...],
+    operation_id: str | None,
+    agent_id: str | None,
+) -> dict[str, frozenset[str]]:
+    """Identify artifact review prose already received through its typed sibling."""
+    sources = tuple(
+        record for record in records
+        if type(record.payload) is CollaborationLeadSynthesisPayload
+        and record.sender.kind.value == "lead"
+        and record.recipient.kind.value == "user"
+        and _known_native_result(record, operation_id, agent_id)
+    )
+    known = {}
+    for record in records:
+        review = record.payload
+        if type(review) is not ArtifactReviewSynthesisPayload:
+            continue
+        for source in sources:
+            synthesis = source.payload
+            if (
+                not _same_publication(record, source)
+                or source.sequence >= record.sequence
+                or record.sender != source.sender
+                or record.recipient != source.recipient
+                or review.execution_attempt_id != synthesis.execution_attempt_id
+                or (review.consultation_proposal_id,
+                    review.consultation_proposal_revision,
+                    review.consultation_proposal_digest)
+                != (synthesis.proposal_id, synthesis.proposal_revision,
+                    synthesis.proposal_digest)
+                or review.reply_event_ids != synthesis.reply_event_ids
+                or review.unresolved_input_ids != synthesis.unresolved_input_ids
+                or review.message != synthesis.message
+            ):
+                continue
+            known[record.event_id] = (
+                frozenset({"rationale"})
+                if review.rationale == synthesis.message else frozenset()
+            )
+            break
+    return known
+
+
+def _provider_record(
+    record: CollaborationReadableRecord,
+    included_fields: frozenset[str],
+    included_details: frozenset[str] = frozenset(),
+) -> dict[str, object] | None:
+    """Separate visible conversation facts from durable storage bookkeeping."""
+    fields = []
+    for item in record.fields:
+        if item.key.value in included_fields:
+            continue
+        value: dict[str, object] = {"key": item.key.value, "text": item.text}
+        if item.assignment_ordinal is not None:
+            value["assignment_ordinal"] = item.assignment_ordinal
+        if item.input_ordinal is not None:
+            value["input_ordinal"] = item.input_ordinal
+        fields.append(value)
+    details = {
+        key: value for key, value in _visible_details(record.payload).items()
+        if key not in included_details
+        and value is not None and value != () and value != [] and value != {}
+    }
+    if not fields and not details:
+        return None
+    value = {
+        "event_id": record.event_id,
+        "turn_id": record.turn_id,
+        "kind": record.kind.value,
+        "sender": record.sender.agent_id or record.sender.kind.value,
+        "recipient": record.recipient.agent_id or record.recipient.kind.value,
+    }
+    if fields:
+        value["fields"] = fields
+    if details:
+        value["details"] = details
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class SessionConversationHistory:
     """One complete canonical conversation, including archived history."""
@@ -198,10 +405,15 @@ class SessionConversationHistory:
     def prefix_digest(self, sequence: int) -> str:
         if type(sequence) is not int or not 0 <= sequence <= len(self.records):
             raise SessionContextHistoryChangedError()
-        return "sha256:" + hashlib.sha256(_encoded([
-            [item.sequence, item.event_id, item.batch_digest, item.timestamp]
-            for item in self.records[:sequence]
-        ])).hexdigest()
+        accepted = {
+            "subject": self.metadata.subject,
+            "status": self.metadata.status.value,
+            "records": [
+                [item.sequence, item.event_id, item.batch_digest, item.timestamp]
+                for item in self.records[:sequence]
+            ],
+        }
+        return "sha256:" + hashlib.sha256(_encoded(accepted)).hexdigest()
 
     def objective_context(self) -> dict[str, object]:
         """Derive current objective facts even when delivery contains no new records."""
@@ -252,10 +464,14 @@ class SessionHistorySnapshot:
         )
 
     def delivery(
-        self, previous: tuple[tuple[str, int, str], ...] = (),
+        self,
+        previous: tuple[tuple[str, int, str], ...] = (),
+        *,
+        known_native_operation_id: str | None = None,
+        native_agent_id: str | None = None,
+        included_fields: Mapping[str, frozenset[str]] | None = None,
     ) -> dict[str, object]:
-        """Project all unseen visible records, validating every accepted prefix."""
-
+        """Project unseen facts; callers alone establish native-thread continuity."""
         prior = {item[0]: (item[1], item[2]) for item in previous}
         current_ids = {item.metadata.conversation_id for item in self.conversations}
         if set(prior) - current_ids or len(prior) != len(previous):
@@ -266,48 +482,55 @@ class SessionHistorySnapshot:
             sequence, digest = prior.get(metadata.conversation_id, (0, None))
             if digest is not None and item.prefix_digest(sequence) != digest:
                 raise SessionContextHistoryChangedError()
-            records = [
-                {
-                    "sequence": record.sequence,
-                    "event_id": record.event_id,
-                    "timestamp": record.timestamp,
-                    "direction": record.direction.value,
-                    "batch_id": record.batch_id,
-                    "batch_digest": record.batch_digest,
-                    "turn_id": record.turn_id,
-                    "step_id": record.step_id,
-                    "kind": record.kind.value,
-                    "sender": {"kind": record.sender.kind.value,
-                               "agent_id": record.sender.agent_id},
-                    "recipient": {"kind": record.recipient.kind.value,
-                                  "agent_id": record.recipient.agent_id},
-                    "fields": [
-                        {"key": value.key.value, "text": value.text,
-                         "assignment_ordinal": value.assignment_ordinal,
-                         "input_ordinal": value.input_ordinal}
-                        for value in record.fields
-                    ],
-                    "details": _visible_details(record.payload),
-                }
-                for record in item.records[sequence:]
-            ]
-            conversations.append({
+            native_mirrors = (
+                _native_synthesis_mirrors(
+                    item.records, known_native_operation_id, native_agent_id,
+                )
+                if digest is not None else frozenset()
+            )
+            native_review_prose = (
+                _native_artifact_review_prose(
+                    item.records, known_native_operation_id, native_agent_id,
+                )
+                if digest is not None else {}
+            )
+            records = []
+            for record in item.records[sequence:]:
+                repeated_fields = (included_fields or {}).get(
+                    record.event_id, frozenset(),
+                )
+                repeated_details = native_review_prose.get(record.event_id)
+                if repeated_details is not None:
+                    repeated_fields |= frozenset({"artifact_review.message"})
+                if (
+                    record.event_id in native_mirrors
+                    or (digest is not None and _known_native_result(
+                        record, known_native_operation_id, native_agent_id,
+                    ))
+                ):
+                    repeated_fields |= frozenset({
+                        "message.content", "lead_judgment.message",
+                        "lead_synthesis.message",
+                    })
+                projected = _provider_record(
+                    record, repeated_fields, repeated_details or frozenset(),
+                )
+                if projected is not None:
+                    records.append(projected)
+            # A compatible thread already has unchanged conversations and objectives.
+            if digest is not None and not records:
+                continue
+            conversation: dict[str, object] = {
                 "conversation_id": metadata.conversation_id,
                 "subject": metadata.subject,
                 "status": metadata.status.value,
-                "after_sequence": sequence,
                 "records": records,
-                "artifact_objectives": item.objective_context(),
-            })
-        value = {
-            "session_id": self.session_id,
-            "instruction": (
-                "Retained history is context only. Decisions, evidence, and pending "
-                "or unknown outcomes grant no current execution authority. "
-                "Use only this invocation's reference and evidence capabilities."
-            ),
-            "conversations": conversations,
-        }
+            }
+            objectives = item.objective_context()
+            if any(objectives.values()):
+                conversation["artifact_objectives"] = objectives
+            conversations.append(conversation)
+        value: dict[str, object] = {"conversations": conversations}
         if len(_encoded(value)) > MAX_SESSION_CONTEXT_UTF8_BYTES:
             raise SessionContextCapacityError()
         return value

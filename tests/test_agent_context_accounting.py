@@ -36,6 +36,14 @@ from story_writing_agents.provider_adapter import (
 )
 from story_writing_agents.agent_context.request_compaction import compact_context_payload
 
+
+def _property_count(value):
+    if isinstance(value, dict):
+        return len(value) + sum(_property_count(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return sum(_property_count(item) for item in value)
+    return 0
+
 def _shared_context_payload(event=None):
     if event is None:
         event = {"instruction": "Retain this exact request 한🙂\n" * 40,
@@ -108,17 +116,19 @@ class CanonicalProviderJsonTests(unittest.TestCase):
         self.assertEqual(list(compact["context_objects"]), ["o1"])
         self.assertEqual(canonical_provider_json(compact).count(b'"context_ref":"o1"'), 8)
         self.assertLess(len(canonical_provider_json(compact)), len(canonical_provider_json(before)))
+        self.assertLess(_property_count(compact), _property_count(before))
         values = [{"body": "한🙂" * 100, "scalar": value} for value in (True, 1, 1.0, [1, 2], [2, 1])]
         typed = {"h": {"conversations": [{"records": [{"details": value} for value in values * 2]}]}}
         encoded, _ = compact_context_payload(typed, paths)
-        self.assertEqual(len(encoded["context_objects"]), 5)
+        self.assertNotIn("context_objects", encoded)
         self.assertEqual(json.dumps(_expanded_context_payload(encoded), sort_keys=True),
                          json.dumps(typed, sort_keys=True))
         collisions = ({"context_objects": {}}, {"context_encoding": {}})
         noops = [{**payload, **collision} for collision in collisions]
         marker = copy.deepcopy(payload)
         marker["i"]["artifact_objectives"] = {"context_ref": "user data"}
-        noops += [marker, _shared_context_payload({"body": "x" * 244})]
+        noops += [marker, _shared_context_payload({"body": "x" * 244}),
+                  _shared_context_payload({"body": "x" * 245})]
         noops += [{"i": {"structured_recommendation_execution": {"request": value, "decision": value}}}
                   for value in ({"small": "x"}, {"body": "x" * 256})]
         noops += [{"i": {"structured_recommendation_execution": {"request": values[0]}}}]
@@ -126,8 +136,10 @@ class CanonicalProviderJsonTests(unittest.TestCase):
             result, result_paths = compact_context_payload(original, paths)
             self.assertEqual(canonical_provider_json(result), canonical_provider_json(original))
             self.assertEqual(result_paths, paths)
-        boundary, _ = compact_context_payload(_shared_context_payload({"body": "x" * 245}), paths)
+        rich = {"body": "x" * 245, "facts": {"state": "open", "origin": {"kind": "history"}}}
+        boundary, _ = compact_context_payload(_shared_context_payload(rich), paths)
         self.assertIn("context_objects", boundary)
+        self.assertLess(_property_count(boundary), _property_count(_shared_context_payload(rich)))
 
     def test_strict_failures_have_one_content_free_diagnostic(self) -> None:
         cyclic: list[object] = ["PRIVATE_CYCLE_VALUE"]
@@ -167,7 +179,8 @@ class ProviderPayloadAccountingTests(unittest.TestCase):
     def test_ascii_and_unicode_components_partition_schema_and_payload(self) -> None:
         schema = {"type": "object", "properties": {"content": {"type": "string"}}}
         payload = _shared_context_payload()
-        history_only = {"content": "Prior history 한🙂" * 70}
+        history_only = {"content": "Prior history 한🙂" * 70,
+                        "facts": {"state": "retained", "origin": {"kind": "history"}}}
         payload["h"]["conversations"][0]["records"] += [{"details": history_only}] * 2
         request = ("i", "structured_recommendation_execution", "request")
         decision = ("i", "structured_recommendation_execution", "decision")

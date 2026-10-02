@@ -678,7 +678,7 @@ for the user-visible lifecycle and limits.
 
 ## Provider disclosure
 
-A built-in substantive call uses typed agent-context wire v8. Codex and
+A built-in substantive call uses typed agent-context wire v9. Codex and
 Antigravity share the same closed domain constraints and payload semantics: the
 only required root field is `action`, which is one closed
 SEARCH, READ, or ANSWER object. ANSWER embeds its invocation-specific result
@@ -701,17 +701,17 @@ role-relevant P2 source bodies, focused record changes, content-free catalog
 facts, and applicable mandatory-reference bodies. Continuations expose only
 the newly authorized SEARCH/READ observation.
 
-Every ordinary Lead invocation and consultation/artifact-review synthesis also
-receives required session context (`h`). Bootstrap includes all retained active
-and archived conversations; compatible continuation includes unseen events.
-This contains exact readable fields, original timestamps, visible workflow
-facts, review rationale/impact/limitations, proposed operation bytes, proposed
-commit messages, and application/commit decision or revision-request text.
-It also carries current
-session directives and complete current canonical core-document bytes on both
-bootstrap and delta. No current receipt or private confirmation, write, or Git
-capability is copied. These are sensitive provider-readable inputs, subject
-to provider retention and the separate local exchange-diagnostic limits.
+Every ordinary Lead invocation and consultation/artifact-review synthesis receives
+required session context (`h`). Fresh threads receive complete retained active and
+archived history. Verified compatible threads receive missing turn content and new
+host/specialist semantic material, without repeating demonstrably model-known Lead text
+or current input. Exact readable text, necessary workflow facts, review
+rationale/impact/limitations, proposed operations, commit messages and decisions remain
+provider-readable. Storage timestamps, batches and prefix digests remain in durable
+local records. Current directives accompany both modes; relevant core content arrives
+through host-owned SEARCH/READ or explicit references with current status evidence. No
+private confirmation, write or Git capability is copied. These sensitive inputs are
+subject to provider retention separately from local exchange limits.
 
 Catalog archive status is not deletion, a session-memory exclusion, or a
 provider-disclosure opt-out. Canonical archive export/import values are a
@@ -761,20 +761,19 @@ use provider-managed context with empty mutable-core bindings. Optional
 conversation RAG stays separate from deterministic lexical context actions.
 
 Ordinary Lead turns and consultation/artifact-review synthesis share compatible
-workspace/session/agent continuation across conversations. Specialists and
-consensus retain their exact scopes and do not share that Lead session thread.
-Cache/history/compaction may retain previously disclosed content under provider
-policy, but never grant current authority. Missing or tainted native history
-selects exact recovery from local retained history/current state on the next
-safe authorized work. An eligible failed read-only Lead attempt can be closed
-and followed by explicit new input in the same conversation. Its original
-request and content-free failure remain in history; only the matching
-unfinished native operation is retired, preserving a successful checkpoint
-from another conversation. Uncertain specialist/synthesis and authoritative
-write outcomes remain recovery-gated. Switching provider routes starts a fresh
-target thread without deleting older native data. Exact delivery has a finite
-capacity and never silently summarizes or omits required history; see
-[Lead session memory](../guides/agent-context.md#lead-session-memory).
+workspace/session/agent continuation across conversations. Specialists and consensus
+retain their exact scopes and do not share that Lead session thread.
+Cache/history/compaction may retain previously disclosed content under provider policy,
+but never grant current authority. Missing or tainted native history selects exact
+recovery from local retained history/current state on the next safe authorized work. An
+eligible failed read-only Lead attempt can be closed and followed by explicit new input
+in the same conversation. Its original request and content-free failure remain in
+history; only the matching unfinished native operation is retired, preserving a
+successful checkpoint from another conversation. Uncertain specialist/synthesis and
+authoritative write outcomes remain recovery-gated. Switching provider routes starts a
+fresh target thread without deleting older native data. Exact delivery has a finite
+capacity and never silently summarizes or omits required history; see [Lead session
+memory](../guides/agent-context.md#lead-session-memory).
 
 The backend-selected provider/model/effort profile and provider argv are the
 execution evidence shown by the terminal. Provider reply prose, including a

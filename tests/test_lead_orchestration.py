@@ -492,7 +492,6 @@ def _live_result(call, value):
         return value
     value = copy.deepcopy(value)
     material = _live_material(call)
-    contract = material["answer_contract"]
     if "assignment_id" in value:
         return {"assessment": value["assessment"], "message": value["message"]}
     if "reply_event_ids" in value:
@@ -706,7 +705,11 @@ def _workflow_material(value: object) -> dict[str, object]:
     if isinstance(value, Mapping) and "context_objects" in value:
         value = _expanded_context_payload(value)
     if isinstance(value, Mapping):
-        if "answer_contract" in value and "workflow" in value:
+        workflow = value.get("workflow")
+        if type(workflow) is str and workflow in {
+            "lead_front_channel", "lead_synthesis", "lead_specialist_consultation",
+            "specialist_advisory", "artifact_mutation", "git_operation",
+        }:
             return value
         for item in value.values():
             try:

@@ -782,7 +782,7 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
         fingerprint = service_module._execution_policy_fingerprint
         policy, actions, sources = DEFAULT_CONTEXT_PLANNING_POLICY, CONTEXT_ACTION_POLICY, CONTEXT_SOURCE_POLICY
         baseline = fingerprint(policy, actions, sources)
-        self.assertEqual(service_module._CONTEXT_WIRE_VERSION, "agent-context-wire-v8")
+        self.assertEqual(service_module._CONTEXT_WIRE_VERSION, "agent-context-wire-v9")
         with mock.patch.object(service_module, "_CONTEXT_WIRE_VERSION", "agent-context-wire-v7"):
             self.assertEqual(fingerprint(policy, actions, sources),
                              "sha256:d8cfd92e6949dbb817dfb7253cff1865642493d46078fa1e042a64ef81740a18")
@@ -843,7 +843,14 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             (_search, _read_search_hit, _lead_answer_with_read)
         )
 
-        result = await self.invoke(provider, request)
+        verified_schemas = []
+        diagnose = service_module.diagnose_json_text
+        def verified(text, schema):
+            verified_schemas.append(schema)
+            return diagnose(text, schema)
+        with mock.patch.object(service_module, "diagnose_json_text", side_effect=verified):
+            result = await self.invoke(provider, request)
+        self.assertEqual(verified_schemas, [call.schema for call in provider.calls])
 
         self.assertEqual(len(provider.calls), 3)
         self.assertEqual(

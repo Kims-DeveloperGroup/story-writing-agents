@@ -258,12 +258,15 @@ validators and omit provider values, unknown member names, and arbitrary excepti
 prose. Each original or repair call has its own outcome and findings; older records
 without this optional field remain readable.
 
-The request's `payload` can contain request-local `context_objects` and
-`context_ref` markers that share repeated runtime context. Read the matching
-table in that same request to resolve a marker; earlier exchanges are not needed.
-The log captures the compact payload actually submitted, together with its
-complete response schema. Historical records remain readable without migration.
-See [request sharing](../design/agent-context.md#typed-provider-wire-v8).
+The request records the actual submitted `payload` and its complete response `schema`.
+Verification enforces that contract, with equivalent provider-specific schema
+translation. Property reduction affects explicit runtime input projections and sharing,
+never schema constraints. Request-local `context_objects` and `context_ref` markers
+resolve within that same request; earlier exchanges are not needed. Sharing applies only
+when recursive property count and bytes both decrease. Payload, schema and complete
+request counts are measured separately, including objects inside arrays. Historical
+records remain readable without migration. See [request
+sharing](../design/agent-context.md#typed-provider-wire-v9).
 
 A completed result that structured or semantic validation rejects therefore
 normally appears as adjacent request, response, and `rejected` outcome records.

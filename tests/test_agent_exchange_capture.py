@@ -8,6 +8,7 @@ import tempfile
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -32,7 +33,8 @@ from story_writing_agents.agents import ROSTER
 from story_writing_agents.provider_adapter import ProviderInvocation, ProviderResult, ProviderResponseDiagnostic, ProviderInvocationError
 from story_writing_agents.workspace import Workspace
 from story_writing_agents.agent_context.request_compaction import compact_context_payload
-from tests.test_agent_context_accounting import _shared_context_payload
+from tests.test_agent_context_accounting import _property_count, _shared_context_payload
+from story_writing_agents.structured_output_validation import diagnose_json_text
 
 
 _EXCHANGE_ID = re.compile(r"exchange_[0-9a-f]{32}")
@@ -167,7 +169,10 @@ class AgentExchangeCaptureContractTests(unittest.TestCase):
 
         store = _RecordingStore()
         payload, _ = compact_context_payload(_shared_context_payload(), {})
-        lifecycle = _begin(store, invocation=_invocation(payload=payload))
+        schema = {"type": "object", "properties": {"answer": {"type": "string", "enum": ["allowed"]}},
+                  "required": ["answer"], "additionalProperties": False}
+        invocation = replace(_invocation(payload=payload), schema=schema)
+        lifecycle = _begin(store, invocation=invocation)
         self.assertTrue(lifecycle.enabled)
         self.assertRegex(lifecycle.exchange_id or "", _EXCHANGE_ID)
         self.assertEqual(len(store.records), 1)
@@ -197,9 +202,18 @@ class AgentExchangeCaptureContractTests(unittest.TestCase):
                 "call_kind": "debate",
                 "payload": payload,
                 "prior_thread_id": "prior_thread",
-                "schema": {"required": ["answer"], "type": "object"},
+                "schema": schema,
             },
         )
+        captured = json.loads(request.content)
+        self.assertEqual(captured["schema"], invocation.schema)
+        self.assertEqual(_property_count(captured),
+                         4 + _property_count(payload) + _property_count(schema))
+        self.assertLess(_property_count(captured),
+                        4 + _property_count(_shared_context_payload()) + _property_count(schema))
+        self.assertEqual(diagnose_json_text('{"answer":"allowed"}', captured["schema"]), ())
+        for invalid in ('{}', '{"answer":"other"}', '{"answer":"allowed","extra":null}'):
+            self.assertTrue(diagnose_json_text(invalid, captured["schema"]))
         self.assertEqual(
             request.content,
             json.dumps(
