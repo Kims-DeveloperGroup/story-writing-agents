@@ -42,7 +42,12 @@ PR, evidence, or status template being used. Preserve all visible headings and m
    [review routing and closure](../../../GITHUB_WORKFLOW.md#asynchronous-review-and-ci):
    record `Review rationale`, choose exactly one provider selector, add `workflow:managed`,
    and move the item to `In review`. Request through the managed workflow while affected CI
-   runs. Balanced uses the Reviewers UI; never silently substitute another effort/provider.
+   runs. Codex reserves an `awaiting_ui` personal-account handoff: verify the signed-in account
+   is a personal repository writer, verify the reserved base/head, and post the exact trigger
+   and round/attempt marker from GITHUB_WORKFLOW.md once. Never post a Codex trigger with a
+   bot token or store personal credentials in Actions. Reconcile the real response against
+   that personal request before another request. Balanced uses the Reviewers UI; never
+   silently substitute another effort/provider.
    Confirmed Copilot budget exhaustion uses the canonical Codex fallback after reconciling
    non-delivery. If Actions cannot execute, use the root-owned local CI and direct review
    [fallback](../../../GITHUB_WORKFLOW.md#actions-non-execution-fallback), preserving request
