@@ -187,17 +187,43 @@ Automatic events never reopen a closed review.
 
 ### Managed requester
 
-`.github/workflows/ai-review-request.yml` owns requests. It never checks out or executes PR
-code with its write token. Automatic events may start only round 1 on a PR without review
+`.github/workflows/ai-review-request.yml` owns request reservations and review state. It never
+checks out or executes PR code with its write token. Automatic events may start only round 1 on a PR without review
 history. Later operations use `workflow_dispatch` on the default branch, by a repository
 writer, with `expected_round` as an optimistic concurrency check:
 
 | Operation | Required decision/evidence |
 | --- | --- |
 | `request` | Initial rationale, or a reason and reconciliation evidence for another round. From round 3, High/Critical severity plus the finding URL; changed evidence is required for a repeated finding. |
-| `reconcile` | Current round, reason, evidence, and outcome. `completed` requires a matching provider review ID (plus actual Copilot effort), or Codex's thumbs-up on this round's request. `failed`/`not_sent` require evidence of terminal failure or confirmed non-delivery. |
+| `reconcile` | Current round, reason, evidence, and outcome. `completed` requires a matching provider review ID (plus actual Copilot effort), Codex's clean thumbs-up, or an authentic clean Codex response comment identifying the reviewed commit. New Codex rounds also verify the personal request. `failed`/`not_sent` require evidence of terminal failure or confirmed non-delivery. |
 | `close` | Current round, current-base/head closure evidence, and the root's verified-closure assessment. Requires a completed review, including later local fix/diff verification. |
 | `adopt` | Existing open PR history, its prior round count, and evidence reconciling all findings and outstanding requests. Import at least two prior rounds so subsequent work is defect-only. Never replay an initial request. |
+
+Codex triggers must be posted by a **personal GitHub account with repository write access**,
+never by `github-actions[bot]` or another bot. No personal token is stored in Actions. A Codex
+`request` reserves `awaiting_ui` with `request_mode: personal`; the bot does not post the trigger.
+The root verifies the CLI account using `gh api user` (type `User`) or the signed-in browser
+account, then checks the PR still matches the reserved base/head. Post exactly one comment:
+
+```text
+@codex review
+
+Review round ROUND; base BASE_SHA, head HEAD_SHA.
+SEVERITY_CONSTRAINTS
+Follow GITHUB_WORKFLOW.md for severity and verified closure.
+
+<!-- ai-review-request:v1:PR_NUMBER:ROUND:ATTEMPT -->
+```
+
+Replace every uppercase placeholder with the reservation's exact value. For rounds 1–2,
+SEVERITY_CONSTRAINTS is `Prioritize confirmed defects. Medium feedback is optional and never blocks completion.`
+For round 3 onward, it is `Only confirmed High/Critical bugs, missing or incorrect agreed requirements, and material defects. Exclude enhancements, Medium feedback, and minor improvements.`
+The writer verifies this full prompt and policy line. Do not post again while a request is outstanding. The writer
+requires exactly one trigger with that marker, a personal writer, the recorded base/head,
+and a creation time after reservation; it records the verified sender and request URL/ID
+on completion. `awaiting_ui` remains outstanding while the personal request runs. Bot status
+records remain bot-authored. Existing historical attempts retain their original request mode
+and provenance; do not retroactively replace an uncertain bot request without reconciliation.
 
 The workflow records reservation, UI wait, requested, uncertain, completed, failed, and
 closed states in bot-authored PR comments. It distinguishes request submission from actual
@@ -210,7 +236,16 @@ failed imports. Unknown outcomes remain outstanding, not failed or passed.
 The `review_id` input is the numeric GitHub review ID, not an inline comment ID. For Copilot,
 `observed_effort` is the root's attestation of the effort shown in that review's overview or
 timeline; link that evidence. A mismatch requires diagnosis, not an automatic replacement
-review. For Codex's clean thumbs-up, omit `review_id`. An eyes reaction is not completion.
+review. For Codex's clean thumbs-up, omit `review_id` and link the request as evidence. For a
+clean response comment, omit `review_id` and link that response: the writer checks Codex bot
+identity, the no-major-issues message, a matching reviewed-commit prefix of at least ten
+characters, and response timing after the request's latest edit. Native reviews and clean
+reactions also must follow the personal request's latest edit. A clean reaction requires the
+reserved base/head to remain unchanged; otherwise use a commit-bound response and retain
+later verification separately. An eyes reaction is not completion.
+Clean response comments apply to reserved rounds with a known head. Historical `adopt`
+continues to use native review IDs or clean reactions; a single manual round keeps an
+explicit manual closure record rather than inventing import history.
 All explicit operations capture the acting user and evidence. The closure record supports
 the root's final audit; it is not an automated merge approval or a replacement CI gate.
 

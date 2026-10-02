@@ -40,7 +40,7 @@ on:
         type: choice
         options: [completed, failed, not_sent]
       review_id:
-        description: Numeric provider review ID; omit for Codex thumbs-up completion
+        description: Native provider review ID; omit for a clean Codex reaction or response comment
         type: string
       observed_effort:
         description: Actual Copilot effort observed in the linked overview/timeline evidence
@@ -181,7 +181,9 @@ jobs:
               delete record.comment_id;
               const marker = Buffer.from(JSON.stringify(record)).toString('base64');
               const guidance = record.status === 'awaiting_ui'
-                ? `Request **${record.profile}** once in the Reviewers UI, then reconcile the provider response and actual effort. Do not request another provider.`
+                ? record.profile === 'codex'
+                  ? 'A personal GitHub account with repository write access must post the Codex review trigger once for this reserved round/attempt and base/head. Follow GITHUB_WORKFLOW.md; bots only record state. Reconcile the response before requesting again.'
+                  : `Request **${record.profile}** once in the Reviewers UI, then reconcile the provider response and actual effort. Do not request another provider.`
                 : record.status === 'uncertain'
                 ? 'Delivery is uncertain. Inspect the request and provider before explicitly reconciling; do not resend.'
                 : record.status === 'closed'
@@ -204,39 +206,93 @@ jobs:
               return fresh;
             };
             const verifyResponse = async (state, adopting = false) => {
+              let request;
+              let requestInfo = {};
+              if (profile === 'codex' && state.request_mode === 'personal') {
+                const matches = comments.filter(comment =>
+                  comment.body?.split(/\r?\n/).includes(state.request_marker) &&
+                  /^@codex review(?:\r?\n|$)/.test(comment.body));
+                if (matches.length !== 1) fail('Exactly one personal Codex request must match this reserved attempt.');
+                request = matches[0];
+                const prompt = `Review round ${state.round}; base ${state.base_sha}, head ${state.head_sha}.`;
+                const constraints = state.round >= 3
+                  ? 'Only confirmed High/Critical bugs, missing or incorrect agreed requirements, and material defects. Exclude enhancements, Medium feedback, and minor improvements.'
+                  : 'Prioritize confirmed defects. Medium feedback is optional and never blocks completion.';
+                if (request.user?.type !== 'User' ||
+                    !request.body.includes(prompt) || !request.body.includes(constraints) ||
+                    !request.body.includes('Follow GITHUB_WORKFLOW.md for severity and verified closure.') ||
+                    !Number.isFinite(Date.parse(request.created_at)) ||
+                    !Number.isFinite(Date.parse(request.updated_at || request.created_at)) ||
+                    !Number.isFinite(Date.parse(state.opened_at)) || request.id <= state.comment_id ||
+                    Date.parse(request.created_at) < Math.floor(Date.parse(state.opened_at) / 1000) * 1000) {
+                  fail('Codex request must be personal, timely, and bound to the reserved base/head.');
+                }
+                const {data: permission} = await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner, repo, username: request.user.login,
+                });
+                if (!['write', 'maintain', 'admin'].includes(permission.permission)) {
+                  fail('Codex request author must have repository write access.');
+                }
+                requestInfo = {request_comment_id: request.id, request_author: request.user.login,
+                  request_url: request.html_url};
+              }
               if (input.review_id) {
                 const id = Number(input.review_id);
                 if (!Number.isSafeInteger(id) || id < 1) fail('Invalid provider review ID.');
                 const review = reviews.find(candidate => candidate.id === id);
                 const providerMatches = profile === 'codex' ? isCodex(review?.user) : isCopilot(review?.user);
+                const earliest = request ? (request.updated_at || request.created_at) : state.opened_at;
                 if (!review || !providerMatches || !review.submitted_at || review.state === 'PENDING' ||
                     (!adopting && (review.commit_id !== state.head_sha ||
-                      new Date(review.submitted_at) < new Date(state.opened_at)))) {
-                  fail('No completed matching provider response for this round/head.');
+                     !Number.isFinite(Date.parse(review.submitted_at)) ||
+                     Date.parse(review.submitted_at) < Date.parse(earliest)))) {
+                  fail('Review author, submission time, or commit does not match this round/head.');
                 }
-                if (ledger.some(row => row.review_id === id && row.round !== state.round)) fail('This review already belongs to another round.');
+                if (ledger.some(row => row.review_id === id && row.round !== state.round)) {
+                  fail('Provider review already belongs to another round.');
+                }
                 if (profile.startsWith('copilot-') && input.observed_effort !== profile.slice('copilot-'.length)) {
-                  fail('Actual Copilot effort must match the selected tier; link its overview/timeline evidence.');
+                  fail('Record actual Copilot effort from the overview/timeline; mismatches require diagnosis.');
                 }
-                return {review_id: id, head_sha: review.commit_id,
+                return {...requestInfo, review_id: id, head_sha: review.commit_id,
+                  reviewed_head_sha: review.commit_id,
                   observed_effort: profile === 'codex' ? null : input.observed_effort,
                   response_url: review.html_url};
               }
-              if (profile !== 'codex') fail('Copilot completion requires a review_id and observed_effort.');
-              let request = comments.find(comment => isWorkflow(comment.user) &&
+              if (profile !== 'codex') fail('Copilot completion requires review_id and observed_effort.');
+              if (!request) request = comments.find(comment => isWorkflow(comment.user) &&
                 comment.body?.includes(state.request_marker || '\u0000'));
               if (adopting) {
                 const id = Number(new URL(evidence).hash.match(/^#issuecomment-(\d+)$/)?.[1]);
                 request = comments.find(comment => comment.id === id && /@codex\s+review\b/.test(comment.body || ''));
               }
-              if (!request) fail('A matching Codex request is needed to verify its clean thumbs-up.');
+              if (!request) fail('A matching Codex request is needed to verify its response.');
+              const responseId = Number(new URL(evidence).hash.match(/^#issuecomment-(\d+)$/)?.[1]);
+              const response = comments.find(comment => comment.id === responseId && isCodex(comment.user));
+              const reportedCommit = response?.body?.match(/\*\*Reviewed commit:\*\*\s*`([a-f0-9]{10,40})`/)?.[1];
+              const requestTime = Date.parse(request.updated_at || request.created_at);
+              if (!Number.isFinite(requestTime)) fail('Codex request timestamp is invalid.');
+              if (state.head_sha && response?.body?.startsWith("Codex Review: Didn't find any major issues.") &&
+                  reportedCommit && state.head_sha.startsWith(reportedCommit) &&
+                  Number.isFinite(Date.parse(response.created_at)) &&
+                  Date.parse(response.created_at) >= requestTime) {
+                return {...requestInfo, response_comment_id: response.id, response_url: response.html_url,
+                  clean_response_comment: true, reported_commit: reportedCommit,
+                  reviewed_head_sha: state.head_sha};
+              }
+              if (evidence !== request.html_url) fail('Link the matched Codex request as clean-reaction evidence.');
               const reactions = await github.paginate(github.rest.reactions.listForIssueComment, {
                 owner, repo, comment_id: request.id, per_page: 100,
               });
-              if (!reactions.some(reaction => isCodex(reaction.user) && reaction.content === '+1')) {
-                fail('No Codex clean thumbs-up; missing/eyes reactions are not completion.');
+              if (!adopting && (pr.head.sha !== state.head_sha || pr.base.sha !== state.base_sha)) {
+                fail('A clean reaction cannot establish review of a changed base/head; use a commit-bound response.');
               }
-              return {response_url: request.html_url, clean_reaction: true};
+              if (!reactions.some(reaction => isCodex(reaction.user) && reaction.content === '+1' &&
+                  Number.isFinite(Date.parse(reaction.created_at)) &&
+                  Date.parse(reaction.created_at) >= requestTime)) {
+                fail('No matching clean Codex response; missing/eyes reactions are not completion.');
+              }
+              return {...requestInfo, response_url: request.html_url, clean_reaction: true};
             };
             if (operation === 'adopt') {
               if (last || !nativeHistory || pending) fail('Adoption needs existing unadopted history and no outstanding native review request.');
@@ -263,7 +319,8 @@ jobs:
               if (['completed', 'closed'].includes(last.status)) return note('Response already reconciled; request another round only if justified, or close.');
               if (!['completed', 'failed', 'not_sent'].includes(input.outcome)) fail('Invalid reconciliation outcome.');
               if (pending && input.outcome !== 'completed') fail('A native review request is still outstanding; reconcile its terminal outcome first.');
-              if (input.outcome === 'not_sent' && comments.some(comment => isWorkflow(comment.user) &&
+              if (input.outcome === 'not_sent' && comments.some(comment =>
+                  /@codex\s+review\b/.test(comment.body || '') &&
                   comment.body?.includes(last.request_marker || '\u0000'))) {
                 fail('A Codex request was posted; reconcile its actual terminal outcome instead of not_sent.');
               }
@@ -291,28 +348,23 @@ jobs:
             }
             const attempt = retry ? last.attempt + 1 : 1;
             const priorCopilot = [...ledger].reverse().find(row => row.profile.startsWith('copilot-'));
-            const needsUI = profile === 'copilot-balanced' ||
+            const needsUI = profile === 'codex' || profile === 'copilot-balanced' ||
               (profile === 'copilot-lite' && priorCopilot && priorCopilot.profile !== profile);
             const marker = `<!-- ai-review-request:v1:${number}:${round}:${attempt} -->`;
             await assertSnapshot();
             let state = await write({round, attempt, profile, status: needsUI ? 'awaiting_ui' : 'reserved',
               base_sha: pr.base.sha, head_sha: pr.head.sha, opened_at: new Date().toISOString(),
+              request_mode: profile === 'codex' ? 'personal' : 'native',
               finding_severity: severity, finding_url: finding, request_marker: marker});
             if (needsUI) return;
             try {
               const fresh = await assertSnapshot();
               if (fresh.requested_reviewers?.some(isAI)) fail('A native AI request appeared before dispatch.');
-              if (profile === 'codex') {
-                const {data: request} = await github.rest.issues.createComment({owner, repo, issue_number: number,
-                  body: `@codex review\n\nReview round ${round}; base ${pr.base.sha}, head ${pr.head.sha}.\n${round >= 3 ? 'Only confirmed High/Critical bugs, missing or incorrect agreed requirements, and material defects. Exclude enhancements, Medium feedback, and minor improvements.' : 'Prioritize confirmed defects. Medium feedback is optional and never blocks completion.'}\nFollow GITHUB_WORKFLOW.md for severity and verified closure.\n\n${marker}`});
-                state.request_comment_id = request.id;
-              } else {
-                const {data: bot} = await github.rest.users.getByUsername({username: 'copilot-pull-request-reviewer[bot]'});
-                if (!isCopilot(bot) || !bot.node_id) fail('Copilot identity is unavailable.');
-                await github.graphql(`mutation($pr: ID!, $bot: ID!) {
-                  requestReviews(input: {pullRequestId: $pr, botIds: [$bot], union: true}) { pullRequest { id } }
-                }`, {pr: pr.node_id, bot: bot.node_id});
-              }
+              const {data: bot} = await github.rest.users.getByUsername({username: 'copilot-pull-request-reviewer[bot]'});
+              if (!isCopilot(bot) || !bot.node_id) fail('Copilot identity is unavailable.');
+              await github.graphql(`mutation($pr: ID!, $bot: ID!) {
+                requestReviews(input: {pullRequestId: $pr, botIds: [$bot], union: true}) { pullRequest { id } }
+              }`, {pr: pr.node_id, bot: bot.node_id});
               await write({...state, status: 'requested'});
             } catch (error) {
               // A network error can occur after a remote send. Never retry it blindly.

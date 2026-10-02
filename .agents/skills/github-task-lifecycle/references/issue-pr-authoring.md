@@ -104,6 +104,13 @@ faster recovery or passing full-suite verification.
 
 ## Verification records
 
+Codex review records distinguish bot-authored reservation/status comments from the personal
+GitHub account that posts the trigger. Retain the request author, round/attempt marker,
+requested base/head, request URL, actual provider response, and later verification separately.
+Link a clean Codex response comment directly when it reports no major issues and identifies
+its reviewed commit; do not invent a native review ID or a thumbs-up. Use the canonical
+[personal-account handoff](../../../../GITHUB_WORKFLOW.md#managed-requester).
+
 Runtime and test changes require complete shard CI under [TEST_POLICY.md](../../../../TEST_POLICY.md).
 Runtime-code changes also require affected tests. Use the canonical runner and retain exact
 IDs, JSON results, shard reports, and reconciliation. Map results to scenarios or criteria.
