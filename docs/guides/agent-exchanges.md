@@ -25,9 +25,9 @@ Or install the distribution normally:
 python -m pip install story-writing-agents
 ```
 
-Both forms install the required independent `jsonl-viewer` 0.3.0 from its exact
+Both forms install the required independent `jsonl-viewer` 0.4.0 from its exact
 HTTPS VCS requirement at
-`ce57f560f3ca1366ea69dfe15cb1c598513e2c82`. A first install normally needs
+`2cc9d363c07e2f45a1c8e71e732c0a3205e78186`. A first install normally needs
 Git, network access, and repository access. Installation does not invoke a
 story provider, open an exchange, or enable a service. The historical
 `story-writing-agents[viewer]` and editable `'.[viewer]'` forms remain accepted
@@ -41,7 +41,7 @@ pulling updated Story source, rerun the normal editable installation:
 python -m pip install --editable .
 ```
 
-That ordinary reinstall upgrades older viewer installations to required 0.3.0
+That ordinary reinstall upgrades older viewer installations to required 0.4.0
 without an uninstall, `--force-reinstall`, or `--ignore-installed`. Reserve a forced
 reinstall for a genuinely damaged same-version installation, as described in
 [Troubleshooting](troubleshooting.md#exchanges-does-not-open-the-expected-response).
@@ -63,7 +63,7 @@ the vendored repository, while installed metadata retains the required VCS
 dependency. The external package is Python 3.11+, MIT licensed, has no runtime
 dependencies, and has no Story import. Story loads and validates its exact
 three-name API and physical-input capability only when `/exchanges` prepares a
-view. Versions 0.1.1 and 0.2.0 lack the required 0.3.0 contract and are
+view. Versions 0.1.1 and 0.2.0 lack the required 0.4.0 contract and are
 rejected before Story opens the viewer terminal. Required installation does
 not create a static Story-to-viewer import.
 
@@ -119,6 +119,7 @@ and subject, and exact agent ID. A Story-hosted plain frame has this shape:
 AGENT EXCHANGES • READ ONLY • SIMPLE
 Session: novel • Debate: d20260830T010412_ef567890 — Draft an opening. • Agent: character_custodian
 > 1 │ {
+      ^
 > 1 │   "timestamp": "2026-08-30T01:04:12.000+00:00",
 > 1 │   "request_type": "response",
 > 1 │   "content": [expanded JSON string ×1] {
@@ -129,19 +130,30 @@ Session: novel • Debate: d20260830T010412_ef567890 — Draft an opening. • A
 > 1 │   }
 > 1 │ }
 Record 1/3 • source line 1 • JSON display 2 expanded, 0 skipped, 0 truncated
-↑/↓ records • PgUp/PgDn scroll • g goto • / search • n/N • m mode • h help • q close
+h/j/k/l cursor • Enter fold • ↑/↓ records • PgUp/PgDn • / search • n/N • m mode • ? help • q close
 ```
 
 This preview shows the renderer's topology, not a retained Story screenshot.
 The external repository owns the byte-tested renderer contract:
 
-- [Terminal design system and Story-hosted scenario](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/ce57f560f3ca1366ea69dfe15cb1c598513e2c82/docs/design-system.md)
-- [Nine deterministic complete sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/ce57f560f3ca1366ea69dfe15cb1c598513e2c82/docs/samples)
+- [Terminal design system and Story-hosted scenario](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/2cc9d363c07e2f45a1c8e71e732c0a3205e78186/docs/design-system.md)
+- [Eleven deterministic complete sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/2cc9d363c07e2f45a1c8e71e732c0a3205e78186/docs/samples)
 
-Every body record is well-formatted multiline JSON. The left gutter repeats
+Expanded records use well-formatted multiline JSON. The left gutter repeats
 the physical JSONL source-record line on continuation rows, so `g` can move to
-an exact positive source line. Up/Down or `j`/`k` changes records; Page Up/Page
+an exact positive source line. Up/Down changes records; Page Up/Page
 Down or `b`/Space pages within a large record and across record boundaries.
+
+In the main view, `h`/`l` moves the character cursor left/right and `j`/`k`
+moves it down/up through visible JSON. Enter folds or unfolds the innermost
+nonempty object or array containing the focused character, including containers
+expanded from encoded JSON strings. Reopening a parent preserves its nested
+folds. Cursor and fold state disappear when the viewer closes.
+
+Search and `n`/`N` unfold the selected hit’s ancestors and focus its first
+character without changing occurrence counts. A manual fold remains effective
+until subsequent search navigation. The former `h` help and `j`/`k` record
+bindings are now `?` and Up/Down; prompt editing retains its existing behavior.
 
 Simple mode shows `timestamp`, `request_type`, and `content`, in that order.
 Verbose mode keeps those fields first, followed by every other top-level field.
@@ -210,7 +222,7 @@ and `n`/`N` reveals the next selected occurrence. Resizing recomputes the
 window. A selected hidden-field hit promotes to Verbose and prevents Simple
 while that occurrence needs hidden fields. More than 100,000 occurrences
 rejects the new search with a refine-query message and preserves the previous
-search and position. `c` clears search; `h` or `?` opens transient help.
+search and position. `c` clears search; `?` opens transient help.
 
 Escape dismisses help, then search, then a transient status; with nothing left
 to dismiss it closes. This main-view behavior begins after a prompt has
@@ -229,9 +241,14 @@ yellow. Only the active keyword uses black on yellow, with printable
 `⟦keyword⟧` focus and an `@` record marker. Other matching records use an
 underlined yellow `*` gutter marker. Warnings/status are yellow, errors red,
 truncation or other muted text gray, and ordinary footer/help text dim cyan.
-JSON punctuation remains terminal-default text.
+JSON punctuation uses terminal-default color; the focused container’s visible
+delimiters are bold. Character focus uses readable inverse video, independently
+of the search highlight.
 
-Color never carries meaning alone. Plain and `NO_COLOR` views retain the same
+Plain/NO_COLOR output places a caret on the row below the focused character.
+The caret row is included in terminal geometry, so plain and ANSI viewports can
+show different numbers of data rows at the same terminal size. Color never
+carries meaning alone. Plain and `NO_COLOR` views retain the same
 words, JSON, `⟦keyword⟧`, `>`, `@`, `*`, line numbers, result position, and help.
 The linked external design system is authoritative for exact SGR values and responsive
 placement.
@@ -391,9 +408,9 @@ Common bounded failures are:
 | --- | --- |
 | No attached session | Attach the intended session, then retry bare `/exchanges`. |
 | No records for the session | Run the intended provider work; do not invoke it merely to manufacture diagnostics. |
-| Viewer 0.1.1 or 0.2.0 remains after updating a checkout | Rerun the normal editable Story install to upgrade it to required 0.3.0; do not force or uninstall. |
+| Viewer 0.1.1, 0.2.0, or 0.3.0 remains after updating a checkout | Rerun the normal editable Story install to upgrade it to required 0.4.0; do not force or uninstall. |
 | Required viewer unavailable | Rerun the normal Story installation, then retry. The compatibility extra is not a separate repair path. |
-| Viewer 0.3.0 is installed but incompatible or damaged | Verify the approved exact pin, then use the bounded forced-repair path in Troubleshooting. |
+| Viewer 0.4.0 is installed but incompatible or damaged | Verify the approved exact pin, then use the bounded forced-repair path in Troubleshooting. |
 | Store busy | Retry after the concurrent exchange write completes. |
 | Unsafe, corrupt, or uncorrelatable records | Preserve the workspace and inspect the content-safe runtime diagnostic before retrying. |
 | Selected stream disappeared | Rerun `/exchanges` to refresh retained inventory. |
