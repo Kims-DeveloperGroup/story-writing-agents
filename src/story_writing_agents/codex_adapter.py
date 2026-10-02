@@ -1042,6 +1042,7 @@ class CodexAdapter:
             deny_subpaths=(session_root / ".git", staging),
             deny_write_subpaths=(session_root,),
             network=True,
+            posix_shm_read_prefixes=("apple.cfprefs.",),
         )
         command = [
             os.fspath(executable),

@@ -1322,6 +1322,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(sandbox.deny_subpaths, (working_directory / ".git",))
             self.assertEqual(sandbox.deny_write_subpaths, (working_directory,))
             self.assertEqual((sandbox.read_subpaths, sandbox.write_paths, sandbox.metadata_paths), ((), (), ()))
+            self.assertEqual(sandbox.posix_shm_read_prefixes, ())
             self.assertIs(sandbox.network, True)
         self.assertEqual(json.loads(expected_command[expected_command.index("--json-schema") + 1]), schema)
         self.assertEqual(role.read_bytes(), (binding.staging_directory / "agent.md").read_bytes())
@@ -1331,17 +1332,17 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             for path in (working_directory / ".agents").rglob("*") if path.is_file()],
             [f".agents/agents/{adapter.session_role_projection(binding).native_agent_id}/agent.md"])
 
+        def native_backend(control, agy_executable):
+            return AgentBackend(control, executable=sys.executable,
+                backend_overrides={PLOT_ARCHITECT: "antigravity"}, antigravity_executable=agy_executable)
+
         for prefix in (".agents", ".AGENTS"):
             session_id = f"tracked-selected-{prefix[1:]}"
             control = pristine_initialized_workspace(self)
             ready = provision_session_resources(control.root, session_id)
             session_root = ready.identity.worktree_root
             subprocess.run(("git", "config", "core.ignoreCase", "false"), cwd=session_root, check=True)
-            backend = AgentBackend(
-                control, executable=sys.executable,
-                backend_overrides={PLOT_ARCHITECT: "antigravity"},
-                antigravity_executable="private-agy",
-            )
+            backend = native_backend(control, "private-agy")
             self.addCleanup(backend.close)
             backend.create_session_with_access(session_id)
             bound = await backend.bind(self.definition)
@@ -1351,10 +1352,8 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             selected.write_bytes(role.content)
             selected.chmod(0o400)
             original_inode = selected.stat().st_ino
-            subprocess.run(
-                ("git", "add", "-f", "--", selected.relative_to(session_root).as_posix()),
-                cwd=session_root, check=True,
-            )
+            subprocess.run(("git", "add", "-f", "--", selected.relative_to(session_root).as_posix()),
+                           cwd=session_root, check=True)
             exclusion = control.root / ".git/info/exclude"
             exclusion_before = exclusion.read_bytes() if exclusion.exists() else None
             invoke = mock.AsyncMock()
@@ -1373,11 +1372,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
 
         control = pristine_initialized_workspace(self)
         ready = provision_session_resources(control.root, "swapped-selected-role")
-        backend = AgentBackend(
-            control, executable=sys.executable,
-            backend_overrides={PLOT_ARCHITECT: "antigravity"},
-            antigravity_executable=sys.executable,
-        )
+        backend = native_backend(control, sys.executable)
         self.addCleanup(backend.close)
         backend.create_session_with_access("swapped-selected-role")
         bound = await backend.bind(self.definition)

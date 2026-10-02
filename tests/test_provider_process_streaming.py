@@ -26,16 +26,10 @@ class TestProviderProcessStreaming(unittest.IsolatedAsyncioTestCase):
 
     async def test_non_streaming_runs_normally(self) -> None:
         """Verify non-streaming requests communicate and return full stdout/stderr."""
-        code = (
-            "import sys; "
-            "sys.stdout.write('hello\\nworld\\n'); sys.stdout.flush(); "
-            "sys.stderr.write('err\\n'); sys.stderr.flush()"
-        )
-        request = ProcessRequest(
-            command=[sys.executable, "-c", code],
-            stdin=b"",
-            timeout_seconds=5.0,
-        )
+        code = ("import sys; "
+                "sys.stdout.write('hello\\nworld\\n'); sys.stdout.flush(); "
+                "sys.stderr.write('err\\n'); sys.stderr.flush()")
+        request = ProcessRequest(command=[sys.executable, "-c", code], stdin=b"", timeout_seconds=5.0)
         result = await run_process(request)
         self.assertEqual(result.stdout, b"hello\nworld\n")
         self.assertEqual(result.stderr, b"err\n")
@@ -60,7 +54,18 @@ class TestProviderProcessStreaming(unittest.IsolatedAsyncioTestCase):
             for invalid in ([], ("not-a-path",), (Path("relative"),), (linked,)):
                 with self.assertRaises(ValueError):
                     replace(requirements, metadata_paths=invalid)
+            for prefixes in ([], type("Prefixes", (tuple,), {})(("a",)), (type("Prefix", (str,), {})("a"),),
+                             ("",), (0,), ("_a",), ('PRIVATE_SHM/"',), ("a\n",), ("a\0",), ("é",)):
+                with self.assertRaises(ValueError) as caught:
+                    replace(requirements, posix_shm_read_prefixes=prefixes)
+                self.assertNotIn("PRIVATE_SHM", str(caught.exception))
             profile = process_module._darwin_sandbox_profile(requirements)
+            self.assertEqual(requirements.posix_shm_read_prefixes, ())
+            self.assertNotIn("ipc-posix-shm", profile)
+            shm_profile = process_module._darwin_sandbox_profile(
+                replace(requirements, posix_shm_read_prefixes=("apple.cfprefs.",)))
+            self.assertIn('(allow ipc-posix-shm-read* (ipc-posix-name-prefix "apple.cfprefs."))', shm_profile)
+            self.assertEqual(shm_profile.count("ipc-posix-shm"), 1)
             literal = lambda path: json.dumps(str(path), ensure_ascii=True)
             resources = (executable, schema, root, output, state, metadata, missing)
             for resource in resources:
