@@ -25,9 +25,9 @@ Or install the distribution normally:
 python -m pip install story-writing-agents
 ```
 
-Both forms install the required independent `jsonl-viewer` 0.4.0 from its exact
+Both forms install the required independent `jsonl-viewer` 0.4.1 from its exact
 HTTPS VCS requirement at
-`2cc9d363c07e2f45a1c8e71e732c0a3205e78186`. A first install normally needs
+`6177ccc69c74d83847204d9ceb7ac16be4d39dac`. A first install normally needs
 Git, network access, and repository access. Installation does not invoke a
 story provider, open an exchange, or enable a service. The historical
 `story-writing-agents[viewer]` and editable `'.[viewer]'` forms remain accepted
@@ -41,7 +41,7 @@ pulling updated Story source, rerun the normal editable installation:
 python -m pip install --editable .
 ```
 
-That ordinary reinstall upgrades older viewer installations to required 0.4.0
+That ordinary reinstall upgrades older viewer installations to required 0.4.1
 without an uninstall, `--force-reinstall`, or `--ignore-installed`. Reserve a forced
 reinstall for a genuinely damaged same-version installation, as described in
 [Troubleshooting](troubleshooting.md#exchanges-does-not-open-the-expected-response).
@@ -63,7 +63,7 @@ the vendored repository, while installed metadata retains the required VCS
 dependency. The external package is Python 3.11+, MIT licensed, has no runtime
 dependencies, and has no Story import. Story loads and validates its exact
 three-name API and physical-input capability only when `/exchanges` prepares a
-view. Versions 0.1.1 and 0.2.0 lack the required 0.4.0 contract and are
+view. Versions 0.1.1 and 0.2.0 lack the required 0.4.1 contract and are
 rejected before Story opens the viewer terminal. Required installation does
 not create a static Story-to-viewer import.
 
@@ -136,13 +136,17 @@ h/j/k/l cursor • Enter fold • ↑/↓ records • PgUp/PgDn • / search •
 This preview shows the renderer's topology, not a retained Story screenshot.
 The external repository owns the byte-tested renderer contract:
 
-- [Terminal design system and Story-hosted scenario](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/2cc9d363c07e2f45a1c8e71e732c0a3205e78186/docs/design-system.md)
-- [Eleven deterministic complete sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/2cc9d363c07e2f45a1c8e71e732c0a3205e78186/docs/samples)
+- [Terminal design system and Story-hosted scenario](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/6177ccc69c74d83847204d9ceb7ac16be4d39dac/docs/design-system.md)
+- [Eleven deterministic complete sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/6177ccc69c74d83847204d9ceb7ac16be4d39dac/docs/samples)
 
 Expanded records use well-formatted multiline JSON. The left gutter repeats
 the physical JSONL source-record line on continuation rows, so `g` can move to
 an exact positive source line. Up/Down changes records; Page Up/Page
 Down or `b`/Space pages within a large record and across record boundaries.
+
+At a JSON row's end, `l` moves to the next visible row's first character. At
+its beginning, `h` moves to the previous row's last character. These moves skip
+gutters and annotations and stop at the viewport edges without scrolling.
 
 In the main view, `h`/`l` moves the character cursor left/right and `j`/`k`
 moves it down/up through visible JSON. Enter folds or unfolds the innermost
@@ -408,9 +412,9 @@ Common bounded failures are:
 | --- | --- |
 | No attached session | Attach the intended session, then retry bare `/exchanges`. |
 | No records for the session | Run the intended provider work; do not invoke it merely to manufacture diagnostics. |
-| Viewer 0.1.1, 0.2.0, or 0.3.0 remains after updating a checkout | Rerun the normal editable Story install to upgrade it to required 0.4.0; do not force or uninstall. |
+| Viewer 0.1.1, 0.2.0, 0.3.0, or 0.4.0 remains after updating a checkout | Rerun the normal editable Story install to upgrade it to required 0.4.1; do not force or uninstall. |
 | Required viewer unavailable | Rerun the normal Story installation, then retry. The compatibility extra is not a separate repair path. |
-| Viewer 0.4.0 is installed but incompatible or damaged | Verify the approved exact pin, then use the bounded forced-repair path in Troubleshooting. |
+| Viewer 0.4.1 is installed but incompatible or damaged | Verify the approved exact pin, then use the bounded forced-repair path in Troubleshooting. |
 | Store busy | Retry after the concurrent exchange write completes. |
 | Unsafe, corrupt, or uncorrelatable records | Preserve the workspace and inspect the content-safe runtime diagnostic before retrying. |
 | Selected stream disappeared | Rerun `/exchanges` to refresh retained inventory. |
