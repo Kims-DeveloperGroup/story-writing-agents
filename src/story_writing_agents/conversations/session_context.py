@@ -302,9 +302,54 @@ def _native_synthesis_mirrors(
     return frozenset(mirrors)
 
 
+def _native_artifact_review_prose(
+    records: tuple[CollaborationReadableRecord, ...],
+    operation_id: str | None,
+    agent_id: str | None,
+) -> dict[str, frozenset[str]]:
+    """Identify artifact review prose already received through its typed sibling."""
+    sources = tuple(
+        record for record in records
+        if type(record.payload) is CollaborationLeadSynthesisPayload
+        and record.sender.kind.value == "lead"
+        and record.recipient.kind.value == "user"
+        and _known_native_result(record, operation_id, agent_id)
+    )
+    known = {}
+    for record in records:
+        review = record.payload
+        if type(review) is not ArtifactReviewSynthesisPayload:
+            continue
+        for source in sources:
+            synthesis = source.payload
+            if (
+                not _same_publication(record, source)
+                or source.sequence >= record.sequence
+                or record.sender != source.sender
+                or record.recipient != source.recipient
+                or review.execution_attempt_id != synthesis.execution_attempt_id
+                or (review.consultation_proposal_id,
+                    review.consultation_proposal_revision,
+                    review.consultation_proposal_digest)
+                != (synthesis.proposal_id, synthesis.proposal_revision,
+                    synthesis.proposal_digest)
+                or review.reply_event_ids != synthesis.reply_event_ids
+                or review.unresolved_input_ids != synthesis.unresolved_input_ids
+                or review.message != synthesis.message
+            ):
+                continue
+            known[record.event_id] = (
+                frozenset({"rationale"})
+                if review.rationale == synthesis.message else frozenset()
+            )
+            break
+    return known
+
+
 def _provider_record(
     record: CollaborationReadableRecord,
     included_fields: frozenset[str],
+    included_details: frozenset[str] = frozenset(),
 ) -> dict[str, object] | None:
     """Separate visible conversation facts from durable storage bookkeeping."""
     fields = []
@@ -319,7 +364,8 @@ def _provider_record(
         fields.append(value)
     details = {
         key: value for key, value in _visible_details(record.payload).items()
-        if value is not None and value != () and value != [] and value != {}
+        if key not in included_details
+        and value is not None and value != () and value != [] and value != {}
     }
     if not fields and not details:
         return None
@@ -442,11 +488,20 @@ class SessionHistorySnapshot:
                 )
                 if digest is not None else frozenset()
             )
+            native_review_prose = (
+                _native_artifact_review_prose(
+                    item.records, known_native_operation_id, native_agent_id,
+                )
+                if digest is not None else {}
+            )
             records = []
             for record in item.records[sequence:]:
                 repeated_fields = (included_fields or {}).get(
                     record.event_id, frozenset(),
                 )
+                repeated_details = native_review_prose.get(record.event_id)
+                if repeated_details is not None:
+                    repeated_fields |= frozenset({"artifact_review.message"})
                 if (
                     record.event_id in native_mirrors
                     or (digest is not None and _known_native_result(
@@ -458,7 +513,7 @@ class SessionHistorySnapshot:
                         "lead_synthesis.message",
                     })
                 projected = _provider_record(
-                    record, repeated_fields,
+                    record, repeated_fields, repeated_details or frozenset(),
                 )
                 if projected is not None:
                     records.append(projected)

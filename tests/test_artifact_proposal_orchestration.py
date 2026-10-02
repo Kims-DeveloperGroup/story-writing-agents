@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import unittest
+from dataclasses import replace
 from unittest import mock
 
 from story_writing_agents import ReplyTraceOrigin, StoryRuntime
 from story_writing_agents.agent_context.accounting import ProviderCallKind
+from story_writing_agents.agent_context.sources import SessionHistorySourceAdapter
+from story_writing_agents.conversations import session_context as session_context_module
 from story_writing_agents.agents import (
     EXECUTION_SPECIALIST,
     LEAD_ORCHESTRATOR,
@@ -263,6 +266,9 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             LEAD_ORCHESTRATOR,
             _artifact_synthesis_outcome("propose"),
         )
+        storage = self.runtime.conversation_storage_services
+        context = SessionHistorySourceAdapter(storage.catalog, storage.event_store, self.session_id)
+        prior = context.capture().coverage
         decision = await self.runtime.decide_lead_step(
             _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
         )
@@ -301,16 +307,35 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         projection = project_collaboration_history(self.history(conversation_id))
         self.assertEqual(projection.current_reviewed_artifact_proposal, reviewed)
         readable = project_collaboration_readable_history(self.history(conversation_id))
-        readable_keys = {
-            field.key.value for record in readable for field in record.fields
-        }
-        self.assertTrue(
-            {
-                "artifact_review.message",
-                "artifact_review.decision",
-                "artifact_proposal.state",
-            }.issubset(readable_keys)
-        )
+        readable_keys = {field.key.value for record in readable for field in record.fields}
+        self.assertTrue({
+            "artifact_review.message", "artifact_review.decision", "artifact_proposal.state",
+        }.issubset(readable_keys))
+        review = next(record for record in readable
+                      if type(record.payload) is session_context_module.ArtifactReviewSynthesisPayload)
+        operation = f"synthesis_{review.payload.execution_attempt_id}"
+        known = session_context_module._native_artifact_review_prose(readable, operation, LEAD_ORCHESTRATOR)
+        self.assertEqual(known, {review.event_id: frozenset({"rationale"})})
+        snapshot = context.capture()
+        delta = snapshot.delivery(prior, known_native_operation_id=operation, native_agent_id=LEAD_ORCHESTRATOR)
+        row = next(row for conversation in delta["conversations"] for row in conversation["records"]
+                   if row["event_id"] == review.event_id)
+        full = session_context_module._provider_record(review, frozenset())
+        self.assertEqual(row, {**full, "fields": [field for field in full["fields"]
+            if field["key"] != "artifact_review.message"], "details": {
+                key: value for key, value in full["details"].items() if key != "rationale"}})
+        self.assertEqual(next(row for conversation in snapshot.delivery()["conversations"]
+            for row in conversation["records"] if row["event_id"] == review.event_id), full)
+        self.assertEqual(session_context_module._native_artifact_review_prose((review,), operation, LEAD_ORCHESTRATOR), {})
+        changed = replace(review, batch_id=review.batch_id + "_unrelated")
+        self.assertNotIn(review.event_id, session_context_module._native_artifact_review_prose(
+            tuple(changed if record.event_id == review.event_id else record for record in readable), operation, LEAD_ORCHESTRATOR))
+        distinct = replace(review, payload=replace(review.payload, rationale="Distinct host rationale."))
+        known = session_context_module._native_artifact_review_prose(
+            tuple(distinct if record.event_id == review.event_id else record for record in readable), operation, LEAD_ORCHESTRATOR)
+        self.assertEqual(known[review.event_id], frozenset())
+        self.assertEqual(session_context_module._provider_record(distinct, frozenset({"artifact_review.message"}),
+            known[review.event_id])["details"]["rationale"], "Distinct host rationale.")
 
 
     async def test_core_conflict_revision_and_manuscript_atomic_rename_workflows(
