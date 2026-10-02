@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import json
 import os
+import re
 import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -53,6 +54,7 @@ class DarwinSandboxRequirements:
     deny_write_subpaths: tuple[Path, ...] = ()
     network: bool = False
     metadata_paths: tuple[Path, ...] = ()
+    posix_shm_read_prefixes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         paths = (
@@ -82,6 +84,12 @@ class DarwinSandboxRequirements:
             or type(self.network) is not bool
         ):
             raise ValueError("Darwin sandbox requirements must use canonical paths")
+        if type(self.posix_shm_read_prefixes) is not tuple or any(
+            type(prefix) is not str
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", prefix) is None
+            for prefix in self.posix_shm_read_prefixes
+        ):
+            raise ValueError("Darwin shared-memory read prefixes must use safe names")
 
 
 @dataclass(frozen=True)
@@ -374,6 +382,10 @@ def _darwin_sandbox_profile(
     ]
     if requirements.network:
         rules.extend(("(allow network-outbound)", "(allow system-socket)"))
+    rules.extend(
+        "(allow ipc-posix-shm-read* (ipc-posix-name-prefix " + literal(prefix) + "))"
+        for prefix in requirements.posix_shm_read_prefixes
+    )
     rules.extend(
         (
             "(allow file-read-data (literal \"/\"))",

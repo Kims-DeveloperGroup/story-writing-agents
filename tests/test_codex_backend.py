@@ -2428,6 +2428,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sandbox.deny_subpaths, (resources.identity.worktree_root / ".git", bound.staging_directory.resolve()))
         self.assertEqual(sandbox.deny_write_subpaths, (resources.identity.worktree_root,))
         self.assertEqual((sandbox.read_subpaths, sandbox.metadata_paths), ((), ()))
+        self.assertEqual(sandbox.posix_shm_read_prefixes, ("apple.cfprefs.",))
         self.assertEqual(sandbox.write_subpaths, (Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).resolve(),))
         self.assertIs(sandbox.network, True)
         for platform, system_root in (("darwin", Path("/private/etc")), ("linux", Path("/etc"))):

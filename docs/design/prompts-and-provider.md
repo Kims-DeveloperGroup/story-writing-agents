@@ -499,9 +499,13 @@ checks.
 On Darwin, a default-deny outer sandbox admits only the literal canonical Codex
 executable, exact transport, validated provider-native state, required system
 resources, and network access. Literal metadata permissions cover admitted
-resources and their ancestors, including the system `/etc` alias. Opening the
-exact session directory can expose its top-level filenames but grants no
-descendant story-file reads or session writes. The policy denies session `.git`, staging, the
+resources and their ancestors, including the system `/etc` alias.
+The Codex declaration also admits only reads of `apple.cfprefs.` POSIX shared-memory
+names so macOS preferences synchronization can complete during `thread/start`.
+The shared contract defaults to no such permission and validates literal name
+prefixes before compilation; it grants no shared-memory writes or removal.
+Opening the exact session directory can expose its top-level filenames but grants
+no descendant story-file reads or session writes. The policy denies session `.git`, staging, the
 control/initialization roots, siblings, traversal, and symlink escapes.
 Runtime-owned context capture,
 explicit references, and SEARCH/READ handlers deliver selected story content

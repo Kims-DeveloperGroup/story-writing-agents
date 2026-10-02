@@ -1171,6 +1171,11 @@ files `requirements.toml`, `managed_config.toml`, and `config.toml` beneath
 that escape that fixed location or overlap protected runtime roots are rejected
 before submission. System configuration can still apply when project/user
 configuration is ignored.
+Codex also receives read-only access to POSIX shared-memory names beginning
+`apple.cfprefs.`, which Apple's preferences service uses during thread startup.
+This permits preferences synchronization without allowing shared-memory writes,
+creation, removal, or access to unrelated namespaces. Other providers receive
+no shared-memory grant by default. This exception adds no story-file access.
 Configured `CODEX_HOME` must be absolute before canonical resolution. Its
 resolved path must already be a directory owned by the effective user without
 group/other write bits. It cannot be the filesystem root or user home, and it
