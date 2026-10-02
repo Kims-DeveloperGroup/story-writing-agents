@@ -1713,17 +1713,16 @@ new top-level authority and, for references, a new operation, capture,
 coordinator, and capability. Never infer non-execution from a missing accepted
 result.
 
-Darwin sandbox unavailability, an unsupported host, invalid canonical
-resources, or unsafe native state fails before submission and has no
-unconfined fallback. For `CODEX_HOME`, verify an existing effective-user-owned
-directory configured by an absolute path, with no group/other write bits, that
-is not filesystem root or user home and does not contain or sit beneath the
-control root, schema-derived sibling-worktree container (including every
-session), staging, or response-output directory. Apple's underlying
-`sandbox-exec` facility is
-deprecated, so deployment checks must treat its absence as loss of Codex story-
-call capability. Authentication, catalog, help, and other management probes
-are outside this story boundary.
+Story launches trusted native provider processes without an outer macOS
+sandbox. Missing `sandbox-exec` is not a startup failure. The provider has the
+current user's OS permissions; native read-only/sandbox flags and Story API
+controls do not prove process-level filesystem isolation. Unsupported descriptor
+launch, invalid resource identities and unsafe native state still fail before
+submission. For `CODEX_HOME`, verify an existing effective-user-owned directory
+configured by an absolute path, with no group/other write bits, that is not
+filesystem root or user home and does not overlap the control root, schema-derived
+sibling-worktree container, staging or response-output directory. Authentication,
+catalog, help and other management probes retain their documented behavior.
 
 For Antigravity, verify the exact protected
 `.agents/agents/<native-selector>/agent.md` projection. The selector is derived
@@ -1750,8 +1749,8 @@ Staged definitions and mutable native history remain beneath the canonical
 control workspace under generation-qualified state paths. An overlap with the
 session worktree rejects the call before per-invocation directories are
 created. Unproved history is retained but never resumed; restore the exact
-READY generation or allow a fresh bootstrap. Missing Darwin confinement fails
-closed without an adapter-control CWD fallback.
+READY generation or allow a fresh bootstrap. Unsupported descriptor/role
+capabilities fail closed without an adapter-control CWD fallback.
 
 For Codex, treat a missing, symlinked, multiply linked, non-regular, changing, oversized,
 or invalid-UTF-8 response output as a failed submitted call, not as recoverable

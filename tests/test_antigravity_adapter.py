@@ -1314,16 +1314,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(request.stdin, b"")
             self.assertEqual(request.command.count("--print"), 1)
             self.assertEqual(request.command[request.command.index("--print") + 1], printed_payload)
-            sandbox = request.darwin_sandbox
-            self.assertIsNotNone(sandbox)
-            self.assertEqual(sandbox.read_paths, (Path(sys.executable).resolve(), working_directory,
-                working_directory / ".agents", role.parent.parent, role.parent, role))
-            self.assertEqual(sandbox.write_subpaths, (provider_directory,))
-            self.assertEqual(sandbox.deny_subpaths, (working_directory / ".git",))
-            self.assertEqual(sandbox.deny_write_subpaths, (working_directory,))
-            self.assertEqual((sandbox.read_subpaths, sandbox.write_paths, sandbox.metadata_paths), ((), (), ()))
-            self.assertEqual(sandbox.posix_shm_read_prefixes, ())
-            self.assertIs(sandbox.network, True)
+            self.assertIsNone(request.cwd)
         self.assertEqual(json.loads(expected_command[expected_command.index("--json-schema") + 1]), schema)
         self.assertEqual(role.read_bytes(), (binding.staging_directory / "agent.md").read_bytes())
         self.assert_agent_installation(role, (binding.staging_directory / "agent.md").read_bytes(), mode=0o400)
@@ -1984,21 +1975,17 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 )
                 assert invocation.payload_json is not None
                 expected_stdin = b""
-                with mock.patch(
-                    "story_writing_agents.provider_process._darwin_confined_command",
-                    side_effect=lambda command, _requirements: tuple(command),
-                ):
-                    if isinstance(communication_failure, asyncio.CancelledError):
-                        with self.assertRaises(asyncio.CancelledError) as caught:
-                            await adapter.invoke(binding, invocation)
-                        self.assertIs(caught.exception, communication_failure)
-                    else:
-                        with self.assertRaises(ProviderInvocationError) as caught:
-                            await adapter.invoke(binding, invocation)
-                        self.assertEqual(str(caught.exception), diagnostic)
-                        self.assertIs(caught.exception.taint_existing_thread, True)
-                        self.assertNotIn("CONFIDENTIAL", str(caught.exception))
-                        self.assertIsNone(caught.exception.continuation_rejection)
+                if isinstance(communication_failure, asyncio.CancelledError):
+                    with self.assertRaises(asyncio.CancelledError) as caught:
+                        await adapter.invoke(binding, invocation)
+                    self.assertIs(caught.exception, communication_failure)
+                else:
+                    with self.assertRaises(ProviderInvocationError) as caught:
+                        await adapter.invoke(binding, invocation)
+                    self.assertEqual(str(caught.exception), diagnostic)
+                    self.assertIs(caught.exception.taint_existing_thread, True)
+                    self.assertNotIn("CONFIDENTIAL", str(caught.exception))
+                    self.assertIsNone(caught.exception.continuation_rejection)
                 process.communicate.assert_called_once_with(expected_stdin)
                 accounting = provider_failure_accounting(caught.exception)
                 self.assertIs(accounting.state, ProviderCallState.SUBMITTED)

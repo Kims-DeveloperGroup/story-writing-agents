@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import json
 import os
-import re
 import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -19,7 +17,6 @@ _DESCRIPTOR_EXEC_HELPER = (
     "import os,sys;fd=int(sys.argv[1]);os.fchdir(fd);os.close(fd);"
     "os.execvpe(sys.argv[2],sys.argv[2:],os.environ)"
 )
-_DARWIN_SANDBOX_EXECUTABLE = Path("/usr/bin/sandbox-exec")
 
 
 class ProcessExecutableNotFound(Exception):
@@ -42,57 +39,6 @@ StdoutLineCallback = Callable[[bytes], Awaitable[None] | None]
 
 
 @dataclass(frozen=True)
-class DarwinSandboxRequirements:
-    """Exact provider resources admitted by the shared Darwin boundary."""
-
-    executable: Path
-    read_subpaths: tuple[Path, ...] = ()
-    read_paths: tuple[Path, ...] = ()
-    write_subpaths: tuple[Path, ...] = ()
-    write_paths: tuple[Path, ...] = ()
-    deny_subpaths: tuple[Path, ...] = ()
-    deny_write_subpaths: tuple[Path, ...] = ()
-    network: bool = False
-    metadata_paths: tuple[Path, ...] = ()
-    posix_shm_read_prefixes: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        paths = (
-            self.executable,
-            *self.read_subpaths,
-            *self.read_paths,
-            *self.write_subpaths,
-            *self.write_paths,
-            *self.deny_subpaths,
-            *self.deny_write_subpaths,
-            *self.metadata_paths,
-        )
-        if (
-            not isinstance(self.executable, Path)
-            or any(type(group) is not tuple for group in (
-                self.read_subpaths,
-                self.read_paths,
-                self.write_subpaths,
-                self.write_paths,
-                self.deny_subpaths,
-                self.deny_write_subpaths,
-                self.metadata_paths,
-            ))
-            or any(not isinstance(path, Path) for path in paths)
-            or any(not path.is_absolute() for path in paths)
-            or any(Path(os.path.realpath(path)) != path for path in paths)
-            or type(self.network) is not bool
-        ):
-            raise ValueError("Darwin sandbox requirements must use canonical paths")
-        if type(self.posix_shm_read_prefixes) is not tuple or any(
-            type(prefix) is not str
-            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", prefix) is None
-            for prefix in self.posix_shm_read_prefixes
-        ):
-            raise ValueError("Darwin shared-memory read prefixes must use safe names")
-
-
-@dataclass(frozen=True)
 class ProcessRequest:
     """Immutable launch and communication inputs for one subprocess."""
 
@@ -107,11 +53,6 @@ class ProcessRequest:
         repr=False,
         compare=False,
     )
-    darwin_sandbox: DarwinSandboxRequirements | None = field(
-        default=None,
-        repr=False,
-        compare=False,
-    )
 
     def __post_init__(self) -> None:
         if self.execution_workspace is not None and (
@@ -120,13 +61,6 @@ class ProcessRequest:
         ):
             raise ValueError(
                 "process cwd and provider execution workspace are mutually exclusive"
-            )
-        if self.darwin_sandbox is not None and (
-            type(self.darwin_sandbox) is not DarwinSandboxRequirements
-            or self.execution_workspace is None
-        ):
-            raise ValueError(
-                "Darwin provider confinement requires an execution workspace"
             )
 
 
@@ -256,11 +190,6 @@ async def run_process(
         if os.name != "posix" or not hasattr(os, "fchdir"):
             raise ProcessStartFailed("UnsupportedPlatform")
         execution_workspace.require_current()
-        if request.darwin_sandbox is not None:
-            command = _darwin_confined_command(
-                command,
-                request.darwin_sandbox,
-            )
         launch_descriptor = execution_workspace.duplicate_launch_descriptor()
         command = (
             os.path.realpath(sys.executable),
@@ -337,116 +266,6 @@ async def run_process(
         stderr=stderr,
         returncode=process.returncode,
     )
-
-
-def _darwin_confined_command(
-    command: Sequence[str],
-    requirements: DarwinSandboxRequirements,
-) -> tuple[str, ...]:
-    """Apply the shared, fail-closed Darwin SBPL process boundary."""
-
-    if sys.platform != "darwin" or not _DARWIN_SANDBOX_EXECUTABLE.is_file():
-        raise ProcessStartFailed("UnsupportedDarwinSandbox")
-    if (
-        not command
-        or type(command[0]) is not str
-        or Path(os.path.realpath(command[0])) != requirements.executable
-    ):
-        raise ProcessStartFailed("InvalidDarwinSandboxExecutable")
-    return (
-        os.fspath(Path(os.path.realpath(_DARWIN_SANDBOX_EXECUTABLE))),
-        "-p",
-        _darwin_sandbox_profile(requirements),
-        *command,
-    )
-
-
-def _darwin_sandbox_profile(
-    requirements: DarwinSandboxRequirements,
-) -> str:
-    """Compile exact provider requirements into the generic Darwin policy."""
-
-    def literal(path: Path | str) -> str:
-        return json.dumps(os.fspath(path), ensure_ascii=True)
-
-    rules = [
-        "(version 1)",
-        "(deny default)",
-        "(allow process-exec (literal "
-        + literal(requirements.executable)
-        + "))",
-        "(allow process-info*)",
-        "(allow signal (target self))",
-        "(allow sysctl-read)",
-        "(allow mach-lookup)",
-    ]
-    if requirements.network:
-        rules.extend(("(allow network-outbound)", "(allow system-socket)"))
-    rules.extend(
-        "(allow ipc-posix-shm-read* (ipc-posix-name-prefix " + literal(prefix) + "))"
-        for prefix in requirements.posix_shm_read_prefixes
-    )
-    rules.extend(
-        (
-            "(allow file-read-data (literal \"/\"))",
-            # Resolving Darwin's system configuration alias needs lstat access
-            # to the alias itself, not only its canonical /private/etc target.
-            "(allow file-read-metadata (literal \"/etc\"))",
-            "(allow file-read* (subpath \"/System\"))",
-            "(allow file-read* (subpath \"/usr/lib\"))",
-            "(allow file-read* (literal \"/dev/null\"))",
-            "(allow file-write* (literal \"/dev/null\"))",
-            "(allow file-read* (literal \"/dev/urandom\"))",
-        )
-    )
-    resources = (
-        requirements.executable,
-        *requirements.read_subpaths,
-        *requirements.read_paths,
-        *requirements.write_subpaths,
-        *requirements.write_paths,
-        *requirements.metadata_paths,
-    )
-    metadata_paths = {
-        ancestor
-        for resource in resources
-        for ancestor in (resource, *resource.parents)
-    }
-    rules.extend(
-        "(allow file-read-metadata (literal " + literal(path) + "))"
-        for path in sorted(metadata_paths)
-    )
-    rules.extend(
-        "(allow file-read* (subpath " + literal(path) + "))"
-        for path in requirements.read_subpaths
-    )
-    rules.extend(
-        "(allow file-read* (literal " + literal(path) + "))"
-        for path in requirements.read_paths
-    )
-    rules.extend(
-        "(allow file-read* (subpath " + literal(path) + "))\n"
-        "(allow file-write* (subpath " + literal(path) + "))"
-        for path in requirements.write_subpaths
-    )
-    rules.extend(
-        "(allow file-read* (literal " + literal(path) + "))\n"
-        "(allow file-write* (literal " + literal(path) + "))"
-        for path in requirements.write_paths
-    )
-    rules.extend(
-        "(deny file-read* (literal " + literal(path) + "))\n"
-        "(deny file-read* (subpath " + literal(path) + "))\n"
-        "(deny file-write* (literal " + literal(path) + "))\n"
-        "(deny file-write* (subpath " + literal(path) + "))"
-        for path in requirements.deny_subpaths
-    )
-    rules.extend(
-        "(deny file-write* (literal " + literal(path) + "))\n"
-        "(deny file-write* (subpath " + literal(path) + "))"
-        for path in requirements.deny_write_subpaths
-    )
-    return "\n".join(rules)
 
 
 def _close_launch_descriptor(

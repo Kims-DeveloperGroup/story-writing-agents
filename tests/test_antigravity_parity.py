@@ -748,14 +748,6 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.environment.start()
-        # Transport fakes exercise parity; sandbox policy has separate profile
-        # and launch-boundary coverage.
-        self.sandbox_patch = mock.patch(
-            "story_writing_agents.provider_process._darwin_confined_command",
-            side_effect=lambda command, requirements: tuple(command),
-        )
-        self.sandbox_patch.start()
-        self.addCleanup(self.sandbox_patch.stop)
         os.environ.pop("STORY_FAKE_AGY_FAIL_ACTION", None)
         self.addCleanup(self.environment.stop)
 

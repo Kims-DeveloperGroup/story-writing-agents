@@ -374,9 +374,8 @@ For each turn, the runtime launches `agy` directly without shell evaluation. It:
 - passes the exact confidential story request JSON as one `--print` argument,
   selects `--input-format text --output-format json` (or `--output-format stream-json` when an active stream sink is bound for capable advisory progress), and sends empty stdin;
 - enables the CLI sandbox, selects plan mode, and disables slash commands;
-- applies a fail-closed Darwin sandbox that permits only literal project/role
-  traversal and the selected role file, denies direct story-file reads, and
-  denies `.git` plus every session write;
+- launches the native CLI directly from the descriptor-selected session worktree
+  without a Story-owned outer macOS sandbox;
 - does not pass an approval-bypass or unrestricted-execution option; and
 - drains stdout and stderr, validates one JSON envelope (extracting the terminal result from stream-json events when streaming) with a safe conversation
   ID, root-object structured output, and an exact rendered-schema echo, then
@@ -392,7 +391,10 @@ when the definition declared only `finish`. The JSON result has no `init` or
 step metadata, so Story cannot attest the selected agent, cwd, permission mode,
 or tool/subagent behavior from this output. CLI 1.1.27 also warns that plan
 mode has no effect when slash commands are disabled; Story retains both flags
-without claiming that plan mode enforces containment.
+without claiming that plan mode enforces containment. The native CLI is trusted
+with the current user's OS permissions. Story does not prevent its independent
+file reads/writes, Git access, process execution or network/IPC use. Guarded
+Story reads and separately confirmed Apply/Commit remain runtime API controls.
 The definition location and selection mechanism follow Antigravity's official
 [custom-agent documentation](https://antigravity.google/docs/cli/commands/agents/).
 

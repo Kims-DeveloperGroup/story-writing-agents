@@ -91,7 +91,7 @@ class ProviderExecutionWorkspace:
 
     @property
     def worktree_root(self) -> Path:
-        """Return the exact normalized root used only to compile confinement."""
+        """Return the exact normalized root for provider launch validation."""
 
         return self._worktree_root
 
