@@ -214,8 +214,13 @@ jobs:
                   /^@codex review(?:\r?\n|$)/.test(comment.body));
                 if (matches.length !== 1) fail('Exactly one personal Codex request must match this reserved attempt.');
                 request = matches[0];
+                const prompt = `Review round ${state.round}; base ${state.base_sha}, head ${state.head_sha}.`;
+                const constraints = state.round >= 3
+                  ? 'Only confirmed High/Critical bugs, missing or incorrect agreed requirements, and material defects. Exclude enhancements, Medium feedback, and minor improvements.'
+                  : 'Prioritize confirmed defects. Medium feedback is optional and never blocks completion.';
                 if (request.user?.type !== 'User' ||
-                    !request.body.includes(state.base_sha) || !request.body.includes(state.head_sha) ||
+                    !request.body.includes(prompt) || !request.body.includes(constraints) ||
+                    !request.body.includes('Follow GITHUB_WORKFLOW.md for severity and verified closure.') ||
                     !Number.isFinite(Date.parse(request.created_at)) ||
                     !Number.isFinite(Date.parse(request.updated_at || request.created_at)) ||
                     !Number.isFinite(Date.parse(state.opened_at)) || request.id <= state.comment_id ||
@@ -275,6 +280,7 @@ jobs:
                   clean_response_comment: true, reported_commit: reportedCommit,
                   reviewed_head_sha: state.head_sha};
               }
+              if (evidence !== request.html_url) fail('Link the matched Codex request as clean-reaction evidence.');
               const reactions = await github.paginate(github.rest.reactions.listForIssueComment, {
                 owner, repo, comment_id: request.id, per_page: 100,
               });

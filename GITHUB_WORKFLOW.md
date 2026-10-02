@@ -209,13 +209,16 @@ account, then checks the PR still matches the reserved base/head. Post exactly o
 @codex review
 
 Review round ROUND; base BASE_SHA, head HEAD_SHA.
+SEVERITY_CONSTRAINTS
 Follow GITHUB_WORKFLOW.md for severity and verified closure.
 
 <!-- ai-review-request:v1:PR_NUMBER:ROUND:ATTEMPT -->
 ```
 
-Replace every uppercase placeholder with the reservation's exact value. Include the current
-round's severity constraints. Do not post again while a request is outstanding. The writer
+Replace every uppercase placeholder with the reservation's exact value. For rounds 1–2,
+SEVERITY_CONSTRAINTS is `Prioritize confirmed defects. Medium feedback is optional and never blocks completion.`
+For round 3 onward, it is `Only confirmed High/Critical bugs, missing or incorrect agreed requirements, and material defects. Exclude enhancements, Medium feedback, and minor improvements.`
+The writer verifies this full prompt and policy line. Do not post again while a request is outstanding. The writer
 requires exactly one trigger with that marker, a personal writer, the recorded base/head,
 and a creation time after reservation; it records the verified sender and request URL/ID
 on completion. `awaiting_ui` remains outstanding while the personal request runs. Bot status
@@ -240,6 +243,9 @@ characters, and response timing after the request's latest edit. Native reviews 
 reactions also must follow the personal request's latest edit. A clean reaction requires the
 reserved base/head to remain unchanged; otherwise use a commit-bound response and retain
 later verification separately. An eyes reaction is not completion.
+Clean response comments apply to reserved rounds with a known head. Historical `adopt`
+continues to use native review IDs or clean reactions; a single manual round keeps an
+explicit manual closure record rather than inventing import history.
 All explicit operations capture the acting user and evidence. The closure record supports
 the root's final audit; it is not an automated merge approval or a replacement CI gate.
 
