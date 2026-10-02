@@ -24,9 +24,11 @@ from story_writing_agents.conversations import (
     CollaborationEventKind,
     CollaborationConfirmationDecision,
     CollaborationLeadJudgmentPayload,
+    CollaborationLeadSynthesisPayload,
     CollaborationMessagePayload,
     CollaborationProviderCallPayload,
     CollaborationProviderCallState,
+    CollaborationStepStatePayload,
     LeadOutcomeKind,
     StoryCommitDecisionPayload,
 )
@@ -86,6 +88,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         first = self.conversation("Synthetic planning")
         second = self.conversation("Synthetic follow-up")
         proposed = await self.proposal(first)
+        prior = self.snapshot()
         plan = "First inspect the outline.\nSecond review the character motive.\nThird draft the opening."
         self.backend.enqueue_for(PLOT_ARCHITECT, lead._specialist_outcome())
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, lead._synthesis_outcome(message=plan))
@@ -122,6 +125,41 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
                          judgment.payload.authoring_scope.task_id)
 
         snapshot = self.snapshot()
+        records = tuple(record for conversation in snapshot.conversations for record in conversation.records)
+        source = next(record for record in records if type(record.payload) is CollaborationLeadSynthesisPayload)
+        mirror = next(record for record in records if type(record.payload) is CollaborationMessagePayload
+                      and record.payload.content == plan)
+        state = next(record for record in records if type(record.payload) is CollaborationStepStatePayload
+                     and record.payload.execution_result_event_id is not None)
+        synthesis_operation = f"synthesis_{source.payload.execution_attempt_id}"
+        self.assertNotEqual((source.batch_id, source.turn_id), (mirror.batch_id, mirror.turn_id))
+        self.assertEqual(session_context_module._native_synthesis_mirrors(
+            records, synthesis_operation, LEAD_ORCHESTRATOR), frozenset({mirror.event_id}))
+        delta = snapshot.delivery(prior.coverage, known_native_operation_id=synthesis_operation,
+                                  native_agent_id=LEAD_ORCHESTRATOR)
+        self.assertNotIn(plan, _fields(delta))
+        synthesis_fact = next(record for record in _records(delta) if record["event_id"] == source.event_id)
+        self.assertEqual(synthesis_fact["details"]["authoring_scope"]["task_id"],
+                         source.payload.authoring_scope.task_id)
+        changed_text = plan + "\nA runtime notice was appended."
+        changed = replace(mirror, payload=replace(mirror.payload, content=changed_text),
+                          fields=tuple(replace(field, text=changed_text) for field in mirror.fields))
+        recovered_source = replace(source, payload=replace(source.payload, trace=replace(
+            source.payload.trace, origin=ReplyTraceOrigin.RECOVERED, recovered_fields=("message",))))
+        variants = (
+            tuple(record for record in records if record.event_id != state.payload.execution_result_event_id),
+            tuple(replace(record, conversation_id=second) if record.event_id == source.event_id else record
+                  for record in records),
+            tuple(recovered_source if record.event_id == source.event_id else record for record in records),
+            tuple(replace(record, batch_id=record.batch_id + "_unrelated")
+                  if record.event_id == mirror.event_id else record for record in records),
+            tuple(changed if record.event_id == mirror.event_id else record for record in records),
+        )
+        for variant in variants:
+            self.assertNotIn(mirror.event_id, session_context_module._native_synthesis_mirrors(
+                variant, synthesis_operation, LEAD_ORCHESTRATOR))
+        self.assertEqual(session_context_module._provider_record(changed, frozenset())["fields"][0]["text"],
+                         changed_text)
         native = next(record for conversation in snapshot.conversations for record in conversation.records
                       if record.event_id == judgment.event_id)
         operation = f"lead_{native.turn_id}"
@@ -159,7 +197,11 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertIsNone(fresh.expected_thread_id)
         self.assertEqual(fresh.payload["h"]["delivery_mode"], "bootstrap")
         replay = _fields(fresh.payload["h"])
-        self.assertIn(plan, replay)
+        self.assertEqual(replay.count(plan), 2)
+        replay_fact = next(record for record in _records(fresh.payload["h"])
+                           if record["event_id"] == source.event_id)
+        self.assertEqual(replay_fact["details"]["authoring_scope"], synthesis_fact["details"]["authoring_scope"])
+        self.assertIn(mirror.event_id, {record["event_id"] for record in _records(fresh.payload["h"])})
         self.assertTrue(all(text in replay for text in followups))
         self.assertEqual({item["conversation_id"]: item["status"]
                           for item in fresh.payload["h"]["conversations"]},

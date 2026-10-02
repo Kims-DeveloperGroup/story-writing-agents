@@ -6,7 +6,7 @@ import json
 import unittest
 from unittest import mock
 
-from story_writing_agents import StoryRuntime
+from story_writing_agents import ReplyTraceOrigin, StoryRuntime
 from story_writing_agents.agent_context.accounting import ProviderCallKind
 from story_writing_agents.agents import (
     EXECUTION_SPECIALIST,
@@ -403,6 +403,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
 
     async def test_ordinary_discussion_captures_current_state_without_specialists(self) -> None:
         conversation_id = self.conversation("Ordinary discussion")
+        message = "A scene goal should identify the desired change and obstacle."
         calls = 0
         original = WritingArtifactRepository.capture_complete_state
 
@@ -419,7 +420,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             self.backend.enqueue(
                 _visible_outcome(
                     "answer",
-                    "A scene goal should identify the desired change and obstacle.",
+                    message,
                 )
             )
             result = await self.runtime.lead_turn(
@@ -428,8 +429,12 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 "What is a scene goal?",
             )
         self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
+        self.assertEqual(result.message, message)
+        self.assertIs(result.trace.origin, ReplyTraceOrigin.PROVIDER)
+        self.assertEqual(tuple(item.calls for item in self.backend.finalizers),
+                         ([("accepted", None)],))
         self.assertIsNone(result.artifact_proposal)
-        self.assertEqual(calls, 1)
+        self.assertEqual(calls, 0)
         self.assertIn("current_state", self.backend.calls[0].payload["h"])
         payload = self.backend.calls[0].payload
         self.assertEqual(set(payload["h"]["current_state"]), {"runtime_overrides"})
