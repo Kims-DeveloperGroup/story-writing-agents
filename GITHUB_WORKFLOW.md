@@ -237,7 +237,9 @@ review. For Codex's clean thumbs-up, omit `review_id` and link the request as ev
 clean response comment, omit `review_id` and link that response: the writer checks Codex bot
 identity, the no-major-issues message, a matching reviewed-commit prefix of at least ten
 characters, and response timing after the request's latest edit. Native reviews and clean
-reactions also must follow the personal request's latest edit. An eyes reaction is not completion.
+reactions also must follow the personal request's latest edit. A clean reaction requires the
+reserved base/head to remain unchanged; otherwise use a commit-bound response and retain
+later verification separately. An eyes reaction is not completion.
 All explicit operations capture the acting user and evidence. The closure record supports
 the root's final audit; it is not an automated merge approval or a replacement CI gate.
 

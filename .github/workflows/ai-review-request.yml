@@ -278,6 +278,9 @@ jobs:
               const reactions = await github.paginate(github.rest.reactions.listForIssueComment, {
                 owner, repo, comment_id: request.id, per_page: 100,
               });
+              if (!adopting && (pr.head.sha !== state.head_sha || pr.base.sha !== state.base_sha)) {
+                fail('A clean reaction cannot establish review of a changed base/head; use a commit-bound response.');
+              }
               if (!reactions.some(reaction => isCodex(reaction.user) && reaction.content === '+1' &&
                   Number.isFinite(Date.parse(reaction.created_at)) &&
                   Date.parse(reaction.created_at) >= requestTime)) {
