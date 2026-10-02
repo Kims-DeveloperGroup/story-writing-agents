@@ -45,7 +45,6 @@ from .provider_adapter import (
 )
 from .provider_process import (
     CreateProcess,
-    DarwinSandboxRequirements,
     ProcessExecutableNotFound,
     ProcessRequest,
     ProcessStartFailed,
@@ -1135,7 +1134,7 @@ class AntigravityAdapter:
                 execution_workspace,
                 plan=staged_role,
             )
-            command, darwin_sandbox = self._confined_command(
+            command = self._execution_command(
                 command,
                 provider_state_directory=provider_state_directory,
                 execution_workspace=execution_workspace,
@@ -1453,7 +1452,6 @@ class AntigravityAdapter:
                         else None
                     ),
                     execution_workspace=execution_workspace,
-                    darwin_sandbox=darwin_sandbox,
                 ),
                 create_process=tracked_create_process,
                 wait_for=self._wait_for(),
@@ -1861,17 +1859,17 @@ class AntigravityAdapter:
             command.extend(["--conversation", thread_id])
         return command
 
-    def _confined_command(
+    def _execution_command(
         self,
         command: list[str],
         *,
         provider_state_directory: Path,
         execution_workspace: ProviderExecutionWorkspace,
         projected_role: Path,
-    ) -> tuple[list[str], DarwinSandboxRequirements]:
-        """Resolve one native command and compile its fail-closed boundary."""
+    ) -> list[str]:
+        """Resolve one native command for the exact execution workspace."""
 
-        session_root, native_state = self._require_state_workspace_disjoint(
+        session_root, _ = self._require_state_workspace_disjoint(
             provider_state_directory,
             execution_workspace,
         )
@@ -1895,23 +1893,9 @@ class AntigravityAdapter:
                 "Antigravity execution workspace is unavailable",
                 taint_existing_thread=False,
             )
-        confined = list(command)
-        confined[0] = os.fspath(executable)
-        return confined, DarwinSandboxRequirements(
-            executable=executable,
-            read_paths=(
-                executable,
-                session_root,
-                agents_root,
-                agents_directory,
-                selected_agent_directory,
-                role,
-            ),
-            write_subpaths=(native_state,),
-            deny_subpaths=(session_root / ".git",),
-            deny_write_subpaths=(session_root,),
-            network=True,
-        )
+        resolved_command = list(command)
+        resolved_command[0] = os.fspath(executable)
+        return resolved_command
 
     @staticmethod
     def _require_state_workspace_disjoint(

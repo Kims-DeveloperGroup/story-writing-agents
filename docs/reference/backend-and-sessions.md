@@ -180,21 +180,20 @@ construction and before accepting their provider-call finalizers. A missing,
 replaced, or aliased named root fails the invocation rather than transferring
 authority to another generation.
 
-On Darwin the native process is additionally wrapped by a default-deny SBPL
-profile and retains Codex's own `--sandbox read-only` setting. The profile
-grants no session-tree file reads or writes; the session `.git` subtree and all
-session writes are also explicit denies. The descriptor-selected CWD is process
-placement and generation identity, not story-content access. Host-owned context
-capture, explicit-reference delivery, and SEARCH/READ handlers perform their
-own guarded reads and place only the selected content in provider payloads or
-observations. Unspecified paths remain denied, including the initialization
-and control roots, sibling worktrees, traversal and symlink escape targets, and
-provider-definition staging.
+Both native providers launch directly without Story's outer Darwin sandbox.
+They are trusted processes with the effective user's OS permissions. Story does
+not impose process-level restrictions on reading story files, sibling worktrees
+or Git state, writing files, executing programs or using network/IPC resources.
+The descriptor-selected CWD establishes placement and generation identity; it
+is not a filesystem isolation boundary. Codex retains native `--sandbox read-only`, disabled shell/web/app/multi-agent features, ignored user/project
+configuration and no approvals. Those requested native controls do not enclose
+the main CLI process in Story's former default-deny policy.
 
-Closed external allowances cover only the literal canonical resolved Codex
-executable, the exact schema read and response write, required system runtime
-files, outbound network/system sockets, and one validated provider-native state
-subtree. Configured `CODEX_HOME` must be absolute before canonical resolution.
+Host-owned context capture, references and SEARCH/READ retain their guarded
+runtime reads. Structured Apply and Commit still authorize Story API actions;
+they do not prevent independent actions by a native provider process. Exact
+schema/output validation and provider-native state separation remain required.
+Configured `CODEX_HOME` must be absolute before canonical resolution.
 The resolved path must already be a directory owned by the effective user,
 must not be group- or other-writable, and must be neither the filesystem root
 nor the user's home. It may neither contain nor be contained by the control
@@ -217,20 +216,15 @@ may be at most 8 MiB. A missing, symlinked, multiply linked, non-regular,
 changing, oversized, or invalidly encoded response is rejected rather than read
 through an alternate transport.
 
-Apple's `sandbox-exec` facility is deprecated. A missing facility, non-Darwin
-host, unsafe native-state directory, noncanonical resource, or executable
-mismatch fails before provider submission; there is no path-only or unconfined
-fallback. Authentication,
+Story does not require `sandbox-exec`. Unsupported descriptor-launch hosts,
+unsafe native-state directories, invalid resource identities or unresolved
+executables fail before provider submission. Authentication,
 model-catalog discovery, help, and other management probes are not story
 invocations and retain their separately documented process boundaries.
 Antigravity uses the same call-local session-generation capability and exact
-descriptor CWD, without Codex's `--cd` option. Its default-deny Darwin profile
-admits only literal reads of the canonical executable, session root and
-`.agents/agents/<native-selector>/agent.md` traversal, plus required system
-resources;
-it denies session `.git`, every session write, and direct reads of manuscript,
-core-document, reference, SEARCH/READ-source, and artifact files. The selected
-role is exact runtime-owned control data: directories are owner-controlled, the
+descriptor CWD, without Codex's `--cd` option. It retains provider-native sandbox
+and plan-mode flags, disabled slash commands and a finish-only role, without
+claiming OS process isolation. The selected role is exact runtime-owned control data: directories are owner-controlled, the
 role is singly linked with exact mode `0400`, and the top-level `.agents`
 namespace and its case-folded aliases are untracked and excluded from Git and
 story data paths. Any tracked variant fails closed before projection mutation

@@ -324,23 +324,22 @@ capability from that binding. The child enters the descriptor-selected exact
 session worktree, so its OS working directory is the same pinned generation,
 never provider staging or the control workspace. Codex also uses `--cd .`;
 Antigravity treats that exact CWD as its native project root without an adapter-
-control fallback. On Darwin, a second default-deny sandbox gives Codex literal
-startup metadata and access to the exact session directory, and gives Antigravity
-literal project traversal plus its selected protected role file. Opening the
-session directory can expose its top-level filenames; descendant story-file
-contents remain inaccessible. Neither provider receives direct manuscript
-or core-document access; session writes and `.git` are denied. Host-owned
-context, explicit-reference, SEARCH, and READ services select and deliver story
-content through the provider payload instead. Codex exceptions admit only its
-literal canonical executable, required system runtime/configuration files, transport,
-outbound network access, and an existing absolute owner-controlled `CODEX_HOME`
-that cannot overlap the control root, the schema-derived sibling-worktree
-container, staging, or output transport. Bound instructions, schema, and
-response transport remain outside story Git. The Codex response is accepted only
-from a no-follow, identity-stable, singly linked regular file containing strict
-UTF-8 and no more than 8 MiB. The
-deprecated Darwin sandbox facility is fail-closed when unavailable, and an
-unsupported host does not fall back to an unconfined Codex story call.
+control fallback. Story launches both native providers directly and does not
+apply an outer macOS sandbox. Native provider processes are trusted programs
+with the current user's OS permissions: Story does not prevent them from
+reading unrelated files, writing session files or Git state, or starting other
+programs. Codex retains its native read-only mode and disabled tools; Antigravity
+retains its native sandbox, plan-mode and restricted-role settings. These
+provider-owned settings are not an equivalent process-isolation guarantee.
+Host-owned context, explicit-reference, SEARCH and READ services still select
+story content through guarded runtime APIs. Structured Apply and Commit govern
+Story's actions, rather than arbitrary native-process actions. Bound instructions,
+schema and response transport remain outside story Git. Codex requires an
+existing absolute owner-controlled `CODEX_HOME` that cannot overlap control,
+sibling-worktree, staging or response-transport roots. Its response is accepted
+only from a no-follow, identity-stable, singly linked regular file containing
+strict UTF-8 and no more than 8 MiB. Descriptor-based launch requires POSIX
+support; missing worktree identity or resource validation fails the call.
 Codex also rejects a fully encoded `developer_instructions=` argument above
 512 KiB before submission; large custom bindings should deliver story material
 through host-owned context, references, or SEARCH/READ instead.

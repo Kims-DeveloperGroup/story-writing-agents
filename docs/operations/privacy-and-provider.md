@@ -1149,67 +1149,49 @@ summaries use a separate boundary.
 Codex story calls run without shell evaluation from the descriptor-selected
 exact READY session worktree, with native project root `--cd .`: read-only
 sandbox, no approvals, ignored project/user configuration, and disabled shell,
-web, app, and multi-agent tools. On Darwin, a second default-deny process
-sandbox permits opening only the exact session root directory, which can expose
-its top-level filenames. It grants no descendant story-file reads and explicitly
-denies `.git`, every session write, and prompt staging. It also denies
-unspecified locations such as the initialization and control roots, sibling
-worktrees, traversal targets, and symlink escape targets. Host-owned context
-capture, explicit-reference delivery, and SEARCH/READ handlers perform guarded
-story reads and place only selected content in request payloads or observations;
-the provider receives no story-file content authority from its CWD.
+web, app, and multi-agent tools. Story does not wrap Codex or Antigravity in a
+macOS `sandbox-exec` policy. Both native processes are trusted with the current
+user's OS permissions. Story does not prevent them from reading manuscript,
+references, control state, sibling worktrees or Git state; writing files;
+executing programs; or using network and IPC resources. Requested provider-native
+sandbox and tool settings are not proof of equivalent process isolation.
 
-Exact external exceptions admit only the literal canonical resolved Codex
-executable, schema/result transport, required system files, outbound
-network/system sockets, and one validated provider-native state subtree.
-Metadata permissions are literal, covering those admitted resources and their
-canonical ancestors; they do not grant directory contents or descendant-file
-reads. The fixed `/etc` alias has metadata permission so native configuration
-lookups can resolve it. Codex can read only the three exact system configuration
-files `requirements.toml`, `managed_config.toml`, and `config.toml` beneath
-`/private/etc/codex` on Darwin. Missing files can be checked; canonical targets
-that escape that fixed location or overlap protected runtime roots are rejected
-before submission. System configuration can still apply when project/user
-configuration is ignored.
-Codex also receives read-only access to POSIX shared-memory names beginning
-`apple.cfprefs.`, which Apple's preferences service uses during thread startup.
-This permits preferences synchronization without allowing shared-memory writes,
-creation, removal, or access to unrelated namespaces. Other providers receive
-no shared-memory grant by default. This exception adds no story-file access.
+Host-owned context capture, references and SEARCH/READ still perform guarded
+runtime reads and deliver selected content through provider payloads. Structured
+Apply and Commit authorize Story API actions; they do not constrain independent
+native-process actions. Exact executable, provider-state, schema and response
+validation remains required.
 Configured `CODEX_HOME` must be absolute before canonical resolution. Its
 resolved path must already be a directory owned by the effective user without
 group/other write bits. It cannot be the filesystem root or user home, and it
 may neither contain nor be contained by the control root, the schema-derived
 sibling-worktree container (including the selected session), prompt staging,
 or response-output directory. An unsafe value produces a fixed pre-submission
-provider failure. This is filesystem confinement, not a claim that the
-executable, broker-delivered content, or remote provider is trusted.
+provider failure. These checks validate runtime resources; they do not isolate
+the trusted native executable or protect against a hostile same-user process.
 
 Stable instructions are prepared outside story Git, read before launch, and
 passed as a `developer_instructions` configuration argument; their text can be
 visible to local process inspection. The fully JSON-encoded argument, including
 its `developer_instructions=` prefix, is capped at 512 KiB; a larger value is
-rejected before submission and does not taint an existing thread. The schema
-has one exact external read path and the result one exact external write path.
+rejected before submission and does not taint an existing thread. The schema and result
+use exact external transport paths validated by the runtime.
 The result is consumed without following links only when it is an identity-
 stable, singly linked regular file containing strict UTF-8 and no more than
-8 MiB. Codex cannot read its prompt staging after launch, and none of those
-definition or output files is created in the story worktree or committed as
-story residue.
+8 MiB. The runtime creates none of those definition or output files in the
+story worktree or commits them as story residue.
 Installation-level or vendor-global instructions can still apply, and the
-vendor may retain remote conversations. Apple's `sandbox-exec` facility is
-deprecated; if it is missing, the host is unsupported, or exact sandbox inputs
-are invalid, the story call fails before submission instead of running without
-confinement.
+vendor may retain remote conversations. Story no longer depends on Apple's
+`sandbox-exec` facility. Unsupported descriptor-launch hosts and invalid runtime
+resources still fail before submission.
 
 These controls apply to provider-bound story calls, including direct bound-
 agent, Lead, specialist, synthesis, and consensus paths. Native authentication,
 model-catalog discovery, `--help`, and other management probes are excluded and
 keep the distinct workspace/environment exposure documented in their own
 sections. Antigravity story calls now use the same exact session-generation
-capability and descriptor-selected CWD. Their outer sandbox admits only literal
-project traversal and the selected protected role, while denying direct story-
-file reads, session writes, and `.git`.
+capability and descriptor-selected CWD, with the same trusted-process model and
+no Story-owned outer OS sandbox.
 
 Antigravity also runs without shell evaluation. The backend passes the exact
 confidential story request JSON as one `--print` argument, uses

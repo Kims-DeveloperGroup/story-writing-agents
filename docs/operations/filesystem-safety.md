@@ -216,21 +216,20 @@ execution and provider contexts to the active in-memory continuation
 transaction and closes them when publication resolves; the authority is never
 stored on a provider binding, adapter, or durable record.
 
-Codex process creation requires Darwin's `sandbox-exec` and canonicalized
-resource paths. The compiled SBPL profile denies by default. It admits reads of
-only the literal canonical resolved Codex executable and required system
-runtime files, but none of the exact session subtree. Session `.git`
-reads/writes and every session
-write remain explicit denies. The initialization/control root, sibling
-worktrees, lexical traversal, symlink escape targets, and prompt staging are
-also denied. Descriptor-selected CWD therefore supplies process placement and
-generation identity without granting story-content access. Context capture,
-explicit references, and SEARCH/READ remain host-owned guarded reads whose
-selected bytes enter only provider payloads or observations.
+Native provider processes launch directly; Story does not apply a macOS
+`sandbox-exec` policy. Descriptor-selected CWD establishes exact placement and
+generation identity, not filesystem isolation. Both providers are trusted with
+the current user's OS permissions, including access to story/control files,
+sibling worktrees and Git state. Story does not prevent their independent
+file writes, process execution or network/IPC use.
 
-The remaining closed allowances cover the exact schema read and output write,
-null/random devices, process support, outbound network/system sockets, and one
-provider-native state subtree. Resolved `CODEX_HOME` is accepted only when it
+Codex retains native read-only mode and disabled tools/config features;
+Antigravity retains native sandbox/plan flags and role settings. These native
+settings do not replace Story's removed outer-process boundary. Runtime context,
+reference and SEARCH/READ handlers retain guarded Story API reads. Structured
+Apply and Commit govern Story API mutations, not arbitrary native-process
+behavior. Exact state, schema and output validation remain required.
+Resolved `CODEX_HOME` is accepted only when it
 was configured as an absolute path and already names a directory owned by the
 effective user with no group/other write bits. It must be neither the
 filesystem root nor the user home, and it may not overlap in either direction
@@ -260,10 +259,9 @@ only clean completion accepts the provider-call finalizer. Loss or cleanup
 failure after a checkpoint commit invalidates that exact ledger generation.
 Exit loss taints the exact generation-bound thread where one is governed by the
 continuation. A deleted, replaced, or symlinked named session root cannot
-acquire the old descriptor authority or redirect a call. Unsupported hosts, a
-missing deprecated sandbox facility, an executable mismatch, or a noncanonical
-exception path fail before provider submission; there is no path-only working-
-directory or unconfined fallback. This Codex boundary requires no Codex
+acquire the old descriptor authority or redirect a call. Unsupported descriptor-launch hosts, unresolved executables and invalid
+resource identities fail before provider submission; there is no path-only
+working-directory fallback. This Codex execution path requires no Codex
 configuration file in the session worktree.
 
 Antigravity story calls use the same descriptor-selected exact session CWD and
@@ -322,16 +320,15 @@ context. The read-only role projection is persistent runtime control data, not
 mutable provider residue or story content; Git, artifact, reference, and SEARCH/
 READ selection exclude it.
 
-Antigravity's Darwin sandbox allows literal reads only for the executable,
-session-root/role traversal, selected role, and required system resources. It
-denies direct session story-file reads, the session `.git` path, and all writes
-beneath the session root. Mutable native continuation state is external and
+Antigravity uses direct descriptor-selected launch and its provider-native
+controls; Story does not enforce OS-level file-read/write restrictions on it.
+Mutable native continuation state is external and
 partitioned beneath the canonical control workspace by session physical
 generation, session, agent, and definition fingerprint; staged definitions are
 rooted there as well. Before any invocation-state directories are created,
 runtime rejects overlap between native state and the exact session worktree.
 Schema/request arguments and stdout/stderr transport remain external as well.
-Unsupported or unavailable confinement fails closed.
+Unsupported descriptor/role validation capabilities fail closed.
 
 Ordinary artifact access retains the stronger semantic boundary: one outer
 synchronous transaction performs a complete READY validation before and after

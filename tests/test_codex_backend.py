@@ -1928,12 +1928,6 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
         self.environment.start()
         self.addCleanup(self.environment.stop)
-        self.fake_native_boundary = mock.patch(
-            "story_writing_agents.provider_process._darwin_confined_command",
-            side_effect=lambda command, _requirements: tuple(command),
-        )
-        self.fake_native_boundary.start()
-        self.addCleanup(self.fake_native_boundary.stop)
 
     def definition(self, agent_id: str = PLOT_ARCHITECT):
         return PromptAssembler(self.workspace).build_definition(
@@ -2419,36 +2413,21 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         wraps=sys.modules["story_writing_agents.codex_adapter"].run_process) as run:
             reply = await bound.invoke(self.request(session_id=session_id))
         request = run.call_args.args[0]
-        sandbox = request.darwin_sandbox
-        self.assertIsNotNone(sandbox)
-        configs = backend._codex_adapter._system_config_paths(protected_paths=())
-        self.assertEqual(sandbox.read_paths, (self.executable.resolve(),
-            Path(request.command[request.command.index("--output-schema") + 1]), resources.identity.worktree_root, *configs))
-        self.assertEqual(sandbox.write_paths, (Path(request.command[request.command.index("--output-last-message") + 1]),))
-        self.assertEqual(sandbox.deny_subpaths, (resources.identity.worktree_root / ".git", bound.staging_directory.resolve()))
-        self.assertEqual(sandbox.deny_write_subpaths, (resources.identity.worktree_root,))
-        self.assertEqual((sandbox.read_subpaths, sandbox.metadata_paths), ((), ()))
-        self.assertEqual(sandbox.posix_shm_read_prefixes, ("apple.cfprefs.",))
-        self.assertEqual(sandbox.write_subpaths, (Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).resolve(),))
-        self.assertIs(sandbox.network, True)
-        for platform, system_root in (("darwin", Path("/private/etc")), ("linux", Path("/etc"))):
-            expected = tuple(system_root / "codex" / name for name in ("requirements.toml", "managed_config.toml", "config.toml"))
-            def canonical(path):
-                return str(system_root) if str(path) == "/etc" else str(path)
-            with mock.patch("story_writing_agents.codex_adapter.sys.platform", platform), mock.patch(
-                "story_writing_agents.codex_adapter.os.path.realpath", side_effect=canonical):
-                for present in (False, True):
-                    with mock.patch.object(Path, "exists", return_value=present):
-                        self.assertEqual(backend._codex_adapter._system_config_paths(protected_paths=()), expected)
-                for protected in (system_root, expected[0], expected[0] / "nested"):
-                    with self.assertRaisesRegex(ProviderInvocationError, "system configuration paths are unsafe") as unsafe:
-                        backend._codex_adapter._system_config_paths(protected_paths=(protected,))
-                    self.assertFalse(unsafe.exception.taint_existing_thread)
-            escaped = lambda path: str(self.workspace.root / "private-config") if Path(path) == expected[0] else canonical(path)
-            with mock.patch("story_writing_agents.codex_adapter.sys.platform", platform), mock.patch(
-                "story_writing_agents.codex_adapter.os.path.realpath", side_effect=escaped), self.assertRaisesRegex(
-                    ProviderInvocationError, "system configuration paths are unsafe"):
-                backend._codex_adapter._system_config_paths(protected_paths=())
+        self.assertIsNone(request.cwd)
+        self.assertEqual(request.execution_workspace.worktree_root, resources.identity.worktree_root)
+        output = Path(request.command[request.command.index("--output-last-message") + 1])
+        native_arguments = dict(session_root=resources.identity.worktree_root,
+                                session_container=resources.identity.worktree_root.parent,
+                                staging=bound.staging_directory.resolve(), output=output)
+        self.assertEqual(backend._codex_adapter._native_state_directory(**native_arguments),
+                         Path(os.environ["CODEX_HOME"]).resolve())
+        for unsafe_state in ("relative", resources.identity.worktree_root,
+                             resources.identity.worktree_root.parent, bound.staging_directory,
+                             output.parent, self.workspace.root, self.fake_directory / "missing"):
+            with mock.patch.dict(os.environ, {"CODEX_HOME": str(unsafe_state)}):
+                with self.assertRaisesRegex(ProviderInvocationError, "native state directory is unsafe") as unsafe:
+                    backend._codex_adapter._native_state_directory(**native_arguments)
+                self.assertFalse(unsafe.exception.taint_existing_thread)
         self.assertEqual(reply.content, "generated candidate")
         invocation = self.invocations()[0]
         argv = invocation["argv"]

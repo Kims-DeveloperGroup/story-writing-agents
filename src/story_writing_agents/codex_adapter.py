@@ -9,7 +9,6 @@ import os
 import re
 import shutil
 import stat
-import sys
 import tempfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -41,7 +40,6 @@ from .provider_adapter import (
 )
 from .provider_process import (
     CreateProcess,
-    DarwinSandboxRequirements,
     ProcessExecutableNotFound,
     ProcessRequest,
     ProcessStartFailed,
@@ -517,7 +515,7 @@ class CodexAdapter:
                     taint_existing_thread=False,
                 ) from None
             schema_path.write_bytes(schema_json)
-            command, darwin_sandbox = self._confined_command(
+            command = self._execution_command(
                 binding.staging_directory,
                 schema_path,
                 output_path,
@@ -811,7 +809,6 @@ class CodexAdapter:
                             handle_stream_line if stream_sink is not None else None
                         ),
                         execution_workspace=execution_workspace,
-                        darwin_sandbox=darwin_sandbox,
                     ),
                     create_process=tracked_create_process,
                     wait_for=self._wait_for(),
@@ -962,7 +959,7 @@ class CodexAdapter:
                 except BaseException:
                     pass
 
-    def _confined_command(
+    def _execution_command(
         self,
         staging_directory: Path,
         schema_path: Path,
@@ -970,8 +967,8 @@ class CodexAdapter:
         thread_id: str | None,
         agent_id: str | None,
         execution_workspace: ProviderExecutionWorkspace,
-    ) -> tuple[list[str], DarwinSandboxRequirements]:
-        """Build a native Codex command and its exact process requirements."""
+    ) -> list[str]:
+        """Build the native Codex command for the exact execution workspace."""
 
         execution_workspace.require_current()
         resolved_executable = self._which()(self.executable)
@@ -993,7 +990,7 @@ class CodexAdapter:
                 "Codex execution workspace is unavailable",
                 taint_existing_thread=False,
             )
-        native_state = self._native_state_directory(
+        self._native_state_directory(
             session_root=session_root,
             session_container=session_container,
             staging=staging,
@@ -1022,28 +1019,6 @@ class CodexAdapter:
                 "Codex bound instructions exceed the safe process argument limit",
                 taint_existing_thread=False,
             )
-        sandbox = DarwinSandboxRequirements(
-            executable=executable,
-            read_paths=(
-                executable,
-                schema,
-                session_root,
-                *self._system_config_paths(
-                    protected_paths=(
-                        self._control_root,
-                        session_container,
-                        staging,
-                        output.parent,
-                    ),
-                ),
-            ),
-            write_subpaths=(native_state,),
-            write_paths=(output,),
-            deny_subpaths=(session_root / ".git", staging),
-            deny_write_subpaths=(session_root,),
-            network=True,
-            posix_shm_read_prefixes=("apple.cfprefs.",),
-        )
         command = [
             os.fspath(executable),
             "--ask-for-approval",
@@ -1093,31 +1068,7 @@ class CodexAdapter:
             command.append(thread_id)
         command.append("-")
         execution_workspace.require_current()
-        return command, sandbox
-
-    @staticmethod
-    def _system_config_paths(*, protected_paths: tuple[Path, ...]) -> tuple[Path, ...]:
-        """Admit only Codex's fixed system configuration files, including absence."""
-        system_root = Path("/private/etc") if sys.platform == "darwin" else Path("/etc")
-        paths = tuple(
-            system_root / "codex" / name
-            for name in ("requirements.toml", "managed_config.toml", "config.toml")
-        )
-        if Path(os.path.realpath("/etc")) != system_root or any(
-            Path(os.path.realpath(path)) != path
-            or any(
-                path == protected
-                or protected in path.parents
-                or path in protected.parents
-                for protected in protected_paths
-            )
-            for path in paths
-        ):
-            raise ProviderInvocationError(
-                "Codex system configuration paths are unsafe",
-                taint_existing_thread=False,
-            )
-        return paths
+        return command
 
     def _native_state_directory(
         self,
