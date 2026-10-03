@@ -352,6 +352,15 @@ class LiveCharacterReaderTests(unittest.TestCase):
         self.assertEqual(stream.calls, [("read1", 1)])
         self.assertEqual(ready.call_count, 2)
 
+        stream = _ByteBackedInput(b"\xe2", b"\x82", b"\xac")
+        reader = LiveCharacterReader(_spec(stream))
+        ready = mock.Mock(side_effect=[None, lifecycle.LiveInputIdle(), None, None])
+        with self.assertRaises(lifecycle.LiveInputIdle):
+            reader.read_character(before_read=ready)
+        self.assertEqual(stream.calls, [("read1", 1)])
+        self.assertEqual(reader.read_character(before_read=ready), "€")
+        self.assertEqual(ready.call_count, 4)
+
     def test_before_read_does_not_wait_for_pending_codepoints_or_stable_eof(self) -> None:
         class SuffixDecoder:
             def decode(self, chunk: bytes, *, final: bool) -> str:
@@ -362,7 +371,9 @@ class LiveCharacterReaderTests(unittest.TestCase):
         ready = mock.Mock()
         self.assertEqual(reader.read_character(before_read=ready), "a")
         self.assertEqual(ready.call_count, 1)
+        ready.side_effect = lifecycle.LiveInputIdle()
         self.assertEqual(reader.read_character(before_read=ready), "b")
+        ready.side_effect = None
         self.assertEqual(ready.call_count, 1)
         self.assertEqual(reader.read_character(before_read=ready), "")
         self.assertEqual(ready.call_count, 2)

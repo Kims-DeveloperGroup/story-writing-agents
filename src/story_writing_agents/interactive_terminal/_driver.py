@@ -14,6 +14,7 @@ from typing import TextIO, TypeAlias, TypeVar
 
 from ._input_lifecycle import (
     LiveDecoderSpec,
+    LiveInputIdle,
     TerminalInputLatch,
     TerminalInputMode,
     inspect_live_decoder_spec,
@@ -92,6 +93,7 @@ _SGR_RESET = "\x1b[0m"
 _DEFAULT_TERMINAL_WIDTH = 80
 _MAX_ESCAPE_SEQUENCE_LENGTH = 64
 _ESCAPE_LOOKAHEAD_SECONDS = 0.05
+_EXTERNAL_VIEW_IDLE_SECONDS = 0.5
 _DEFAULT_TERMIOS = object()
 _PROGRESS_FRAME_COUNT = 14
 _LIVE_COMPOSER_POLL_SECONDS = 0.025
@@ -2898,10 +2900,23 @@ class RawTerminalDriver:
         self,
         configuration: _TerminalConfiguration,
     ) -> str | None:
-        """Deliver one physical input without interpreting viewer behavior."""
+        """Deliver physical input or a resumable idle interval to the viewer."""
+        deadline = time.monotonic() + _EXTERNAL_VIEW_IDLE_SECONDS
+
+        def before_read() -> None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise LiveInputIdle
+            ready, _, _ = _select.select(
+                (configuration.input_descriptor,), (), (), remaining
+            )
+            if not ready:
+                raise LiveInputIdle
 
         try:
-            character = self._read_character()
+            character = self._read_character(before_read=before_read)
+        except LiveInputIdle:
+            return "idle"
         except KeyboardInterrupt:
             return "key\tinterrupt"
         except EOFError:

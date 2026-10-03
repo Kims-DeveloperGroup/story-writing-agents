@@ -83,15 +83,7 @@ class _Termios:
     TCSADRAIN = 11
 
     def __init__(self) -> None:
-        self.original = [
-            0,
-            0,
-            0,
-            self.ICANON | self.ECHO,
-            0,
-            0,
-            [b"\x04", b"\x03", 0, 0, 9, 9],
-        ]
+        self.original = [0, 0, 0, self.ICANON | self.ECHO, 0, 0, [b'\x04', b'\x03', 0, 0, 9, 9]]
         self.events: list[str] = []
         self.restoration_failure: BaseException | None = None
 
@@ -309,6 +301,11 @@ class ExternalViewContractTests(unittest.TestCase):
 
 
 class RawExternalViewLifecycleTests(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch.object(driver_module._select, "select", return_value=((7,), (), ()))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_live_host_owns_geometry_color_events_screen_and_restoration(self) -> None:
         driver, _input, output, fallback, termios = _raw_driver("\x1b[A\x1b[B\x1b[5~\x1b[6~jkb nNmh?cq", width=91, height=27)
         events = []
@@ -322,15 +319,24 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
         self.assertEqual(events[:2], [(91, 27), True])
         self.assertEqual(events[2:], ["key\tup", "key\tdown", "key\tpage_up", "key\tpage_down"] + ["text\t" + c for c in "jkb nNmh?cq"])
         fallback.assert_not_called()
-        self.assertEqual(termios.events.count("activate"), 1)
-        self.assertEqual(termios.events.count("restore"), 1)
+        self.assertEqual((termios.events.count("activate"), termios.events.count("restore")), (1, 1))
         rendered = "".join(output.records)
         self.assertEqual(rendered.count(driver_module._VIEWER_SCREEN_ENTER), 1)
         self.assertEqual(rendered.count(driver_module._VIEWER_SCREEN_EXIT), 1)
         self.assertIn("\x1b[36mframe\x1b[0m", rendered)
 
+        driver, input_stream, _output, _fallback, _termios = _raw_driver("€J")
+        events = []
+        with mock.patch.object(driver_module.time, "monotonic", side_effect=[100.0, 100.1, 100.4, 101.0, 101.0, 101.1, 102.0, 102.0]), \
+             mock.patch.object(driver_module._select, "select", side_effect=[((7,), (), ()), ((), (), ()), ((7,), (), ()), ((7,), (), ()), ((7,), (), ())]) as poll:
+            driver.open_external_view(lambda host: events.extend(host.read_event() for _ in range(3)))
+        self.assertEqual(events, ["idle", "text\t€", "text\tJ"])
+        self.assertEqual(input_stream.characters, [])
+        self.assertAlmostEqual(poll.call_args_list[0].args[3], 0.4)
+        self.assertAlmostEqual(poll.call_args_list[1].args[3], 0.1)
+
     def test_physical_input_has_no_viewer_bindings_prompts_or_history(self) -> None:
-        text = "/gqjkb nNmh?c개요😀e\u0301"
+        text = "/gqjkb nNmh?cJK개요😀e\u0301"
         controls = "\r\n\x08\x7f\x01\x05\x15\x0b\x17\x03\x04\t"
         names = ("enter", "enter", "backspace", "backspace", "ctrl_a", "ctrl_e", "ctrl_u", "ctrl_k", "ctrl_w", "interrupt", "eof", "unknown")
         driver, _input, output, fallback, termios = _raw_driver(text + controls)
@@ -338,8 +344,7 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
         driver.open_external_view(lambda host: events.extend(host.read_event() for _ in range(len(text + controls))))
         self.assertEqual(events, ["text\t" + c for c in text] + ["key\t" + n for n in names])
         self.assertEqual(output.records, [driver_module._VIEWER_SCREEN_ENTER, driver_module._VIEWER_SCREEN_REDRAW, driver_module._VIEWER_SCREEN_EXIT])
-        self.assertEqual(termios.events.count("activate"), 1)
-        self.assertEqual(termios.events.count("restore"), 1)
+        self.assertEqual((termios.events.count("activate"), termios.events.count("restore")), (1, 1))
         fallback.assert_not_called()
         self.assertEqual(driver._history_state, driver_module.MainInputHistoryState())
 
@@ -355,7 +360,7 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
                 fallback.assert_not_called()
         driver, _input, _output, _fallback, _termios = _raw_driver("\x1bq")
         events = []
-        with mock.patch.object(driver_module._select, "select", return_value=((), (), ())):
+        with mock.patch.object(driver_module._select, "select", side_effect=[((7,), (), ()), ((), (), ()), ((7,), (), ())]):
             driver.open_external_view(lambda host: events.extend((host.read_event(), host.read_event())))
         self.assertEqual(events, ["key\tescape", "text\tq"])
 
@@ -366,7 +371,7 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
         with (
             mock.patch.object(input_stream, "read1", wraps=original_read) as reads,
             mock.patch.object(driver_module.time, "monotonic", return_value=100.0),
-            mock.patch.object(driver_module._select, "select", side_effect=[((7,), (), ()), ((7,), (), ()), ((), (), ())]),
+            mock.patch.object(driver_module._select, "select", side_effect=[((7,), (), ()), ((7,), (), ()), ((7,), (), ()), ((), (), ())]),
             self.assertRaisesRegex(TimeoutError, "^external terminal character deadline expired$") as raised,
         ):
             driver.open_external_view(lambda host: host.read_event())
@@ -377,8 +382,7 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
         with self.assertRaises(TimeoutError) as again:
             reader.read_character()
         self.assertIs(again.exception, raised.exception)
-        self.assertEqual(termios.events.count("activate"), 1)
-        self.assertEqual(termios.events.count("restore"), 1)
+        self.assertEqual((termios.events.count("activate"), termios.events.count("restore")), (1, 1))
         self.assertEqual("".join(output.records).count(driver_module._VIEWER_SCREEN_EXIT), 1)
         fallback.assert_not_called()
 
@@ -419,8 +423,7 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
         self.assertIn("개요 one ⟦개요 one⟧", re.sub(r"\x1b\[[0-9;]*m", "", "".join(output.records)))
         self.assertIn("개요 one ⟦개요 one⟧", "".join(story_output))
         self.assertNotIn("U0015", "".join(output.records))
-        self.assertEqual(termios.events.count("activate"), 1)
-        self.assertEqual(termios.events.count("restore"), 1)
+        self.assertEqual((termios.events.count("activate"), termios.events.count("restore")), (1, 1))
         fallback.assert_not_called()
         self.assertEqual(source, ('{"content":"개요 one 개요 one"}\n{"content":"other"}\n').encode())
 

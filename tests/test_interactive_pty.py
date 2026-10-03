@@ -1830,12 +1830,18 @@ print(f"SHELL_VALUE={input('shell> ')}")
             "TERM": "xterm-256color",
             "PYTHONPATH": os.pathsep.join((str(_SOURCE_ROOT), str(_REPOSITORY_ROOT / "vendor/jsonl-viewer/src"))),
         }, terminal_columns=120)
+        process.wait_for_text("Record 1/7")
         process.wait_for_text("? help • q close")
         assert termios is not None
         self.assertFalse(termios.tcgetattr(process.master_fd)[3] & termios.ICANON)
         mark = process.output_mark()
+        process.wait_for_text("? help • q close", after=mark)
+        self.assertNotRegex(process.text_after(mark), r"\x1b\[[0-9;]*4[;m]")
+        mark = process.output_mark()
         query = b"wrong\x15" + "개요".encode() if edit_query else "개요".encode()
-        process.send_bytes(b"/" + query + b"\nn")
+        process.send_bytes(b"/" + query[:-1])
+        time.sleep(0.6)  # An idle poll must preserve the incomplete final UTF-8 character.
+        process.send_bytes(query[-1:] + b"\nn")
         process.wait_for_text("2/14 occurrences • Search all text='개요'", after=mark)
         process.wait_for_text("? help • q close", after=mark)
         # Wait for the final selected-match frame, not an earlier search frame.
@@ -1846,7 +1852,7 @@ print(f"SHELL_VALUE={input('shell> ')}")
         active = process.normalized_text.rsplit("\x1b[H\x1b[2J", 1)[1]
         active = active[:active.index("? help • q close") + len("? help • q close")]
         self.assertIn('"content": "개요 ⟦개요⟧ 0"', active)
-        for draft, prompt in ((b"/draft", "Search query: draft│"), (b"g999", "Go to source line: 999│")):
+        for draft, prompt in ((b"/JKdraft", "Search query: JKdraft│"), (b"g999", "Go to source line: 999│")):
             mark = process.output_mark()
             process.send_bytes(draft)
             process.wait_for_text(prompt, after=mark)

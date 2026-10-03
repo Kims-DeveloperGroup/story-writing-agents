@@ -649,24 +649,12 @@ class LazyViewerAdapterTests(unittest.TestCase):
             from story_writing_agents.interactive_controller._exchange_viewer import prepare_agent_exchange_view
 
             record = {
-                "agent_id": "character_custodian",
-                "content": "body",
-                "content_full_characters": 4,
-                "content_full_utf8_bytes": 4,
-                "content_retained_characters": 4,
-                "content_retained_utf8_bytes": 4,
-                "content_sha256": "sha256:" + "0" * 64,
-                "content_truncated": False,
-                "exchange_id": "exchange_1",
-                "provider": "codex codex",
-                "request_type": "request",
-                "schema_version": 1,
-                "scope_id": "debate_1",
-                "scope_kind": "debate",
-                "sequence": 1,
-                "session_id": "session_1",
-                "timestamp": "2026-08-30T00:00:00+00:00",
-                "workspace_sequence": 1,
+                "agent_id": "character_custodian", "content": "body", "content_full_characters": 4,
+                "content_full_utf8_bytes": 4, "content_retained_characters": 4, "content_retained_utf8_bytes": 4,
+                "content_sha256": "sha256:" + "0" * 64, "content_truncated": False, "exchange_id": "exchange_1",
+                "provider": "codex codex", "request_type": "request", "schema_version": 1,
+                "scope_id": "debate_1", "scope_kind": "debate", "sequence": 1,
+                "session_id": "session_1", "timestamp": "2026-08-30T00:00:00+00:00", "workspace_sequence": 1,
             }
             source = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\\n").encode()
 
@@ -683,12 +671,8 @@ class LazyViewerAdapterTests(unittest.TestCase):
 
             host = Host()
             operation = prepare_agent_exchange_view(
-                source,
-                session_id="session_1",
-                scope_kind=AgentExchangeScopeKind.DEBATE,
-                scope_id="debate_1",
-                scope_subject="Subject",
-                agent_id="character_custodian",
+                source, session_id="session_1", scope_kind=AgentExchangeScopeKind.DEBATE,
+                scope_id="debate_1", scope_subject="Subject", agent_id="character_custodian",
             )
             operation(host)
             assert host.closed == 1
@@ -706,23 +690,23 @@ class LazyViewerAdapterTests(unittest.TestCase):
             operation(second)
             assert "SIMPLE" in second.frames[0]
             assert "Search " not in second.frames[0]
+            siblings = Host()
+            siblings.events = iter(("text\\tJ", "text\\tJ", "idle", "text\\tK", "close"))
+            operation(siblings)
+            assert siblings.frames[2] == siblings.frames[5]
+            assert siblings.frames[2] != siblings.frames[3]
+            assert "^" in siblings.frames[3] and "^" not in siblings.frames[4]
+            assert len(siblings.frames[3].splitlines()) == len(siblings.frames[4].splitlines())
+            assert siblings.closed == 1 and json.loads(source) == record
+
             """
         )
-        environment = dict(
-            os.environ,
-            PYTHONPATH=os.pathsep.join((str(ROOT / "src"), str(VIEWER_SOURCE))),
-        )
+        environment = dict(os.environ, PYTHONPATH=os.pathsep.join((str(ROOT / "src"), str(VIEWER_SOURCE))))
         completed = subprocess.run(
             [sys.executable, "-W", "error", "-c", script],
-            cwd=ROOT,
-            env=environment,
-            text=True,
-            capture_output=True,
-            check=False,
+            cwd=ROOT, env=environment, text=True, capture_output=True, check=False,
         )
-        self.assertEqual(
-            completed.returncode,
-            0,
+        self.assertEqual(completed.returncode, 0,
             f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}",
         )
 
