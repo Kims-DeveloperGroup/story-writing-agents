@@ -170,7 +170,7 @@ runtime authorization rather than embedded by the control.
 
 `/exchanges` uses a different hosted external viewer. After attachment, the
 controller chooses an immutable scope/agent snapshot and opens the installed
-isolated read-only JSONL viewer. Story validates the pinned 0.4.1 API and
+isolated read-only JSONL viewer. Story validates the pinned 0.4.2 API and
 `ViewerSpec.input_protocol="keys"` capability before terminal acquisition;
 the older 0.1.1 and 0.2.0 APIs are incompatible. The viewer owns key bindings,
 ordinary-line grammar, a single full-text search draft, goto drafts, editing,
