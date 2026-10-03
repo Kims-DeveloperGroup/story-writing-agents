@@ -2003,6 +2003,8 @@ print(f"SHELL_VALUE={input('shell> ')}")
         self,
     ) -> None:
         """Cover retained conversation management and main-input cleanup."""
+        for edit_query in (False, True):
+            self._exercise_external_library_pty(edit_query=edit_query)
 
         process = self._spawn_cli(())
         process.wait_for_text("story[lobby]> ")
@@ -2067,9 +2069,7 @@ print(f"SHELL_VALUE={input('shell> ')}")
         ).read("alpha", successor.conversation_id)
         self.assertEqual(events, ())
         self.assertFalse(self.provider_log.exists())
-        self.assertFalse(
-            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.access.json").exists()
-        )
+        self.assertFalse(self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.access.json").exists())
 
 
 
