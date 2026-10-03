@@ -83,8 +83,11 @@ def preparation(turn, *, text=DRAFT, mutate=None):
               {"action": "continue", "objective_id": request.objective_id,
                "next_step": "prepare", "draft_source_event_ids": selected})
     producer = artifact._artifact_outcome(
-        operations=lambda call, material: [{"kind": "replace",
-            "evidence_id": artifact._status_id(call, OUTLINE), "new_text": text}],
+        operations=lambda call, material: [
+            {"kind": "replace", "evidence_id": artifact._status_id(call, path), "new_text": text}
+            if path.startswith("core_documents/") else
+            {"kind": "create", "suggested_path": path, "new_text": text}
+            for path in request.target_paths],
         evidence_status="empty",
         evidence_ids=lambda call, material: [artifact._status_id(call, OUTLINE)],
         objective_intent=intent,

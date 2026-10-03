@@ -1214,7 +1214,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual(diagnose_json_text(json.dumps({"response_type": "specialist_assignment_result", "assignment_status": "draft_completed", "response_text": "Synthetic draft."}), draft_contract.schema), ())
         facts = LeadProviderConstraints(input_ids=("user_input", "outline"),
             reviewer_inputs=((PLOT_ARCHITECT, "outline"),), task_revisions=(("task", 1),),
-            source_ids=("current_response",), objective_ids=("objective",))
+            source_ids=("current_response", "historical_synthesis"), objective_ids=("objective",))
         contract = orchestrator_module._lead_front_result_contract(
             orchestrator_module.LeadProposalRelation.NEW_STEP, facts.input_ids, constraints=facts).schema_value()
         value = {"kind": "proposal", "message": "Review.", "authoring_scope": {
@@ -1223,6 +1223,37 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 "instruction": "Review sources.", "input_ids": ["user_input", "outline"]}]}}
         self.assertEqual(diagnose_json_text(json.dumps(wire_result(value, "lead-response-v6")), contract), ())
         self.assertEqual(facts.diagnose(json.dumps(value)), ())
+        from story_writing_agents.provider_wire import project_runtime_object
+        from story_writing_agents.writing_artifacts.catalog import canonical_artifact_kind
+        native = project_runtime_object(facts.prompt_facts(), "provider_constraints")
+        self.assertEqual(native["available_assignment_input_source_ids"], ["user_input", "outline"])
+        self.assertEqual(native["available_proposal_drafting_source_ids"], ["current_response", "historical_synthesis"])
+        self.assertNotIn("available_source_ids", native)
+        self.assertNotEqual(native["source_membership"], native["recommendation_source_membership"])
+        self.assertIn("manuscript/PART/PATH.md", native["artifact_path_rule"])
+        self.assertIsNone(canonical_artifact_kind("essays/approved-draft.md"))
+        bad = copy.deepcopy(value)
+        bad["proposal"]["assignments"][0]["input_ids"].append("historical_synthesis")
+        self.assertEqual(facts.diagnose(json.dumps(bad)), (Rule.INPUT_NOT_OFFERED,))
+        read_facts = replace(facts, allow_read_sources=True, input_ids=("user_input",), reviewer_inputs=())
+        legacy = {"kind": "proposal", "message": "Prepare the approved draft.", "authoring_scope": {
+            "activity": "draft", "domains": ["plot_structure", "character_world", "tone_execution"],
+            "target_paths": [], "task": "task@1"}, "proposal": {"assignments": [
+                {"agent_id": agent, "mode": "draft", "instruction": "Use the approved draft.",
+                 "input_ids": ["user_input", "historical_synthesis"]}
+                for agent in (PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST)]}}
+        read_contract = orchestrator_module._lead_front_result_contract(
+            orchestrator_module.LeadProposalRelation.NEW_STEP, read_facts.input_ids, constraints=read_facts).schema_value()
+        self.assertEqual(diagnose_json_text(json.dumps(wire_result(legacy, "lead-response-v6")), read_contract), ())
+        self.assertEqual(read_facts.diagnose(json.dumps(legacy)), (Rule.INPUT_NOT_OFFERED,))
+        recommendation_value = {"kind": "recommendation", "message": "Prepare approved material.",
+            "recommended_action": {"kind": "prepare_artifact", "instruction": "Use the approved draft.",
+                "source_ids": ["historical_synthesis"], "target_paths": ["manuscript/part-01/approved.md"]}}
+        self.assertEqual(facts.diagnose(json.dumps(recommendation_value)), ())
+        recommendation_value["recommended_action"]["source_ids"] = ["foreign_synthesis"]
+        self.assertEqual(facts.diagnose(json.dumps(recommendation_value)), (Rule.SOURCE_NOT_OFFERED,))
+        self.assertIn("assignment", facts.assignment_schema()["anyOf"][0]["properties"]["input_ids"]["description"])
+        self.assertIn("recommendation", facts.recommendation_schema()["anyOf"][0]["properties"]["source_ids"]["description"].lower())
         for field, replacement, rule in (
             ("input_ids", ["user_input"], Rule.INPUT_COVERAGE),
             ("input_ids", ["user_input", "outline", "outline"], Rule.INPUT_DUPLICATE),

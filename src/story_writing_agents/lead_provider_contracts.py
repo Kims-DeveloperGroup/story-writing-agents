@@ -126,6 +126,7 @@ class LeadProviderConstraints:
 
     def prompt_facts(self) -> dict[str, object]:
         return {
+            "offered_assignment_input_ids": list(self.input_ids),
             "required_input_ids": [item for item in self.input_ids
                                    if not self.preparation_kind or item not in PREPARATION_INPUT_IDS],
             "mandatory_reviewer_inputs": [
@@ -148,11 +149,34 @@ class LeadProviderConstraints:
             "specialist_order": list(SPECIALIST_IDS),
             "domain_order": [item.value for item in ArtifactReviewDomain],
             "source_membership": (
-                "Use only the offered source aliases or evidence IDs from completed authorized READs. "
-                "Consultation and continuation assignments must cover every disclosed input; each core-document reviewer must "
+                "Assignment input_ids select only the offered assignment inputs"
+                + (" or evidence IDs from completed authorized READs. " if self.allow_read_sources else ". ")
+                + "Historical draft IDs offered for preparation recommendations are not assignment inputs until "
+                "selected and materialized by confirmed preparation. "
+                "Consultation and continuation assignments must cover every required input; each core-document reviewer must "
                 "receive its own source. Do not invent or omit source aliases."
             ),
             "offered_source_ids": None if self.source_ids is None else list(self.source_ids),
+            "recommendation_source_membership": (
+                "Recommendation source_ids select only the offered preparation recommendation sources"
+                + (" or evidence IDs from completed authorized READs. " if self.allow_read_sources else ". ")
+                + "These sources are not extra assignment inputs. To prepare a document from an approved historical draft, "
+                "select its exact offered draft ID and preserve its authoring task and specialist provenance. "
+                "Use artifact preparation without another drafting consultation when that task already has complete "
+                "required specialist drafts; otherwise use consultation preparation. Confirmation materializes the "
+                "selected sources without authorizing Apply or Commit."
+            ),
+            "artifact_path_rule": (
+                "Use normalized workspace-relative POSIX artifact paths. Existing core-document targets are only "
+                "core_documents/global_outline.md, core_documents/part_outlines.md, "
+                "core_documents/character_sheets.md and core_documents/narrative_rules.md. "
+                "New documents use unused manuscript/PART/PATH.md paths. PART is 1-64 ASCII letters, digits, "
+                "underscores or hyphens, starting with a letter or digit. Every remaining path component is "
+                "1-128 ASCII letters, digits, underscores, hyphens or dots, starting with a letter or digit; "
+                "the final component ends in .md. The whole path is at most 1024 UTF-8 bytes. "
+                "Keep the requested title and language in the document content and disclose the proposed destination. "
+                "An existing empty document needs replacement, not creation."
+            ),
             "offered_objective_ids": None if self.objective_ids is None else list(self.objective_ids),
             "runtime_input_ids": list(PREPARATION_INPUT_IDS) if self.preparation_kind else [],
             "runtime_input_rule": "Runtime appends only its recommendation request/decision aliases after exact confirmation.",
@@ -185,13 +209,20 @@ class LeadProviderConstraints:
         required = () if self.scope is None else required_authoring_specialists(self.scope)
         mode = "review" if self.scope and self.scope.activity is AuthoringActivity.REVIEW else "draft"
         agents = self.preparation_specialists or tuple(SPECIALIST_IDS)
+        input_rule = (
+            "Assignment sources use only offered assignment inputs"
+            + (" or evidence IDs from completed authorized READs. " if self.allow_read_sources else ". ")
+            + "Preparation recommendation sources are not assignment inputs unless confirmed preparation has "
+            "materialized and offered them here. Preserve all required inputs and each reviewer's own source."
+        )
         return alternatives([closed_object({
             "agent_id": {"type": "string", "enum": [agent]},
             "instruction": nonempty_text_schema(),
-            "input_ids": string_array(
-                None if self.allow_read_sources else self.input_ids,
-                minimum=1, maximum=None if self.allow_read_sources else len(self.input_ids) or None,
-            ),
+            "input_ids": {
+                **string_array(None if self.allow_read_sources else self.input_ids, minimum=1,
+                               maximum=None if self.allow_read_sources else len(self.input_ids) or None),
+                "description": input_rule,
+            },
             "mode": {"type": "string", "enum": [mode] if agent in required else ["draft", "review"]},
         }) for agent in agents])
 
@@ -220,8 +251,14 @@ class LeadProviderConstraints:
 
     def recommendation_schema(self) -> dict[str, object]:
         sources = None if self.allow_read_sources else self.source_ids
-        common = {"instruction": nonempty_text_schema(),
-                  "source_ids": string_array(sources, minimum=1, maximum=len(sources) if sources else None)}
+        source_schema = string_array(sources, minimum=1, maximum=len(sources) if sources else None)
+        source_schema["description"] = (
+            "Recommendation source_ids select only offered preparation recommendation sources"
+            + (" or evidence IDs from completed authorized READs. " if self.allow_read_sources else ". ")
+            + "Select the exact approved historical draft to prepare its document; preserve its task and provenance. "
+            "This selection does not make it an ordinary assignment input or authorize a write."
+        )
+        common = {"instruction": nonempty_text_schema(), "source_ids": source_schema}
         objectives: list[dict[str, object]] = [{}]
         if self.objective_ids is None or self.objective_ids:
             identity: dict[str, object] = {"type": "string"}
