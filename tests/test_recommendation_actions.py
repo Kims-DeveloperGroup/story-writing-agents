@@ -120,7 +120,7 @@ class RecommendationActionContractTests(RecommendationCase):
             self.assertIsNone(result.recommendation_request)
             self.assertFalse(self.payload_events(cid, c.LeadRecommendationRequestPayload))
             if bad_route:
-                issue = ("$.action.result.recommended_action.specialist_ids: select unique offered specialist IDs "
+                issue = ("$.agent_action.task_result.proposal_drafting_request.specialist_ids: select unique offered specialist IDs "
                          "and include every required authoring domain")
                 self.assertEqual(tuple(detail.partition("\n")[2] for detail in result.validation_details),
                                  (issue, issue))
@@ -130,22 +130,22 @@ class RecommendationActionContractTests(RecommendationCase):
         def checked(offer):
             producer = preparation(offer)
             def response(call, provider):
-                raw = producer(call, provider)
+                raw = lead.wire_response(producer(call, provider), lead.wire_contract_id(call.payload))
                 self.assertEqual(lead.diagnose_json_text(raw, call.schema), ())
                 for change in ("absent", "step", "identity", "scope"):
                     bad = json.loads(raw)
-                    body = bad["action"]["result"]
-                    intent = body["artifact_intent"]["objective_intent"]
+                    body = bad["agent_action"]["task_result"]
+                    intent = body["artifact_change_proposal"]["document_change_request_update"]
                     if change == "absent":
-                        del body["artifact_intent"]["objective_intent"]
+                        del body["artifact_change_proposal"]["document_change_request_update"]
                     elif change == "step":
-                        intent["next_step"] = "consult"
+                        intent["requested_workflow_step"] = "consult_specialists"
                     elif change == "scope":
-                        body["authoring_scope"]["task"] = "foreign_task@1"
-                    elif intent["action"] == "start":
-                        intent["target_paths"] = ["core_documents/character_sheets.md"]
+                        body["writing_task_scope"]["task_reference"] = {"task_id": "foreign_task", "task_revision": 1}
+                    elif intent["update_type"] == "start_document_change_request":
+                        intent["target_artifact_paths"] = ["core_documents/character_sheets.md"]
                     else:
-                        intent["objective_id"] = "foreign_objective"
+                        intent["document_change_request_id"] = "foreign_objective"
                     self.assertTrue(lead.diagnose_json_text(json.dumps(bad), call.schema), change)
                 return raw
             return response

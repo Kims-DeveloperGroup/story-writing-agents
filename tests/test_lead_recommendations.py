@@ -59,7 +59,7 @@ class LeadRecommendationTests(RecommendationCase):
             self.assertEqual(started.payload.decision_event_id, decision_event.event_id)
             self.assertEqual(started.payload.request_event_id, request.request_event_id)
             material = lead._workflow_material(call.payload)["structured_recommendation_execution"]
-            self.assertEqual(call.payload["context_encoding"]["format"], "shared-objects-v1")
+            self.assertEqual(call.payload["context_reuse"]["format"], "shared-objects-v1")
             self.assertLess(len(json.dumps(dict(call.payload), ensure_ascii=False)),
                             len(json.dumps(lead._expanded_context_payload(call.payload), ensure_ascii=False)))
             self.assertEqual(material["request"]["action_digest"], request.action_digest)
@@ -118,8 +118,8 @@ class LeadRecommendationTests(RecommendationCase):
                     "authoring_scope": lead._compact_scope(c.authoring_scope_to_dict(request.authoring_scope)),
                     "proposal": {"assignments": [{"agent_id": agent, "mode": mode,
                         "instruction": request.instruction, "input_ids": selected} for agent in request.specialist_ids]}}
-                encoded = json.dumps({"action": {"kind": "answer", "result": body}})
-                raw_observations.append((json.loads(encoded)["action"]["result"]["proposal"]["assignments"][0]["input_ids"],
+                encoded = lead.wire_answer(body, lead.wire_contract_id(call.payload))
+                raw_observations.append((json.loads(encoded)["agent_action"]["task_result"]["specialist_consultation_proposal"]["assignments"][0]["input_source_ids"],
                                          lead.diagnose_json_text(encoded, call.schema)))
                 return encoded
             self.backend.enqueue(raw)

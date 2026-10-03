@@ -122,6 +122,10 @@ from .ledger import (
     context_checkpoint_proposal_digest,
 )
 from .request_compaction import compact_context_payload
+from ..provider_wire import (
+    BUILTIN_RESULT_CONTRACT_IDS, WIRE_VERSION, WireShapeError, add_contract_guidance, diagnostic_to_wire, normalize_context_action,
+    normalize_result, project_action_schema, project_context_payload, project_candidate,
+)
 from .sources import (
     CONTEXT_SOURCE_POLICY,
     ActiveDebateSourceAdapter,
@@ -166,7 +170,7 @@ __all__ = [
     "record_context_provider_failure",
 ]
 
-_CONTEXT_WIRE_VERSION = "agent-context-wire-v9"
+_CONTEXT_WIRE_VERSION = WIRE_VERSION
 _ACTION_WIRE_CODES = {
     "search": "s",
     "read": "r",
@@ -2995,7 +2999,7 @@ def _answer_text_for_contract(
             'expected a JSON object matching the current result contract',
         )
     try:
-        return _canonical_bytes(value).decode("utf-8", errors="strict")
+        return _canonical_bytes(normalize_result(value, contract.contract_id)).decode("utf-8", errors="strict")
     except ContextActionError as failure:
         raise encoding_failure(failure, value, contract.schema_value())
 
@@ -3016,7 +3020,7 @@ def _decode_context_action(
             response_text, object_pairs_hook=_unique_json_object,
             parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
         )
-        raw = _exact_object(value, frozenset({"action"}))
+        raw = _exact_object(normalize_context_action(value), frozenset({"action"}))
         action = raw["action"]
         if type(action) is not dict or type(action.get("kind")) is not str:
             raise validation_failure(ValueError(), "$.kind", "expected one of search, read, answer")
@@ -3140,6 +3144,8 @@ def _decode_context_action(
             validation_call("$.result", _answer_text_for_contract, answer["result"], result_contract),
             completed_handles,
         )
+    except WireShapeError as failure:
+        raise carry_validation(_execution_error(ContextExecutionErrorCode.MALFORMED_ACTION), validation_failure(failure, failure.wire_path, failure.wire_requirement)) from None
     except ContextExecutionError:
         raise
     except (ContextActionError, ContextManifestError, _DuplicateJsonKey, json.JSONDecodeError, TypeError, ValueError) as failure:
@@ -3161,9 +3167,7 @@ def _context_validation_details(
         failure, _ContextExecutionErrorDetail.RESPONSE_CORRELATION_MISMATCH,
     ):
         issues = ("$.action: response correlation must match the current request",)
-    return bounded_chunks(issues or (
-        "$.action: action decoder failed without a property diagnostic",
-    ))
+    return bounded_chunks(tuple(diagnostic_to_wire(item, result_fields=False) for item in (issues or ("$.agent_action: action decoder failed without a property diagnostic",))))
 
 
 def _closed_provider_object_schema(
@@ -3278,6 +3282,7 @@ def _context_action_schema(
             "owns correlation and action-index bookkeeping."
         ),
     )
+    schema = project_action_schema(schema)
     _validate_provider_schema_node(schema)
     return schema
 
@@ -3550,7 +3555,7 @@ def _wire_candidate_value(
             "result": "candidate_text",
             "resolve_record_candidate": "logical_n",
         }
-        if len(_canonical_bytes(pointer)) >= len(_canonical_bytes(candidate)):
+        if len(_canonical_bytes(project_candidate(pointer))) >= len(_canonical_bytes(project_candidate(candidate))):
             return candidate
         return pointer
     prefix, suffix, replacement = _candidate_single_splice(
@@ -3575,7 +3580,7 @@ def _wire_candidate_value(
         "result": "candidate_text",
         "resolve_record_candidate": "logical_n",
     }
-    if len(_canonical_bytes(patch)) >= len(_canonical_bytes(candidate)):
+    if len(_canonical_bytes(project_candidate(patch))) >= len(_canonical_bytes(project_candidate(candidate))):
         return candidate
     return patch
 
@@ -4912,6 +4917,8 @@ class AgentContextService:
                 )
                 known_payload["h"] = history_delivery
                 known_component_paths[("h",)] = ContextComponentKind.CONVERSATION_CONTEXT
+                known_payload, known_component_paths, known_reference_paths = project_context_payload(known_payload, known_component_paths, known_reference_paths)
+                known_payload = add_contract_guidance(known_payload, {})
                 known_payload, _ = compact_context_payload(
                     known_payload, known_component_paths, known_reference_paths,
                 )
@@ -5096,9 +5103,12 @@ class AgentContextService:
                             else ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION
                         )
                     )
+                payload, component_paths, reference_paths = project_context_payload(payload, component_paths, reference_paths)
+                payload = add_contract_guidance(payload, schema)
                 payload, component_paths = compact_context_payload(
                     payload, component_paths, reference_paths,
                 )
+                payload = add_contract_guidance(payload, schema)
                 if (
                     observation is None
                     and history_delivery is not None
@@ -5519,7 +5529,9 @@ class AgentContextService:
                     try:
                         _require_sync_none(answer_validator(action.answer, authorization))
                     except Exception as answer_failure:
-                        issues = failure_issues(answer_failure, path="$.action.result")
+                        issues = failure_issues(answer_failure, path="$.agent_action.task_result")
+                        if phase_contract[1].contract_id in BUILTIN_RESULT_CONTRACT_IDS:
+                            issues = tuple(diagnostic_to_wire(item) for item in issues)
                         if issues:
                             details = bounded_chunks(issues)
                         else:
@@ -5528,6 +5540,8 @@ class AgentContextService:
                             except Exception:
                                 rules = None
                             details = domain_rule_chunks(rules)
+                            if phase_contract[1].contract_id in BUILTIN_RESULT_CONTRACT_IDS:
+                                details = tuple(diagnostic_to_wire(item) for item in details)
                         call_validation_details = details
                         if call_finalizer is not None:
                             try:

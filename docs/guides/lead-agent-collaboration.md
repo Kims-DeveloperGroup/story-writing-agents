@@ -314,184 +314,20 @@ exact delivery, capacity, and recovery limits.
 
 ### Provider-shaped examples
 
-These synthetic excerpts illustrate review of a nonempty part outline against
-a nonempty global outline. The initial workflow excerpt shows identity, input
-aliases, a task offer, and the answer contract. Core statuses, required session
-memory, and the outer compact input envelope are omitted:
+See the [agent JSON field guide](../reference/provider-wire.md) for current payloads,
+schema variants, and examples. Both providers use `agent-provider-wire-v10`.
 
-```json
-{
-  "workflow": "lead_front_channel",
-  "identity": {
-    "agent_id": "lead_orchestrator",
-    "session_id": "novel"
-  },
-  "authoring_tasks": [
-    {
-      "task_id": "task_outline",
-      "task_revision": 1,
-      "current_scope": null
-    }
-  ],
-  "input_aliases": [
-    {
-      "input_id": "user_input",
-      "kind": "user_input"
-    },
-    {
-      "input_id": "reference_1",
-      "kind": "core_document",
-      "locator": "${core_documents/global_outline.md}"
-    }
-  ],
-  "answer_contract": {
-    "outer_action": {"kind": "answer"},
-    "direct_result": "message plus compact authoring_scope; no inner kind",
-    "selected_variant": "add only its required kind and semantic field",
-    "unused_fields": "omit instead of null"
-  }
-}
-```
+Context actions use `agent_action.action_type`: `search_context`, `read_context`,
+or `submit_result`. Results live in `task_result` and every built-in result has
+`response_type`. Lead uses `lead-response-v6`; specialist assignments use
+`specialist-assignment-response-v3`; synthesis uses `consultation-summary-v4` or
+`artifact-review-summary-v4`.
 
-A default direct answer keeps the required outer action kind. Its result has
-only the visible message and compact authoring scope, with no inner `kind`:
-
-```json
-{
-  "action": {
-    "kind": "answer",
-    "result": {
-      "message": "The request is ready for a review proposal.",
-      "authoring_scope": {
-        "activity": "workflow",
-        "target_paths": [],
-        "domains": [],
-        "task": "task_outline@1"
-      }
-    }
-  }
-}
-```
-
-The Lead requests a bounded search, then reads a returned opaque handle:
-
-```json
-{"action":{"kind":"search","queries":[{"text":"part outline pacing","source_kinds":["writing_artifact"]}]}}
-```
-
-```json
-{"action":{"kind":"read","handles":["<runtime-handle>"]}}
-```
-
-Assume READ returns the nonempty part outline as `read_1`. A
-`lead-outcome-v5` ANSWER returns only its semantic result fields. Runtime derives
-the used-handle receipts, evidence status, scope, correlation, versions, and
-interpretation. Substantive critique requires a proposal, so this selected
-variant adds an inner `kind` and `proposal`:
-
-```json
-{
-  "action": {
-    "kind": "answer",
-    "result": {
-      "message": "I propose Plot review of part-outline pacing against the global outline.",
-      "authoring_scope": {
-        "activity": "review",
-        "target_paths": [
-          "core_documents/global_outline.md",
-          "core_documents/part_outlines.md"
-        ],
-        "domains": [
-          "plot_structure"
-        ],
-        "task": "task_outline@1"
-      },
-      "kind": "proposal",
-      "proposal": {
-        "assignments": [
-          {
-            "agent_id": "plot_architect",
-            "instruction": "Review the concrete part outline against the global outline.",
-            "input_ids": [
-              "user_input",
-              "reference_1",
-              "read_1"
-            ],
-            "mode": "review"
-          }
-        ]
-      }
-    }
-  }
-}
-```
-
-After exact confirmation, the Plot specialist returns this `action.result`:
-
-```json
-{
-  "mode": "review",
-  "assessment": "concern",
-  "assignment_id": "as_plot_1",
-  "input_ids": [
-    "user_input",
-    "reference_1",
-    "read_1"
-  ],
-  "message": "The part outline advances the reversal before its required trigger."
-}
-```
-
-The Lead synthesis preserves the exact proposal scope/evidence and attributes
-every reply. Its semantic `action.result` is:
-
-```json
-{
-  "scope": "story_specific",
-  "authoring_scope": {
-    "schema_version": 1,
-    "activity": "review",
-    "target_paths": [
-      "core_documents/global_outline.md",
-      "core_documents/part_outlines.md"
-    ],
-    "domains": [
-      "plot_structure"
-    ],
-    "interpretation": "Review the part outline for pacing against the global outline.",
-    "task_id": "task_outline",
-    "task_revision": 1
-  },
-  "evidence_status": "verified",
-  "evidence_ids": [
-    "reference_1",
-    "read_1"
-  ],
-  "message": "The Plot review identifies a pacing concern to resolve before revision.",
-  "next_intent": null,
-  "reply_event_ids": [
-    "reply_plot_1"
-  ],
-  "unresolved_input_ids": [
-    "user_input",
-    "reference_1",
-    "read_1"
-  ],
-  "recommended_action": null
-}
-```
-
-The runtime rejects invented, stale, duplicated, reordered, or unused IDs.
-It also rejects a SEARCH hit that was never READ when the lead cites its
-content. The complete contracts are in the
-[Lead API guide](lead-agent.md#what-providers-receive).
-
-The front-channel schema requires `objective_intent` and `recommended_action`.
-Fresh recommendations have an action and null objective intent; other kinds
-have a null action. Ordinary synthesis also accepts a nullable action, mutually
-exclusive with `next_intent`. Specialist and artifact-review synthesis schemas
-remain separate. The exact `start`, `continue`,
-and `cancel` objects are in the [runtime API](../reference/runtime-api.md#contextual-authoring-objectives).
+The request names `task_input`, `session_history`, `response_contract`, and
+`contract_guidance`. Guidance explains the fields and allowed values agents actually
+receive. `proposal_drafting_request` asks for a proposal to confirm later;
+`document_change_request` tracks the user's requested document change through Apply.
+Public Python examples elsewhere in this guide retain their API names.
 
 ## Confirming a proposed step
 
@@ -748,7 +584,7 @@ runtime appends its routing policy to the captured prompt; customized workspace
 files are preserved. Routing policy v1 is separate from Lead result v3 and
 specialist/synthesis result v2.
 
-Fresh Lead policies use `lead-outcome-v5`. The runtime overlay also applies
+Fresh Lead policies use `lead-response-v6`. The runtime overlay also applies
 during Lead synthesis while preserving that invocation's separate minimal
 result schema.
 
@@ -766,7 +602,7 @@ You: Check the outline's pacing.
 Lead input: route the Plot domain, with the supplied concrete outline reference.
 Runtime input: common + specialist_collaboration + plot snapshots + runtime
                routing policy, then one isolated review assignment.
-Plot output: {"mode":"review", "assessment":"concern", "assignment_id":"as_plot_1", ...}
+Plot output: agent_action.task_result has response_type=specialist_assignment_result, assignment_status=concerns_found, and response_text.
 Lead output: The timing concern is ...; next action: ...
 Runtime effect: the reply is stored and shown through the lead; no sibling
                 policy or authority is added.

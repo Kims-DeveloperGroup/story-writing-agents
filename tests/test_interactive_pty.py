@@ -235,73 +235,27 @@ def compact_agent_id(arguments):
 
 
 def compact_context_current(value, agent_id):
-    """Extract authoritative current material from the contextual request."""
-
-    query = value.get("q")
-    correlation = value.get("c")
-    if (
-        not isinstance(correlation, str)
-        or len(correlation) != 43
-        or not isinstance(query, list)
-        or len(query) != 5
-        or not isinstance(query[0], str)
-        or "i" not in value
-    ):
+    query = value.get("response_contract")
+    correlation = value.get("request_correlation_token")
+    if not isinstance(query, dict) or not isinstance(correlation, str) or len(correlation) != 43 or "task_input" not in value:
         return None
-    phase = query[0]
-    material = value["i"]
-    if isinstance(material, str):
-        command = material
-    elif isinstance(material, dict):
-        command = material.get("input", material.get("command", ""))
-        if not isinstance(command, str):
-            raise SystemExit(83)
-    else:
+    material = scenario_input(value["task_input"])
+    command = material if isinstance(material, str) else material.get("input", material.get("command", ""))
+    if not isinstance(command, str):
         raise SystemExit(83)
-    return {
-        "workflow": (
-            "conversation_retrieval"
-            if phase == "retrieval"
-            else "conversation"
-            if phase == "conversation"
-            else "debate"
-        ),
-        "command": command,
-        "phase": phase,
-        "identity": {"agent_id": agent_id},
-    }
+    phase = query["workflow_phase"]
+    return {"workflow": "conversation_retrieval" if phase == "retrieval" else "conversation" if phase == "conversation" else "debate",
+            "command": command, "phase": phase, "identity": {"agent_id": agent_id}}
 
 
 def compact_observation_handles(value):
-    """Return the current observation kind and its authorized handle aliases."""
-
-    observation = value.get("o")
-    if not isinstance(observation, list) or not observation:
+    observation = value.get("context_observation")
+    if observation is None:
         return None, ()
-    if (
-        observation[0] == "s"
-        and len(observation) == 4
-        and isinstance(observation[3], list)
-    ):
-        return "search", tuple(
-            item[5]
-            for item in observation[3]
-            if isinstance(item, list)
-            and len(item) == 7
-            and isinstance(item[5], str)
-        )
-    if (
-        observation[0] == "r"
-        and len(observation) == 2
-        and isinstance(observation[1], list)
-    ):
-        return "read", tuple(
-            item[4]
-            for item in observation[1]
-            if isinstance(item, list)
-            and len(item) == 7
-            and isinstance(item[4], str)
-        )
+    if observation.get("observation_type") == "context_search_results":
+        return "search", tuple(item["read_handle"] for item in observation["search_results"])
+    if observation.get("observation_type") == "context_read_results":
+        return "read", tuple(item["read_handle"] for item in observation["read_results"])
     raise SystemExit(84)
 
 
@@ -309,6 +263,8 @@ def nested_mapping_with(value, key):
     """Return the first recursively nested mapping containing ``key``."""
 
     if isinstance(value, dict):
+        if "workflow_type" in value:
+            value = scenario_input(value)
         if key in value:
             return value
         for nested in value.values():
@@ -333,19 +289,19 @@ def lead_scope(value, activity="workflow", domains=()):
 def lead_consultation_answer(value, _agent_id):
     """Return one deterministic proposal, specialist reply, or synthesis."""
 
-    contract_id = value["q"][4][1]
-    if contract_id == "specialist-reply-v2":
+    contract_id = value["response_contract"]["result_contract_id"]
+    if contract_id == "specialist-assignment-response-v3":
         material = nested_mapping_with(value, "assignment")
         assignment = material["assignment"]
         return {
             "assessment": "drafted" if assignment["mode"] == "draft" else "supports",
             "message": "The outline evidence supports the request.",
         }
-    if contract_id == "lead-synthesis-v3":
+    if contract_id == "consultation-summary-v4":
         return {
             "message": "The specialist confirms the proposed direction.",
         }
-    if contract_id == "artifact-review-synthesis-v3":
+    if contract_id == "artifact-review-summary-v4":
         return {
             "decision": "approve",
             "message": "The specialist confirms the proposed direction.",
@@ -374,9 +330,9 @@ def lead_recommendation_answer(value):
     """Echo the finished user candidate, then prepare only after exact Confirm."""
     draft = "1. A courier finds a sealed map.\n2. The map reveals a false harbor.\n3. The courier returns the missing seal.\nB642-PTY-SYNTHETIC\n"
     execution = nested_mapping_with(value, "structured_recommendation_execution")
-    statuses = nested_mapping_with(value, "core_statuses")["core_statuses"]
+    statuses = nested_mapping_with(value, "core_document_statuses")["core_document_statuses"]
     evidence = next(item["evidence_id"] for item in statuses
-                    if item["locator"] == "core_documents/global_outline.md")
+                    if item["artifact_path"] == "core_documents/global_outline.md")
     if execution is None:
         scope = lead_scope(value, "review")
         scope["target_paths"] = ["core_documents/global_outline.md"]
@@ -387,9 +343,9 @@ def lead_recommendation_answer(value):
                 "source_ids": ["current_response"],
                 "target_paths": ["core_documents/global_outline.md"]}}
     request = execution["structured_recommendation_execution"]["request"]
-    statuses = nested_mapping_with(value, "core_statuses")["core_statuses"]
+    statuses = nested_mapping_with(value, "core_document_statuses")["core_document_statuses"]
     evidence = next(item["evidence_id"] for item in statuses
-                    if item["locator"] == "core_documents/global_outline.md")
+                    if item["artifact_path"] == "core_documents/global_outline.md")
     requested_scope = request["authoring_scope"]
     scope = {
         "activity": requested_scope["activity"],
@@ -408,8 +364,8 @@ def lead_recommendation_answer(value):
 def compact_answer(value, used_handles=(), *, after_retrieval=False):
     """Encode one strict natural-result ANSWER for the live phase contract."""
 
-    phase = value["q"][0]
-    contract_id = value["q"][4][1]
+    phase = value["response_contract"]["workflow_phase"]
+    contract_id = value["response_contract"]["result_contract_id"]
     current = compact_context_current(value, compact_agent_id(argv))
     command = current["command"] if current is not None else ""
     content = (
@@ -419,13 +375,13 @@ def compact_answer(value, used_handles=(), *, after_retrieval=False):
         if command == "show visible controls"
         else "deterministic advisory reply"
     )
-    if contract_id == "lead-outcome-v5":
+    if contract_id == "lead-response-v6":
         result = {"message": content, "authoring_scope": lead_scope(value)}
-    elif contract_id == "specialist-reply-v2":
+    elif contract_id == "specialist-assignment-response-v3":
         result = lead_consultation_answer(value, compact_agent_id(argv))
-    elif contract_id == "lead-synthesis-v3":
+    elif contract_id == "consultation-summary-v4":
         result = {"message": content}
-    elif contract_id == "artifact-review-synthesis-v3":
+    elif contract_id == "artifact-review-summary-v4":
         result = {"decision": "approve", "message": content}
     else:
         raise SystemExit(87)
@@ -439,7 +395,7 @@ def compact_answer(value, used_handles=(), *, after_retrieval=False):
 
 agent_id = compact_agent_id(argv)
 current = compact_context_current(payload, agent_id)
-query = payload.get("q")
+query = payload.get("response_contract")
 observation_kind, observation_handles = compact_observation_handles(payload)
 context_action_index = (
     1
@@ -458,10 +414,10 @@ append_record(
         "argv": argv,
         "operation": (
             "agent_context_v7"
-            if isinstance(query, list)
+            if isinstance(query, dict)
             else payload.get("operation")
         ),
-        "phase": query[0] if isinstance(query, list) and query else payload.get("phase"),
+        "phase": query["workflow_phase"] if isinstance(query, dict) and query else payload.get("phase"),
         "context_current": current,
         "context_action_index": context_action_index,
         "payload": payload,
@@ -531,7 +487,7 @@ elif control.get("mode") == "correlation_mismatch":
         ),
         encoding="utf-8",
     )
-elif isinstance(query, list):
+elif isinstance(query, dict):
     if control.get("mode") in {
         "lead_consultation",
         "lead_recommendation",
@@ -571,16 +527,16 @@ elif isinstance(query, list):
         }
     elif (
         len(query) != 5
-        or not isinstance(payload.get("c"), str)
-        or len(payload["c"]) != 43
-        or not isinstance(query[1], str)
+        or not isinstance(payload.get("request_correlation_token"), str)
+        or len(payload["request_correlation_token"]) != 43
+        or not isinstance(query["allowed_action_types"], list)
     ):
         raise SystemExit(85)
     elif (
         current is not None
         and current["workflow"] == "conversation_retrieval"
         and current["command"].startswith("retrieve ")
-        and "s" in query[1]
+        and "search_context" in query["allowed_action_types"]
     ):
         response = {
             "action": {
@@ -596,20 +552,20 @@ elif isinstance(query, list):
     elif (
         observation_kind == "search"
         and observation_handles
-        and "r" in query[1]
+        and "read_context" in query["allowed_action_types"]
     ):
         response = {
             "action": {"kind": "read", "handles": list(observation_handles)},
         }
     else:
-        if "a" not in query[1]:
+        if "submit_result" not in query["allowed_action_types"]:
             raise SystemExit(86)
         response = compact_answer(
             payload,
             observation_handles if observation_kind == "read" else (),
             after_retrieval=observation_kind in {"search", "read"},
         )
-    output_path.write_text(json.dumps(response), encoding="utf-8")
+    output_path.write_text(wire_response(json.dumps(response), payload["response_contract"]["result_contract_id"]), encoding="utf-8")
 elif payload.get("operation") == "conversation_retrieval":
     action_index = payload["retrieval"]["action_index"]
     correlation = {
@@ -687,8 +643,8 @@ if "resume" not in argv:
     thread_agent = payload.get("agent_id", scope.get("agent_id", agent_id))
     thread_subject = scope.get("subject_id", "direct")
     thread_id = (
-        "thread-" + agent_id + "-" + payload["c"][:16]
-        if isinstance(query, list) and isinstance(payload.get("c"), str)
+        "thread-" + agent_id + "-" + payload["request_correlation_token"][:16]
+        if isinstance(query, dict) and isinstance(payload.get("request_correlation_token"), str)
         else (
             "thread-"
             + thread_session
@@ -892,8 +848,7 @@ if "--print" in argv:
         answer = lead_consultation_answer(payload, agent)
     print(json.dumps({"conversation_id": option("--conversation") or ("auth-thread-" + agent),
         "status": "SUCCESS", "json_schema": json.loads(option("--json-schema")),
-        "structured_output": {
-            "action": {"kind": "answer", "result": answer}}}), flush=True)
+        "structured_output": json.loads(wire_response(json.dumps({"action": {"kind": "answer", "result": answer}}), payload["response_contract"]["result_contract_id"]))}), flush=True)
     raise SystemExit(0)
 ''' + _FAKE_AGY
 
@@ -992,6 +947,11 @@ def _durable_tree_without_access(root: Path) -> dict[str, bytes]:
         and not path.name.endswith(".access.json")
         and "debug_logs" not in path.relative_to(root).parts
     }
+
+
+_WIRE_FIXTURE_SOURCE = Path(__file__).with_name("provider_wire_fixture.py").read_text().replace("from __future__ import annotations\n", "") + "\nwire_response = response\n"
+_FAKE_CODEX = _FAKE_CODEX.replace("import fcntl\n", "import fcntl\n" + _WIRE_FIXTURE_SOURCE, 1)
+_FAKE_AGY = _FAKE_AGY.replace("import json\n", "import json\n" + _WIRE_FIXTURE_SOURCE, 1)
 
 
 class PtyCliProcess:

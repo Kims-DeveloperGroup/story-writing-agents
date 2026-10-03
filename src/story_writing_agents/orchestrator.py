@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .provider_wire import project_result_schema
+
 import asyncio
 import hashlib
 import inspect
@@ -408,13 +410,13 @@ _LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES = frozenset(
     }
 )
 _LEAD_RESPONSE_CORRECTION_INSTRUCTION = (
-    "Return ANSWER now without SEARCH or READ. Encode exactly one complete "
-    "lead_front_channel lead-outcome-v5 object in action.result with only the fields "
-    "required by its selected semantic variant. Every direct answer needs message and "
-    "authoring_scope; include kind for a question or critique. Include proposal, "
-    "artifact_intent, objective_intent, or "
-    "recommended_action only when that variant requires it. Preserve a selected objective PREPARE as an exact "
-    "artifact proposal; do not downgrade it into advice or claim completion."
+    "Return submit_result now without search_context or read_context. Encode one complete "
+    "lead-response-v6 object in agent_action.task_result using only the selected variant's fields. "
+    "Every Lead result includes response_type, response_text, and writing_task_scope. Include "
+    "specialist_consultation_proposal, artifact_change_proposal, document_change_request_update, "
+    "or proposal_drafting_request only when its variant requires it. Preserve the selected "
+    "draft_document_change_proposal step as its exact artifact proposal; do not downgrade it "
+    "to advice or claim that the document change request is completed."
 )
 _SAFE_STRUCTURED_FALLBACK_MESSAGE = (
     "I couldn't validate the provider's structured reply after one repair attempt, "
@@ -561,6 +563,10 @@ def _objective_intent_result_schema() -> dict[str, object]:
         LeadProviderConstraints().objective_schema("clarify", cancel=True)]}
 
 
+def _provider_result_contract(contract_id: str, schema: dict[str, object]) -> ContextJsonObjectResultContract:
+    return ContextJsonObjectResultContract(contract_id, project_result_schema(schema, contract_id))
+
+
 def _lead_front_result_contract(
     expected_relation: LeadProposalRelation,
     input_ids: tuple[str, ...],
@@ -606,7 +612,7 @@ def _lead_front_result_contract(
                               ("artifact_intent", _artifact_intent_result_schema(facts))):
             variants.append(_closed_result_object({**scoped,
                 "kind": {"enum": ["proposal"], "type": "string"}, field: intent}))
-    return ContextJsonObjectResultContract("lead-outcome-v5", alternatives(variants))
+    return _provider_result_contract("lead-response-v6", alternatives(variants))
 
 
 def _specialist_result_contract(
@@ -614,8 +620,8 @@ def _specialist_result_contract(
 ) -> ContextJsonObjectResultContract:
     if assignment.mode is None:
         raise BackendProtocolError("live specialist contract requires an explicit mode")
-    return ContextJsonObjectResultContract(
-        "specialist-reply-v2",
+    return _provider_result_contract(
+        "specialist-assignment-response-v3",
         _closed_result_object(
             {
                 "assessment": {
@@ -647,7 +653,7 @@ def _lead_synthesis_result_contract(
         input_ids=(*input_ids, *reply_event_ids), scope=authoring_scope, continuation=True,
     )
     message = {"message": nonempty_text_schema()}
-    contract_id = "lead-synthesis-v3"
+    contract_id = "consultation-summary-v4"
     if not artifact_review:
         variants = [_closed_result_object(message)]
         if allow_next_intent:
@@ -667,9 +673,9 @@ def _lead_synthesis_result_contract(
             **message,
             "recommended_action": facts.recommendation_schema(),
         }))
-        return ContextJsonObjectResultContract(contract_id, {"anyOf": variants})
-    contract_id = "artifact-review-synthesis-v3"
-    return ContextJsonObjectResultContract(
+        return _provider_result_contract(contract_id, {"anyOf": variants})
+    contract_id = "artifact-review-summary-v4"
+    return _provider_result_contract(
         contract_id,
         _closed_result_object({
             "decision": {
@@ -5987,7 +5993,9 @@ class StoryRuntime:
                         "response_correction": {
                             "instruction": (
                                 "The prior structured response was rejected. Return "
-                                "ANSWER with exactly the required semantic fields."
+                                "agent_action with action_type submit_result and "
+                                        "one complete task_result matching the current "
+                                        "response schema and validation diagnostics."
                             ),
                             "rejection_code": facts.response_rejection_code.value,
                         },

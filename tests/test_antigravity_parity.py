@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import json
 import os
@@ -75,6 +76,7 @@ from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
 
+from tests.provider_wire_fixture import direct_response, direct_reply
 from tests.helpers import (
     SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE,
     pristine_initialized_workspace,
@@ -147,6 +149,7 @@ def emit(value):
 
 """
     + SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE
+    + inspect.getsource(direct_response)
     + r"""
 def matches_schema(value, specification):
     if isinstance(specification, bool):
@@ -226,26 +229,26 @@ if (
     raise SystemExit(87)
 
 def compact_context_current(value):
-    query = value.get("q")
-    correlation = value.get("c")
+    query = value.get("response_contract")
+    correlation = value.get("request_correlation_token")
     if (
         not isinstance(correlation, str)
-        or not isinstance(query, list)
+        or not isinstance(query, dict)
         or not query
-        or not isinstance(query[0], str)
-        or "i" not in value
+        or not isinstance(query["workflow_phase"], str)
+        or "task_input" not in value
     ):
         return None
-    current = value["i"]
+    current = value["task_input"]
     if isinstance(current, dict):
         return dict(current)
     if isinstance(current, str):
         return {
             "workflow": (
                 "conversation_retrieval"
-                if query[0] == "retrieval"
+                if query["workflow_phase"] == "retrieval"
                 else "conversation"
-                if query[0] == "conversation"
+                if query["workflow_phase"] == "conversation"
                 else "debate"
             ),
             "command": current,
@@ -253,10 +256,10 @@ def compact_context_current(value):
     return None
 
 def compact_contextual_answer(value):
-    phase = value["q"][0]
-    if phase == "audit":
+    phase = value["response_contract"]["workflow_phase"]
+    if phase == "review_candidate":
         result = "a"
-    elif phase == "finalize":
+    elif phase == "confirm_reviewed_proposal":
         result = [["global_outline.md", "bounded outline update"]]
     elif phase == "retrieval":
         result = ["retrieval answer", []]
@@ -265,9 +268,9 @@ def compact_contextual_answer(value):
     else:
         result = "reply-" + phase
     return {
-        "action": {
-            "kind": "answer",
-            "result": result if isinstance(result, dict) else {"value": result},
+        "agent_action": {
+            "action_type": "submit_result",
+            "task_result": result if isinstance(result, dict) else {"value": result},
         },
     }
 
@@ -344,12 +347,12 @@ record = {
     "phase": (
         current.get("phase")
         if current is not None and current.get("phase") is not None
-        else payload["q"][0]
-        if isinstance(payload.get("q"), list) and payload["q"]
-        else payload.get("phase")
+        else payload["response_contract"]["workflow_phase"]
+        if isinstance(payload.get("response_contract"), dict) and payload["response_contract"]
+        else payload.get("consensus_phase")
     ),
     "revision_id": (
-        current.get("revision") if current is not None else payload.get("revision_id")
+        current.get("revision") if current is not None else payload.get("candidate_revision_id")
     ),
     "conversation_id": (
         identity.get("conversation_id") or payload.get("conversation_id")
@@ -358,7 +361,7 @@ record = {
     "retrieval_action_index": (
         1
         if compact_context_current(payload) is not None
-        else payload.get("retrieval", {}).get("action_index")
+        else payload.get("conversation_retrieval_control", {}).get("retrieval_action_number")
     ),
     "resumed_id": resumed_id,
     "resume_known": resume_known,
@@ -375,7 +378,7 @@ if not schema_uses_supported_array_items(schema):
 fail_action = os.environ.get("STORY_FAKE_AGY_FAIL_ACTION")
 if (
     fail_action is not None
-    and payload.get("retrieval", {}).get("action_index") != int(fail_action)
+    and payload.get("conversation_retrieval_control", {}).get("retrieval_action_number") != int(fail_action)
 ):
     mode = "ok"
 
@@ -397,8 +400,8 @@ elif payload.get("operation") == "writing_artifact_reference_read":
         "kind": "read_writing_artifacts",
         "references": payload["references"],
     }}
-elif "operation" in payload and payload["operation"] == "conversation_retrieval":
-    action_index = payload["retrieval"]["action_index"]
+elif payload.get("request_type") == "answer_with_conversation_history":
+    action_index = payload["conversation_retrieval_control"]["retrieval_action_number"]
     if action_index == 1:
         output = {"action": {
             "kind": "search_conversations",
@@ -412,27 +415,28 @@ elif "operation" in payload and payload["operation"] == "conversation_retrieval"
         }}
 elif "conversation_id" in payload:
     output = {"message": "conversation answer"}
-elif payload["phase"] == "audit":
+elif payload["consensus_phase"] == "review_candidate":
     output = {
         "verdict": "approve",
         "message": "",
     }
-elif payload["phase"] == "finalize":
+elif payload["consensus_phase"] == "confirm_reviewed_proposal":
     output = {
         "reviewed_proposal_id": "reviewed-proposal",
         "reviewed_proposal_digest": "sha256:" + "a" * 64,
     }
-elif payload["phase"] == "synthesize":
+elif payload["consensus_phase"] == "synthesize_reviews":
     output = {
         "next": "finalization",
-        "message": "reply-" + payload["phase"],
+        "message": "reply-" + {"draft_candidate": "draft", "review_candidate": "audit", "synthesize_reviews": "synthesize", "revise_candidate": "propose_revision", "confirm_reviewed_proposal": "finalize"}[payload["consensus_phase"]],
     }
 else:
-    output = {"message": "reply-" + payload["phase"]}
+    output = {"message": "reply-" + {"draft_candidate": "draft", "review_candidate": "audit", "synthesize_reviews": "synthesize", "revise_candidate": "propose_revision", "confirm_reviewed_proposal": "finalize"}[payload["consensus_phase"]]}
 
 if mode == "empty_required_string":
     output["message"] = ""
 
+output = json.loads(direct_response(json.dumps(output), payload))
 if mode != "empty_required_string" and not matches_schema(output, schema):
     raise SystemExit(83)
 
@@ -1454,22 +1458,23 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         substantive = calls[0]
 
         expected_payload = AgentBackend._request_payload(request)
-        expected_payload["untrusted_writing_artifact_context"] = [
+        expected_payload["untrusted_attached_references"] = [
             {
-                "reference": {
-                    "path": "manuscript/part-01/antigravity-reference.md",
+                "artifact_reference": {
+                    "artifact_path": "manuscript/part-01/antigravity-reference.md",
                     "line_range": None,
                 },
-                "content": "ANTIGRAVITY-WHOLE-MARKER\n",
+                "content_text": "ANTIGRAVITY-WHOLE-MARKER\n",
             },
             {
-                "reference": {
-                    "path": "manuscript/part-01/antigravity-range.md",
-                    "line_range": {"start": 2, "end": 2},
+                "artifact_reference": {
+                    "artifact_path": "manuscript/part-01/antigravity-range.md",
+                    "line_range": {"start_line": 2, "end_line": 2},
                 },
-                "content": "ANTIGRAVITY-RANGE-MARKER\n",
+                "content_text": "ANTIGRAVITY-RANGE-MARKER\n",
             },
         ]
+        self.assertTrue(substantive["payload"].pop("contract_guidance")["input_fields"]["$.untrusted_attached_references"])
         self.assertEqual(substantive["payload"], expected_payload)
         manifest = self.manifest(session_id)
         thread = self.antigravity_thread(manifest)
@@ -1618,7 +1623,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 (
                     session_id,
                     PLOT_ARCHITECT,
-                    phase.value,
+                    {Phase.DRAFT: "draft_candidate", Phase.AUDIT: "review_candidate", Phase.SYNTHESIZE: "synthesize_reviews", Phase.PROPOSE_REVISION: "revise_candidate", Phase.FINALIZE: "confirm_reviewed_proposal"}[phase],
                     f"r-{phase.value}",
                 )
                 for phase in Phase
@@ -1956,7 +1961,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 await release.wait()
             return ProviderResult(
                 thread_id="agy-mixed-thread",
-                response_text=json.dumps({"message": "antigravity mixed reply"}),
+                response_text=direct_response(json.dumps({"message": "antigravity mixed reply"}), json.loads(invocation.payload_json)),
             )
 
         codex_keys: list[str] = []
@@ -1965,12 +1970,12 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             codex_keys.append(
                 "codex:character_custodian:"
                 + invocation.execution_workspace.continuation_digest(
-                    "legacy-definition-policy", codex_definition.fingerprint
+                    "legacy-definition-policy", hashlib.sha256(("agent-provider-wire-v10\0" + codex_definition.fingerprint).encode()).hexdigest()
                 ).removeprefix("sha256:")
             )
             return ProviderResult(
                 thread_id="codex-mixed-thread",
-                response_text='{"message":"codex mixed reply"}',
+                response_text=direct_response('{"message":"codex mixed reply"}', json.loads(invocation.payload_json)),
             )
 
         codex_invoke = mock.AsyncMock(side_effect=fake_codex)
@@ -2084,7 +2089,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             side_effect=(
                 ProviderResult(
                     thread_id="agy-capture-seeded-thread",
-                    response_text='{"message":"seeded response"}',
+                    response_text=direct_reply({"message": "seeded response"}, "draft"),
                 ),
                 ProviderResult(
                     thread_id="agy-capture-rejected-thread",
@@ -2096,7 +2101,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 ),
                 ProviderResult(
                     thread_id="agy-capture-recovered-thread",
-                    response_text='{"message":"recovered response"}',
+                    response_text=direct_reply({"message": "recovered response"}, "draft"),
                 ),
             )
         )
@@ -2402,7 +2407,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("after one repair attempt", reply.content)
         self.assertEqual(len(reply.validation_details), 2)
         self.assertEqual(
-            tuple("$.message: expected at least 1 characters, got 0" in chunk
+            tuple("$.response_text: expected at least 1 characters, got 0" in chunk
                   for chunk in reply.validation_details),
             (True, True),
         )
@@ -2414,7 +2419,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         for call in failure_calls:
             self.assertEqual(
                 call["schema"]["required"],
-                ["message"],
+                ["response_type", "response_text"],
             )
             self.assertNotIn("session_id", call["schema"]["properties"])
             self.assertNotIn("conversation_id", call["schema"]["properties"])

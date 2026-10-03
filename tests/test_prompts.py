@@ -95,63 +95,22 @@ class PromptAssemblerTests(unittest.TestCase):
         self.assertIn("Do not reveal", request.task)
         self.assertIsNone(request.conversation_context)
 
-    def test_lead_prompt_is_front_channel_router_watcher_critic_and_non_authority(
-        self,
-    ) -> None:
-        prompt = self.assembler.build_definition(
-            session_id="lead-policy", agent_id=LEAD_ORCHESTRATOR
-        ).system_prompt_file.read_text()
-        normalized_prompt = " ".join(prompt.split())
-        required = (
-            "sole normal user-facing story agent",
-            "front channel",
-            "inspect the known workflow and artifacts",
-            "Answer workflow and factual status questions directly",
-            "Ask a focused clarification",
-            "Route every substantive story answer",
-            "recommendation, critique, draft, revision, and review",
-            "separately confirmed specialist work",
-            "Route every affected domain",
-            "does not vote",
-            "preserve material disagreement",
-            "untrusted evidence",
-            "SEARCH finds a locator and READ obtains",
-            "Return only the one invocation-specific structured result",
-            '"kind": "question | critique | recommendation | proposal (omit for a default answer)"',
-            "no surrounding prose",
-            "hidden reasoning",
-            "For `lead_synthesis`",
-            '"message": "nonempty user-visible synthesis"',
-            "The runtime restores proposal identity",
-            "Round two omits `next_intent`",
-            "does not make those decisions for the user",
-            "own user confirmation",
-        )
+    def test_lead_prompt_is_front_channel_router_watcher_critic_and_non_authority(self):
+        prompt = self.assembler.build_definition(session_id="lead-policy", agent_id=LEAD_ORCHESTRATOR).system_prompt_file.read_text()
+        normalized = " ".join(prompt.split())
+        required = ("sole ordinary user-facing coordinator", "Answer workflow and factual status questions directly", "complete affected specialist union", "Do not omit a specialist to fit a budget", "explicitly states response_type", "clarification_question", "proposal_drafting_recommendation", "writing_task_scope", "exact offered task_reference object", "exact task_id/task_revision pair", "draft_content", "review_content", "every required input", "artifact_changes", "Existing empty documents require replacement", "completed READ evidence", "proposal_drafting_request", "document_change_request_update", "Only exact successful Apply", "ready_for_apply_confirmation", "Neither synthesis result", "report unresolved concerns")
         for phrase in required:
             with self.subTest(phrase=phrase):
-                self.assertIn(phrase, normalized_prompt)
-        self.assertIn("Omit unused fields instead of writing `null`", normalized_prompt)
-        self.assertIn("Runtime derives schema versions", normalized_prompt)
+                self.assertIn(phrase, normalized)
+        self.assertNotIn("objective_intent", normalized)
+        self.assertNotIn("recommended_action", normalized)
 
-    def test_all_specialist_prompts_share_the_exact_bounded_assessment_contract(
-        self,
-    ) -> None:
+    def test_all_specialist_prompts_share_the_exact_bounded_assessment_contract(self):
         for agent_id in ROSTER[1:]:
-            prompt = self.assembler.build_definition(
-                session_id="specialist-policy", agent_id=agent_id
-            ).system_prompt_file.read_text()
+            prompt = self.assembler.build_definition(session_id="specialist-policy", agent_id=agent_id).system_prompt_file.read_text()
             normalized = " ".join(prompt.split())
             with self.subTest(agent_id=agent_id):
-                for phrase in (
-                    "one exact assignment and one ordered set of input IDs",
-                    "Read every attached reference required by the assignment",
-                    "no access to a sibling's references",
-                    "provides a scoped assessment for the lead",
-                    "Return exactly one JSON object",
-                    '"assessment": "drafted | supports | concern | conflict | insufficient_evidence"',
-                    '"message": "nonempty visible assessment"',
-                    "runtime attaches the supplied assignment ID, mode, and ordered input IDs",
-                ):
+                for phrase in ("exact assignment", "contract_guidance", "response_type specialist_assignment_result", "assignment_status", "draft_completed", "supports_proposal", "concerns_found", "conflicts_found", "insufficient_evidence", "neither review support", "permission to Apply or Commit"):
                     self.assertIn(phrase, normalized)
 
     def test_lead_overlay_supersedes_retained_policy_and_preserves_specialist_bytes(self):
@@ -164,30 +123,12 @@ class PromptAssemblerTests(unittest.TestCase):
         changed = {agent: PromptAssembler(self.workspace).build_definition(session_id="overlay", agent_id=agent).system_prompt_file.content for agent in ROSTER}
         lead = changed[LEAD_ORCHESTRATOR]
         self.assertIn(retained.strip(), lead)
-        self.assertIn(b"Runtime Lead contract overlay (lead-outcome-v5)", lead)
-        overlay = lead[lead.index(b"Runtime Lead contract overlay (lead-outcome-v5)"):]
-        self.assertIn(
-            b"context action envelope retains its required outer kind",
-            overlay,
-        )
-        self.assertIn(b"Inside the final action.result", overlay)
-        self.assertIn(
-            b"default direct-answer variant omits the inner kind",
-            overlay,
-        )
-        self.assertNotIn(
-            b"Every front-channel result includes kind, message, and authoring_scope.",
-            lead,
-        )
-        self.assertIn(b"objective_intent", lead)
-        self.assertIn(b"recommended_action", lead)
-        self.assertIn(b"omits objective_intent", lead)
-        self.assertIn(b"current_response selects this exact visible recommendation", lead)
-        self.assertIn(b"one preparation only", lead)
-        self.assertIn(b"before its fresh Confirm", lead)
-        self.assertIn(b"empty core document requires replace, not create", lead)
-        self.assertIn(b"Only the exact successful structured Apply", lead)
-        self.assertGreater(lead.index(b"Runtime Lead contract overlay"), lead.index(retained.strip()))
+        overlay = lead[lead.rindex(b"# Lead Orchestrator Policy"):]
+        for phrase in (b"explicitly states response_type", b"document_change_request_update", b"proposal_drafting_request", b"current_response selects", b"Only exact successful Apply", b"Existing empty documents require replacement"):
+            self.assertIn(phrase, overlay)
+        self.assertNotIn(b"objective_intent", overlay)
+        self.assertNotIn(b"recommended_action", overlay)
+        self.assertGreater(lead.rindex(b"# Lead Orchestrator Policy"), lead.index(retained.strip()))
         for agent in ROSTER[1:]:
             self.assertEqual(changed[agent], baseline[agent])
 

@@ -149,22 +149,10 @@ class AgentPolicyCompositionTests(unittest.TestCase):
 
         codex_bytes, codex_components = CodexAdapter._definition_file(definition)
         antigravity_bytes, antigravity_components = AntigravityAdapter._definition_file(definition)
-        original_clause = b"invoke another agent, provider subagent, tool, or model."
-        staged_clause = b"invoke another agent, provider subagent, or model."
+        original_clause = b"Do not invoke tools, other agents, subagents, providers, shell commands,"
         self.assertIn(original_clause, captured)
         self.assertIn(captured, codex_bytes)
-        expected = captured.replace(original_clause, staged_clause).replace(
-            b"Return only the one invocation-specific structured result requested by the\nruntime.",
-            b"Submit the invocation-specific structured result requested by the runtime\n"
-            b"through finish, using the complete supplied output schema.",
-        ).replace(
-            b"Return exactly one JSON object with this shape and no additional fields:",
-            b"The specialist assessment in action.result has exactly this shape and\n"
-            b"no additional fields. Submit the complete schema-selected outer object\n"
-            b"with action through finish; do not submit this inner\n"
-            b"assessment alone:",
-        )
-        self.assertIn(expected, antigravity_bytes)
+        self.assertIn(captured, antigravity_bytes)
         self.assertEqual(definition.system_prompt_file.content, captured)
         for provider_bytes, components in (
             (codex_bytes, codex_components),

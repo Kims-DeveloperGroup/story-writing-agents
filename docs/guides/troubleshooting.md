@@ -298,11 +298,11 @@ current-call finish evidence plus normal validation before accepting it.
 One fixed Codex defect produced the first row when the compact output schema
 contained an array `items` node without an explicit supported type. Codex
 rejected the output schema before returning a valid provider result. Current
-typed wire v9 instead uses a closed required `{action}` root and
+agent-provider-wire-v10 instead uses a closed required `{agent_action}` root and
 closed SEARCH/READ/ANSWER variants with explicitly typed arrays and nested
 objects, consistent with
 [Codex Structured Outputs requirements](https://developers.openai.com/api/docs/guides/structured-outputs).
-If a captured current request lacks the typed-v8 root or has an untyped
+If a captured current request lacks the `agent_action` root or has an untyped
 `items` node, verify that the running `story` installation is the updated
 checkout before retrying after repair. Do not add a compatibility decoder.
 
@@ -310,7 +310,7 @@ An Antigravity response can reach the returned-result rejection row instead.
 For example, adding an undeclared metadata echo or omitting a semantic field
 required by the selected variant is a deterministic rejection, not proof of an
 unknown outcome. Lead validation notices can identify trusted JSON property
-paths such as `$.action.result.message`, expected versus actual JSON types,
+paths such as `$.agent_action.task_result.response_text`, expected versus actual JSON types,
 missing fields, and applicable rules. They collect independently detectable
 schema issues across a response. Domain failures identify the first rejected
 property or relationship and its expected rule; `Original response` and

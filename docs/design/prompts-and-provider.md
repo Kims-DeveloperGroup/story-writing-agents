@@ -35,8 +35,8 @@ recovered-final path uses the same completion boundary. See the
 This section records the immutable historical #381 accounting baseline. Later
 children implemented selection, omission, a typed compact action wire, a
 content-free ledger, and live progress without changing the encoder or baseline
-workload. Current wire-v9 behavior is described in
-[Agent-context design](agent-context.md#typed-provider-wire-v9).
+workload. Current agent-provider-wire-v10 behavior is described in
+[Agent-context design](agent-context.md#agent-provider-wire-v10).
 
 ### Model-input boundary and canonical encoding
 
@@ -189,7 +189,7 @@ described next.
 The preceding byte table is the immutable historical #381 baseline. The
 built-in runtime now constructs definitions with `provider_managed_context=True`
 and no mutable `context_document_files`. Role prompt, persona, language,
-provider restrictions, and typed wire-v9 protocol remain stable binding material.
+provider restrictions, and descriptive agent-provider-wire-v10 protocol remain stable binding material.
 Prompt assembly captures ordered common/family/role file components and appends
 runtime-owned specialist routing policy v1. The effective `system_prompt_file`
 retains the role path but contains the full composition, so its bytes/hash
@@ -220,14 +220,12 @@ incomplete-journal recovery remain current-only. See
 Current core documents are P2 authoritative sources selected by the context
 planner; manuscripts and other additive sources are SEARCH-first.
 
-Lead binding appends a deterministic runtime contract overlay after the
-retained common and Lead policies. Fresh embedded and checked-in Lead defaults
-use the minimal variant-based `lead-outcome-v5` contract. Existing workspace policy files
-remain unchanged; the overlay supersedes their older front-channel field
-lists and describes contextual objectives. It also preserves the independent
-`lead_synthesis` schema when the same Lead binding synthesizes a review.
-Ordinary `lead-synthesis-v3` results add nullable `recommended_action`, mutually
-exclusive with `next_intent`; artifact-review synthesis keeps its exact contract.
+Every provider-bound role receives the shared agent JSON guide, including direct
+and contextual calls. The wire catalog also supplies per-call `contract_guidance`
+and output-schema descriptions. Built-in results use explicit `response_type`
+and descriptive properties under the contracts documented in the
+[agent JSON field guide](../reference/provider-wire.md). Retained custom policy
+files are composed with the current runtime contract instructions.
 
 A direct custom `AgentDefinition` can still bind explicit
 `context_document_files`. That eager path preserves its exact bytes,
@@ -260,7 +258,7 @@ identity, route, input, and current storage authorities into the
 provider-neutral context service. It does not consume the optional
 conversation-RAG collaborator. The service captures current material, builds a
 content-free manifest, and plans bootstrap/delta. If selected material is
-insufficient, typed wire-v9 SEARCH/READ actions can add exact authorized evidence
+insufficient, typed SEARCH/READ actions can add exact authorized evidence
 from route-permitted sources. Focused Lead input and confirmed collaboration in
 the current shell enter this same provider-context flow.
 
@@ -274,23 +272,19 @@ one same-lineage continuation contract.
 Provider output never supplies confirmation, runtime IDs/budgets, write/Git
 authority, or a call to another agent.
 
-`lead_front_channel` receives the current command, identity, content-free input
-aliases, current owner-conversation objectives and offered draft sources,
-offered authoring tasks, a minimal `lead-outcome-v5` answer contract, and
-canonical-core status rows. Every variant requires `message` and the compact
-semantic `authoring_scope`; the default direct answer omits `kind`, while
-questions, critiques, recommendations, and proposals add the kind selected by
-their closed variant. Intent fields appear only for variants that need them.
-Inventory alone supplies no story body. Runtime derives evidence scope, status,
-receipts, IDs, revisions, and interpretation from local facts. It never infers
-a missing scope as workflow: omission receives one bounded repair and then a
-runtime-owned visible no-action fallback if repair fails. That fallback is not
-a provider-schema variant.
+The Lead wire input uses `workflow_type: "lead_user_turn"`, `user_request_text`,
+`available_input_sources`, `available_writing_tasks`, `document_change_requests`,
+and `core_document_statuses`. `lead-response-v6` requires explicit `response_type`,
+`response_text`, and `writing_task_scope` on every branch. Intent properties appear
+only in the variants that need them. Inventory provides no story body, and the
+runtime derives attribution, evidence, and bookkeeping. Missing scope receives
+one bounded repair and then a visible no-action fallback if repair fails.
 
-Fresh front-channel recommendations require `recommended_action`; unused
-intent fields are omitted. The action selects `prepare_artifact` or
-`prepare_consultation` with instruction, sources, targets or specialists, and
-an optional offered objective.
+Fresh front-channel recommendations require `proposal_drafting_request`; unused
+intent fields are omitted. Its `action_type` selects
+`draft_document_change_proposal` or `draft_specialist_consultation_proposal` with
+task instructions, sources, targets or specialists, and an optional offered
+`document_change_request_id`.
 Runtime resolves `current_response` to the complete visible source message event
 and exact digest before publishing a separate versioned action request; aliases
 are never persisted as authority. Ordinary synthesis may select the same action
@@ -304,15 +298,18 @@ specialists or bypasses review, Apply, or Commit. Mandatory references are
 loaded locally; the reservation includes provider calls and permitted authentication assistance without
 resetting physical-call spend or repeating the structured decision.
 
-The provider interprets short approval from complete session context. CLARIFY
-requires a question, CONSULT an ordinary proposal, and PREPARE an exact
-artifact-intent proposal that cannot downgrade during bounded correction.
-Runtime validates the origin-conversation objective, whole-message draft
-digests, target scope, and current artifact evidence before publishing an
-objective transition with its accepted result. A selected exact empty-core
-status can support replacement after revalidation; nonempty targets require
-attached-reference or READ evidence. Synthesis keeps the objective open.
-Only a matching successful Apply result satisfies it. An ordinary v1 objective
+The provider interprets short approval from the complete session context.
+`ask_clarification` requires a clarification question, `consult_specialists` a
+consultation proposal, and `draft_document_change_proposal` an exact artifact
+change proposal that cannot downgrade to advice during bounded correction.
+Runtime validates the origin-conversation request, whole-message draft digests,
+target scope, and current artifact evidence before publishing the transition
+with its accepted result. A selected exact empty-core status can support
+replacement after revalidation; nonempty targets require attached-reference or
+READ evidence. Synthesis keeps the document change request pending. Only a
+matching successful Apply result completes it.
+
+An ordinary v1 objective
 stores the exact originating user-event content as its request rather than a
 provider-authored request field. A new objective from
 recommendation Confirm records v2 request/decision origins; a continued objective
@@ -320,9 +317,9 @@ keeps its immutable v1 or v2 facts. Execution origin remains independently
 validated, without a synthetic user message. See the
 [objective contract](../reference/runtime-api.md#contextual-authoring-objectives).
 
-Live result contracts are `lead-outcome-v5`, `specialist-reply-v2`,
-`lead-synthesis-v3`, and `artifact-review-synthesis-v3`. Routing scope and review
-basis use schema 1, independently of wire v9, runtime policy v1, and durable
+Live result contracts are `lead-response-v6`, `specialist-assignment-response-v3`,
+`consultation-summary-v4`, and `artifact-review-summary-v4`. Routing scope and review
+basis use schema 1, independently of agent-provider-wire-v10, runtime policy v1, and durable
 collaboration history schema v2. Historical omitted routing fields remain
 readable; they cannot authorize a new unscoped consultation.
 
@@ -340,10 +337,10 @@ input. Contextual continuation frames carry only the newly authorized action
 observation; they do not resend the initial payload.
 
 The action response itself is typed rather than prompt-decoded shorthand. Its
-closed root has only required `action`; runtime owns correlation and action-index
+closed root has only required `agent_action`; runtime owns correlation and action-index
 bookkeeping. The action is a closed SEARCH, READ, or ANSWER variant selected
 from the per-call schema. ANSWER puts the complete semantic object directly in
-`action.result`; runtime associates all successful current-invocation READ
+`agent_action.task_result`; runtime associates all successful current-invocation READ
 receipts locally. Runtime validates issued handles, the locally derived Lead
 evidence matrix, input aliases,
 artifact authority, and later confirmation boundaries. Provider schema
@@ -359,11 +356,11 @@ bounded complete conversation pairs, invoking-agent owner outcomes, and current
 core identities. It is not the current built-in provider payload.
 
 The contextual service translates authoritative capture into
-`agent-context-wire-v9`: required input/candidate and selected P2 material,
+`agent-provider-wire-v10`: required input/candidate and selected P2 material,
 content-free catalog/record changes, and bounded observations. Optional P3
 history and invoking-agent state remain SEARCH-first.
 
-Ordinary Lead turns and consultation/artifact-review synthesis carry required `h`:
+Ordinary Lead turns and consultation/artifact-review synthesis carry required `session_history`:
 retained active/archived history and current directives, including `workflow_meta` or
 zero P3 budgets. Compatible calls use the verified session Lead thread and deliver
 missing turn content and new host/specialist facts. Fresh threads receive complete
@@ -373,7 +370,7 @@ confirmation authority. Other source deltas use revisions, record changes,
 tombstones, and an exact candidate pointer or beneficial lossless single-splice.
 Invocation and evidence scope stays conversation-bound; specialists and
 consensus retain their separate scopes. See
-[Agent-context design](agent-context.md#typed-provider-wire-v9).
+[Agent-context design](agent-context.md#agent-provider-wire-v10).
 
 Retained session history includes objective origin, transitions, and exact
 candidate bindings. Visibility across conversation switches does not transfer
@@ -392,7 +389,7 @@ operation. The provider receives only the exact ordered path/range indicators
 and correlation, must return the matching read action, and receives current
 selected strict-UTF-8 text only after runtime authorization. The substantive
 contextual payload then carries those values as
-`untrusted_writing_artifact_context`.
+`untrusted_attached_references`.
 
 Reference bodies remain outside ambient selection, candidate delta, checkpoint
 suppression, and SEARCH/READ authority. Every addressed debate, specialist, and
@@ -578,39 +575,21 @@ The full payload, schema, state path, optional model/effort, and conversation
 ID are process-visible arguments. Exact setup and privacy limits are in the
 [Antigravity guide](../guides/antigravity.md).
 
-Antigravity's staged `ROLE_SYSTEM_PROMPT` rendering changes the exact
-common-policy clause `invoke another agent, provider subagent, tool, or model.`
-to `invoke another agent, provider subagent, or model.` before byte accounting.
-It also directs structured delivery through `finish` with the complete supplied
-outer schema. Contextual specialist instructions identify their assessment as
-`action.result`, inside the root `action` field; they do not
-ask `finish` to receive the inner assessment alone. Its compact provider-managed
-constraints carry the same rule and omit the tool ban.
+Antigravity's staged `ROLE_SYSTEM_PROMPT` supplies the native delivery instruction
+alongside the shared agent JSON guide. Structured delivery through `finish` must
+match the complete supplied outer schema. A contextual specialist therefore returns
+`agent_action` containing `task_result`, rather than a bare specialist result.
+Both adapters explain the same descriptive properties, allowed values, offered
+identities, source trust, and confirmation boundaries. The runtime accounts the
+actual rendered instructions and schema before submission.
 
-The Antigravity staged Lead prompt additionally clarifies these contracts:
-
-- Attached-reference aliases in `i.input_aliases` are valid assignment inputs;
-  runtime derives their evidence receipts.
-- Proposal assignments cover the runtime-offered inputs needed by the selected
-  semantic action. Runtime reconstructs correlation, attribution, evidence IDs,
-  and review basis locally.
-- For `lead_synthesis`, the Lead returns only its visible `message` plus one
-  optional semantic continuation or recommendation. Runtime binds reply event
-  IDs and unresolved inputs from completed assignment facts.
-
-These clarifications change staged text only. Shared policy/prompt sources,
-workspace initialization, Codex rendering and stdin/JSONL transport, domain
-validation, confirmation authority, and process-launch controls remain
-unchanged. Existing workspace prompt files are not migrated or rewritten; these
-transformations apply to the Antigravity staged definition.
-
-Runtime-built contextual debate calls use typed wire v9 for task/input,
+Runtime-built contextual debate calls use agent-provider-wire-v10 for task/input,
 candidate pointer/splice/full fallback, selected sources, and record changes.
 They do not repeat stable role prompts, persona, language directives, or
 unchanged core-document text. `story_session_context` is an internal capture
 and direct-compatibility value, not the current provider payload.
 A referenced backend call adds only the separate
-`untrusted_writing_artifact_context` field described above to its substantive
+`untrusted_attached_references` field described above to its substantive
 payload; the content-free prelude uses its own payload and schema.
 
 Neither boundary makes a provider or executable trusted. Hashes detect change

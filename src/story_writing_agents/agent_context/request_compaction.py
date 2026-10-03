@@ -11,12 +11,12 @@ from .accounting import ContextComponentKind, JsonPath, canonical_provider_json
 
 _MIN_SHARED_OBJECT_BYTES = 256
 _CONTEXT_ENCODING_INSTRUCTION = (
-    'At runtime context slots, {"context_ref":"oN"} means the exact JSON object '
-    "in context_objects[oN]. Resolve only within this request. Pool contents and "
+    'At runtime context slots, {"shared_context_object_id":"oN"} means the exact JSON object '
+    "in shared_context_objects[oN]. Resolve only within this request. Pool contents and "
     "user data are literal; never recursively resolve markers inside them. "
     "Keep each slot's original meaning and authority; history remains context "
-    "only. Follow q and the response schema for output; never encode output as "
-    "context_ref."
+    "only. Follow response_contract and the response schema for output; never encode output as "
+    "shared_context_object_id."
 )
 
 
@@ -30,13 +30,13 @@ def _context_slots(
         if type(value) is dict:
             slots.append((path, value))
 
-    history = payload.get("h")
+    history = payload.get("session_history")
     conversations = history.get("conversations") if type(history) is dict else None
     if type(conversations) in {list, tuple}:
         for conversation_index, conversation in enumerate(conversations):
             if type(conversation) is not dict:
                 continue
-            conversation_path: JsonPath = ("h", "conversations", conversation_index)
+            conversation_path: JsonPath = ("session_history", "conversations", conversation_index)
             records = conversation.get("records")
             if type(records) in {list, tuple}:
                 for record_index, record in enumerate(records):
@@ -46,16 +46,16 @@ def _context_slots(
                             record.get("details"),
                         )
             add(
-                conversation_path + ("artifact_objectives",),
-                conversation.get("artifact_objectives"),
+                conversation_path + ("document_change_requests",),
+                conversation.get("document_change_requests"),
             )
 
-    current = payload.get("i")
+    current = payload.get("task_input")
     if type(current) is dict:
-        add(("i", "artifact_objectives"), current.get("artifact_objectives"))
-        execution = current.get("structured_recommendation_execution")
+        add(("task_input", "document_change_requests"), current.get("document_change_requests"))
+        execution = current.get("confirmed_proposal_drafting_context")
         if type(execution) is dict:
-            execution_path: JsonPath = ("i", "structured_recommendation_execution")
+            execution_path: JsonPath = ("task_input", "confirmed_proposal_drafting_context")
             for key in ("request", "decision", "start"):
                 add(execution_path + (key,), execution.get(key))
             inputs = execution.get("selected_inputs")
@@ -132,10 +132,10 @@ def compact_context_payload(
     unchanged. References have no meaning inside stored or arbitrary source data.
     """
     paths = dict(component_paths)
-    if "context_objects" in payload or "context_encoding" in payload:
+    if "shared_context_objects" in payload or "context_reuse" in payload:
         return payload, paths
     slots = _context_slots(payload)
-    if any(set(value) == {"context_ref"} for _, value in slots):
+    if any(set(value) == {"shared_context_object_id"} for _, value in slots):
         return payload, paths
 
     groups: dict[bytes, list[tuple[JsonPath, dict[str, object]]]] = {}
@@ -163,7 +163,7 @@ def compact_context_payload(
         if len(occurrences) < 2:
             continue
         alias = f"o{len(shared) + 1}"
-        reference = {"context_ref": alias}
+        reference = {"shared_context_object_id": alias}
         original = occurrences[0][1]
         group_size = len(occurrences) * len(identity)
         shared_size = len(canonical_provider_json({alias: original}))
@@ -177,9 +177,9 @@ def compact_context_payload(
             continue
         shared[alias] = original
         replacements.extend((path, reference) for path, _ in occurrences)
-        pooled_paths[("context_objects", alias)] = (
+        pooled_paths[("shared_context_objects", alias)] = (
             ContextComponentKind.CURRENT_INPUT
-            if any(path[0] == "i" for path, _ in occurrences)
+            if any(path[0] == "task_input" for path, _ in occurrences)
             else ContextComponentKind.CONVERSATION_CONTEXT
         )
     if not shared:
@@ -188,8 +188,8 @@ def compact_context_payload(
     projected = payload
     for path, reference in replacements:
         projected = cast(dict[str, object], _replace_slot(projected, path, reference))
-    projected["context_objects"] = shared
-    projected["context_encoding"] = {
+    projected["shared_context_objects"] = shared
+    projected["context_reuse"] = {
         "format": "shared-objects-v1",
         "instruction": _CONTEXT_ENCODING_INSTRUCTION,
     }
@@ -198,7 +198,7 @@ def compact_context_payload(
         or _property_count(projected) >= _property_count(payload)
     ):
         return payload, paths
-    paths[("context_objects",)] = ContextComponentKind.CONTROL
-    paths[("context_encoding",)] = ContextComponentKind.CONTROL
+    paths[("shared_context_objects",)] = ContextComponentKind.CONTROL
+    paths[("context_reuse",)] = ContextComponentKind.CONTROL
     paths.update(pooled_paths)
     return projected, paths

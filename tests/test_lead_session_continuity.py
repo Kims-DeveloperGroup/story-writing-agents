@@ -61,7 +61,7 @@ def _records(delivery):
     return [record for conversation in delivery["conversations"] for record in conversation["records"]]
 
 def _fields(delivery):
-    return [field["text"] for record in _records(delivery) for field in record.get("fields", [])]
+    return [field["field_text"] for record in _records(delivery) for field in record.get("readable_fields", [])]
 
 
 class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
@@ -103,23 +103,23 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
             await self.say(second, text, f"Follow-up answer {index}.")
         calls = [call for agent, call in self.backend.call_records if agent == LEAD_ORCHESTRATOR]
         self.assertEqual({call.expected_thread_id for call in calls[1:]}, {"thread-lead-1"})
-        delivered = [text for call in calls for text in _fields(call.payload["h"])]
+        delivered = [text for call in calls for text in _fields(call.payload["session_history"])]
         self.assertNotIn(plan, delivered)
         for text in followups:
             self.assertEqual(sum(type(event.payload) is CollaborationMessagePayload and event.payload.content == text for event in self.history(second)), 1)
-            self.assertIn(text, [call.payload["i"]["command"] for call in calls
-                                 if "command" in call.payload["i"]])
+            self.assertIn(text, [call.payload["task_input"]["user_request_text"] for call in calls
+                                 if "user_request_text" in call.payload["task_input"]])
         self.assertEqual(calls[-1].scope.subject_id, second)
         for call in calls[2:]:
-            self.assertNotIn(call.payload["i"]["command"], _fields(call.payload["h"]))
-        self.assertLessEqual(_property_count(calls[-1].payload["h"]),
-                             _property_count(calls[-2].payload["h"]))
+            self.assertNotIn(call.payload["task_input"]["user_request_text"], _fields(call.payload["session_history"]))
+        self.assertLessEqual(_property_count(calls[-1].payload["session_history"]),
+                             _property_count(calls[-2].payload["session_history"]))
         self.assertTrue(all("timestamp" not in record and "batch_digest" not in record
                             and "sequence" not in record
-                            for call in calls for record in _records(call.payload["h"])))
+                            for call in calls for record in _records(call.payload["session_history"])))
         judgment = next(event for event in self.history(second)
                         if type(event.payload) is CollaborationLeadJudgmentPayload)
-        host_fact = next(record for record in _records(calls[3].payload["h"])
+        host_fact = next(record for record in _records(calls[3].payload["session_history"])
                          if record["event_id"] == judgment.event_id)
         self.assertEqual(host_fact["details"]["authoring_scope"]["task_id"],
                          judgment.payload.authoring_scope.task_id)
@@ -195,16 +195,16 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         await self.say(second, "Recall all retained planning.", runtime=restarted)
         fresh = self.backend.calls[-1]
         self.assertIsNone(fresh.expected_thread_id)
-        self.assertEqual(fresh.payload["h"]["delivery_mode"], "bootstrap")
-        replay = _fields(fresh.payload["h"])
+        self.assertEqual(fresh.payload["session_history"]["context_delivery_mode"], "bootstrap")
+        replay = _fields(fresh.payload["session_history"])
         self.assertEqual(replay.count(plan), 2)
-        replay_fact = next(record for record in _records(fresh.payload["h"])
+        replay_fact = next(record for record in _records(fresh.payload["session_history"])
                            if record["event_id"] == source.event_id)
         self.assertEqual(replay_fact["details"]["authoring_scope"], synthesis_fact["details"]["authoring_scope"])
-        self.assertIn(mirror.event_id, {record["event_id"] for record in _records(fresh.payload["h"])})
+        self.assertIn(mirror.event_id, {record["event_id"] for record in _records(fresh.payload["session_history"])})
         self.assertTrue(all(text in replay for text in followups))
-        self.assertEqual({item["conversation_id"]: item["status"]
-                          for item in fresh.payload["h"]["conversations"]},
+        self.assertEqual({item["conversation_id"]: item["conversation_status"]
+                          for item in fresh.payload["session_history"]["conversations"]},
                          {first: "archived", second: "active", empty: "active"})
 
         stage = ContextContinuationTransaction.stage
@@ -219,6 +219,6 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         await self.say(second, "Retry after publication verification failure.", runtime=restarted)
         retry = self.backend.calls[-1]
         self.assertIsNone(retry.expected_thread_id)
-        self.assertIn("Synthetic publication verification failure.", _fields(retry.payload["h"]))
+        self.assertIn("Synthetic publication verification failure.", _fields(retry.payload["session_history"]))
         self.assertEqual(calls[0].continuation_identity, calls[-1].continuation_identity)
         self.assertNotEqual(calls[0].scope, calls[-1].scope)

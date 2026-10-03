@@ -48,26 +48,26 @@ def _shared_context_payload(event=None):
     if event is None:
         event = {"instruction": "Retain this exact request 한🙂\n" * 40,
                  "values": [True, 1, 1.0, None], "nested": {"context_ref": "literal-user-data"}}
-    return {"i": {"input": "CURRENT_한🙂", "artifact_objectives": dict(reversed(event.items())),
-                  "structured_recommendation_execution": {
+    return {"task_input": {"input": "CURRENT_한🙂", "document_change_requests": dict(reversed(event.items())),
+                  "confirmed_proposal_drafting_context": {
                       "request": event, "decision": event, "start": event,
                       "selected_inputs": [{"conversation_event": event}]}},
-            "h": {"conversations": [{"records": [{"details": event}], "artifact_objectives": event}]}}
+            "session_history": {"conversations": [{"records": [{"details": event}], "document_change_requests": event}]}}
 
 def _expanded_context_payload(payload):
-    if "context_objects" not in payload:
+    if "shared_context_objects" not in payload:
         return payload
     result = copy.deepcopy(dict(payload))
-    table = result.pop("context_objects")
-    result.pop("context_encoding")
+    table = result.pop("shared_context_objects")
+    result.pop("context_reuse")
     def resolve(owner, key):
         value = owner.get(key)
-        if type(value) is dict and set(value) == {"context_ref"}:
-            owner[key] = copy.deepcopy(table[value["context_ref"]])
-    current, history = result.get("i"), result.get("h")
+        if type(value) is dict and set(value) == {"shared_context_object_id"}:
+            owner[key] = copy.deepcopy(table[value["shared_context_object_id"]])
+    current, history = result.get("task_input"), result.get("session_history")
     if type(current) is dict:
-        resolve(current, "artifact_objectives")
-        execution = current.get("structured_recommendation_execution")
+        resolve(current, "document_change_requests")
+        execution = current.get("confirmed_proposal_drafting_context")
         if type(execution) is dict:
             for key in ("request", "decision", "start"):
                 resolve(execution, key)
@@ -75,7 +75,7 @@ def _expanded_context_payload(payload):
                 resolve(item, "conversation_event")
     if type(history) is dict:
         for conversation in history.get("conversations", []):
-            resolve(conversation, "artifact_objectives")
+            resolve(conversation, "document_change_requests")
             for record in conversation.get("records", []):
                 resolve(record, "details")
     return result
@@ -105,40 +105,40 @@ class CanonicalProviderJsonTests(unittest.TestCase):
             b'{"tuple":[0,-2,1.5],"left":["same"],"right":["same"]}',
         )
         payload = _shared_context_payload()
-        payload["unrelated"] = {"context_ref": "o1"}
+        payload["unrelated"] = {"shared_context_object_id": "o1"}
         before = copy.deepcopy(payload)
-        paths = {("i",): ContextComponentKind.CURRENT_INPUT,
-                 ("h",): ContextComponentKind.CONVERSATION_CONTEXT}
+        paths = {("task_input",): ContextComponentKind.CURRENT_INPUT,
+                 ("session_history",): ContextComponentKind.CONVERSATION_CONTEXT}
         compact, _ = compact_context_payload(payload, paths)
         self.assertEqual(payload, before)
         self.assertEqual(_expanded_context_payload(compact), before)
-        self.assertEqual(compact["context_encoding"]["format"], "shared-objects-v1")
-        self.assertEqual(list(compact["context_objects"]), ["o1"])
-        self.assertEqual(canonical_provider_json(compact).count(b'"context_ref":"o1"'), 8)
+        self.assertEqual(compact["context_reuse"]["format"], "shared-objects-v1")
+        self.assertEqual(list(compact["shared_context_objects"]), ["o1"])
+        self.assertEqual(canonical_provider_json(compact).count(b'"shared_context_object_id":"o1"'), 8)
         self.assertLess(len(canonical_provider_json(compact)), len(canonical_provider_json(before)))
         self.assertLess(_property_count(compact), _property_count(before))
         values = [{"body": "한🙂" * 100, "scalar": value} for value in (True, 1, 1.0, [1, 2], [2, 1])]
-        typed = {"h": {"conversations": [{"records": [{"details": value} for value in values * 2]}]}}
+        typed = {"session_history": {"conversations": [{"records": [{"details": value} for value in values * 2]}]}}
         encoded, _ = compact_context_payload(typed, paths)
-        self.assertNotIn("context_objects", encoded)
+        self.assertNotIn("shared_context_objects", encoded)
         self.assertEqual(json.dumps(_expanded_context_payload(encoded), sort_keys=True),
                          json.dumps(typed, sort_keys=True))
-        collisions = ({"context_objects": {}}, {"context_encoding": {}})
+        collisions = ({"shared_context_objects": {}}, {"context_reuse": {}})
         noops = [{**payload, **collision} for collision in collisions]
         marker = copy.deepcopy(payload)
-        marker["i"]["artifact_objectives"] = {"context_ref": "user data"}
+        marker["task_input"]["document_change_requests"] = {"shared_context_object_id": "user data"}
         noops += [marker, _shared_context_payload({"body": "x" * 244}),
                   _shared_context_payload({"body": "x" * 245})]
-        noops += [{"i": {"structured_recommendation_execution": {"request": value, "decision": value}}}
+        noops += [{"task_input": {"confirmed_proposal_drafting_context": {"request": value, "decision": value}}}
                   for value in ({"small": "x"}, {"body": "x" * 256})]
-        noops += [{"i": {"structured_recommendation_execution": {"request": values[0]}}}]
+        noops += [{"task_input": {"confirmed_proposal_drafting_context": {"request": values[0]}}}]
         for original in noops:
             result, result_paths = compact_context_payload(original, paths)
             self.assertEqual(canonical_provider_json(result), canonical_provider_json(original))
             self.assertEqual(result_paths, paths)
         rich = {"body": "x" * 245, "facts": {"state": "open", "origin": {"kind": "history"}}}
         boundary, _ = compact_context_payload(_shared_context_payload(rich), paths)
-        self.assertIn("context_objects", boundary)
+        self.assertIn("shared_context_objects", boundary)
         self.assertLess(_property_count(boundary), _property_count(_shared_context_payload(rich)))
 
     def test_strict_failures_have_one_content_free_diagnostic(self) -> None:
@@ -181,25 +181,25 @@ class ProviderPayloadAccountingTests(unittest.TestCase):
         payload = _shared_context_payload()
         history_only = {"content": "Prior history 한🙂" * 70,
                         "facts": {"state": "retained", "origin": {"kind": "history"}}}
-        payload["h"]["conversations"][0]["records"] += [{"details": history_only}] * 2
-        request = ("i", "structured_recommendation_execution", "request")
-        decision = ("i", "structured_recommendation_execution", "decision")
+        payload["session_history"]["conversations"][0]["records"] += [{"details": history_only}] * 2
+        request = ("task_input", "confirmed_proposal_drafting_context", "request")
+        decision = ("task_input", "confirmed_proposal_drafting_context", "decision")
         mandatory = (*request, "instruction")
-        paths = {("i",): ContextComponentKind.CURRENT_INPUT,
-                 ("h",): ContextComponentKind.CONVERSATION_CONTEXT,
+        paths = {("task_input",): ContextComponentKind.CURRENT_INPUT,
+                 ("session_history",): ContextComponentKind.CONVERSATION_CONTEXT,
                  mandatory: ContextComponentKind.MANDATORY_REFERENCE_CONTENT,
                  (*decision, "nested"): ContextComponentKind.ROLE_SYSTEM_PROMPT}
         compact, compact_paths = compact_context_payload(payload, paths, (mandatory,))
-        execution = compact["i"]["structured_recommendation_execution"]
-        original = payload["i"]["structured_recommendation_execution"]
+        execution = compact["task_input"]["confirmed_proposal_drafting_context"]
+        original = payload["task_input"]["confirmed_proposal_drafting_context"]
         self.assertEqual((execution["request"], execution["decision"]),
                          (original["request"], original["decision"]))
         self.assertEqual(_expanded_context_payload(compact), payload)
         self.assertEqual(compact_paths[mandatory], paths[mandatory])
-        for alias, value in compact["context_objects"].items():
+        for alias, value in compact["shared_context_objects"].items():
             expected = (ContextComponentKind.CONVERSATION_CONTEXT if value == history_only
                         else ContextComponentKind.CURRENT_INPUT)
-            self.assertEqual(compact_paths[("context_objects", alias)], expected)
+            self.assertEqual(compact_paths[("shared_context_objects", alias)], expected)
         payload_json, accounting = account_provider_payload(
             schema, compact, call_kind=ProviderCallKind.CONVERSATION,
             component_paths=compact_paths, mandatory_reference_paths=(mandatory,))

@@ -124,8 +124,8 @@ Session: novel • Debate: d20260830T010412_ef567890 — Draft an opening. • A
 > 1 │   "request_type": "response",
 > 1 │   "content": [expanded JSON string ×1] {
 > 1 │     "response_text": [expanded JSON string ×1] {
-> 1 │       "c": "wrong provider correlation value",
-> 1 │       "d": []
+> 1 │       "agent_action": {"action_type": "unsupported_action"},
+> 1 │       "unexpected_metadata": []
 > 1 │     }
 > 1 │   }
 > 1 │ }
@@ -282,12 +282,12 @@ without this optional field remain readable.
 The request records the actual submitted `payload` and its complete response `schema`.
 Verification enforces that contract, with equivalent provider-specific schema
 translation. Property reduction affects explicit runtime input projections and sharing,
-never schema constraints. Request-local `context_objects` and `context_ref` markers
+never schema constraints. Request-local `shared_context_objects` and `shared_context_object_id` markers
 resolve within that same request; earlier exchanges are not needed. Sharing applies only
 when recursive property count and bytes both decrease. Payload, schema and complete
 request counts are measured separately, including objects inside arrays. Historical
 records remain readable without migration. See [request
-sharing](../design/agent-context.md#typed-provider-wire-v9).
+sharing](../design/agent-context.md#agent-provider-wire-v10).
 
 A completed result that structured or semantic validation rejects therefore
 normally appears as adjacent request, response, and `rejected` outcome records.

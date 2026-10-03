@@ -565,13 +565,13 @@ event does not copy that response into collaboration history.
 
 ### Artifact-candidate and review retention
 
-A valid non-null lead `artifact_intent` contains proposed story text. Runtime
+A valid Lead `artifact_change_proposal` contains proposed story text. Runtime
 resolves it against a complete in-process capture of all canonical artifacts.
 That capture is used to build and validate the candidate; it is not copied as
 a second complete-workspace blob into collaboration history. The resulting
 `ArtifactReviewCandidate`, however, deliberately contains the exact proposed
 change set and projected relationship facts and is stored in the typed
-`artifact_review_candidate` event. A successful `propose` synthesis stores the
+`artifact_review_candidate` event. A successful `ready_for_apply_confirmation` synthesis stores the
 same candidate inside `ArtifactReviewedProposal` so restart and storage
 transfer can prove what every reviewer assessed.
 
@@ -678,9 +678,9 @@ for the user-visible lifecycle and limits.
 
 ## Provider disclosure
 
-A built-in substantive call uses typed agent-context wire v9. Codex and
+A built-in substantive call uses agent-provider-wire-v10. Codex and
 Antigravity share the same closed domain constraints and payload semantics: the
-only required root field is `action`, which is one closed
+only required root field is `agent_action`, which is one closed
 SEARCH, READ, or ANSWER object. ANSWER embeds its invocation-specific result
 object directly. Runtime derives correlation and successful supporting READ
 handles from the active invocation. There is no JSON-in-string layer,

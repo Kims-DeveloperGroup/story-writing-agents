@@ -486,6 +486,7 @@ indicators. See
 - [Provider-free smoke](docs/guides/smoke-test.md)
 - [CLI reference](docs/reference/cli.md)
 - [Runtime API](docs/reference/runtime-api.md)
+- [Agent JSON contracts, schema construction, and field guidance](docs/reference/provider-wire.md)
 - [Safe Git baseline, session resources, and exact internal commits](docs/reference/git-adapter.md)
 - [System design](docs/design/overview.md)
 

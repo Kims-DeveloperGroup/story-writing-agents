@@ -439,113 +439,18 @@ fixed start-failure diagnostic. Such a call has no submitted transport count.
 
 ### Sanitized provider call and JSON result
 
-For a session named `novel`, the process working directory is the exact
-descriptor-selected session worktree (the container path is sanitized):
+Antigravity and Codex receive the same `agent-provider-wire-v10` request and response
+semantics. The native invocation passes the response schema through `--json-schema`.
+The [agent JSON field guide](../reference/provider-wire.md) documents complete shapes
+and illustrative responses, including the `agent_action` root, `response_type`,
+context source records, and direct conversation and consensus schemas.
 
-```text
-/workspace-sibling-worktrees/novel
-  .agents/agents/lead_orchestrator-<selector-sha256>/agent.md  # protected role
-```
-
-Mutable provider state remains external and generation-qualified at
-`<control>/agent_states/orchestrator_state/provider_sessions/.antigravity/sessions/novel/<generation-sha256>/lead_orchestrator/<definition-sha256>/provider`.
-A fresh non-streaming or fallback Lead call uses this shell-free argument vector
-(interactive turns on capable raw terminals select `--output-format stream-json`);
-wrapping is only for readability:
-
-```text
-cwd=/workspace-sibling-worktrees/novel
-agy --gemini_dir=<runtime-root>/provider \
-  --input-format text --output-format json \
-  --json-schema '<exact Antigravity-rendered wire-v9 schema>' \
-  --agent lead_orchestrator-<selector-sha256> --sandbox --mode plan \
-  --disable-slash-commands --print-timeout 900s --new-project \
-  --print '<exact confidential wire-v9 payload JSON, one argument>'
-```
-
-On a compatible later call, the adapter keeps the exact content-qualified
-`--agent` selector and replaces `--new-project` with
-`--conversation agy-c-1`. Antigravity reopens the project associated with that
-exact conversation. Story never supplies
-`--project`; the exact correlated session CWD is the project root. This matches
-the provider's documented
-[project and conversation behavior](https://antigravity.google/docs/cli/projects/).
-
-The payload is the exact UTF-8 inner JSON string, without a native event wrapper
-or an added newline. Standard input is empty. This transport was verified with
-CLI 1.1.27: raw text stdin was ignored in probes with an empty `--print` argument,
-`-`, or a constant print value. The response schema still requires the descriptive
-typed result even though the input uses compact runtime field names.
-
-A successful native response is exactly one UTF-8 JSON object (or in streaming mode,
-line-delimited stream-json events ending in one terminal `result` object). This sanitized
-shape is deliberately non-executable: `json_schema` stands for the complete
-object supplied on argv, whose canonical bytes must match exactly.
-
-```json
-{
-  "status": "SUCCESS",
-  "conversation_id": "agy-c-1",
-  "structured_output": {
-    "action": {
-      "kind": "answer",
-      "result": {
-        "message": "<sanitized reply>",
-        "authoring_scope": {
-          "activity": "workflow",
-          "target_paths": [],
-          "domains": [],
-          "task": "task_demo@1"
-        }
-      }
-    }
-  },
-  "json_schema": {"<documentation-placeholder>": "exact Antigravity-rendered wire-v9 schema object"},
-  "usage": {"input_tokens": 100, "output_tokens": 20, "cache_read_tokens": 0}
-}
-```
-
-The example shows the minimal fields of a `lead-outcome-v5` Lead ANSWER using
-an illustrative task offered by runtime. Every provider-produced direct Lead
-result requires `message` and compact `authoring_scope`; questions and critiques
-add `kind`, while the default answer omits it. Missing scope receives one
-bounded structured repair and then a runtime-owned visible no-action fallback
-if repair also fails; runtime never infers a workflow scope. The fallback is
-not a variant of the closed native Structured Output schema. Other calls
-require only the semantic fields for their selected result type. Fresh
-recommendations require one typed preparation action, then offer
-Confirm/Reject/Revise. Confirm prepares an exact proposal or asks a material
-question; specialist execution/review, Apply, and Commit need separate
-decisions. Ordinary contextual approval can supersede an unconfirmed
-recommendation as a new instruction. Contextual authoring can select `start`,
-`continue`, or `cancel`
-under the [runtime contract](../reference/runtime-api.md#contextual-authoring-objectives).
-Story rejects invalid UTF-8, duplicate fields, non-finite numbers, additional
-JSON objects, and trailing non-whitespace data. It requires a safe
-`conversation_id` matching the retained ID on resume, object
-`structured_output`, and the exact rendered object schema echo before
-constructing a `ProviderResult`. Status must be `SUCCESS` or pass the narrow
-completed-error recovery below. It never falls back to a string-valued
-`response` field.
-Usage comes only from the terminal object's recognized exact nonnegative
-integer counters; absent or invalid counters remain unavailable. The complete
-closed SEARCH, READ, and minimal Lead ANSWER branches are shown in
-[What providers receive](lead-agent.md#what-providers-receive).
-
-Lead policies use the v5 overlay. Ordinary synthesis uses the minimal
-`lead-synthesis-v3` contract. Specialist replies use `specialist-reply-v2`,
-artifact-review synthesis uses `artifact-review-synthesis-v3`, and contextual
-transport remains wire v9. A known
-read-only Lead failure after reference reads can expose `retry_lead_turn` once
-the exact attempt and reference accounting close. Its authoring objective
-stays open; explicit new input uses fresh evidence. Uncertain cleanup remains
-recovery-gated, and neither adapter nor runtime automatically replays the turn.
-
-Recommendation Confirm and Revise retain the same pending operation through
-permitted authentication assistance. Login neither repeats the decision nor
-resets its call reservation. These contract descriptions do not establish a
-new native-provider evaluation; historical evaluation records below retain
-their recorded scope and versions.
+The runtime delivers common instructions for every role, per-call
+`contract_guidance`, and descriptions in the output schema. The request uses named
+controls in `response_contract`, task data in `task_input`, and current evidence in
+`context_observation`. The adapter's native transport envelope is distinct from the
+semantic JSON returned by the agent. Provider exchange records capture the actual
+payload and schema for inspection.
 
 ### Recover a completed native error
 
@@ -592,69 +497,20 @@ alone never establishes domain acceptance.
 
 ### Shared structured-output contract
 
-Codex and Antigravity share provider-neutral result constraints and payload
-semantics. Typed wire v9 has a closed required root object with one `action`:
-SEARCH, READ, or ANSWER. Runtime derives correlation and READ usage. ANSWER
-embeds the invocation-specific result object directly; there is no JSON-in-
-string result layer.
+Both adapters validate the same closed, descriptive contract before semantic
+normalization. Contextual replies select `search_context`, `read_context`, or
+`submit_result` through `agent_action.action_type`. The current schema restricts
+available actions, source types, and counts. A terminal `task_result` follows the
+specific built-in result contract and includes `response_type`.
 
-Antigravity locally renders two equivalent constraints for its native
-function-schema conversion: `{"type":"null","enum":[null]}` becomes
-`{"type":"null"}`, and an integer singleton enum becomes equal `minimum` and
-`maximum` when the integer is within ±(2^53−1) and neither bound already exists.
-The renderer visits schema nodes without changing instance data. The original
-domain schema and Codex schema remain unchanged. The equivalence follows the
-JSON Schema definitions of [null](https://json-schema.org/understanding-json-schema/reference/null)
-and [numeric bounds](https://json-schema.org/understanding-json-schema/reference/numeric);
-Google's native [Schema representation](https://ai.google.dev/api/generate-content#Schema)
-declares enum entries as strings and numeric bounds as numbers.
+Use the [field guide](../reference/provider-wire.md) to build and interpret response
+schemas. Agents receive these meanings in bound instructions, `contract_guidance`,
+and schema descriptions. Invalid JSON, extra properties, unsupported values, and
+wrong branches follow the bounded structured-result repair behavior. Diagnostics
+refer to the descriptive provider fields. No legacy wire decoder is available.
 
-Before constructing an Antigravity `ProviderInvocation`, the backend uses the
-adapter-owned renderer. Request capture, schema-byte accounting, argv, and the
-required schema echo therefore use the actual rendered transport schema.
-Rendered bytes can grow: the captured canary changed from 1,314 to 1,326 bytes.
-The original schema size is neither transport byte identity nor a conservative
-bound. Shared accounting definitions and the exact payload remain unchanged.
-
-Antigravity's staged prompt also directs `finish` to receive the complete
-schema-selected outer object. For contextual calls, the specialist assessment
-belongs in `action.result` inside `action`. This rendering
-changes no common prompt file, existing workspace prompt, or Codex adapter or
-transport.
-
-The staged Lead instructions also clarify three existing requirements:
-
-- Verified story judgments need a supporting attached-reference or completed
-  READ receipt. A core-document status ID alone is not content evidence.
-- Proposal assignments collectively cover all supplied input aliases, including
-  `user_input`, and all cited READ evidence IDs. Assignment inputs and content
-  evidence serve different purposes.
-- Every consultation synthesis preserves the runtime-supplied scope, evidence,
-  and ordered reply IDs, plus every required unresolved input. A concern,
-  conflict, or insufficient-evidence assessment remains unresolved even when
-  the Lead describes a remedy or ends the consultation.
-
-These Antigravity-only clarifications change staged instructions; domain
-validation, confirmation authority, and process-launch controls remain the same.
-The [design reference](../design/prompts-and-provider.md#provider-process-boundaries)
-describes the exact fields.
-
-OpenAI Structured Outputs requires an object root, every declared field in
-`required`, `additionalProperties: false` on closed objects, explicitly typed
-array items, and a union with `null` for nullable values. See the official
-[OpenAI Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
-The [Gemini structured-output guide](https://ai.google.dev/gemini-api/docs/structured-output)
-describes a separate schema surface; Antigravity's native function conversion
-also needs the local rendering above.
-Antigravity transport success additionally requires the root-object
-`structured_output` and exact `json_schema` echo described by its official
-[headless CLI guide](https://antigravity.google/docs/cli/headless/).
-
-Transport validation does not replace Story's checks of correlation,
-runtime-issued handles and evidence IDs, the Lead outcome matrix, input
-aliases, artifact authority, or user confirmation. Applications do not call
-separate Codex or Antigravity SEARCH/READ/ANSWER APIs: Story may make bounded
-continuation calls using the same provider invocation boundary.
+Direct conversation, retrieval, and consensus calls use the same semantic naming
+and guidance rules. Public Python and persistence codecs retain their own names.
 
 ### Why the earlier Lead call did not proceed
 
@@ -856,7 +712,7 @@ The current routes are:
 | L04-SONNET-ONE | `claude-sonnet-4-6`: one-specialist consultation and resume. |
 | L05-MIXED | Configured Codex Lead, Antigravity Pro High plot specialist, and Sonnet character specialist. |
 | L06A-QUESTION | Flash: fresh workflow-only clarification. |
-| L06C-RECOMMENDATION | Flash: finished supplied outline, substantive Plot `REVIEW` scope, and an exact pending `prepare_consultation` recommendation for `plot_architect`. No preparation decision, consultation proposal, specialist execution, Apply, or Commit. |
+| L06C-RECOMMENDATION | Flash: finished supplied outline, substantive Plot `REVIEW` scope, and an exact pending `draft_specialist_consultation_proposal` recommendation for `plot_architect`. No preparation decision, consultation proposal, specialist execution, Apply, or Commit. |
 | L06B-CRITIQUE | Flash: critique unsafe workflow instructions about skipping confirmation. Locally loaded whole-outline and ranged-manuscript references supply context; no story judgment is requested. |
 | L07-SEARCH-READ | Flash: fresh workflow-only literal scheduling lookup and citation through SEARCH→READ→ANSWER, without story interpretation. |
 | L08-DECISIONS | Flash: finished inline outline review; exact Reject/Revise, stale/forged decisions, and ordinary `Yes`. |

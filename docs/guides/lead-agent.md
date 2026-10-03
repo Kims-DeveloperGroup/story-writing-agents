@@ -283,7 +283,7 @@ property paths, expected and actual JSON types, or a fixed rule. Reports that
 exceed the diagnostic cap list up to 2,048 findings, then say additional issues
 were omitted.
 For example, a missing
-`$.action.result.authoring_scope` is described as a missing required property;
+`$.agent_action.task_result.writing_task_scope` is described as a missing required property;
 unexpected property names and provider values are never printed. Python
 callers can read the same ordered chunks from `LeadTurnResult.validation_details`;
 direct `AgentReply` and `ConversationReply` values also expose
@@ -787,8 +787,8 @@ Do not treat every provider-related failure as the same recovery case:
 For example, the former Codex failure was caused by a response schema whose
 array `items` node had no explicit supported type. Codex rejected that schema
 before returning a valid `ProviderResult`, so the exchange could show only
-`provider_invocation_failed`. Typed wire v9 uses a closed
-`{action}` root and embeds every action/result object directly. Runtime derives
+`provider_invocation_failed`. Agent-provider-wire-v10 uses a closed
+`{agent_action}` root and embeds every action/result object directly. Runtime derives
 correlation from the active call.
 Conversely, an Antigravity result that adds undeclared bookkeeping fields or
 omits a semantic field required by its selected variant is a returned-result
@@ -918,410 +918,50 @@ cannot cover.
 
 ## What providers receive
 
-Applications do not call separate provider search/read/answer endpoints.
-Runtime binds the selected agent and drives one bounded contextual invocation.
-The samples below are synthetic illustrations of the stabilized contracts;
-generated correlations, IDs, handles, digests, and compact planning counters
-vary.
-Initial-payload samples below omit the separate required `h` session-context
-object for readability; they are excerpts, not complete on-wire payloads.
-SEARCH/READ continuation frames carry only their new observation.
+The runtime binds the selected agent and drives one bounded contextual invocation.
+Codex and Antigravity receive the same `agent-provider-wire-v10` payload and
+response-schema semantics through their native transports. See the
+[agent JSON field guide](../reference/provider-wire.md) for the complete contract,
+field meanings, schema construction, and illustrative responses.
 
-Codex and Antigravity receive byte-identical provider-neutral wire-v9 schema
-and payload semantics; only their native transport differs. The provider root
-requires only `action`; runtime derives correlation and action-index facts from
-the active invocation. This sanitized structural sample shows all three action
-variants:
+Each call carries `protocol_version`, `request_correlation_token`,
+`response_contract`, and `contract_guidance`. Initial calls also carry the relevant
+`task_input`, `session_history`, documents, and current draft. Continuations carry
+`context_observation` and the current remaining action limits. Named objects
+replace positional controls, source records, and candidate operations.
 
-```json
-{
-  "type": "object",
-  "additionalProperties": false,
-  "properties": {
-    "action": {
-      "anyOf": [
-        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["search"]},"queries":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"properties":{"text":{"type":"string"},"source_kinds":{"type":"array","minItems":1,"items":{"type":"string","enum":["writing_artifact","conversation","active_debate","own_agent_state"]}}},"required":["text","source_kinds"]}}},"required":["kind","queries"]},
-        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["search"]},"queries":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"properties":{"text":{"type":"string"},"source_kinds":{"type":"array","minItems":1,"items":{"type":"string","enum":["writing_artifact"]},"maxItems":1}},"required":["text","source_kinds"]}},"path_prefix":{"type":"string"}},"required":["kind","queries","path_prefix"]},
-        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["read"]},"handles":{"type":"array","minItems":1,"items":{"type":"string"}}},"required":["kind","handles"]},
-        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["answer"]},"result":{"type":"object","additionalProperties":false,"properties":{"message":{"type":"string"},"authoring_scope":{"type":"object","additionalProperties":false,"properties":{"activity":{"type":"string","enum":["workflow","draft","revise","review"]},"target_paths":{"type":"array","items":{"type":"string"}},"domains":{"type":"array","items":{"type":"string","enum":["plot_structure","character_world","tone_execution"]}},"task":{"type":"string"}},"required":["activity","target_paths","domains","task"]}},"required":["message","authoring_scope"]}},"required":["kind","result"]}
-      ]
-    }
-  },
-  "required": ["action"]
-}
-```
+The response root is `agent_action`. Its `action_type` selects `search_context`,
+`read_context`, or `submit_result`; the current schema includes only actions still
+allowed by the invocation. SEARCH returns authorized READ handles. READ retrieves
+exact source content. A terminal response embeds the semantic object directly in
+`task_result`. The runtime owns correlation, attribution, and evidence receipts.
 
-The shown ANSWER branch is the minimal `lead-outcome-v5` workflow-meta direct-
-answer variant. Every provider-produced direct Lead result requires `message`
-and compact `authoring_scope`; questions and critiques add `kind`, while the
-default answer omits it. Live schemas add only the semantic fields needed by
-recommendation, story-specific, and proposal variants. SEARCH finds locators,
-READ accepts only issued SEARCH handles, and ANSWER embeds its semantic result
-directly. Runtime derives evidence receipts, used handles, correlation, and
-other bookkeeping. It never infers a missing scope as workflow: omission gets
-one bounded repair, then a runtime-owned visible no-action fallback if repair
-fails. That fallback is not a provider-schema variant. There is no JSON-in-
-string layer or legacy decoder.
+Every built-in result has an explicit `response_type`. The Lead contract,
+`lead-response-v6`, distinguishes answers, clarification questions, critiques,
+proposal-drafting recommendations, specialist-consultation proposals, and artifact
+change proposals. Every Lead result includes `response_text` and
+`writing_task_scope`; the scope selects an exact offered `{task_id, task_revision}`
+pair. Missing scope receives the bounded structured-result repair and then the
+runtime's visible no-action fallback if repair fails.
 
-A sanitized provider-call summary (with the schema block referenced rather
-than duplicated) has the same semantics for either provider:
+A `proposal_drafting_request` asks Lead to draft a concrete document-change or
+specialist-consultation proposal for later confirmation. A `document_change_request`
+tracks the user's requested durable document change. It remains pending through
+questions, drafts, consultation, and review; exact successful Apply completes it.
+These concepts are explained separately in the field guide.
 
-```json
-{
-  "call_kind": "collaboration_initial",
-  "prior_thread_id": null,
-  "schema": "<exact per-call schema shown above>",
-  "payload": {
-    "c": "<correlation-1>",
-    "q": ["lead", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead", "lead-outcome-v5"]],
-    "i": {"workflow": "lead_front_channel", "command": "Does the planned reveal conflict with the current opening?"}
-  }
-}
-```
+Specialist tasks use `specialist-assignment-response-v3`. Draft assignments return
+`draft_completed` or `insufficient_evidence`; review assignments return
+`supports_proposal`, `concerns_found`, `conflicts_found`, or `insufficient_evidence`.
+Ordinary synthesis uses `consultation-summary-v4`. Artifact review uses
+`artifact-review-summary-v4`, with `review_outcome` set to
+`ready_for_apply_confirmation`, `revision_required`, or `rejected`. A positive
+review permits presentation of a separate Apply decision and does not write files.
 
-Codex receives that schema by `--output-schema <schema-file>`. Antigravity
-receives the same canonical schema by `--json-schema <canonical-json>` and must
-return a root-object `structured_output` plus an exact `json_schema` echo; its
-custom-agent, isolated-project, and JSON-result boundary is documented in
-the [Antigravity guide](antigravity.md#sanitized-provider-call-and-json-result).
-Applications do not call separate provider search/read endpoints.
-
-For example, either provider can return this provider-neutral SEARCH output:
-
-```json
-{"action":{"kind":"search","queries":[{"text":"planned reveal opening","source_kinds":["writing_artifact"]}]}}
-```
-
-The samples keep `source_kinds` in canonical order for readability, but a
-provider's array order is not semantic. Runtime requires a nonempty,
-duplicate-free subset of the kinds allowed for that request and canonicalizes
-it before authorizing SEARCH. Empty, duplicate, unknown, or request-disallowed
-kinds are rejected. A non-null `path_prefix` is allowed only with
-`source_kinds=["writing_artifact"]`. The provider schema types and enums each
-member; runtime—not JSON Schema—owns uniqueness and ordering validation.
-
-### Lead turn: initial input, SEARCH, READ, and ANSWER
-
-For this user input:
-
-```text
-Does the planned reveal conflict with the current opening?
-```
-
-the initial compact call includes required workflow material and four
-content-free canonical-core statuses. The status inventory itself grants no
-story-body receipt. Required `h` context includes exact retained history and
-current session directives. Relevant core content requires host-owned SEARCH/READ
-or explicit references; remembered content does not satisfy current evidence
-requirements.
-
-```json
-{
-  "c": "<correlation-1>",
-  "q": ["lead", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead", "lead-outcome-v5"]],
-  "i": {
-    "workflow": "lead_front_channel",
-    "conversation_id": "<conversation-id>",
-    "command": "Does the planned reveal conflict with the current opening?",
-    "authoring_tasks": [{"task_id": "task_demo", "task_revision": 1}],
-    "input_aliases": [{"input_id": "user_input", "kind": "user_input", "locator": "conversation/<turn-id>/user_input", "revision_digest": "sha256:<digest>"}]
-  },
-  "core_statuses": [
-    {"evidence_id": "status_1", "locator": "core_documents/global_outline.md", "status": "present"},
-    {"evidence_id": "status_2", "locator": "core_documents/part_outlines.md", "status": "empty"}
-  ]
-}
-
-```
-
-The sample abbreviates `h`, provider constraints, the remaining two status rows
-and `artifact_objectives` material. The latter
-contains the owner conversation, current objectives, and exact offered draft
-source IDs/digests. The illustrated review involves plot, motivation, and prose,
-and offers `task_demo`/`1`; real output must select an exact pair offered by that
-call. A provider that needs the manuscript can request a bounded lexical SEARCH:
-
-```json
-{"action":{"kind":"search","queries":[{"text":"planned reveal opening","source_kinds":["writing_artifact"]}]}}
-```
-
-Runtime returns a compact continuation observation. A hit includes source,
-revision, boundary, provenance, snippet, and an opaque invocation-local
-handle; it is not yet content evidence. The provider asks to READ that handle:
-
-```json
-{"action":{"kind":"read","handles":["<handle>"]}}
-```
-
-The READ continuation contains the selected untrusted text and a new evidence
-ID such as `read_2_1`. Runtime associates that receipt with the active
-invocation; the provider's final ANSWER returns only the semantic proposal:
-
-```json
-{
-  "action": {
-    "kind": "answer",
-    "result": {
-      "kind": "proposal",
-      "message": "I propose reviews of opening order, motivation, and prose.",
-      "authoring_scope": {
-        "activity": "review",
-        "target_paths": ["core_documents/global_outline.md", "manuscript/part-01/opening.md"],
-        "domains": ["plot_structure", "character_world", "tone_execution"],
-        "task": "task_demo@1"
-      },
-      "proposal": {
-        "assignments": [
-          {"agent_id":"plot_architect","instruction":"Review opening order against the outline.","input_ids":["user_input","read_2_1","read_2_2"],"mode":"review"},
-          {"agent_id":"character_custodian","instruction":"Review motivation in the opening.","input_ids":["user_input","read_2_1","read_2_2"],"mode":"review"},
-          {"agent_id":"execution_specialist","instruction":"Review the opening prose.","input_ids":["user_input","read_2_1","read_2_2"],"mode":"review"}
-        ]
-      }
-    }
-  }
-}
-```
-
-Runtime maps only those current used READs to durable content-free receipts,
-checks that two distinct nonempty receipts can prove `conflicting`, persists a
-typed scoped proposal, and returns its evidence and confirmation request to the
-caller. All affected specialists are disclosed before work starts. It does not
-independently decide that the two passages are semantically inconsistent.
-
-A complete, non-truncated zero-hit SEARCH instead includes a content-free
-`search_<action>` receipt in the observation. That receipt can support
-`missing` only when the searched scope includes canonical writing artifacts.
-A conversation-only zero hit, a truncated search, a hit that was never READ,
-or a READ not associated with the accepted answer cannot ground the claim.
-
-For a story-file change, the lead ANSWER uses the same envelope but chooses
-`kind=proposal`, sets the ordinary `proposal` to `null`, and returns one strict
-provider-neutral `artifact_intent`. For example, a range reference might be
-resolved to `reference_1` by runtime. This illustration assumes all required
-current-task specialist drafts are already recorded and integrated; it is not
-a shortcut from an authoring brief to review. The synthetic task pair below
-must match the offered active task:
-
-```json
-{
-  "action": {
-    "kind": "answer",
-    "result": {
-      "kind": "proposal",
-      "message": "I prepared an exact manuscript patch candidate for review.",
-      "authoring_scope": {"activity":"review","target_paths":["manuscript/part-01/opening.md"],"domains":["plot_structure","character_world"],"task":"task_demo@1"},
-      "artifact_intent": {"operations":[{"kind":"patch","evidence_id":"reference_1","replacement_text":"<proposed replacement>"}]}
-    }
-  }
-}
-```
-
-The provider does not supply a candidate ID, path authority, reviewer ID,
-digest, Apply flag, or Git flag. Runtime resolves `reference_1` to its current
-canonical path/range, captures the complete artifact state, builds an exact
-change set, validates projected relationships, derives mandatory review
-domains, unions the explicitly requested additional domains in canonical
-order, and computes the candidate digest. An unknown or authority-bearing
-provider field violates the closed wire-v9 result schema, so the response is
-repaired once before candidate construction. If repair also fails, runtime
-emits a visible safe no-action Lead answer and continues the conversation. A
-schema-valid intent that cannot satisfy runtime artifact semantics instead
-closes as `artifact_intent_rejected`; runtime never infers missing paths, task
-selectors, or other authority.
-
-Every front-channel result supplies only the semantic fields for its selected
-variant. CLARIFY requires `kind=question`; CONSULT requires an ordinary
-consultation proposal; PREPARE requires an artifact intent. Once PREPARE is
-selected, bounded same-turn correction cannot replace it with advice or a prose
-completion claim. Runtime derives absent bookkeeping and no-action defaults; it
-never derives authority. Ordinary synthesis and specialist and artifact-review
-synthesis retain separate minimal contracts. Fresh Lead policies use v5.
-
-### Specialist assignment: initial input
-
-The dynamic material includes the exact assignment, its input subset, and the
-strict answer contract. Runtime loads authorized reference bytes locally and
-adds them under `untrusted_writing_artifact_context` without a provider prelude.
-
-```json
-{
-  "c": "<correlation-1>",
-  "q": ["specialist_assignment", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["specialist_assignment", "specialist-reply-v2"]],
-  "i": {
-    "workflow": "lead_specialist_consultation",
-    "authoring_scope": {"schema_version":1,"activity":"review","target_paths":["core_documents/global_outline.md","manuscript/part-01/opening.md"],"domains":["plot_structure","character_world","tone_execution"],"interpretation":"Review the supplied opening for timing, motivation, and prose.","task_id":"task_demo","task_revision":1},
-    "assignment": {
-      "assignment_id": "<assignment-id>",
-      "instruction": "Check the outline against the opening range.",
-      "mode": "review",
-      "review_basis": {"schema_version":1,"candidate_input_ids":["reference_3"],"criteria":"Check opening order against the outline."},
-      "input_ids": ["user_input", "reference_1", "reference_3"],
-      "round": 1
-    },
-    "inputs": [
-      {"input_id": "user_input", "kind": "user_input", "locator": "conversation/<turn-id>/user_input", "revision_digest": "sha256:<digest>", "start_line": null, "end_line": null, "text": "Check the opening."},
-      {"input_id": "reference_1", "kind": "core_document", "locator": "${core_documents/global_outline.md}", "revision_digest": "sha256:<digest>", "start_line": null, "end_line": null},
-      {"input_id": "reference_3", "kind": "manuscript", "locator": "${manuscript/part-01/opening.md}#L20-L32", "revision_digest": "sha256:<digest>", "start_line": 20, "end_line": 32}
-    ],
-    "answer_contract": {
-      "assessment": ["supports", "concern", "conflict", "insufficient_evidence"],
-      "mode": "review",
-      "assignment_id": "<assignment-id>",
-      "input_ids": ["user_input", "reference_1", "reference_3"],
-      "message": "nonempty visible specialist assessment"
-    }
-  },
-  "untrusted_writing_artifact_context": [
-    {"ordinal": 1, "content": "<authorized whole outline>"},
-    {"ordinal": 2, "content": "<authorized manuscript lines 20-32>"}
-  ]
-}
-```
-
-For artifact review, every disclosed specialist receives all disclosed
-evidence plus one identical `artifact_candidate` input. The content-bearing
-candidate is a strict canonical object, not a path to reread and not write
-authority. This abbreviated rendering replaces the two nested canonical
-objects with labels:
-
-```json
-{
-  "input_id": "artifact_candidate",
-  "kind": "artifact_candidate",
-  "locator": "artifact-candidate/<candidate-id>",
-  "revision_digest": "sha256:<candidate-digest>",
-  "start_line": null,
-  "end_line": null,
-  "candidate": {
-    "schema_version": 1,
-    "candidate_id": "<candidate-id>",
-    "candidate_revision": 1,
-    "candidate_digest": "sha256:<candidate-digest>",
-    "change_set": "<exact canonical change-set object>",
-    "relationship_validation": "<exact projected relationship facts>",
-    "grounding_evidence_ids": ["reference_1", "reference_2"],
-    "mandatory_review_domains": ["tone_execution"],
-    "disclosed_review_domains": ["plot_structure", "character_world", "tone_execution"]
-  }
-}
-```
-
-Runtime derives `plot_architect`, `character_custodian`, and
-`execution_specialist` from those canonical domains. Reviewers cannot modify
-the candidate or delegate. Each returns only its exact assignment mode and ID, exact
-input IDs, assessment, and visible message.
-
-### Specialist SEARCH, READ, and ANSWER
-
-The provider can request bounded lexical search:
-
-```json
-{"action":{"kind":"search","queries":[{"text":"opening causality","source_kinds":["writing_artifact","conversation"]}]}}
-```
-
-Runtime searches only this invocation's authorized sources and returns an
-opaque handle in the continuation observation. The provider requests that
-handle:
-
-```json
-{"action":{"kind":"read","handles":["<handle>"]}}
-```
-
-After runtime recaptures and validates the source, the provider answers with
-only its assessment and visible message:
-
-```json
-{
-  "action": {
-    "kind": "answer",
-    "result": {"assessment":"concern","message":"The opening advances the reveal before its outline cause."}
-  }
-}
-```
-
-SEARCH and READ can inspect canonical writing artifacts, focused conversation,
-active debate, or the invoking agent's own state only as the route permits.
-They are not web search, shell access, a specialist call, or write authority.
-
-### Lead synthesis input and answer
-
-Only after every assignment succeeds does runtime call the lead with all typed
-replies and the exact attribution contract:
-
-```json
-{
-  "c": "<synthesis-correlation>",
-  "q": ["lead_synthesis", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead_synthesis", "lead-synthesis-v3"]],
-  "i": {
-    "workflow": "lead_synthesis",
-    "inputs": [
-      {"input_id": "user_input", "kind": "user_input", "locator": "conversation/<turn-id>/user_input", "revision_digest": "sha256:<digest>", "start_line": null, "end_line": null, "text": "Check the opening."},
-      {"input_id": "reference_1", "kind": "core_document", "locator": "${core_documents/global_outline.md}", "revision_digest": "sha256:<digest>", "start_line": null, "end_line": null},
-      {"input_id": "read_2_1", "kind": "manuscript", "locator": "${manuscript/part-01/opening.md}#L20-L32", "revision_digest": "sha256:<digest>", "start_line": 20, "end_line": 32}
-    ],
-    "replies": [
-      {"mode":"review", "assessment": "concern", "assignment_id": "<assignment-1>", "input_ids": ["user_input", "reference_1", "read_2_1"], "message": "The reveal is too early.", "reply_event_id": "<reply-event-1>"},
-      {"mode":"review", "assessment": "supports", "assignment_id": "<assignment-2>", "input_ids": ["user_input", "reference_1", "read_2_1"], "message": "The character motivation is plausible.", "reply_event_id": "<reply-event-2>"},
-      {"mode":"review", "assessment":"supports", "assignment_id":"<assignment-3>", "input_ids":["user_input","reference_1","read_2_1"], "message":"The prose supports the intended scene form.", "reply_event_id":"<reply-event-3>"}
-    ],
-    "answer_contract": {
-      "scope": "story_specific",
-      "authoring_scope": {"schema_version":1,"activity":"review","target_paths":["core_documents/global_outline.md","manuscript/part-01/opening.md"],"domains":["plot_structure","character_world","tone_execution"],"interpretation":"Review the supplied opening for timing, motivation, and prose.","task_id":"task_demo","task_revision":1},
-      "evidence_status": "conflicting",
-      "evidence_ids": ["reference_1", "read_2_1"],
-      "message": "nonempty visible synthesis",
-      "reply_event_ids": ["<reply-event-1>", "<reply-event-2>", "<reply-event-3>"],
-      "unresolved_input_ids": ["user_input", "reference_1", "read_2_1"],
-      "next_intent": "null or an exact same-lineage proposal intent",
-      "recommended_action": "null or one typed preparation action"
-    }
-  }
-}
-```
-
-The terminal provider answer returns only its semantic message:
-
-```json
-{
-  "action": {
-    "kind": "answer",
-    "result": {
-      "message": "Motivation is plausible, but the reveal still conflicts with the outline timing."
-    }
-  }
-}
-```
-
-Synthesis preserves the proposal's exact `authoring_scope`, story-specific scope,
-evidence status, and ordered evidence IDs unchanged; specialist reply IDs remain separate
-attribution. Synthesis may also use bounded SEARCH/READ before ANSWER, but new
-reads do not replace the proposal evidence lineage. It cannot dispatch another
-agent, write an artifact, or authorize Git. A strict `next_intent` is only a
-semantic request for runtime to construct a fresh round-two proposal. Ordinary
-synthesis uses `lead-synthesis-v3`: `recommended_action` is nullable and mutually
-exclusive with `next_intent`. Without either, the visible outcome is an answer.
-An action produces a separately confirmable recommendation while the historical
-durable synthesis payload remains unchanged.
-
-For artifact review, the synthesis input additionally includes the same exact
-`artifact_candidate`. Its independent minimal answer contract requires only
-`decision` and `message`. This uses `artifact-review-synthesis-v3`, independently
-of the candidate codec version:
-
-```json
-{
-  "action": {
-    "kind": "answer",
-    "result": {"decision":"propose","message":"The candidate is coherent after preserving the stated concern."}
-  }
-}
-```
-
-`decision=propose` is not a majority tally: the lead must account for every
-reply and retain every input from a `concern`, `conflict`, or
-`insufficient_evidence` reply in `unresolved_input_ids`. `revise` returns
-`revision_required`; `reject` returns `rejected`; neither creates an immutable
-reviewed proposal.
+All roles receive shared bound instructions, per-call input guidance, and response
+schema descriptions. Agents must follow the current schema's presence rules and
+select offered identities exactly. There are no alternate-name decoders or wire
+migration steps. Python API and persisted-history names remain separate interfaces.
 
 ## State meanings and next actions
 

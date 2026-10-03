@@ -354,6 +354,11 @@ def allowed_values(values: Sequence[object]) -> str:
     return choices
 
 
+_WIRE_DISCRIMINATORS = (
+    "response_type", "action_type", "change_type", "update_type", "review_outcome",
+)
+
+
 def _discriminator_schema(
     variant: object, discriminator: str,
 ) -> Mapping[str, object] | None:
@@ -370,7 +375,7 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str) -> Iterato
     variants = schema.get("anyOf")
     if type(variants) is list and variants:
         if type(value) is dict:
-            for discriminator in ("kind", "action", "decision", "operation"):
+            for discriminator in (*_WIRE_DISCRIMINATORS, "kind", "action", "decision", "operation"):
                 if discriminator not in value:
                     continue
                 supplied = value[discriminator]
@@ -416,7 +421,15 @@ def _diagnose(value: object, schema: Mapping[str, object], path: str) -> Iterato
                     ]
                     if len(properties) == len(variants):
                         common = set.intersection(*(set(item) for item in properties))
-                        for name in sorted(common):
+                        # Current wire names must not change the established
+                        # missing-context-before-invalid-value diagnostic order.
+                        # Keep domain-schema ordering unchanged.
+                        names = (
+                            sorted(common, key=lambda name: (name in value, name))
+                            if discriminator in _WIRE_DISCRIMINATORS
+                            else sorted(common)
+                        )
+                        for name in names:
                             if name == discriminator:
                                 continue
                             child = properties[0][name]

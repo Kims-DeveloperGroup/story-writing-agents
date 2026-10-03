@@ -189,7 +189,7 @@ def _materials(current_input: object = _PRIVATE_INPUT) -> tuple[ContextMaterial,
 
 
 def _correlation(call: ContextProviderCallRequest) -> str:
-    value = call.payload["c"]
+    value = call.payload["request_correlation_token"]
     assert isinstance(value, str)
     return value
 
@@ -204,9 +204,9 @@ def _answer(
     del call, used_handles
     return json.dumps(
         {
-            "action": {
-                "kind": "answer",
-                "result": {"content": content},
+            'agent_action': {
+                'action_type': 'submit_result',
+                'task_result': {"content": content},
             },
         },
         ensure_ascii=False,
@@ -220,10 +220,10 @@ def _search(
 ) -> str:
     return json.dumps(
         {
-            "action": {
-                "kind": "search",
+            'agent_action': {
+                'action_type': 'search_context',
                 "queries": [
-                    {"text": "needle", "source_kinds": ["writing_artifact"]}
+                    {'search_text': "needle", 'source_types': ['story_document']}
                 ],
             },
         },
@@ -235,13 +235,13 @@ def _read_search_hit(
     call: ContextProviderCallRequest,
     provider: "_ScriptedProvider",
 ) -> str:
-    framed = call.payload["o"]
-    assert isinstance(framed, list) and framed[0] == "s"
-    handle = framed[3][0][5]
+    framed = call.payload["context_observation"]
+    assert isinstance(framed, dict) and framed["observation_type"] == "context_search_results"
+    handle = framed["search_results"][0]["read_handle"]
     provider.used_handles = (handle,)
     return json.dumps(
         {
-            "action": {"kind": "read", "handles": [handle]},
+            'agent_action': {'action_type': 'read_context', 'read_handles': [handle]},
         },
         separators=(",", ":"),
     )
@@ -251,9 +251,9 @@ def _answer_with_read(
     call: ContextProviderCallRequest,
     provider: "_ScriptedProvider",
 ) -> str:
-    framed = call.payload["o"]
-    assert isinstance(framed, list) and framed[0] == "r"
-    assert framed[1][0][4] == provider.used_handles[0]
+    framed = call.payload["context_observation"]
+    assert isinstance(framed, dict) and framed["observation_type"] == "context_read_results"
+    assert framed["read_results"][0]["read_handle"] == provider.used_handles[0]
     return _answer(call, provider, used_handles=provider.used_handles)
 
 
@@ -263,9 +263,9 @@ def _lead_answer(
 ) -> str:
     return json.dumps(
         {
-            "action": {
-                "kind": "answer",
-                "result": {
+            'agent_action': {
+                'action_type': 'submit_result',
+                'task_result': {
                     "kind": "answer",
                     "message": "Visible lead answer.",
                     "proposal": None,
@@ -280,13 +280,13 @@ def _lead_answer_with_read(
     call: ContextProviderCallRequest,
     provider: "_ScriptedProvider",
 ) -> str:
-    framed = call.payload["o"]
-    assert isinstance(framed, list) and framed[0] == "r"
+    framed = call.payload["context_observation"]
+    assert isinstance(framed, dict) and framed["observation_type"] == "context_read_results"
     return json.dumps(
         {
-            "action": {
-                "kind": "answer",
-                "result": {
+            'agent_action': {
+                'action_type': 'submit_result',
+                'task_result': {
                     "kind": "answer",
                     "message": "Visible grounded lead answer.",
                     "proposal": None,
@@ -782,7 +782,7 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
         fingerprint = service_module._execution_policy_fingerprint
         policy, actions, sources = DEFAULT_CONTEXT_PLANNING_POLICY, CONTEXT_ACTION_POLICY, CONTEXT_SOURCE_POLICY
         baseline = fingerprint(policy, actions, sources)
-        self.assertEqual(service_module._CONTEXT_WIRE_VERSION, "agent-context-wire-v9")
+        self.assertEqual(service_module._CONTEXT_WIRE_VERSION, "agent-provider-wire-v10")
         with mock.patch.object(service_module, "_CONTEXT_WIRE_VERSION", "agent-context-wire-v7"):
             self.assertEqual(fingerprint(policy, actions, sources),
                              "sha256:d8cfd92e6949dbb817dfb7253cff1865642493d46078fa1e042a64ef81740a18")
@@ -859,19 +859,19 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             '"proposal":null}',
         )
         self.assertEqual(
-            tuple(call.payload["q"][0] for call in provider.calls),
-            ("lead", "lead", "lead"),
+            tuple(call.payload["response_contract"]["workflow_phase"] for call in provider.calls),
+            ("lead_user_turn",) * 3,
         )
         self.assertEqual(
-            tuple(tuple(call.payload["q"][-1]) for call in provider.calls),
-            (("lead", "outcome-v1"),) * 3,
+            tuple(call.payload["response_contract"]["result_contract_id"] for call in provider.calls),
+            ("outcome-v1",) * 3,
         )
         self.assertEqual(
-            tuple(call.payload["q"][1] for call in provider.calls),
-            ("sa", "sra", "a"),
+            tuple(call.payload["response_contract"]["allowed_action_types"] for call in provider.calls),
+            (["search_context", "submit_result"], ["search_context", "read_context", "submit_result"], ["submit_result"]),
         )
         self.assertEqual(
-            tuple(call.payload["q"][3][0] for call in provider.calls),
+            tuple(call.payload["response_contract"]["action_limits"]["remaining_context_actions"] for call in provider.calls),
             (2, 1, 0),
         )
 
@@ -906,16 +906,21 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
 
         self.assertEqual(len(result.provider_calls), 1)
         self.assertEqual(len(provider.calls), 1)
-        self.assertEqual(provider.calls[0].payload["q"][1], "a")
-        self.assertEqual(provider.calls[0].payload["q"][3][0], 0)
+        self.assertEqual(provider.calls[0].payload["response_contract"]["allowed_action_types"], ["submit_result"])
+        self.assertEqual(provider.calls[0].payload["response_contract"]["action_limits"]["remaining_context_actions"], 0)
 
     async def test_no_action_reserves_before_provider_and_commits_exact_call(
         self,
     ) -> None:
-        current = {**_shared_context_payload()["i"], "input": _PRIVATE_INPUT}
-        request = self.request(materials=_materials(current))
+        current = {**_shared_context_payload()["task_input"], "input": _PRIVATE_INPUT,
+                   "opaque_user_json": {"kind": "answer", "action": {"task": "literal@7"},
+                                        "state": "open", "context_ref": "literal-user-data"}}
+        custom_schema = _closed_schema({"content": {"type": "string"}, "opaque_customer_value": {
+            "type": "string", "enum": ["owner_only_value"], "description": "Caller-owned label; copy the offered value."}})
+        request = self.request(materials=_materials(current), result_contract=ContextJsonObjectResultContract("owner-contract-v1", custom_schema))
+        response_value = {"content": _PRIVATE_ANSWER, "opaque_customer_value": "owner_only_value"}
         provider = _ScriptedProvider(
-            (_answer,),
+            (lambda call, provider: json.dumps({"agent_action": {"action_type": "submit_result", "task_result": response_value}}),),
             usage=ProviderUsage(input_tokens=0, output_tokens=3),
         )
         hook_calls = 0
@@ -929,13 +934,16 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
 
         provider.before_call = assert_reserved
         result = await self.invoke(provider, request)
-        self.assertEqual(result.answer, _expected_text_answer())
+        self.assertEqual(json.loads(result.answer), response_value)
         self.assertEqual(len(provider.calls), 1)
+        action = provider.calls[0].schema["properties"]["agent_action"]
+        answer = next(variant for variant in action.get("anyOf", [action]) if variant["properties"]["action_type"]["enum"] == ["submit_result"])
+        self.assertEqual(answer["properties"]["task_result"], custom_schema)
         self.assertEqual(hook_calls, 1)
         self.assertEqual(provider.finalizers[0].calls, [("accepted", None)])
-        self.assertEqual(set(provider.calls[0].payload), {"c", "q", "i", "context_objects", "context_encoding"})
-        self.assertEqual(_expanded_context_payload(provider.calls[0].payload)["i"], current)
-        self.assertEqual(provider.calls[0].payload["q"][0], "conversation")
+        self.assertEqual(set(provider.calls[0].payload), {"request_correlation_token", "response_contract", "task_input", "shared_context_objects", "context_reuse", "protocol_version", "contract_guidance"})
+        self.assertEqual(_expanded_context_payload(provider.calls[0].payload)["task_input"], current)
+        self.assertEqual(provider.calls[0].payload["response_contract"]["workflow_phase"], "conversation")
         self.assertIsNone(provider.calls[0].expected_thread_id)
         self.assertEqual(result.provider_calls[0].accounting.usage, provider.usage)
         self.assertEqual(
@@ -967,51 +975,35 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.assertEqual(
             tuple(sorted(call.payload) for call in provider.calls),
             (
-                ["c", "i", "q"],
-                ["c", "o", "q"],
-                ["c", "o", "q"],
+                ["contract_guidance", "protocol_version", "request_correlation_token", "response_contract", "task_input"],
+                ["context_observation", "contract_guidance", "protocol_version", "request_correlation_token", "response_contract"],
+                ["context_observation", "contract_guidance", "protocol_version", "request_correlation_token", "response_contract"],
             ),
         )
         self.assertEqual(
-            tuple(call.payload["q"] for call in provider.calls),
-            (
-                [
-                    "conversation",
-                    "sa",
-                    "wcdo",
-                    [4, 2, 2, 4, 8, 8, 16, 200],
-                    ["conversation", "text-v1"],
-                ],
-                [
-                    "conversation",
-                    "sra",
-                    "wcdo",
-                    [3, 1, 2, 4, 7, 8, 16, 200],
-                    ["conversation", "text-v1"],
-                ],
-                [
-                    "conversation",
-                    "sa",
-                    "wcdo",
-                    [2, 1, 1, 4, 7, 8, 15, 200],
-                    ["conversation", "text-v1"],
-                ],
-            ),
+            tuple(call.payload["response_contract"] for call in provider.calls),
+            tuple({"workflow_phase": "conversation", "allowed_action_types": actions,
+                   "searchable_source_types": ["story_document", "conversation_history", "current_consensus_run", "agent_work_history"],
+                   "action_limits": dict(zip(("remaining_context_actions", "remaining_search_actions", "remaining_read_actions", "max_queries_per_search", "remaining_search_queries", "max_handles_per_read", "remaining_read_handles", "max_query_characters"), limits)),
+                   "result_contract_id": "text-v1"}
+                  for actions, limits in ((["search_context", "submit_result"], [4, 2, 2, 4, 8, 8, 16, 200]),
+                                         (["search_context", "read_context", "submit_result"], [3, 1, 2, 4, 7, 8, 16, 200]),
+                                         (["search_context", "submit_result"], [2, 1, 1, 4, 7, 8, 15, 200]))),
         )
         schemas = tuple(canonical_provider_json(call.schema) for call in provider.calls)
         self.assertEqual(len(set(schemas)), 2)
         for call in provider.calls:
             outer = call.schema
             self.assertIs(outer["additionalProperties"], False)
-            self.assertEqual(set(outer["properties"]), {"action"})
-            action = outer["properties"]["action"]
+            self.assertEqual(set(outer["properties"]), {"agent_action"})
+            action = outer["properties"]["agent_action"]
             variants = action.get("anyOf", [action])
             answer = next(
                 variant
                 for variant in variants
-                if variant["properties"]["kind"].get("enum") == ["answer"]
+                if variant["properties"]["action_type"].get("enum") == ["submit_result"]
             )
-            self.assertEqual(set(answer["properties"]), {"kind", "result"})
+            self.assertEqual(set(answer["properties"]), {"action_type", "task_result"})
         self.assertTrue(all(len(_correlation(call)) == 43 for call in provider.calls))
         self.assertEqual(len({_correlation(call) for call in provider.calls}), 3)
         self.assertEqual(
@@ -1044,7 +1036,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
 
     async def test_compatible_ready_is_delta_and_provider_history_loss_bootstraps(self) -> None:
         provider = _ScriptedProvider((_answer,) * 4)
-        current = _shared_context_payload()["i"]
+        current = _shared_context_payload()["task_input"]
         def request(index):
             return self.request(operation_id=f"operation-{index}", result_correlation_id=f"result-{index}",
                                 materials=_materials(current))
@@ -1064,8 +1056,8 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.assertIs(fourth.projection_accounting.mode, ContextDeliveryMode.BOOTSTRAP)
         self.assertIsNone(provider.calls[3].expected_thread_id)
         for call in provider.calls:
-            self.assertEqual(list(call.payload["context_objects"]), ["o1"])
-            self.assertEqual(_expanded_context_payload(call.payload)["i"], current)
+            self.assertEqual(list(call.payload["shared_context_objects"]), ["o1"])
+            self.assertEqual(_expanded_context_payload(call.payload)["task_input"], current)
 
     async def test_explicit_bootstrap_retires_reinspects_and_replaces_active_thread(
         self,
@@ -1160,15 +1152,15 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
 
         self.assertIs(first.projection_accounting.mode, ContextDeliveryMode.BOOTSTRAP)
         self.assertEqual(
-            provider.calls[0].payload["docs"],
-            [[1, "manuscript/part-01/chapter-01.md", "first line\nsecond line\n"]],
+            provider.calls[0].payload["context_documents"],
+            [{"source_reference_id": 1, "artifact_path": "manuscript/part-01/chapter-01.md", "content_text": "first line\nsecond line\n"}],
         )
         self.assertIs(second.projection_accounting.mode, ContextDeliveryMode.DELTA)
-        self.assertEqual(provider.calls[1].payload["t"], [["r", 1, 2]])
-        self.assertEqual(provider.calls[2].payload["t"], [["d", 1]])
-        self.assertEqual(provider.calls[3].payload["t"], [["s", 1]])
-        self.assertNotIn("p", provider.calls[2].payload)
-        self.assertNotIn("p", provider.calls[3].payload)
+        self.assertEqual(provider.calls[1].payload["context_removals"], [{"removal_type": "remove_record", "source_reference_id": 1, "record_reference_id": 2}])
+        self.assertEqual(provider.calls[2].payload["context_removals"], [{"removal_type": "remove_source_content", "source_reference_id": 1}])
+        self.assertEqual(provider.calls[3].payload["context_removals"], [{"removal_type": "remove_source", "source_reference_id": 1}])
+        self.assertNotIn("context_record_updates", provider.calls[2].payload)
+        self.assertNotIn("context_record_updates", provider.calls[3].payload)
         self.assertEqual(
             tuple(result.answer for result in (first, second, third, fourth)),
             (_expected_text_answer(),) * 4,
@@ -1336,10 +1328,10 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
         )
         self.assertEqual(len(provider.responses), 1)
         self.assertEqual(
-            tuple(call.payload["q"][1] for call in provider.calls[:-1]),
-            ("sa", "sra", "sa", "ra"),
+            tuple(call.payload["response_contract"]["allowed_action_types"] for call in provider.calls[:-1]),
+            (["search_context", "submit_result"], ["search_context", "read_context", "submit_result"], ["search_context", "submit_result"], ["read_context", "submit_result"]),
         )
-        self.assertEqual(provider.calls[-1].payload["q"][1], "a")
+        self.assertEqual(provider.calls[-1].payload["response_contract"]["allowed_action_types"], ["submit_result"])
 
         inspection = self.inspect(provider, request)
         self.assertIs(inspection.record.state, ContextLedgerRecordState.TAINTED)
@@ -1442,9 +1434,9 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
         ) -> str:
             return json.dumps(
                 {
-                    "action": {
-                        "kind": "read",
-                        "handles": list(private_values),
+                    'agent_action': {
+                        'action_type': 'read_context',
+                        'read_handles': list(private_values),
                     },
                 },
                 ensure_ascii=False,
@@ -1517,7 +1509,7 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
             return json.dumps(
                 {
                     "correlation": private_correlation,
-                    "action": {"kind": "read", "handles": []},
+                    'agent_action': {'action_type': 'read_context', 'read_handles': []},
                 },
                 ensure_ascii=False,
                 separators=(",", ":"),
@@ -1607,9 +1599,9 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
             del call, provider
             return json.dumps(
                 {
-                    "action": {
-                        "kind": "answer",
-                        "result": {"content": _PRIVATE_ANSWER},
+                    'agent_action': {
+                        'action_type': 'submit_result',
+                        'task_result': {"content": _PRIVATE_ANSWER},
                         "used_handles": [forged],
                     }
                 },

@@ -319,8 +319,8 @@ def _search(query: str, kinds: list[str]):
 
 def _missing_outcome(*, proposal: bool = False):
     def respond(call, _provider):
-        observation = call.payload["o"]
-        assert observation[0] == "s" and observation[2] is not None
+        observation = call.payload["context_observation"]
+        assert observation["observation_type"] == "context_search_results" and observation["zero_hit_receipt"] is not None
         value = {
                 "recommended_action": None if proposal else {"kind": "prepare_consultation", "purpose": "Check the missing evidence.",
                 "instruction": "Prepare an exact consultation for the disclosed user input.",
@@ -331,7 +331,7 @@ def _missing_outcome(*, proposal: bool = False):
             "message": "No matching canonical writing artifact was found.",
             "scope": "story_specific",
             "evidence_status": "missing",
-            "evidence_ids": [observation[2]["evidence_id"]],
+            "evidence_ids": [observation["zero_hit_receipt"]["evidence_id"]],
             "artifact_intent": None,
             "objective_intent": None,
             "authoring_scope": _live_scope(
@@ -360,11 +360,11 @@ def _missing_outcome(*, proposal: bool = False):
 
 def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False):
     def respond(call, _provider):
-        aliases = call.payload["i"]["input_aliases"]
+        aliases = call.payload["task_input"]["available_input_sources"]
         target_paths = tuple(
-            item["locator"].removeprefix("${").removesuffix("}").split("}#", 1)[0]
+            item["source_locator"].removeprefix("${").removesuffix("}").split("}#", 1)[0]
             for item in aliases
-            if item["input_id"] != "user_input"
+            if item["input_source_id"] != "user_input"
         )
         return _provider_envelope(call, {
             "kind": "question" if factual else "proposal",
@@ -380,7 +380,7 @@ def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False):
             "proposal": None if factual else {
                 "relation": "new_step", "purpose": "Review the exact attached candidates.",
                 "assignments": [{"agent_id": agent, "instruction": "Review the supplied candidates for the assigned domain.",
-                                 "input_ids": [item["input_id"] for item in aliases], "mode":"review",
+                                 "input_ids": [item["input_source_id"] for item in aliases], "mode":"review",
                                  "review_basis":{"schema_version":1,"candidate_input_ids":evidence_ids,"criteria":"Assess the exact candidate references."}}
                                 for agent in (PLOT_ARCHITECT, "execution_specialist")],
             },
@@ -607,7 +607,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         def invalid(ids: list[str]):
             def respond(call, _provider):
                 self.assertEqual(
-                    [item["evidence_id"] for item in call.payload["core_statuses"]],
+                    [item["evidence_id"] for item in call.payload["core_document_statuses"]],
                     ["status_1", "status_2", "status_3", "status_4"],
                 )
                 return _provider_envelope(
@@ -665,8 +665,8 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         prior_evidence_ids: list[str] = []
 
         def read_prior_turn(call, provider: _LeadContextProvider):
-            observation = call.payload["o"]
-            handle = observation[3][0][5]
+            observation = call.payload["context_observation"]
+            handle = observation["search_results"][0]["read_handle"]
             provider.used_handles = (handle,)
             return json.dumps(
                 {
@@ -676,8 +676,8 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             )
 
         def answer_prior_turn(call, provider: _LeadContextProvider):
-            observation = call.payload["o"]
-            evidence_id = observation[1][0][5]
+            observation = call.payload["context_observation"]
+            evidence_id = observation["read_results"][0]["evidence_id"]
             prior_evidence_ids.append(evidence_id)
             return _provider_envelope(
                 call,
@@ -750,8 +750,8 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             )
 
         def answer_with_unread_id(call, _provider):
-            observation = call.payload["o"]
-            self.assertEqual(observation[0], "s")
+            observation = call.payload["context_observation"]
+            self.assertEqual(observation["observation_type"], "context_search_results")
             return _provider_envelope(
                 call,
                 {
@@ -768,8 +768,8 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             )
 
         def read_first(call, provider: _LeadContextProvider):
-            observation = call.payload["o"]
-            handle = observation[3][0][5]
+            observation = call.payload["context_observation"]
+            handle = observation["search_results"][0]["read_handle"]
             provider.used_handles = (handle,)
             return json.dumps(
                 {
@@ -779,8 +779,8 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             )
 
         def answer_without_using_read(call, _provider):
-            observation = call.payload["o"]
-            self.assertEqual(observation[0], "r")
+            observation = call.payload["context_observation"]
+            self.assertEqual(observation["observation_type"], "context_read_results")
             return _provider_envelope(
                 call,
                 {
@@ -789,7 +789,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                     "message": "An unused READ cannot ground this answer.",
                     "scope": "story_specific",
                     "evidence_status": "verified",
-                    "evidence_ids": [observation[1][0][5]],
+                    "evidence_ids": [observation["read_results"][0]["evidence_id"]],
                     "artifact_intent": None,
                 "objective_intent": None,
                     "proposal": None,
@@ -822,7 +822,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             )
 
         def truncated_answer(call, provider):
-            self.assertTrue(call.payload["o"][1])
+            self.assertTrue(call.payload["context_observation"]["truncated"])
             return answer_with_unread_id(call, provider)
 
         conversation_id = self.conversation("Truncated search")
