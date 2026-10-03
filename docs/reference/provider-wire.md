@@ -98,6 +98,11 @@ error before provider submission. Caller-owned custom result schemas retain thei
 declared fields and supplied descriptions. The runtime accounts for guide bytes along
 with the actual request, schema, and bound instructions.
 
+Agents may use the bound provider's required native structured-result delivery
+mechanism, such as Antigravity's `finish`, only to return the current
+schema-conforming response. This narrow delivery permission does not grant shell,
+web, filesystem, other-agent, or general tool authority.
+
 ## Building the `schema` property
 
 The `schema` property is a JSON Schema object describing the response, separate

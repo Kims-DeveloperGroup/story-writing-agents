@@ -149,8 +149,10 @@ class AgentPolicyCompositionTests(unittest.TestCase):
 
         codex_bytes, codex_components = CodexAdapter._definition_file(definition)
         antigravity_bytes, antigravity_components = AntigravityAdapter._definition_file(definition)
-        original_clause = b"Do not invoke tools, other agents, subagents, providers, shell commands,"
-        self.assertIn(original_clause, captured)
+        self.assertIn(b"Do not invoke tools except the bound provider's required structured-result\ndelivery mechanism", captured)
+        self.assertIn(b"Use that mechanism only to deliver the current schema-conforming response.", captured)
+        self.assertIn(b"invoke other agents, subagents, providers, shell commands, web search, filesystem\noperations, or Git.", captured)
+        self.assertNotIn(b"Do not invoke tools, other agents", captured)
         self.assertIn(captured, codex_bytes)
         self.assertIn(captured, antigravity_bytes)
         self.assertEqual(definition.system_prompt_file.content, captured)

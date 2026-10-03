@@ -82,7 +82,7 @@ _EXPECTED_DIGESTS = {
     "agent_states/plot_architect_state/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "config/agent_configs.json": "16b585aa159899eb54f2f75d013e4dba1c35435f1beef4e34d50862500a4908e",
     "config/agents/character_custodian/AGENTS.md": "806db0bae145e2ba50e920174299de06c20c083e45bba04b76ffe9c2d550e923",
-    "config/agents/common/AGENTS.md": "9cf89bafdc5a49073f57773978628b752217b3e1ddd68f379440baf7493b4a4b",
+    "config/agents/common/AGENTS.md": "2bc0ea34377319843c3a998c95a873bd7c70d77d4f31304f7259b6a928e688b8",
     "config/agents/execution_specialist/AGENTS.md": "4a3ead3e2389bda9662989d02bb8817ad1ec2d7b4d4f322b246b892545d3979b",
     "config/agents/lead_orchestrator/AGENTS.md": "5278b90ba5939db6ee31d4e2e4808ba583b66ebb25614acaf8a79200b9e7ea7a",
     "config/agents/plot_architect/AGENTS.md": "e59aba2b2e750c7b9ef00b2c3f1ea4e7e9b2889f7abf25a840d7db781d5d93e7",
