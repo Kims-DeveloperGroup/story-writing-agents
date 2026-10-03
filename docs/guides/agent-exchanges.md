@@ -137,7 +137,7 @@ This preview shows the renderer's topology, not a retained Story screenshot.
 The external repository owns the byte-tested renderer contract:
 
 - [Terminal design system and Story-hosted scenario](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/21389ed43ff19f3d8f36727f4a7c6a1b102b6946/docs/design-system.md)
-- [Eleven deterministic complete sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/21389ed43ff19f3d8f36727f4a7c6a1b102b6946/docs/samples)
+- [Thirteen deterministic complete sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/21389ed43ff19f3d8f36727f4a7c6a1b102b6946/docs/samples)
 
 Expanded records use well-formatted multiline JSON. The left gutter repeats
 the physical JSONL source-record line on continuation rows, so `g` can move to
