@@ -659,10 +659,9 @@ class LazyViewerAdapterTests(unittest.TestCase):
             source = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\\n").encode()
 
             class Host:
-                def __init__(self):
-                    self.events = iter(("search\\tCODEX", "next_match", "previous_match", "clear_search", "close"))
-                    self.frames = []
-                    self.closed = 0
+                def __init__(self, events=("search\\tCODEX", "next_match", "previous_match", "clear_search", "close")):
+                    self.events = iter(events)
+                    self.frames, self.closed = [], 0
                 def terminal_size(self): return (240, 28)
                 def color_enabled(self): return False
                 def present(self, frame): self.frames.append(frame)
@@ -670,26 +669,22 @@ class LazyViewerAdapterTests(unittest.TestCase):
                 def close_view(self): self.closed += 1
 
             host = Host()
-            operation = prepare_agent_exchange_view(
-                source, session_id="session_1", scope_kind=AgentExchangeScopeKind.DEBATE,
-                scope_id="debate_1", scope_subject="Subject", agent_id="character_custodian",
-            )
+            def prepared(snapshot):
+                return prepare_agent_exchange_view(snapshot, session_id="session_1", scope_kind=AgentExchangeScopeKind.DEBATE,
+                    scope_id="debate_1", scope_subject="Subject", agent_id="character_custodian")
+            operation = prepared(source)
             operation(host)
-            assert host.closed == 1
-            assert "SIMPLE" in host.frames[0]
+            assert host.closed == 1 and "SIMPLE" in host.frames[0]
             searched = [frame for frame in host.frames if "Search all text='CODEX'" in frame]
             assert searched and all("VERBOSE" in frame for frame in searched)
             assert ["1/2" in frame for frame in searched] == [True, False, True]
             assert all('"provider": "' + text + '"' in frame for text, frame in zip(("⟦codex⟧ codex", "codex ⟦codex⟧", "⟦codex⟧ codex"), searched))
             assert "Search cleared" in host.frames[-1]
 
-            second = Host()
-            second.events = iter(("close",))
+            second = Host(("close",))
             operation(second)
-            assert "SIMPLE" in second.frames[0]
-            assert "Search " not in second.frames[0]
-            siblings = Host()
-            siblings.events = iter(("text\\tJ", "text\\tK", "text\\tJ", "text\\tJ", "idle", "text\\tK", "search\\tCODEX", "toggle_fold", "next_sibling", "idle", "next_match", "close"))
+            assert "SIMPLE" in second.frames[0] and "Search " not in second.frames[0]
+            siblings = Host(("text\\tJ", "text\\tK", "text\\tJ", "text\\tJ", "idle", "text\\tK", "search\\tCODEX", "toggle_fold", "next_sibling", "idle", "next_match", "close"))
             operation(siblings)
             assert all("First sibling." in siblings.frames[i] for i in (2, 4, 7))
             assert "Last sibling." in siblings.frames[3] and siblings.frames[2] == siblings.frames[4]
@@ -699,6 +694,11 @@ class LazyViewerAdapterTests(unittest.TestCase):
             assert all("{...}" in siblings.frames[i] and "1/2 occurrences" in siblings.frames[i] for i in (9, 10, 11))
             assert "2/2 occurrences" in siblings.frames[12] and '"provider": "codex ⟦codex⟧"' in siblings.frames[12]
             assert siblings.closed == 1 and json.loads(source) == record
+            navigation = Host(("key\\tup", "key\\tdown", "key\\tpage_up", "key\\tpage_down", "close"))
+            prepared(source * 2)(navigation)
+            assert all(notice in navigation.frames[i] for i, notice in ((2, "Last record."), (3, "First record."), (4, "Last record."), (5, "First record.")))
+            assert navigation.closed == 1 and navigation.frames[2] == navigation.frames[4] and navigation.frames[3] == navigation.frames[5]
+
             """
         )
         environment = dict(os.environ, PYTHONPATH=os.pathsep.join((str(ROOT / "src"), str(VIEWER_SOURCE))))
