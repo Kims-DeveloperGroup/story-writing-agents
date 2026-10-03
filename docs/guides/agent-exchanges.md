@@ -441,7 +441,7 @@ Common bounded failures are:
 | --- | --- |
 | No attached session | Attach the intended session, then retry bare `/exchanges`. |
 | No records for the session | Run the intended provider work; do not invoke it merely to manufacture diagnostics. |
-| Viewer 0.1.1, 0.2.0, 0.3.0, 0.4.0, 0.4.1, 0.4.2, or 0.5.0 remains after updating a checkout | Rerun the normal editable Story install to upgrade it to required 0.5.2; do not force or uninstall. |
+| Viewer 0.1.1, 0.2.0, 0.3.0, 0.4.0, 0.4.1, 0.4.2, 0.5.0, or 0.5.1 remains after updating a checkout | Rerun the normal editable Story install to upgrade it to required 0.5.2; do not force or uninstall. |
 | Required viewer unavailable | Rerun the normal Story installation, then retry. The compatibility extra is not a separate repair path. |
 | Viewer 0.5.2 is installed but incompatible or damaged | Verify the approved exact pin, then use the bounded forced-repair path in Troubleshooting. |
 | Store busy | Retry after the concurrent exchange write completes. |
