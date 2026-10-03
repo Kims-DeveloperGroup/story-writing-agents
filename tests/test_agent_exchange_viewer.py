@@ -680,9 +680,7 @@ class LazyViewerAdapterTests(unittest.TestCase):
             searched = [frame for frame in host.frames if "Search all text='CODEX'" in frame]
             assert searched and all("VERBOSE" in frame for frame in searched)
             assert ["1/2" in frame for frame in searched] == [True, False, True]
-            assert '"provider": "⟦codex⟧ codex"' in searched[0]
-            assert '"provider": "codex ⟦codex⟧"' in searched[1]
-            assert '"provider": "⟦codex⟧ codex"' in searched[2]
+            assert all('"provider": "' + text + '"' in frame for text, frame in zip(("⟦codex⟧ codex", "codex ⟦codex⟧", "⟦codex⟧ codex"), searched))
             assert "Search cleared" in host.frames[-1]
 
             second = Host()
@@ -691,14 +689,16 @@ class LazyViewerAdapterTests(unittest.TestCase):
             assert "SIMPLE" in second.frames[0]
             assert "Search " not in second.frames[0]
             siblings = Host()
-            siblings.events = iter(("text\\tJ", "text\\tJ", "idle", "text\\tK", "close"))
+            siblings.events = iter(("text\\tJ", "text\\tK", "text\\tJ", "text\\tJ", "idle", "text\\tK", "search\\tCODEX", "toggle_fold", "next_sibling", "idle", "next_match", "close"))
             operation(siblings)
-            assert siblings.frames[2] == siblings.frames[5]
-            assert siblings.frames[2] != siblings.frames[3]
-            assert "^" in siblings.frames[3] and "^" not in siblings.frames[4]
-            assert len(siblings.frames[3].splitlines()) == len(siblings.frames[4].splitlines())
+            assert all("First sibling." in siblings.frames[i] for i in (2, 4, 7))
+            assert "Last sibling." in siblings.frames[3] and siblings.frames[2] == siblings.frames[4]
+            assert "sibling." not in siblings.frames[5] and siblings.frames[2] != siblings.frames[5]
+            assert "^" in siblings.frames[5] and "^" not in siblings.frames[6]
+            assert len(siblings.frames[5].splitlines()) == len(siblings.frames[6].splitlines())
+            assert all("{...}" in siblings.frames[i] and "1/2 occurrences" in siblings.frames[i] for i in (9, 10, 11))
+            assert "2/2 occurrences" in siblings.frames[12] and '"provider": "codex ⟦codex⟧"' in siblings.frames[12]
             assert siblings.closed == 1 and json.loads(source) == record
-
             """
         )
         environment = dict(os.environ, PYTHONPATH=os.pathsep.join((str(ROOT / "src"), str(VIEWER_SOURCE))))
@@ -706,9 +706,7 @@ class LazyViewerAdapterTests(unittest.TestCase):
             [sys.executable, "-W", "error", "-c", script],
             cwd=ROOT, env=environment, text=True, capture_output=True, check=False,
         )
-        self.assertEqual(completed.returncode, 0,
-            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}",
-        )
+        self.assertEqual(completed.returncode, 0, f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}")
 
     def test_adapter_surface_is_internal_and_only_runtime_import_is_lazy(self) -> None:
         self.assertEqual(
