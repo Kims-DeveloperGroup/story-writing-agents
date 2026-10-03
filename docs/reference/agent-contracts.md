@@ -78,13 +78,12 @@ therefore changes the source revision/delta and can force bootstrap; it does not
 change the stable definition fingerprint. Role-prompt and persona references
 remain content-backed at definition construction.
 
-The runtime appends a deterministic Lead contract overlay to the retained
-common and Lead policy snapshots. It specifies the current minimal
-`lead-outcome-v5` variants and contextual objectives without rewriting an
-existing workspace's policies. Fresh checked-in and embedded Lead defaults
-already describe v5. The overlay preserves the separate `lead_synthesis`
-result schema. Ordinary synthesis has an optional `recommended_action`;
-specialist replies and artifact-review synthesis retain their own schemas.
+The runtime appends shared agent JSON guidance to every provider-bound role.
+The current built-in wire is `agent-provider-wire-v10`; the separate result
+contracts are `lead-response-v6`, `specialist-assignment-response-v3`,
+`consultation-summary-v4`, and `artifact-review-summary-v4`. Per-call guidance
+and schema descriptions explain the actual fields and allowed values. See the
+[field guide](provider-wire.md).
 
 <a id="explicit-reference-read-contracts"></a>
 
@@ -133,47 +132,26 @@ lead invocation with the direct story-artifact inputs and all typed replies.
 
 ## Typed context action contract
 
-Every built-in contextual physical call supplies one generated wire-v9 JSON
-Schema. The schema's root is a closed required object with only `action`.
-Runtime derives the invocation correlation and action index locally. `action`
-is one or more of these closed variants, narrowed to the
-actions and bounds valid for that physical call:
+The provider wire is `agent-provider-wire-v10`; its complete
+[field guide](provider-wire.md) covers contextual and direct calls. A contextual
+request supplies named controls in `response_contract`. The closed response root
+is `agent_action`, with one schema-permitted `action_type`:
 
-```json
-{"action":{"kind":"search","path_prefix":"manuscript/part-01/","queries":[{"text":"opening causality","source_kinds":["writing_artifact"]}]}}
-```
+- `search_context`: `queries` contain `search_text` and `source_types`; the
+  artifact-only branch may carry `artifact_directory_prefix`.
+- `read_context`: `read_handles` select capabilities issued by SEARCH.
+- `submit_result`: `task_result` is the invocation's semantic result object.
 
-```json
-{"action":{"kind":"read","handles":["<issued-handle>"]}}
-```
+The runtime rebuilds action branches and limits for each call and derives
+correlation, action index, attribution, and read receipts itself. No JSON-encoded
+result string or alternate-name decoder is accepted. All built-in result schemas
+use explicit `response_type`; custom result contracts retain their declared schema.
 
-```json
-{"action":{"kind":"answer","result":{"message":"Hello. What would you like to work on?","authoring_scope":{"activity":"workflow","target_paths":[],"domains":[],"task":"task_demo@1"}}}}
-```
-
-SEARCH has required `kind`, nullable `path_prefix`, and nonempty typed
-`queries`; every query has required `text` and a nonempty, duplicate-free
-`source_kinds` collection drawn from the request's allowed kinds. Provider
-array order is not semantic: runtime canonicalizes it to internal source-kind
-order before authorization. Empty, duplicate, unknown, and request-disallowed
-values are rejected, and a non-null `path_prefix` is valid only for the
-canonical collection containing `writing_artifact` alone. The documented
-common provider-schema subset types and enums members; it does not claim JSON
-Schema enforces uniqueness or canonical order.
-READ has required `kind` and nonempty typed `handles`. ANSWER has required
-`kind` and the exact invocation-specific object in `result`. The Lead front-
-channel example is a complete `lead-outcome-v5` direct-answer variant using an
-illustrative offered task: every provider-produced direct result requires
-`message` and compact `authoring_scope`. Questions and critiques add `kind`;
-the default answer omits it. Intent-bearing variants add their one semantic
-intent field. Runtime never infers a missing scope as `workflow`; it derives
-READ usage, evidence, IDs, revisions, interpretation, and other bookkeeping
-from the invocation and durable history.
-
-No action or result object is encoded as JSON text. Runtime still checks the closed schema,
-issued handles, result-domain contract, and current source
-authority after a provider returns the object. See
-[Agent-context design](../design/agent-context.md#typed-provider-wire-v9).
+Each provider-bound role receives common protocol instructions. Each call supplies
+`contract_guidance` for its actual inputs and response, and built-in output schemas
+carry field and enum descriptions. Guidance and schema bytes are accounted as part
+of the request. Runtime-owned contracts fail construction if required guidance is
+missing or inconsistent.
 
 ## Lead judgment and evidence contracts
 
@@ -229,15 +207,17 @@ is not replay authority.
 `ArtifactObjectiveCandidateBinding`, `ArtifactObjectivePayload`,
 `ArtifactObjectivePayloadV2`, `ArtifactObjective`, and `artifact_objective_context()`.
 
-The provider omits `objective_intent` or supplies a strict `start`, `continue`,
-or `cancel` intent. A start selects exact target paths; runtime freezes the
-exact originating user-event content as the visible request rather than
-accepting a provider request field. Continuation/cancellation names an offered
-`OPEN` objective owned by the current conversation. `clarify` requires a
-question, `consult` an ordinary consultation proposal, and `prepare` an
-artifact-intent proposal. PREPARE
-cannot become advice during bounded result correction. The exact field shapes
-are in the [runtime API](runtime-api.md#contextual-authoring-objectives).
+The provider omits `document_change_request_update` or supplies an `update_type`
+of `start_request`, `continue_request`, or `cancel_request`. Start selects exact
+target paths; the runtime freezes the originating user-event content as the
+visible request. Continue/cancel names an offered pending request owned by the
+current conversation. `requested_workflow_step` selects `ask_clarification`
+(a clarification question), `consult_specialists` (a consultation proposal), or
+`draft_document_change_proposal` (an exact artifact change proposal). The final
+step cannot become advice during bounded result correction. These wire fields
+normalize into the Python domain types listed above; their storage names remain
+unchanged. See the [wire field guide](provider-wire.md) and
+[runtime API](runtime-api.md#contextual-authoring-objectives).
 
 Runtime co-batches an accepted transition with its Lead result. Draft sources
 bind the complete original visible message bytes by event ID and digest;
@@ -258,11 +238,11 @@ The conversations facade exports `LeadRecommendationActionKind`,
 facade: `decide_lead_recommendation()` returns `LeadTurnResult` with a trailing
 optional `recommendation_request` for a pending recommendation.
 
-A fresh front-channel recommendation requires one `prepare_artifact` or
-`prepare_consultation` action and omits `objective_intent`. Other kinds omit
-`recommended_action`. Runtime replaces source aliases with exact event or
-input identities and discloses the action, basis, impact, and call reservation.
-The request requires substantive scope; consultation preparation includes every
+A fresh provider recommendation uses `proposal_drafting_request` with
+`action_type` set to `draft_document_change_proposal` or
+`draft_specialist_consultation_proposal`; unrelated intent fields are omitted.
+The runtime normalizes it into the Python values above, resolves source aliases,
+and discloses the action, basis, impact, and call reservation. The request requires substantive scope; consultation preparation includes every
 affected specialist. Its optional Python `authoring_scope` is keyword-only and
 binds the canonical scope into `action_digest` when present. Legacy omission
 remains omitted in codecs and digests; an old pending unscoped request is stale
@@ -312,14 +292,17 @@ nonempty candidate inputs and criteria. The conversations facade owns the exact
 `authoring_scope_to_dict`/`authoring_scope_from_dict` and
 `review_basis_to_dict`/`review_basis_from_dict` durable codecs.
 
-The strict provider contracts are `lead-outcome-v5`, `specialist-reply-v2`,
-`lead-synthesis-v3`, and `artifact-review-synthesis-v3`. Provider schemas contain
-only semantic choices. Runtime reconstructs attribution and routing metadata and
-never infers missing authority selectors. The provider schemas remain closed
-Structured Outputs. A missing Lead `authoring_scope`, like another structured-
-result rejection, receives one bounded repair call; a second rejection becomes
-a runtime-owned visible safe answer with no action. That fallback is not a
-provider-schema variant and never supplies an inferred `workflow` scope.
+The provider contracts are `lead-response-v6`,
+`specialist-assignment-response-v3`, `consultation-summary-v4`, and
+`artifact-review-summary-v4`. Their JSON names are independent of the Python
+values above. In particular, provider `writing_task_scope` contains
+`activity_type`, `target_artifact_paths`, `specialist_domains`, and an exact
+`task_reference` object. The runtime reconstructs attribution and routing facts
+and never infers missing authority selectors.
+
+Provider schemas are closed. Missing Lead scope receives one bounded repair;
+a second rejection becomes a runtime-owned visible no-action fallback. That
+fallback is not a provider-schema variant.
 
 ## Specialist reply and lead synthesis
 
@@ -353,16 +336,19 @@ CollaborationLeadSynthesisPayload(
 )
 ```
 
-The constructor above is the unchanged durable synthesis payload. The ordinary
-provider result uses `lead-synthesis-v3` and additionally requires nullable
-`recommended_action`, mutually exclusive with `next_intent`. Runtime stores an
-action in a separate versioned recommendation request; historical synthesis
-bytes and the artifact-review synthesis contract remain unchanged.
+The constructor above describes the durable synthesis payload. The ordinary
+provider result uses `consultation-summary-v4`, with explicit
+`response_type: "consultation_summary"`, `response_text`, and schema-permitted
+`proposal_drafting_request` or `follow_up_consultation`. The two requests are
+mutually exclusive. Provider specialist status values are `draft_completed`,
+`supports_proposal`, `concerns_found`, `conflicts_found`, and
+`insufficient_evidence`. The following rules describe the Python domain values
+normalized from that wire contract.
 
 Draft-mode assessment is `drafted` or `insufficient_evidence`; review-mode
 assessment is `supports`, `concern`, `conflict`, or `insufficient_evidence`.
-The reply must repeat its assignment mode, assignment ID, and exact
-ordered input IDs. Synthesis must cite every successful reply event in order
+The runtime binds the reply to its assignment mode, assignment ID, and exact
+ordered input IDs. Durable synthesis records cite every successful reply event in order
 and cannot omit an input from a concern, conflict, or insufficient-evidence
 reply. `drafted` contributes material without asserting support or final review.
 A non-null `next_intent`
@@ -475,7 +461,7 @@ compatibility value. It must match the request's session and agent. The current
 built-in runtime translates authoritative capture into typed contextual wire
 v7; it does not send this object as the provider envelope. Direct noncontextual
 callers may still use the established request field. The context types are not
-package-root exports; see [Agent-context design](../design/agent-context.md#typed-provider-wire-v9).
+package-root exports; see [Agent-context design](../design/agent-context.md#agent-provider-wire-v10).
 
 ```python
 DebateMessage(sender: str, phase: str, round: int, revision: str,
@@ -517,7 +503,7 @@ their two trailing context fields default to `None`, and their reply adds
 ordered validated sources without changing the one-step pair.
 When present, story-session capture must match the request session, agent, and
 any focused conversation identity. Current built-in execution converts it to
-typed contextual wire v9; omitting it retains direct-request compatibility. An
+agent-provider-wire-v10; omitting it retains direct-request compatibility. An
 omitted `rag_context` means there was no attempted RAG envelope.
 See [Conversation transcripts](conversation-transcripts.md) for windows and
 [Bounded retrieval](conversation-retrieval.md) for actions and persistence.

@@ -65,16 +65,13 @@ class LiveHarnessAuditTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.identity = dict(session_id="session", conversation_id="conversation",
                              turn_id="turn", step_id="step", agent_id="lead_orchestrator")
-        current = dict(identity=self.identity, workflow="lead_front_channel", command="Review once")
-        prelude = lambda ordinal: dict(operation="writing_artifact_reference_read", correlation={
+        current = dict(identity=self.identity, workflow_type="lead_user_turn", user_request_text="Review once")
+        prelude = lambda ordinal: dict(request_type="writing_artifact_reference_read", correlation={
             "operation_id": "reference-operation", "invocation_ordinal": ordinal,
             "agent_id": "lead_orchestrator", "phase": "lead"})
         correction = dict(current, response_correction={
             "rejection_code": "answer_validation_failed", "instruction": "Return ANSWER now"})
-        self.payloads = [prelude(1), dict(c="correlation", q=["lead", "sa", "wcdo"], i=current,
-                                       untrusted_writing_artifact_context=["reference"]),
-                         prelude(2), dict(c="correlation", q=["lead", "a", ""], i=correction,
-                                          untrusted_writing_artifact_context=["reference"])]
+        self.payloads = [prelude(1), dict(request_correlation_token="correlation", response_contract={"workflow_phase": "lead_user_turn", "allowed_action_types": ["search_context", "submit_result"], "searchable_source_types": ["story_document", "conversation_history", "current_consensus_run", "agent_work_history"]}, task_input=current, untrusted_attached_references=["reference"]), prelude(2), dict(request_correlation_token="correlation", response_contract={"workflow_phase": "lead_user_turn", "allowed_action_types": ["submit_result"], "searchable_source_types": []}, task_input=correction, untrusted_attached_references=["reference"])]
         self.calls = []
         self.exchanges = []
         self.history = []
@@ -84,8 +81,8 @@ class LiveHarnessAuditTests(unittest.TestCase):
             thread = "old-thread" if index <= 2 else "fresh-thread"
             prior = thread if index in (2, 4) else None
             schema = {"type": "object"}
-            content = {"correlation": "correlation", "action": {"kind": "answer", "result": {
-                "kind": "answer", "message": "Correct answer" if index == 4 else "Rejected answer"}}}
+            content = {"agent_action": {"action_type": "submit_result", "task_result": {
+                "response_type": "answer", "response_text": "Correct answer" if index == 4 else "Rejected answer"}}}
             native = dict(status="SUCCESS", conversation_id=thread,
                           json_schema=schema, structured_output=content)
             argv = ["unused-agy", "--json-schema", harness.canonical_provider_json(schema).decode(), "--print", json.dumps(payload)]
@@ -488,7 +485,7 @@ class LiveHarnessAuditTests(unittest.TestCase):
         directory = Path(self.calls[3]["directory"])
         value = json.loads((directory / "command.private.json").read_text())
         payload = json.loads(value["argv"][-1])
-        del payload["i"]["response_correction"]
+        del payload["task_input"]["response_correction"]
         value["argv"][-1] = json.dumps(payload)
         (directory / "command.private.json").write_text(json.dumps(value))
         self.calls[3]["payload_sha256"] = harness.digest(value["argv"][-1].encode())
@@ -554,8 +551,8 @@ class LiveHarnessAuditTests(unittest.TestCase):
                 if field == "correlation":
                     output["correlation"] = "foreign"
                 else:
-                    output["action"]["kind"] = "search"
-                with self.assertRaisesRegex(AssertionError, "correlation or action"):
+                    output["agent_action"]["action_type"] = "search_context"
+                with self.assertRaisesRegex(AssertionError, "response shape or action"):
                     harness.prove_lead_corrections(changed, self.history)
 
     def test_resume_accepts_only_proven_fresh_handoff(self):
@@ -852,83 +849,63 @@ class LiveTerminalCleanupTests(unittest.IsolatedAsyncioTestCase):
 
 class LiveBudgetContinuationTests(unittest.TestCase):
     def test_budget_next_intent_injection_preserves_exact_completed_native_fields(self):
-        contract = {
-            "evidence_ids": ["evidence-reference"], "evidence_status": "verified",
-            "scope": "story_specific", "reply_event_ids": ["reply-plot", "reply-character", "reply-execution"],
-            "unresolved_input_ids": ["user_input", "reference_1"],
-        }
-        from story_writing_agents.conversations.events import authoring_scope_to_dict
-        contract["authoring_scope"] = authoring_scope_to_dict(scoped_proposal(harness.BUDGET_REVIEWERS).authoring_scope)
-        payload = {"c": "synthetic-synthesis-correlation", "i": {
-            "workflow": "lead_synthesis", "answer_contract": contract,
-            "inputs": [{"input_id": "user_input", "kind": "user_input"},
-                       {"input_id": "reference_1", "kind": "core_document"}],
+        input_ids = ["user_input", "reference_1"]
+        reply_ids = ["reply-plot", "reply-character", "reply-execution"]
+        payload = {"request_correlation_token": "synthetic-synthesis-correlation", "task_input": {
+            "workflow_type": "consultation_summary",
+            "provider_constraints": {"current_writing_task_scope": {"activity_type": "review_writing"}},
+            "inputs": [{"input_source_id": "user_input", "input_source_type": "user_input"}, {"input_source_id": "reference_1", "input_source_type": "core_document"}],
+            "replies": [{"reply_event_id": identity} for identity in reply_ids],
         }}
-        native = {
-            "status": "SUCCESS", "conversation_id": "synthetic-thread", "json_schema": {"type": "object"},
-            "structured_output": {"correlation": payload["c"], "action": {
-                "kind": "answer", "used_handles": [], "result": {
-                    **copy.deepcopy(contract), "message": "A complete visible synthesis.", "next_intent": None, "recommended_action": None,
-                },
-            }}, "usage": {"input_tokens": 13, "output_tokens": 7},
-        }
-        original = copy.deepcopy(native)
-        original_payload = copy.deepcopy(payload)
+        native = {"status": "SUCCESS", "conversation_id": "synthetic-thread", "json_schema": {"type": "object"},
+                  "structured_output": {"agent_action": {"action_type": "submit_result", "task_result": {"response_type": "consultation_summary", "response_text": "A complete visible synthesis."}}},
+                  "usage": {"input_tokens": 13, "output_tokens": 7}}
+        original_native, original_payload = copy.deepcopy(native), copy.deepcopy(payload)
         stdout = json.dumps(native, indent=2).encode()
         def mutate(value=stdout, request=payload, **changes):
             kwargs = {"agent": "lead_orchestrator", "returncode": 0, "physical_calls_spent": 10}
             kwargs.update(changes)
             return harness.inject_budget_next_intent(value, request, **kwargs)
-
         delivered, proof = mutate()
         actual = json.loads(delivered)
-        intent = actual["structured_output"]["action"]["result"]["next_intent"]
-        self.assertEqual([a["agent_id"] for a in intent["assignments"]], list(harness.BUDGET_REVIEWERS))
+        result = actual["structured_output"]["agent_action"]["task_result"]
+        intent = result.pop("follow_up_consultation")
+        self.assertEqual(set(intent), {"consultation_purpose", "assignments"})
+        self.assertEqual([item["agent_id"] for item in intent["assignments"]], list(harness.BUDGET_REVIEWERS))
         for assignment in intent["assignments"]:
-            self.assertEqual(assignment["input_ids"], ["user_input", "reference_1", *contract["reply_event_ids"]])
-            self.assertEqual(assignment["mode"], "review")
-            self.assertEqual(assignment["review_basis"]["candidate_input_ids"], ["reference_1"])
-        self.assertEqual(intent["authoring_scope"], contract["authoring_scope"])
-        actual["structured_output"]["action"]["result"]["next_intent"] = None
-        self.assertEqual(actual, original)
-        self.assertEqual(native, original)
+            self.assertEqual(set(assignment), {"agent_id", "assignment_type", "task_instructions", "input_source_ids"})
+            self.assertEqual(assignment["input_source_ids"], [*input_ids, *reply_ids])
+            self.assertEqual(assignment["assignment_type"], "review_content")
+            self.assertTrue(assignment["task_instructions"])
+        self.assertEqual(actual, original_native)
+        self.assertEqual(native, original_native)
         self.assertEqual(payload, original_payload)
         self.assertEqual(proof["minimum_required_calls"], 8)
         self.assertEqual(proof["remaining_calls"], 2)
-        self.assertEqual(proof["path"], "structured_output.action.result.next_intent")
+        self.assertEqual(proof["path"], "structured_output.agent_action.task_result.follow_up_consultation")
         self.assertTrue(proof["changed"])
         self.assertEqual(proof["original_stdout_sha256"], harness.digest(stdout))
         self.assertEqual(proof["delivered_stdout_sha256"], harness.digest(delivered))
         unchanged, observed = mutate(delivered)
         self.assertEqual(unchanged, delivered)
         self.assertFalse(observed["changed"])
-
-        for changes in ({"agent": "plot_architect"}, {"returncode": 1},
-                        {"physical_calls_spent": 4}, {"physical_calls_spent": 13},
-                        {"physical_calls_spent": True}):
+        for changes in ({"agent": "plot_architect"}, {"returncode": 1}, {"physical_calls_spent": 4}, {"physical_calls_spent": 13}, {"physical_calls_spent": True}):
             with self.subTest(transport=changes), self.assertRaises(AssertionError):
                 mutate(**changes)
-        for workflow in ("lead_front_channel", "writing_artifact_reference_read"):
+        for workflow in ("lead_user_turn", "writing_artifact_reference_read"):
             wrong = copy.deepcopy(payload)
-            wrong["i"]["workflow"] = workflow
+            wrong["task_input"]["workflow_type"] = workflow
             with self.subTest(workflow=workflow), self.assertRaises(AssertionError):
                 mutate(request=wrong)
         for mutation in ("status", "correlation", "kind", "missing", "evidence", "unresolved", "recommended_action"):
             wrong = copy.deepcopy(native)
-            action = wrong["structured_output"]["action"]
-            if mutation == "status":
-                wrong["status"] = "ERROR"
-            elif mutation == "correlation":
-                wrong["structured_output"]["correlation"] = "another-correlation"
-            elif mutation == "kind":
-                action["kind"] = "search"
-            elif mutation == "missing":
-                del action["result"]["message"]
-            elif mutation == "evidence":
-                action["result"]["evidence_ids"] = []
-            elif mutation == "recommended_action":
-                action["result"]["recommended_action"] = {"kind": "prepare_artifact"}
-            else:
-                action["result"]["unresolved_input_ids"] = []
+            action = wrong["structured_output"]["agent_action"]
+            if mutation == "status": wrong["status"] = "ERROR"
+            elif mutation == "correlation": wrong["structured_output"]["correlation"] = "retired-response-field"
+            elif mutation == "kind": action["action_type"] = "read_context"
+            elif mutation == "missing": del action["task_result"]["response_text"]
+            elif mutation == "evidence": action["task_result"]["evidence_ids"] = []
+            elif mutation == "recommended_action": action["task_result"]["proposal_drafting_request"] = {"action_type": "draft_document_change_proposal"}
+            else: action["task_result"]["unresolved_input_ids"] = []
             with self.subTest(native=mutation), self.assertRaises(AssertionError):
                 mutate(json.dumps(wrong).encode())

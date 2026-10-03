@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from ..provider_wire import project_zero_hit_receipt
+from ..provider_wire import SOURCE_TYPES
+
 import hashlib
 import json
 import re
@@ -65,12 +68,6 @@ _SEARCHABLE_SOURCE_KIND_ORDER = (
     ContextSourceKind.ACTIVE_DEBATE,
     ContextSourceKind.OWN_AGENT_STATE,
 )
-_SOURCE_KIND_WIRE_CODE = {
-    ContextSourceKind.WRITING_ARTIFACT: "w",
-    ContextSourceKind.CONVERSATION: "c",
-    ContextSourceKind.ACTIVE_DEBATE: "d",
-    ContextSourceKind.OWN_AGENT_STATE: "o",
-}
 _ACTION_POLICY_MAXIMA = {
     "max_nonterminal_actions": 4,
     "max_provider_calls": 5,
@@ -1131,66 +1128,30 @@ def _completed_evidence_digest(
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
-def _wire_boundary_value(boundary: ContextSourceBoundary) -> list[object]:
-    """Project one exact boundary identity."""
-
-    return [
-        boundary.kind.value,
-        boundary.start,
-        boundary.end,
-        boundary.first_id,
-        boundary.last_id,
-    ]
 
 
-def _wire_source_facts(
-    *,
-    source_alias: int,
-    source_id: str,
-    source_kind: ContextSourceKind,
-    revision: str,
-    source_digest: str,
-    source_utf8_bytes: int,
-) -> list[object]:
-    """Project complete source facts, collapsing only an explicit digest equality."""
-
-    digest_facts: list[object]
-    if revision == source_digest:
-        digest_facts = ["revision=source_digest", revision]
-    else:
-        digest_facts = ["revision", revision, "source_digest", source_digest]
-    return [
-        "source",
-        source_alias,
-        source_id,
-        source_kind.value,
-        digest_facts,
-        source_utf8_bytes,
-    ]
+def _wire_source_facts(*, source_alias: int, source_id: str, source_kind: ContextSourceKind,
+                       revision: str, source_digest: str, source_utf8_bytes: int) -> dict[str, object]:
+    return {"source_reference_id": source_alias, "source_id": source_id,
+            "source_type": SOURCE_TYPES[source_kind.value], "source_revision": revision,
+            "source_digest": source_digest, "source_utf8_bytes": source_utf8_bytes}
 
 
-def _wire_boundary_facts(
-    boundary: ContextSourceBoundary,
-    boundary_digest: str,
-    boundary_utf8_bytes: int,
-) -> list[object]:
-    """Project complete exact boundary identity, digest, and size facts."""
-
-    return [
-        "boundary",
-        *_wire_boundary_value(boundary),
-        boundary_digest,
-        boundary_utf8_bytes,
-    ]
+def _wire_boundary_facts(boundary: ContextSourceBoundary, boundary_digest: str,
+                         boundary_utf8_bytes: int) -> dict[str, object]:
+    names = {"whole": "entire_source", "artifact_lines": "line_range", "records": "record_range"}
+    result = {"range_type": names[boundary.kind.value], "range_digest": boundary_digest,
+              "range_utf8_bytes": boundary_utf8_bytes}
+    if boundary.kind.value == "artifact_lines":
+        result.update(start_line=boundary.start, end_line=boundary.end)
+    elif boundary.kind.value == "records":
+        result.update(start_record_number=boundary.start, end_record_number=boundary.end,
+                      first_record_id=boundary.first_id, last_record_id=boundary.last_id)
+    return result
 
 
-def _wire_provenance_facts(
-    authority_kind: ContextAuthorityKind,
-    locator: str,
-) -> list[object]:
-    """Project complete safe provenance facts."""
-
-    return ["provenance", authority_kind.value, locator]
+def _wire_provenance_facts(authority_kind: ContextAuthorityKind, locator: str) -> dict[str, object]:
+    return {"authority_type": authority_kind.value, "source_locator": locator}
 
 
 def serialize_context_action_observation(
@@ -1254,74 +1215,26 @@ def serialize_context_action_observation(
         return value
 
     if compact and type(observation) is ContextSearchObservation:
-        payload: object = [
-            "s",
-            observation.truncated,
-            (
-                None
-                if observation.zero_hit_receipt is None
-                else _zero_hit_value(observation.zero_hit_receipt)
-            ),
-            [
-                [
-                    hit.query_index,
-                    _wire_source_facts(
-                        source_alias=source_value(hit.source_id),
-                        source_id=hit.source_id,
-                        source_kind=hit.source_kind,
-                        revision=hit.revision,
-                        source_digest=hit.source_digest,
-                        source_utf8_bytes=hit.source_utf8_bytes,
-                    ),
-                    _wire_boundary_facts(
-                        hit.boundary,
-                        hit.boundary_digest,
-                        hit.boundary_utf8_bytes,
-                    ),
-                    _wire_provenance_facts(
-                        hit.provenance.authority_kind,
-                        locator_value(hit.handle, hit.provenance.locator),
-                    ),
-                    _SOURCE_KIND_WIRE_CODE[hit.source_kind],
-                    handle_value(hit.handle),
-                    ["snippet", hit.snippet, hit.snippet_utf8_bytes],
-                ]
-                for hit in observation.hits
-            ],
-        ]
+        payload: object = {
+            "observation_type": "context_search_results", "truncated": observation.truncated,
+            "zero_hit_receipt": None if observation.zero_hit_receipt is None else project_zero_hit_receipt(_zero_hit_value(observation.zero_hit_receipt)),
+            "search_results": [
+                {"query_index": hit.query_index,
+                 "source": _wire_source_facts(source_alias=source_value(hit.source_id), source_id=hit.source_id,
+                     source_kind=hit.source_kind, revision=hit.revision, source_digest=hit.source_digest, source_utf8_bytes=hit.source_utf8_bytes),
+                 "source_range": _wire_boundary_facts(hit.boundary, hit.boundary_digest, hit.boundary_utf8_bytes),
+                 "provenance": _wire_provenance_facts(hit.provenance.authority_kind, locator_value(hit.handle, hit.provenance.locator)),
+                 "read_handle": handle_value(hit.handle), "snippet_text": hit.snippet, "snippet_utf8_bytes": hit.snippet_utf8_bytes}
+                for hit in observation.hits],
+        }
     elif compact and type(observation) is ContextReadObservation:
-        payload = [
-            "r",
-            [
-                [
-                    _wire_source_facts(
-                        source_alias=source_value(item.receipt.source_id),
-                        source_id=item.receipt.source_id,
-                        source_kind=item.receipt.source_kind,
-                        revision=item.receipt.revision,
-                        source_digest=item.receipt.source_digest,
-                        source_utf8_bytes=item.receipt.source_utf8_bytes,
-                    ),
-                    _wire_boundary_facts(
-                        item.receipt.boundary,
-                        item.receipt.boundary_digest,
-                        item.receipt.boundary_utf8_bytes,
-                    ),
-                    _wire_provenance_facts(
-                        item.receipt.provenance.authority_kind,
-                        locator_value(
-                            item.receipt.handle,
-                            item.receipt.provenance.locator,
-                        ),
-                    ),
-                    _SOURCE_KIND_WIRE_CODE[item.receipt.source_kind],
-                    handle_value(item.receipt.handle),
-                    item.receipt.evidence_id,
-                    item.content,
-                ]
-                for item in observation.evidence
-            ],
-        ]
+        payload = {"observation_type": "context_read_results", "read_results": [
+            {"source": _wire_source_facts(source_alias=source_value(item.receipt.source_id), source_id=item.receipt.source_id,
+                source_kind=item.receipt.source_kind, revision=item.receipt.revision, source_digest=item.receipt.source_digest, source_utf8_bytes=item.receipt.source_utf8_bytes),
+             "source_range": _wire_boundary_facts(item.receipt.boundary, item.receipt.boundary_digest, item.receipt.boundary_utf8_bytes),
+             "provenance": _wire_provenance_facts(item.receipt.provenance.authority_kind, locator_value(item.receipt.handle, item.receipt.provenance.locator)),
+             "read_handle": handle_value(item.receipt.handle), "evidence_id": item.receipt.evidence_id, "content_text": item.content}
+            for item in observation.evidence]}
     elif type(observation) is ContextSearchObservation:
         payload = {
             "correlation": _correlation_value(observation.correlation),

@@ -115,7 +115,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, lead._synthesis_outcome(message=message))
         completed = await self.runtime.decide_lead_step(lead._decision(proposed, c.CollaborationConfirmationDecision.CONFIRM))
         turn = completed.turn
-        self.assertIs(turn.state, c.CollaborationStepState.COMPLETED)
+        self.assertIs(turn.state, c.CollaborationStepState.COMPLETED, turn)
         self.assertEqual(turn.message, message + "\n\n"
             "Draft material is available for Lead integration and concrete review. "
             "Story authoring is not complete; no Apply is authorized.")
@@ -156,9 +156,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
             objective_intent=intent)
         def prepare_current_task(call, provider):
             value = json.loads(response(call, provider))
-            value["action"]["result"]["authoring_scope"] = lead._compact_scope(
-                self.scope(call, intent=intent)
-            )
+            value["action"]["result"]["authoring_scope"] = lead._compact_scope(self.scope(call, intent=intent))
             return json.dumps(value)
         self.backend.enqueue(prepare_current_task)
         prompt = f"Prepare the next revision using ${{{OUTLINE}}}." if attached else "네, 그 초안 그대로 문서로 준비해 줘."
@@ -172,7 +170,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
             self.backend.enqueue_for(assignment.specialist_id, lead._specialist_outcome("supports"))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, artifact._artifact_synthesis_outcome("propose"))
         result = await self.runtime.decide_lead_step(lead._decision(proposed, c.CollaborationConfirmationDecision.CONFIRM))
-        self.assertIsNotNone(result.turn.artifact_application_request)
+        self.assertIsNotNone(result.turn.artifact_application_request, result.turn)
         return result.turn
 
     async def apply(self, reviewed, kind=c.ArtifactApplicationDecisionKind.APPLY):
@@ -274,8 +272,8 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
             "objective_intent": {"action": "cancel", "objective_id": objective_id},
             "authoring_scope": lead._live_scope(call),
         }))
-        await self.runtime.lead_turn(self.session_id, conversation_id, "Cancel this writing objective.")
-        self.assertIs(self.objective(conversation_id).state, c.ArtifactObjectiveState.CANCELLED)
+        cancelled = await self.runtime.lead_turn(self.session_id, conversation_id, "Cancel this writing objective.")
+        self.assertIs(self.objective(conversation_id).state, c.ArtifactObjectiveState.CANCELLED, cancelled)
         before = self.objective(conversation_id)
         bad = self.question(intent={"action": "continue", "objective_id": objective_id, "next_step": "clarify", "draft_source_event_ids": []})
         self.backend.enqueue(bad, bad)

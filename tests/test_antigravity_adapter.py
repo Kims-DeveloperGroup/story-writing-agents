@@ -138,52 +138,7 @@ _NO_FOLLOW_DIRECTORY_HARDENING = "chmod" in {
 
 
 def _expected_antigravity_role(value: bytes, *, contextual: bool = True) -> bytes:
-    value = value.replace(
-        b"invoke another agent, provider subagent, tool, or model.",
-        b"invoke another agent, provider subagent, or model.",
-    ).replace(
-        b"Return only the one invocation-specific structured result requested by the\nruntime.",
-        b"Submit the invocation-specific structured result requested by the runtime\n"
-        b"through finish, using the complete supplied output schema.",
-    )
-    if contextual:
-        value = value.replace(
-            b"Return exactly one JSON object with this shape and no additional fields:",
-            b"The specialist assessment in action.result has exactly this shape and\n"
-            b"no additional fields. Submit the complete schema-selected outer object\n"
-            b"with action through finish; do not submit this inner\n"
-            b"assessment alone:",
-        ).replace(
-            b"Use evidence IDs in runtime order: attached references by ordinal, canonical\n"
-            b"core statuses, then completed SEARCH/READ actions by action order.",
-            b"After mandatory reference reading, the attached-reference aliases in\n"
-            b"i.input_aliases (such as reference_1) are content evidence IDs. They\n"
-            b"are distinct from the status IDs in core_statuses. For verified story\n"
-            b"content, evidence_ids must include a supporting attached-reference or\n"
-            b"completed READ evidence ID; status IDs alone are insufficient. Use\n"
-            b"only current, actually supplied IDs.\n\n"
-            b"Keep evidence_ids separate from proposal assignment input_ids. For a\n"
-            b"proposal, assignments must collectively cover every input_id supplied in\n"
-            b"i.input_aliases, including user_input, and every cited READ evidence ID.\n"
-            b"Do not drop user_input because it is not a content evidence receipt.\n\n"
-            b"Use evidence IDs in runtime order: attached references by ordinal, canonical\n"
-            b"core statuses, then completed SEARCH/READ actions by action order.",
-        ).replace(
-            b"Never omit, duplicate, reorder, or invent attribution IDs. Synthesis preserves\n"
-            b"the proposal's scope, evidence status, and evidence IDs exactly.",
-            b"For lead_synthesis, i.answer_contract supplies required values, not\n"
-            b"examples. Copy its scope, evidence_status, evidence_ids, and reply_event_ids\n"
-            b"exactly. Preserve every required unresolved_input_ids entry in the supplied\n"
-            b"order before any additional unresolved original inputs. A concern, conflict,\n"
-            b"or insufficient_evidence assessment keeps its input IDs unresolved even if\n"
-            b"the synthesis explains a remedy or ends the consultation. Only an empty\n"
-            b"required list permits an empty unresolved_input_ids. This applies to every\n"
-            b"specialist consultation, including those without an artifact candidate.\n\n"
-            b"Never omit, duplicate, reorder, or invent attribution IDs. Synthesis preserves\n"
-            b"the proposal's scope, evidence status, and evidence IDs exactly.",
-        )
     return value
-
 
 def _singleton_correlation_schema():
     """Synthetic public shape from the native compatibility regression."""
@@ -689,11 +644,11 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         )
         rules = body.decode("utf-8")
         original_prompt = self.definition.system_prompt_file.read_text()
-        original_clause = "invoke another agent, provider subagent, tool, or model."
+        original_clause = "contract_guidance"
         staged_clause = "invoke another agent, provider subagent, or model."
         self.assertIn(original_clause, original_prompt)
         self.assertIn(_expected_antigravity_role(original_prompt.encode(), contextual=False).decode(), rules)
-        self.assertNotIn(original_clause, rules)
+        self.assertIn(original_clause, rules)
         self.assertEqual(self.definition.system_prompt_file.read_text(), original_prompt)
         self.assertIn(self.definition.persona_file.read_text(), rules)
         for reference in self.definition.context_document_files:
@@ -722,163 +677,33 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             ):
                 adapter.bind(invalid)
 
-    def test_contextual_binding_shared_semantics_and_vendor_constraints_are_exact(
-        self,
-    ) -> None:
-        definition = PromptAssembler(
-            self.workspace,
-            backend_overrides={PLOT_ARCHITECT: "antigravity"},
-        ).build_contextual_definition(
-            session_id="definition_session",
-            agent_id=PLOT_ARCHITECT,
-        )
-        self.assertIs(definition.provider_managed_context, True)
-        self.assertEqual(definition.context_document_files, ())
-
-        codex_bytes, codex_components = CodexAdapter._definition_file(definition)
-        antigravity_bytes, antigravity_components = AntigravityAdapter._definition_file(
-            definition
-        )
-        original_role_clause = b"invoke another agent, provider subagent, tool, or model."
-        staged_role_clause = b"invoke another agent, provider subagent, or model."
-        original_constraint = b"No tool, subagent, or CoT."
-        staged_constraint = b"No subagent or CoT."
-        captured_prompt = definition.system_prompt_file.content
-        self.assertIn(original_role_clause, captured_prompt)
-        self.assertEqual(
-            definition.fingerprint,
-            "a7bb90c92173fdd52ad5ff1ad1ef47325dde328094987dd57f9e648c58848e0b",
-        )
-        self.assertEqual(len(codex_bytes), 9626)
-        self.assertEqual(
-            hashlib.sha256(codex_bytes).hexdigest(),
-            "dbcc2bdf0141b35a3c51e41f1455e1acbf9842cfdf0d58ec2f6300203fc9fcf6",
-        )
-        expected_role = _expected_antigravity_role(captured_prompt)
-        provider_constraint_bytes = next(
-            component.serialized_utf8_bytes
-            for component in codex_components
-            if component.kind is ContextComponentKind.PROVIDER_CONSTRAINTS
-        )
-        original_provider = codex_bytes[-(provider_constraint_bytes + 1):-1]
-        expected_provider = original_provider.replace(
-            b"JSON only.", b"Submit JSON through finish."
-        ).replace(
-            b"No tool, subagent, or CoT.", b"No subagent or CoT."
-        ).replace(
-            b"Return exactly the schema-selected root object with action as its only field; the runtime owns correlation metadata.",
-            b"Call finish with exactly the schema-selected root object as its arguments, with action as its only field; the runtime owns correlation metadata.",
-        )
-        expected_provider = expected_provider.replace(
-            b"directly in result", b"directly in action.result"
-        )
-        self.assertEqual(
-            antigravity_bytes,
-            codex_bytes.replace(captured_prompt, expected_role).replace(original_provider, expected_provider),
-        )
-        self.assertIn(captured_prompt, codex_bytes)
-        self.assertIn(original_constraint, codex_bytes)
-        self.assertNotIn(original_role_clause, antigravity_bytes)
-        self.assertNotIn(original_constraint, antigravity_bytes)
-        self.assertIn(staged_constraint, antigravity_bytes)
-        self.assertEqual(definition.system_prompt_file.content, captured_prompt)
-        self.assertEqual(CodexAdapter._definition_file(definition), (codex_bytes, codex_components))
-        deltas = {
-            ContextComponentKind.ROLE_SYSTEM_PROMPT: len(captured_prompt) - len(expected_role),
-            ContextComponentKind.PROVIDER_CONSTRAINTS: len(original_provider) - len(expected_provider),
-        }
-        self.assertEqual(
-            tuple(item.serialized_utf8_bytes for item in codex_components),
-            (4, 8710, 251, 10, 651),
-        )
-        for codex_component, antigravity_component in zip(
-            codex_components, antigravity_components, strict=True
-        ):
-            self.assertEqual(codex_component.kind, antigravity_component.kind)
-            self.assertEqual(codex_component.identity, antigravity_component.identity)
-            self.assertEqual(
-                codex_component.serialized_utf8_bytes - antigravity_component.serialized_utf8_bytes,
-                deltas.get(codex_component.kind, 0),
-            )
-        self.assertEqual(len(codex_bytes), sum(item.serialized_utf8_bytes for item in codex_components))
-        self.assertEqual(len(antigravity_bytes), sum(item.serialized_utf8_bytes for item in antigravity_components))
-        provider_constraints = original_provider
-        self.assertEqual(len(provider_constraints), 651)
-        self.assertEqual(
-            hashlib.sha256(provider_constraints).hexdigest(),
-            "45c7e298a03108a8d92345e8d1031090bc2dc0ac548b1d6ed2dc32cb6c87c1da",
-        )
-        text = codex_bytes.decode("utf-8")
-        for rule in (
-            "Return exactly the schema-selected root object with action as its only "
-            "field; the runtime owns correlation metadata.",
-            "Set action.kind to search, read, or answer and include only the fields "
-            "required by that schema variant.",
-            "SEARCH uses {text,source_kinds} queries and an optional path_prefix.",
-            "READ uses handles from SEARCH.",
-            "ANSWER puts the exact q result object directly in result; runtime attaches "
-            "successful READ receipts.",
-            "Do not JSON-encode objects as strings or move the result outside action.",
-            "n ptr/splice:p[id] verify;=k=n;p upsert;keep n;t rm",
-        ):
-            self.assertIn(rule, text)
-
-        repository_root = Path(__file__).resolve().parents[1]
-        sample_definition = replace(
-            definition,
-            fingerprint="0" * 64,
-            system_prompt_file=PromptFileReference.from_path(
-                repository_root / "config/agents/lead_orchestrator/AGENTS.md"
-            ),
-            behavior_policy_components=(),
-            runtime_behavior_policy=b"",
-        )
-        codex_sample, codex_sample_components = CodexAdapter._definition_file(
-            sample_definition
-        )
-        antigravity_sample, antigravity_sample_components = (
-            AntigravityAdapter._definition_file(sample_definition)
-        )
-        self.assertEqual(len(codex_sample), 11682)
-        self.assertEqual(
-            hashlib.sha256(codex_sample).hexdigest(),
-            "17410478a062c1b4974fd87879390b33f1ce9111a776639d6db50c70097729ab",
-        )
-        self.assertEqual(
-            tuple(item.serialized_utf8_bytes for item in codex_sample_components),
-            (4, 10766, 251, 10, 651),
-        )
-        self.assertEqual(antigravity_sample, _expected_antigravity_role(codex_sample).replace(original_provider, expected_provider))
-        captured_lead_role = sample_definition.system_prompt_file.content
-        expected_lead_role = _expected_antigravity_role(captured_lead_role)
-        self.assertIn(b"Runtime derives schema versions, interpretation", expected_lead_role)
-        self.assertIn(
-            b"Omit unused fields instead of\nwriting `null`",
-            expected_lead_role,
-        )
-        self.assertIn(b"runtime derives the review basis", expected_lead_role)
-        self.assertIn(b"runtime restores\nproposal identity", expected_lead_role)
-        self.assertIn(b"runtime derives review bookkeeping", expected_lead_role)
-        self.assertEqual(
-            sample_definition.system_prompt_file.content,
-            (repository_root / "config/agents/lead_orchestrator/AGENTS.md").read_bytes(),
-        )
-        self.assertEqual(sample_definition.fingerprint, "0" * 64)
-        for original, staged in zip(codex_sample_components, antigravity_sample_components, strict=True):
-            self.assertEqual((original.kind, original.identity), (staged.kind, staged.identity))
-            delta = {
-                ContextComponentKind.ROLE_SYSTEM_PROMPT: len(expected_lead_role) - len(captured_lead_role),
-                ContextComponentKind.PROVIDER_CONSTRAINTS: len(expected_provider) - len(original_provider),
-            }.get(original.kind, 0)
-            self.assertEqual(staged.serialized_utf8_bytes, original.serialized_utf8_bytes + delta)
-        self.assertEqual(
-            CodexAdapter._definition_file(sample_definition),
-            (codex_sample, codex_sample_components),
-        )
-        self.assertEqual(len(codex_sample), sum(item.serialized_utf8_bytes for item in codex_sample_components))
-        self.assertEqual(len(antigravity_sample), sum(item.serialized_utf8_bytes for item in antigravity_sample_components))
-        for reference in self.definition.context_document_files:
-            self.assertNotIn(reference.read_text(), text)
+    def test_contextual_binding_shared_semantics_and_vendor_constraints_are_exact(self):
+        specialist = PromptAssembler(self.workspace, backend_overrides={PLOT_ARCHITECT: "antigravity"}).build_contextual_definition(session_id="definition_session", agent_id=PLOT_ARCHITECT)
+        lead = replace(specialist, fingerprint="0" * 64, system_prompt_file=PromptFileReference.from_path(Path(__file__).resolve().parents[1] / "config/agents/lead_orchestrator/AGENTS.md"), behavior_policy_components=(), runtime_behavior_policy=b"")
+        for definition in (specialist, lead):
+            self.assertIs(definition.provider_managed_context, True)
+            self.assertEqual(definition.context_document_files, ())
+            codex_bytes, codex_components = CodexAdapter._definition_file(definition)
+            agy_bytes, agy_components = AntigravityAdapter._definition_file(definition)
+            role = definition.system_prompt_file.content
+            prefix = role + b"\n" + definition.persona_file.content + b"\n" + f"Output:{definition.language}.\n".encode()
+            self.assertTrue(codex_bytes.startswith(prefix))
+            self.assertTrue(agy_bytes.startswith(prefix))
+            self.assertEqual(tuple(item.kind for item in codex_components), tuple(item.kind for item in agy_components))
+            for body, components in ((codex_bytes, codex_components), (agy_bytes, agy_components)):
+                self.assertEqual(len(body), sum(item.serialized_utf8_bytes for item in components))
+                self.assertEqual(next(item.serialized_utf8_bytes for item in components if item.kind is ContextComponentKind.ROLE_SYSTEM_PROMPT), len(role))
+                for token in (b"agent-provider-wire-v10", b"contract_guidance.input_fields", b"contract_guidance.response_rules", b"agent_action", b"action_type", b"task_result", b"response_type", b"search_context/read_context/submit_result"):
+                    self.assertIn(token, body[len(prefix):])
+            self.assertIn(b"Use finish only for structured delivery of the exact schema-selected object; do not use other tools, subagents, or hidden reasoning.", agy_bytes[len(prefix):])
+            self.assertNotIn(b"Do not invoke tools, other agents", agy_bytes)
+            if definition is specialist:
+                self.assertIn(b"Do not invoke tools except the bound provider's required structured-result\ndelivery mechanism", role)
+            self.assertNotIn(b"Use finish only", codex_bytes[len(prefix):])
+            self.assertEqual(CodexAdapter._definition_file(definition), (codex_bytes, codex_components))
+            self.assertEqual(AntigravityAdapter._definition_file(definition), (agy_bytes, agy_components))
+            self.assertEqual(definition.system_prompt_file.content, role)
+        self.assertEqual(lead.fingerprint, "0" * 64)
 
     @unittest.skipUnless(
         os.name == "posix" and hasattr(os, "umask") and _NO_FOLLOW_DIRECTORY_HARDENING,
@@ -1396,10 +1221,10 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         binding = adapter.bind(self.definition)
         schema = {"type": "object"}
         payload, component_paths = compact_context_payload(_shared_context_payload(), {
-            ("i",): ContextComponentKind.CURRENT_INPUT, ("h",): ContextComponentKind.CONVERSATION_CONTEXT})
+            ("task_input",): ContextComponentKind.CURRENT_INPUT, ("session_history",): ContextComponentKind.CONVERSATION_CONTEXT})
         payload.update({
-            "c": "A" * 43,
-            "q": ["conversation", "sa", "wco", [4, 2, 2, 4, 8, 8, 16, 200], "text"],
+            "request_correlation_token": "A" * 43,
+            "response_contract": {"workflow_phase": "conversation", "allowed_action_types": ["search_context", "submit_result"], "result_contract_id": "text"},
         })
         invocation = ProviderInvocation(
             session_id="contextual-session",
@@ -1730,7 +1555,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         first_invoke = mock.AsyncMock(
             return_value=ProviderResult(
                 thread_id="agy-conversation",
-                response_text='{"message":"candidate"}',
+                response_text='{"response_type":"candidate_draft","response_text":"candidate"}',
             )
         )
         with mock.patch.object(
@@ -1790,7 +1615,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         second_invoke = mock.AsyncMock(
             return_value=ProviderResult(
                 thread_id="agy-conversation",
-                response_text='{"message":"resumed"}',
+                response_text='{"response_type":"candidate_draft","response_text":"resumed"}',
             )
         )
         with mock.patch.object(

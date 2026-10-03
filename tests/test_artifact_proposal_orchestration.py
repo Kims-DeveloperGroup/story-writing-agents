@@ -99,8 +99,8 @@ def _reference_ids(material: dict[str, object]) -> list[str]:
 
 def _status_id(call: object, locator: str) -> str:
     payload = call.payload  # type: ignore[attr-defined]
-    statuses = payload["core_statuses"]
-    return next(item["evidence_id"] for item in statuses if item["locator"] == locator)
+    statuses = payload["core_document_statuses"]
+    return next(item["evidence_id"] for item in statuses if item["artifact_path"] == locator)
 
 
 def _artifact_outcome(
@@ -282,24 +282,20 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.assertFalse(reviewed.artifact_write_occurred)
         self.assertFalse(reviewed.git_action_occurred)
         self.assertEqual(self.artifact_snapshot(), before)
-        specialist_material = next(
-            _workflow_material(call.payload)
-            for agent_id, call in self.backend.call_records
-            if agent_id == EXECUTION_SPECIALIST
-        )
-        specialist_candidate = next(
-            item["candidate"]
-            for item in specialist_material["inputs"]
-            if item["kind"] == "artifact_candidate"
-        )
-        synthesis_material = next(
-            _workflow_material(call.payload)
-            for agent_id, call in self.backend.call_records
-            if agent_id == LEAD_ORCHESTRATOR
-            and _workflow_material(call.payload)["workflow"] == "lead_synthesis"
-        )
-        self.assertEqual(specialist_candidate, candidate_value)
-        self.assertEqual(synthesis_material["artifact_candidate"], candidate_value)
+        from tests.provider_wire_fixture import artifact_candidate as wire_candidate
+        from tests.test_agent_context_accounting import _expanded_context_payload
+        materials = [(agent_id, (_expanded_context_payload(call.payload) if "shared_context_objects" in call.payload else call.payload)["task_input"])
+                     for agent_id, call in self.backend.call_records]
+        specialist_material = next(value for agent_id, value in materials if agent_id == EXECUTION_SPECIALIST)
+        specialist_candidate = next(item["artifact_candidate"] for item in specialist_material["inputs"]
+                                    if item["input_source_type"] == "artifact_candidate")
+        synthesis_material = next(value for agent_id, value in materials
+                                  if agent_id == LEAD_ORCHESTRATOR and value["workflow_type"] == "consultation_summary")
+        self.assertEqual(specialist_candidate, wire_candidate(candidate_value))
+        self.assertEqual(synthesis_material["artifact_candidate"], wire_candidate(candidate_value))
+        operation = specialist_candidate["artifact_change_set"]["artifact_changes"][0]
+        self.assertIn(operation["change_type"], {"create_artifact", "replace_artifact_text", "patch_artifact_text", "rename_artifact", "delete_artifact"})
+        self.assertEqual(specialist_candidate["candidate_digest"], candidate_value["candidate_digest"])
         self.assertEqual(
             self.artifact_events(conversation_id, ArtifactReviewedProposal),
             (reviewed,),
@@ -460,15 +456,15 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                          ([("accepted", None)],))
         self.assertIsNone(result.artifact_proposal)
         self.assertEqual(calls, 0)
-        self.assertIn("current_state", self.backend.calls[0].payload["h"])
+        self.assertIn("current_session_state", self.backend.calls[0].payload["session_history"])
         payload = self.backend.calls[0].payload
-        self.assertEqual(set(payload["h"]["current_state"]), {"runtime_overrides"})
-        self.assertTrue(payload["core_statuses"])
-        self.assertTrue(all(set(item) == {"locator", "status", "evidence_id"}
-                            for item in payload["core_statuses"]))
-        self.assertNotIn("answer_contract", payload["i"])
-        self.assertNotIn("runtime_contract_overlay", payload["i"])
-        self.assertNotIn("authoring_rules", payload["i"])
+        self.assertEqual(set(payload["session_history"]["current_session_state"]), {"runtime_overrides"})
+        self.assertTrue(payload["core_document_statuses"])
+        self.assertTrue(all(set(item) == {"artifact_path", "document_status", "evidence_id"}
+                            for item in payload["core_document_statuses"]))
+        self.assertNotIn("answer_contract", payload["task_input"])
+        self.assertNotIn("runtime_contract_overlay", payload["task_input"])
+        self.assertNotIn("authoring_rules", payload["task_input"])
         self.assertNotIn("Outline first line.", json.dumps(dict(payload)))
         self.assertEqual(
             tuple(agent_id for agent_id, _call in self.backend.call_records),
@@ -803,15 +799,14 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             tuple(agent_id for agent_id, _call in specialist_calls),
             tuple(item.specialist_id for item in proposed.proposal.assignments),
         )
+        from tests.provider_wire_fixture import artifact_candidate as wire_candidate
+        from tests.test_agent_context_accounting import _expanded_context_payload
         for agent_id, call in specialist_calls:
             with self.subTest(specialist=agent_id):
-                material = _workflow_material(call.payload)
-                disclosed = next(
-                    item["candidate"]
-                    for item in material["inputs"]
-                    if item["kind"] == "artifact_candidate"
-                )
-                self.assertEqual(disclosed, candidate_value)
+                material = (_expanded_context_payload(call.payload) if "shared_context_objects" in call.payload else call.payload)["task_input"]
+                disclosed = next(item["artifact_candidate"] for item in material["inputs"]
+                                 if item["input_source_type"] == "artifact_candidate")
+                self.assertEqual(disclosed, wire_candidate(candidate_value))
 
     async def test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority(
         self,
@@ -1006,8 +1001,8 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         )
 
         def answer_with_artifact(call, provider):
-            observation = call.payload["o"]
-            evidence_id = observation[1][0][5]
+            observation = call.payload["context_observation"]
+            evidence_id = observation["read_results"][0]["evidence_id"]
             return _provider_envelope(
                 call,
                 {
@@ -1073,15 +1068,15 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 ProviderCallKind.COLLABORATION_CONTINUATION,
             ),
         )
-        self.assertNotIn("o", self.backend.calls[-3].payload)
-        self.assertEqual(self.backend.calls[-2].payload["o"][0], "s")
-        self.assertEqual(self.backend.calls[-1].payload["o"][0], "r")
-        actions = self.backend.calls[-3].schema["properties"]["action"]["anyOf"]
+        self.assertNotIn("context_observation", self.backend.calls[-3].payload)
+        self.assertEqual(self.backend.calls[-2].payload["context_observation"]["observation_type"], "context_search_results")
+        self.assertEqual(self.backend.calls[-1].payload["context_observation"]["observation_type"], "context_read_results")
+        actions = self.backend.calls[-3].schema["properties"]["agent_action"]["anyOf"]
         answer = next(variant for variant in actions
-                      if variant["properties"]["kind"]["enum"] == ["answer"])
-        self.assertTrue(any("artifact_intent" in variant["properties"]
-                            for variant in answer["properties"]["result"]["anyOf"]))
-        read_evidence_id = self.backend.calls[-1].payload["o"][1][0][5]
+                      if variant["properties"]["action_type"]["enum"] == ["submit_result"])
+        self.assertTrue(any("artifact_change_proposal" in variant["properties"]
+                            for variant in answer["properties"]["task_result"]["anyOf"]))
+        read_evidence_id = self.backend.calls[-1].payload["context_observation"]["read_results"][0]["evidence_id"]
         self.assertIn(
             read_evidence_id,
             result.artifact_proposal.candidate.candidate.grounding_evidence_ids,
@@ -1195,7 +1190,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         def search(call, _provider):
             return json.dumps({"action": {"kind": "search", "path_prefix": "core_documents/", "queries": [{"text": "needle", "source_kinds": ["writing_artifact"]}]}})
         def answer(call, provider):
-            evidence_id = call.payload["o"][1][0][5]
+            evidence_id = call.payload["context_observation"]["read_results"][0]["evidence_id"]
             return _provider_envelope(call, {
                                                 "recommended_action": None,"scope": "story_specific", "evidence_status": "verified", "evidence_ids": [evidence_id], "kind": "question", "message": "The selected line is visible; what should change?", "proposal": None, "artifact_intent": None, "objective_intent": None,
                                                 "authoring_scope": _live_scope(call, activity="review", domains=("plot_structure",), paths=(_OUTLINE,))}, used_handles=provider.used_handles)

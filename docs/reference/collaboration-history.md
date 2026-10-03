@@ -282,8 +282,8 @@ Uncertain submitted work remains `inspect_and_resolve_outcome`; corrupt or
 unprovable closure requires recovery. Inspection creates no capability or
 provider replay. See [recovery](../operations/recovery-and-limitations.md#recommendation-preparation-recovery).
 
-Ordinary provider synthesis uses `lead-synthesis-v3` with nullable
-`recommended_action`; it is mutually exclusive with `next_intent`. Runtime
+Ordinary provider synthesis uses `consultation-summary-v4`. Its optional
+`proposal_drafting_request` and `follow_up_consultation` are mutually exclusive. Runtime
 persists the unchanged historical `CollaborationLeadSynthesisPayload` and a
 separate recommendation request when an action is selected. Artifact-review
 synthesis keeps its independent contract. Filesystem/SQLite storage, archive,

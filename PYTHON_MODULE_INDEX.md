@@ -1,7 +1,6 @@
 # Python Module Index
 
 ## Purpose
-
 This is the current navigation map for production Python under
 `src/story_writing_agents/`. It groups importable units by responsibility instead of
 duplicating implementation detail. The source tree and package exports remain the source
@@ -16,7 +15,6 @@ inventory includes its `__init__.py`.
 Exact module and import-edge counts are intentionally omitted; the source tree is authoritative.
 
 ## Supported public surfaces
-
 - `story_writing_agents` is the library facade. Its `__all__` is the supported top-level
   API for agent specifications, conversations and retrieval, directives, errors, commands,
   runtime models, session lifecycle, workspace access, and `StoryRuntime`.
@@ -87,7 +85,7 @@ authentication, recovery, and diagnostic behavior behind provider-neutral contra
 
 - `orchestrator`, `backend`, `provider_adapter`, `antigravity_adapter`, `codex_adapter`
 - `provider_auth`, `provider_auth_recovery`, `provider_catalog`, `provider_process`, `provider_execution_workspace`
-- `provider_error_artifacts`, `debug_log`, `structured_output_validation`, `lead_provider_contracts`
+- `provider_error_artifacts`, `debug_log`, `structured_output_validation`, `lead_provider_contracts`, `provider_wire`
 
 `orchestrator` composes domain contracts, storage, consensus, Git story commits, references, and provider-neutral backends. Its Apply handoff prepares the Git candidate before atomically publishing the known result with one exact Commit request; proven absence publishes a reprepare result, while ambiguous publication requires inspection.
 `provider_process` owns bounded subprocess transport and descriptor-pinned launch/cleanup for trusted native provider processes; it provides no OS filesystem confinement.
@@ -100,6 +98,8 @@ source-authored domain findings. Domain validators identify the rejected propert
 orchestration and adapters retain findings through exception translation and map domain
 fields to provider wire paths. This package-internal boundary owns no provider state,
 persistence, or authority and is not a public facade.
+`provider_wire` is a stateless stdlib leaf for provider vocabulary, known-shape projections,
+guidance, schemas, and diagnostics; semantic owners retain domain APIs, storage, and state.
 `lead_provider_contracts` owns immutable Lead choice snapshots shared by schema projections,
 prompt facts, and closed validation rules. It depends on domain contracts; orchestration
 retains confirmation, current-source membership, READ receipt, and lifecycle authority.

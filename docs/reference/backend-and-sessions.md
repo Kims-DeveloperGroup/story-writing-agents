@@ -74,12 +74,12 @@ server-side default. Provider reply prose and self-identification are never
 execution evidence.
 
 Runtime-built provider-managed definitions use the agent-context service and
-typed wire v9. Package-internal `story_session_context` remains capture and
+agent-provider-wire-v10. Package-internal `story_session_context` remains capture and
 direct-request compatibility input; it is not the current built-in provider
 envelope. Explicit writing-artifact references are authorized and loaded
 locally before the substantive provider call, and context continuations carry
 only the new authorized observation. See
-[Agent-context design](../design/agent-context.md#typed-provider-wire-v9).
+[Agent-context design](../design/agent-context.md#agent-provider-wire-v10).
 
 Both adapters receive the same provider-neutral `ProviderInvocation`, including
 byte-identical canonical schema and payload semantics. Codex receives the

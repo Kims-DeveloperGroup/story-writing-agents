@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.provider_wire_fixture import response as wire_response, contract_id as wire_contract_id
+
 import asyncio
 import json
 import unittest
@@ -640,10 +642,10 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         invalid_values = (
-            ({"assessment": "supports"}, "$.action.result.message: required property is missing"),
-            ({"message": "Missing assessment."}, "$.action.result.assessment: required property is missing"),
+            ({"assessment": "supports"}, "$.agent_action.task_result.response_text: required property is missing"),
+            ({"message": "Missing assessment."}, "$.agent_action.task_result.assignment_status: required property is missing"),
             ({"assessment": "supports", "message": "Private state claim.", "private_state": "forbidden"},
-             "$.action.result: contains 1 unexpected properties (names withheld)"),
+             "$.agent_action.task_result: contains 1 unexpected properties (names withheld)"),
         )
         for ordinal, (value, issue) in enumerate(invalid_values, start=1):
             with self.subTest(ordinal=ordinal):
@@ -714,7 +716,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                           if payload.role == LEAD_ORCHESTRATOR and payload.validation_details)
         self.assertEqual(len(synthesis), 1)
         self.assertTrue(synthesis[0].validation_details[0].startswith("Original response"))
-        self.assertIn("$.action.result: contains 1 unexpected properties",
+        self.assertIn("$.agent_action.task_result: contains 1 unexpected properties",
                       repr(synthesis[0].validation_details))
         self.assertIs(decision.turn.state, CollaborationStepState.COMPLETED)
         self.assertEqual(
@@ -822,7 +824,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 self.assertTrue(expected)
                 requirement = ("expected nonempty text" if rejected_role == PLOT_ARCHITECT
                                else "expected nonempty bounded UTF-8 text")
-                self.assertEqual(expected[0], "Original response\n$.action.result.message: " + requirement)
+                self.assertEqual(expected[0], "Original response\n$.agent_action.task_result.response_text: " + requirement)
 
                 restarted_backend = _LeadBackend()
                 restarted = StoryRuntime(
@@ -892,7 +894,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         empty_message_details = tuple(
             detail for detail in expected
             if detail == "Original response\n"
-                         "$.action.result.message: expected nonempty text"
+                         "$.agent_action.task_result.response_text: expected nonempty text"
         )
         self.assertEqual(len(empty_message_details), 2)
         self.assertEqual(empty_message_details[0], empty_message_details[1])
@@ -971,7 +973,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertEqual(notices[0].validation_invocation_id,
                          submitted[0].invocation_id)
         self.assertEqual(notices[0].validation_details[0], "Original response\n"
-                         "$.action.result.message: expected nonempty text")
+                         "$.agent_action.task_result.response_text: expected nonempty text")
         self.assertNotIn(private, repr(known))
 
         restarted_backend = _LeadBackend()
@@ -1266,7 +1268,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                           "input_ids": [*known_ids, *reply_ids], "mode": "review"}
             body = {"message": "One issue needs a second review.", "next_intent": {
                 "purpose": "Resolve the remaining concern.", "assignments": [assignment]}}
-            encoded = json.dumps({"action": {"kind": "answer", "result": body}})
+            encoded = wire_response(json.dumps({"action": {"kind": "answer", "result": body}}), wire_contract_id(call.payload))
             self.assertEqual(diagnose_json_text(encoded, call.schema), ())
             facts = LeadProviderConstraints(input_ids=tuple(known_ids + reply_ids),
                 reviewer_inputs=((PLOT_ARCHITECT, "reference_1"),), scope=first.proposal.authoring_scope, continuation=True)
@@ -1275,7 +1277,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 bad = {**body, "next_intent": {**body["next_intent"], "assignments": [{**assignment, "input_ids": selected}]}}
                 self.assertIn(Rule.CONTINUATION_INPUT_COVERAGE, facts.diagnose(json.dumps(bad)))
             bad = {**body, "next_intent": {**body["next_intent"], "assignments": [{**assignment, "input_ids": ["foreign_reply"]}]}}
-            self.assertTrue(diagnose_json_text(json.dumps({"action": {"kind": "answer", "result": bad}}), call.schema))
+            self.assertTrue(diagnose_json_text(wire_response(json.dumps({"action": {"kind": "answer", "result": bad}}), wire_contract_id(call.payload)), call.schema))
             self.assertIn(Rule.PURPOSE_REQUIRED, facts.diagnose(json.dumps({**body, "next_intent": {**body["next_intent"], "purpose": ""}})))
             return encoded
         private = "PRIVATE_CONTINUATION_SYNTHESIS_VALUE"

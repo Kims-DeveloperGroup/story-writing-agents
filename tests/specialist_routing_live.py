@@ -293,7 +293,7 @@ async def evaluate_objective(output: Path, *, setup_only: bool = False):
               'max_calls': 0 if setup_only else 6, 'max_seconds': maximum_seconds,
               'inputs': fingerprint, 'calls': [], 'native_launches': [], 'stages': [],
               'unexecuted': ['draft_proposal', 'confirmed_draft', 'recommendation_prepare'],
-              'wire_contract': 'lead-outcome-v5', 'passed': False}
+              'wire_contract': 'lead-response-v6', 'passed': False}
     backend = None
     temporary = None
     temporary_root = None
@@ -334,8 +334,8 @@ async def evaluate_objective(output: Path, *, setup_only: bool = False):
                 raise RuntimeError('Authorized provider call/time budget exhausted')
             row = {'ordinal': len(ledger['calls']) + 1, 'vendor': vendor,
                    'payload_sha256': hashlib.sha256(request.stdin).hexdigest(),
-                   'contains_v5': b'lead-outcome-v5' in request.stdin,
-                   'contains_synthesis_v3': b'lead-synthesis-v3' in request.stdin,
+                   'contains_v6': b'lead-response-v6' in request.stdin,
+                   'contains_summary_v4': b'consultation-summary-v4' in request.stdin,
                    'contains_ten_lead_fields': all(field.encode() in request.stdin for field in
                     ('scope', 'authoring_scope', 'evidence_status', 'evidence_ids', 'kind',
                      'message', 'artifact_intent', 'proposal', 'objective_intent', 'recommended_action'))}
@@ -505,7 +505,7 @@ async def evaluate_objective(output: Path, *, setup_only: bool = False):
                         decisions == [choice] and sum(type(e.payload) is c.CollaborationMessagePayload
                             and e.direction is c.CollaborationDirection.USER_TO_LEAD for e in history()) == user_count)
                     assertion('Native synthesis must disclose current synthesis contract', lambda:
-                        any(row['contains_synthesis_v3'] for row in ledger['calls']))
+                        any(row['contains_summary_v4'] for row in ledger['calls']))
                     assertion('Confirmed recommendation must disclose exact Plot candidate review', lambda: not (prepared.proposal is None or prepared.artifact_proposal is None or prepared.proposal.participants != ('plot_architect',)))
                     scope = prepared.proposal.authoring_scope
                     assertion('Preparation changed task/revision', lambda: not ((scope.task_id, scope.task_revision) != (task.task_id, task.task_revision)))

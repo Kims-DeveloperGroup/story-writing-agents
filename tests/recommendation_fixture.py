@@ -45,10 +45,10 @@ def recommendation(*, message=DRAFT, recommended_action=None, mutate=None, autho
                 domains=tuple(domains[agent] for agent in selected["specialist_ids"]),
                 task_index=0 if selected["objective_id"] is not None else -1)
             scope["interpretation"] = "Prepare separate review of the finished user-supplied synthetic candidate."
-        status = next(item for item in call.payload["core_statuses"] if item["locator"] == OUTLINE)
+        status = next(item for item in call.payload["core_document_statuses"] if item["artifact_path"] == OUTLINE)
         value = {
             "kind": "recommendation", "message": message,
-            "scope": "story_specific", "evidence_status": status["status"] if status["status"] in {"empty", "missing"} else "incomplete",
+            "scope": "story_specific", "evidence_status": status["document_status"] if status["document_status"] in {"empty", "missing"} else "incomplete",
             "evidence_ids": [artifact._status_id(call, OUTLINE)], "proposal": None, "artifact_intent": None,
             "objective_intent": None, "recommended_action": selected,
             "authoring_scope": scope,

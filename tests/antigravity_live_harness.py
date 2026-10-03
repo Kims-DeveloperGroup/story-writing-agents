@@ -143,7 +143,7 @@ def assert_pending_plot_recommendation(history, result, calls):
     from story_writing_agents import conversations as contracts
     require(result.kind is LeadOutcomeKind.RECOMMENDATION
             and result.next_action is contracts.CollaborationNextAction.SUBMIT_RECOMMENDATION_DECISION,
-            'L06C lacks a separately confirmable recommendation')
+            f'L06C lacks separately confirmable recommendation: {result!r}')
     request = result.recommendation_request
     require(type(request) is contracts.LeadRecommendationRequestPayload,
             'L06C lacks an exact typed recommendation request')
@@ -268,44 +268,24 @@ def prove_lead_corrections(entries, history):
         if rejected['outcome'] != 'rejected':
             continue
         call = rejected['call']
-        require(rejected['code'] == 'answer_validation_failed'
-                and call['vendor'] == 'antigravity' and call['agent'] == 'lead_orchestrator'
-                and call['fault'] is None and call['delivered_returncode'] == 0
-                and rejected['terminal']['status'] == 'SUCCESS',
-                'Unapproved rejected provider response')
+        require(rejected['code'] == 'answer_validation_failed' and call['vendor'] == 'antigravity' and (call['agent'] == 'lead_orchestrator') and (call['fault'] is None) and (call['delivered_returncode'] == 0) and (rejected['terminal']['status'] == 'SUCCESS'), 'Unapproved rejected provider response')
         payload = rejected['payload']
         rejected_output = rejected['terminal'].get('structured_output', {})
-        require(rejected_output.get('correlation') == payload.get('c')
-                and rejected_output.get('action', {}).get('kind') == 'answer',
-                'Rejected native answer correlation or action differs')
-        current = payload.get('i', {})
+        require(set(rejected_output) == {'agent_action'} and rejected_output.get('agent_action', {}).get('action_type') == 'submit_result', 'Rejected native answer response shape or action differs')
+        current = payload.get('task_input', {})
         identity = current.get('identity')
-        require(type(identity) is dict and current.get('workflow') == 'lead_front_channel'
-                and 'response_correction' not in current,
-                'Rejected response is not the first Lead attempt')
-        candidates = [entry for entry in entries
-                      if entry['call']['number'] > call['number']
-                      and entry['payload'].get('c') == payload.get('c')
-                      and entry['payload'].get('i', {}).get('identity') == identity
-                      and 'response_correction' in entry['payload'].get('i', {})]
+        require(type(identity) is dict and current.get('workflow_type') == 'lead_user_turn' and ('response_correction' not in current), 'Rejected response is not the first Lead attempt')
+        candidates = [entry for entry in entries if entry['call']['number'] > call['number'] and entry['payload'].get('request_correlation_token') == payload.get('request_correlation_token') and (entry['payload'].get('task_input', {}).get('identity') == identity) and ('response_correction' in entry['payload'].get('task_input', {}))]
         require(len(candidates) == 1, 'Missing or multiple Lead corrections')
         corrected = candidates[0]
-        corrected_input = dict(corrected['payload']['i'])
+        corrected_input = dict(corrected['payload']['task_input'])
         marker = corrected_input.pop('response_correction')
-        require(type(marker) is dict and marker.get('rejection_code') == 'answer_validation_failed'
-                and type(marker.get('instruction')) is str and bool(marker['instruction'])
-                and corrected_input == current, 'Correction marker or original request differs')
-        q = corrected['payload'].get('q', [])
-        require(len(q) >= 3 and q[0:3] == ['lead', 'a', ''],
-                'Correction did not disable retrieval')
-        require(corrected['outcome'] == 'accepted' and corrected['code'] == 'accepted'
-                and corrected['call']['fault'] is None
-                and corrected['terminal']['status'] == 'SUCCESS'
-                and corrected['call']['delivered_returncode'] == 0,
-                'Corrective Lead answer was not accepted')
-        between = [entry for entry in entries if call['number'] < entry['call']['number']
-                   < corrected['call']['number']]
-        references = bool(payload.get('untrusted_writing_artifact_context'))
+        require(type(marker) is dict and marker.get('rejection_code') == 'answer_validation_failed' and (type(marker.get('instruction')) is str) and bool(marker['instruction']) and (corrected_input == current), 'Correction marker or original request differs')
+        q = corrected['payload'].get('response_contract', [])
+        require(q.get('workflow_phase') == 'lead_user_turn' and q.get('allowed_action_types') == ['submit_result'] and q.get('searchable_source_types') == [], 'Correction did not disable retrieval')
+        require(corrected['outcome'] == 'accepted' and corrected['code'] == 'accepted' and (corrected['call']['fault'] is None) and (corrected['terminal']['status'] == 'SUCCESS') and (corrected['call']['delivered_returncode'] == 0), 'Corrective Lead answer was not accepted')
+        between = [entry for entry in entries if call['number'] < entry['call']['number'] < corrected['call']['number']]
+        references = bool(payload.get('untrusted_attached_references'))
         require(len(between) == int(references), 'Correction exceeds exact prelude/answer bound')
         operation_id = None
         if references:
@@ -313,148 +293,86 @@ def prove_lead_corrections(entries, history):
             prelude_call = prelude['call']
             correlation = prelude['payload'].get('correlation', {})
             operation_id = correlation.get('operation_id')
-            require(prelude['payload'].get('operation') == 'writing_artifact_reference_read'
-                    and correlation.get('agent_id') == 'lead_orchestrator'
-                    and correlation.get('phase') == 'lead'
-                    and prelude_call['prior_thread_id'] is None
-                    and prelude['outcome'] == 'accepted', 'Corrective reference prelude differs')
+            require(prelude['payload'].get('request_type') == 'writing_artifact_reference_read' and correlation.get('agent_id') == 'lead_orchestrator' and (correlation.get('phase') == 'lead') and (prelude_call['prior_thread_id'] is None) and (prelude['outcome'] == 'accepted'), 'Corrective reference prelude differs')
             fresh_thread = prelude_call['thread_id']
-            require(corrected['call']['prior_thread_id'] == fresh_thread,
-                    'Correction did not continue its fresh prelude thread')
+            require(corrected['call']['prior_thread_id'] == fresh_thread, 'Correction did not continue its fresh prelude thread')
         else:
-            require(corrected['call']['prior_thread_id'] is None,
-                    'Correction reused the rejected thread')
+            require(corrected['call']['prior_thread_id'] is None, 'Correction reused the rejected thread')
             fresh_thread = corrected['call']['thread_id']
-        require(fresh_thread != call['thread_id'] and corrected['call']['thread_id'] == fresh_thread,
-                'Correction native thread is not fresh or consistent')
-        logical_calls = [entry for entry in entries
-                         if entry['call']['agent'] == 'lead_orchestrator'
-                         and (entry['payload'].get('c') == payload.get('c')
-                              or (operation_id is not None and entry['payload'].get('correlation', {}).get('operation_id') == operation_id))]
-        require(logical_calls[-1] is corrected and len(logical_calls) <= 6 + int(references),
-                'Logical Lead invocation exceeds its source-derived bound')
-        matching = [event for event in events
-                    if all(event.get(key) == identity[key] for key in ('session_id', 'conversation_id', 'turn_id', 'step_id'))]
-        submitted = [event for event in matching
-                     if event['payload'].get('payload_type') == 'provider_call'
-                     and event['payload'].get('role') == 'lead_orchestrator'
-                     and event['payload'].get('invocation_kind') == 'lead'
-                     and event['payload'].get('state') == 'submitted']
-        require(len(submitted) == len(logical_calls) and submitted,
-                'Durable correction physical-call count differs')
+        require(fresh_thread != call['thread_id'] and corrected['call']['thread_id'] == fresh_thread, 'Correction native thread is not fresh or consistent')
+        logical_calls = [entry for entry in entries if entry['call']['agent'] == 'lead_orchestrator' and (entry['payload'].get('request_correlation_token') == payload.get('request_correlation_token') or (operation_id is not None and entry['payload'].get('correlation', {}).get('operation_id') == operation_id))]
+        require(logical_calls[-1] is corrected and len(logical_calls) <= 6 + int(references), 'Logical Lead invocation exceeds its source-derived bound')
+        matching = [event for event in events if all((event.get(key) == identity[key] for key in ('session_id', 'conversation_id', 'turn_id', 'step_id')))]
+        submitted = [event for event in matching if event['payload'].get('payload_type') == 'provider_call' and event['payload'].get('role') == 'lead_orchestrator' and (event['payload'].get('invocation_kind') == 'lead') and (event['payload'].get('state') == 'submitted')]
+        require(len(submitted) == len(logical_calls) and submitted, 'Durable correction physical-call count differs')
         invocations = {event['payload']['invocation_id'] for event in submitted}
-        require(len(invocations) == 1 and [event['payload']['ordinal'] for event in submitted]
-                == list(range(1, len(submitted) + 1)), 'Wrong durable invocation or ordinal')
+        require(len(invocations) == 1 and [event['payload']['ordinal'] for event in submitted] == list(range(1, len(submitted) + 1)), 'Wrong durable invocation or ordinal')
         call_ids = [event['payload']['call_id'] for event in submitted]
         require(len(set(call_ids)) == len(call_ids), 'Duplicate durable submission')
         for entry, event in zip(logical_calls, submitted):
-            is_prelude = entry['payload'].get('operation') == 'writing_artifact_reference_read'
-            require((event['payload']['call_kind'] == 'reference_prelude') == is_prelude,
-                    'Native action and durable physical-call ordinal differ')
-            prepared = [item for item in matching
-                        if item['payload'].get('payload_type') == 'provider_call'
-                        and item['payload'].get('state') == 'prepared'
-                        and item['payload'].get('call_id') == event['payload']['call_id']]
-            require(len(prepared) == 1 and prepared[0]['sequence'] < event['sequence']
-                    and all(prepared[0]['payload'][key] == event['payload'][key]
-                            for key in ('invocation_id', 'ordinal', 'role', 'invocation_kind')),
-                    'Durable prepared/submitted correction facts differ')
-        require(corrected['terminal']['structured_output'].get('correlation') == payload.get('c'),
-                'Corrected native correlation differs')
-        answer = corrected['terminal']['structured_output']['action']
-        require(answer.get('kind') == 'answer', 'Correction is not a terminal answer')
-        value = answer['result']
-        judgments = [event for event in matching
-                     if event['payload'].get('payload_type') == 'lead_judgment']
-        require(len(judgments) == 1 and judgments[0]['sequence'] > submitted[-1]['sequence']
-                and judgments[0]['payload']['kind'] == value['kind']
-                and judgments[0]['payload']['message'] == value['message'],
-                'Final accepted durable Lead judgment differs')
-        proofs[call['number']] = {'rejected_call': call['number'],
-                                 'corrected_call': corrected['call']['number'],
-                                 'fresh_thread': fresh_thread,
-                                 'fresh_start_call': between[0]['call']['number'] if references else corrected['call']['number'],
-                                 'logical_invocation_id': next(iter(invocations)),
-                                 'physical_calls': len(logical_calls)}
+            is_prelude = entry['payload'].get('request_type') == 'writing_artifact_reference_read'
+            require((event['payload']['call_kind'] == 'reference_prelude') == is_prelude, 'Native action and durable physical-call ordinal differ')
+            prepared = [item for item in matching if item['payload'].get('payload_type') == 'provider_call' and item['payload'].get('state') == 'prepared' and (item['payload'].get('call_id') == event['payload']['call_id'])]
+            require(len(prepared) == 1 and prepared[0]['sequence'] < event['sequence'] and all((prepared[0]['payload'][key] == event['payload'][key] for key in ('invocation_id', 'ordinal', 'role', 'invocation_kind'))), 'Durable prepared/submitted correction facts differ')
+        output = corrected['terminal']['structured_output']
+        require(type(output) is dict and set(output) == {'agent_action'}, 'Corrected native response shape differs')
+        answer = output['agent_action']
+        require(set(answer) == {'action_type', 'task_result'} and answer['action_type'] == 'submit_result', 'Correction is not terminal answer')
+        value = answer['task_result']
+        judgments = [event for event in matching if event['payload'].get('payload_type') == 'lead_judgment']
+        require(len(judgments) == 1 and judgments[0]['sequence'] > submitted[-1]['sequence'] and judgments[0]['payload']['kind'] == {'clarification_question': 'question', 'proposal_drafting_recommendation': 'recommendation'}.get(value['response_type'], value['response_type']) and judgments[0]['payload']['message'] == value['response_text'], 'Final accepted durable Lead judgment differs')
+        proofs[call['number']] = {'rejected_call': call['number'], 'corrected_call': corrected['call']['number'], 'fresh_thread': fresh_thread, 'fresh_start_call': between[0]['call']['number'] if references else corrected['call']['number'], 'logical_invocation_id': next(iter(invocations)), 'physical_calls': len(logical_calls)}
     return proofs
-
 
 
 BUDGET_REVIEWERS = ('plot_architect', 'character_custodian', 'execution_specialist')
 
 
 def budget_synthesis_material(payload):
-    """Recognize only the runtime's current substantive synthesis request."""
-    material = payload.get('i') if type(payload) is dict else None
-    return (material if type(material) is dict
-            and material.get('workflow') == 'lead_synthesis' else None)
-
+    """Recognize only the current named consultation summary request."""
+    if type(payload) is not dict:
+        return None
+    from tests.test_agent_context_accounting import _expanded_context_payload
+    material = _expanded_context_payload(payload).get('task_input')
+    return material if type(material) is dict and material.get('workflow_type') == 'consultation_summary' else None
 
 def inject_budget_next_intent(stdout, payload, *, agent, returncode, physical_calls_spent):
-    """Named F06 fault: retain every completed native field except next_intent."""
-    require(agent == 'lead_orchestrator' and returncode == 0,
-            'Budget injection requires successful Lead transport')
+    """Inject one schema-valid continuation into a real completed summary."""
     material = budget_synthesis_material(payload)
-    require(material is not None and 'artifact_candidate' not in material,
-            'Budget injection requires ordinary Lead synthesis')
-    require(type(physical_calls_spent) is int and 0 <= physical_calls_spent <= 12,
-            'Budget injection requires an actual bounded lineage count')
+    require(material is not None and agent == 'lead_orchestrator' and returncode == 0,
+            'Budget fault requires the current successful Lead synthesis')
+    require(type(physical_calls_spent) is int and 4 <= physical_calls_spent <= 12,
+            'Budget fault requires the actual durable submitted-call count')
     native = json.loads(stdout)
-    require(native.get('status') == 'SUCCESS', 'Budget injection requires native SUCCESS')
-    answer = native['structured_output']
-    require(set(answer) == {'correlation', 'action'} and answer['correlation'] == payload['c'],
-            'Budget synthesis correlation differs')
-    action = answer['action']
-    require(set(action) == {'kind', 'result', 'used_handles'} and action['kind'] == 'answer'
-            and type(action['used_handles']) is list, 'Budget synthesis is not an ANSWER')
-    result = action['result']
-    require(set(result) == {'evidence_ids', 'evidence_status', 'scope', 'message',
-                           'reply_event_ids', 'unresolved_input_ids', 'next_intent', 'authoring_scope', 'recommended_action'},
-            'Budget synthesis fields differ')
-    require(result['recommended_action'] is None, 'Budget continuation cannot replace a recommended action')
-    contract = material['answer_contract']
-    for name in ('evidence_ids', 'evidence_status', 'scope', 'reply_event_ids', 'authoring_scope'):
-        require(result[name] == contract[name], 'Budget synthesis contract differs: ' + name)
+    require(native.get('status') == 'SUCCESS', 'Budget synthesis must complete with SUCCESS')
+    output = native.get('structured_output')
+    require(type(output) is dict and set(output) == {'agent_action'}, 'Budget synthesis has an invalid outer object')
+    action = output['agent_action']
+    require(type(action) is dict and set(action) == {'action_type', 'task_result'} and action['action_type'] == 'submit_result', 'Budget synthesis must submit its task result')
+    result = action['task_result']
+    require(type(result) is dict and set(result) in ({'response_type', 'response_text'}, {'response_type', 'response_text', 'follow_up_consultation'}) and result['response_type'] == 'consultation_summary', 'Budget synthesis fields differ')
+    require(type(result['response_text']) is str and bool(result['response_text'].strip()), 'Budget synthesis message is absent')
     inputs = material['inputs']
-    input_ids = [item['input_id'] for item in inputs]
-    reply_ids = contract['reply_event_ids']
-    require(len(reply_ids) == 3 and len(set(reply_ids)) == 3,
-            'Budget synthesis requires three actual replies')
-    require(type(result['message']) is str and bool(result['message'].strip()),
-            'Budget synthesis message absent')
-    required = contract['unresolved_input_ids']
-    unresolved = result['unresolved_input_ids']
-    order = [*required, *(item for item in input_ids if item not in required)]
-    require(type(unresolved) is list and set(required) <= set(unresolved)
-            and unresolved == [item for item in order if item in unresolved],
-            'Budget synthesis erased or reordered unresolved inputs')
-    references = [item for item in inputs if item['kind'] in
-                  {'core_document', 'manuscript', 'writing_artifact'}]
+    input_ids = [item['input_source_id'] for item in inputs]
+    reply_ids = [item['reply_event_id'] for item in material['replies']]
+    require(len(reply_ids) == 3 and len(set(reply_ids)) == 3, 'Budget synthesis requires three actual replies')
+    references = [item for item in inputs if item['input_source_type'] in {'core_document', 'manuscript', 'story_document'}]
     require(references, 'Budget synthesis has no genuine reference prelude basis')
     minimum = 2 * len(BUDGET_REVIEWERS) + 2
-    require(minimum > 12 - physical_calls_spent,
-            'Requested next intent would fit the actual remaining budget')
-    scope = contract['authoring_scope']
-    require(scope['activity'] == 'review', 'Budget continuation requires a current review task')
-    candidate_ids = [item['input_id'] for item in references]
-    intent = {'relation': 'continue_lineage', 'purpose': 'Reconsider every unresolved finding.',
-              'authoring_scope': json.loads(json.dumps(scope)),
-              'assignments': [
-                  {'agent_id': reviewer, 'instruction': 'Review the original inputs and all replies again.',
-                   'input_ids': [*input_ids, *reply_ids], 'mode': 'review',
-                   'review_basis': {'schema_version': 1, 'candidate_input_ids': candidate_ids,
-                                    'criteria': 'Review the exact original candidates against the recorded findings.'}}
-                  for reviewer in BUDGET_REVIEWERS]}
-    before = result['next_intent']
-    result['next_intent'] = intent
+    require(minimum > 12 - physical_calls_spent, 'Requested continuation fits the remaining budget')
+    require(material['provider_constraints']['current_writing_task_scope']['activity_type'] == 'review_writing', 'Budget continuation requires the current review task')
+    intent = {'consultation_purpose': 'Reconsider the unresolved finding.', 'assignments': [
+        {'agent_id': reviewer, 'task_instructions': 'Review the original inputs and all replies again.',
+         'input_source_ids': [*input_ids, *reply_ids], 'assignment_type': 'review_content'}
+        for reviewer in BUDGET_REVIEWERS]}
+    before = result.get('follow_up_consultation')
+    result['follow_up_consultation'] = intent
     delivered = stdout if before == intent else canonical_provider_json(native)
-    proof = {'fault': 'budget_next_intent', 'path': 'structured_output.action.result.next_intent',
+    proof = {'fault': 'budget_next_intent', 'path': 'structured_output.agent_action.task_result.follow_up_consultation',
              'physical_calls_spent': physical_calls_spent, 'minimum_required_calls': minimum,
-             'remaining_calls': 12 - physical_calls_spent,
-             'changed': before != intent, 'original_stdout_sha256': digest(stdout),
-             'delivered_stdout_sha256': digest(delivered)}
+             'remaining_calls': 12 - physical_calls_spent, 'changed': before != intent,
+             'original_stdout_sha256': digest(stdout), 'delivered_stdout_sha256': digest(delivered)}
     return delivered, proof
-
 
 def audit_exchanges(exchanges, calls, history=()):
     """Correlate actual transport, durable capture and exact diagnostic bytes."""
@@ -1386,45 +1304,16 @@ class ConversationCase:
         from story_writing_agents.prompts import PromptAssembler
         from story_writing_agents.provider_adapter import ProviderInvocation, ProviderInvocationError
         from story_writing_agents.workspace.initialization import compose_session_artifact_binding
-        schema = {'additionalProperties': False,
-         'properties': {'correlation': {'description': 'Echo the exact correlation token from this '
-                                                       'call.',
-                                        'enum': ['synthetic-correlation'],
-                                        'type': 'string'},
-                        'action': {'additionalProperties': False,
-                                   'properties': {'kind': {'enum': ['answer'], 'type': 'string'},
-                                                  'result': {'additionalProperties': False,
-                                                             'properties': {'assessment': {'enum': ['supports',
-                                                                                                    'concern',
-                                                                                                    'conflict',
-                                                                                                    'insufficient_evidence'],
-                                                                                           'type': 'string'},
-                                                                            'assignment_id': {'enum': ['synthetic-assignment'],
-                                                                                              'type': 'string'},
-                                                                            'input_ids': {'items': {'enum': ['synthetic-input'],
-                                                                                                    'type': 'string'},
-                                                                                          'maxItems': 1,
-                                                                                          'minItems': 1,
-                                                                                          'type': 'array'},
-                                                                            'message': {'type': 'string'}},
-                                                             'required': ['assessment',
-                                                                          'assignment_id',
-                                                                          'input_ids',
-                                                                          'message'],
-                                                             'type': 'object'},
-                                                  'used_handles': {'items': {'type': 'string'},
-                                                                   'maxItems': 0,
-                                                                   'type': 'array',
-                                                                   'minItems': 0}},
-                                   'required': ['kind', 'result', 'used_handles'],
-                                   'type': 'object',
-                                   'description': 'ANSWER: return the exact result and only '
-                                                  'supporting handles emitted by successful READ '
-                                                  'actions.'}},
-         'required': ['correlation', 'action'],
-         'type': 'object',
-         'description': 'Return exactly one schema-selected context action with its exact '
-                        'correlation token.'}
+        from story_writing_agents.provider_wire import add_contract_guidance, describe_schema
+        schema = describe_schema({"type": "object", "additionalProperties": False,
+            "properties": {"agent_action": {"type": "object", "additionalProperties": False,
+                "properties": {"action_type": {"type": "string", "enum": ["submit_result"]},
+                    "task_result": {"type": "object", "additionalProperties": False,
+                        "properties": {"response_type": {"type": "string", "enum": ["specialist_assignment_result"]},
+                            "assignment_status": {"type": "string", "enum": ["supports_proposal"]},
+                            "response_text": {"type": "string", "minLength": 1}},
+                        "required": ["response_type", "assignment_status", "response_text"]}},
+                "required": ["action_type", "task_result"]}}, "required": ["agent_action"]})
         definition = PromptAssembler(self.workspace, backend_overrides={'plot_architect': 'antigravity'}).build_contextual_definition(session_id='diagnostics', agent_id='plot_architect')
         session_binding = compose_session_artifact_binding(
             self.workspace.root,
@@ -1438,7 +1327,9 @@ class ConversationCase:
             with session_binding.open_ready_resources() as access:
                 access.install_provider_role(role)
             with session_binding.open_provider_execution_workspace() as execution_workspace:
-                payload = {'c': 'synthetic-correlation', 'q': 'Return exactly the schema-selected outer answer. action.result must contain assessment supports, assignment_id synthetic-assignment, input_ids [synthetic-input], and a short visible message. Set used_handles to [].'}
+                payload = add_contract_guidance({"request_correlation_token": "synthetic-correlation",
+                "task_input": {"workflow_type": "specialist_task", "user_request_text":
+                    "Return the declared specialist_assignment_result with assignment_status supports_proposal and a brief response_text."}}, schema)
                 invocation = ProviderInvocation(session_id=self.session, schema=antigravity_adapter.AntigravityAdapter.native_output_schema(schema), payload=payload, thread_id=None, binding_components=binding.binding_components, execution_workspace=execution_workspace)
                 self.observer.fault = fault
                 self.observer.fault_agent = 'plot_architect'
@@ -1458,22 +1349,11 @@ class ConversationCase:
                     capture.accepted()
                     require(fault in (None, 'known_error'), 'Injected malformed/error result accepted')
                     answer = json.loads(result.response_text)
-                    require(type(answer) is dict and set(answer) == {'correlation', 'action'}
-                            and answer['correlation'] == 'synthetic-correlation',
-                            'Direct diagnostic answer has incorrect outer identity')
-                    action = answer['action']
-                    require(type(action) is dict and set(action) == {'kind', 'result', 'used_handles'}
-                            and action['kind'] == 'answer' and type(action['used_handles']) is list
-                            and action['used_handles'] == [], 'Direct diagnostic action differs')
-                    assessment = action['result']
-                    require(type(assessment) is dict
-                            and set(assessment) == {'assessment', 'assignment_id', 'input_ids', 'message'}
-                            and assessment['assessment'] == 'supports'
-                            and assessment['assignment_id'] == 'synthetic-assignment'
-                            and type(assessment['input_ids']) is list
-                            and assessment['input_ids'] == ['synthetic-input']
-                            and type(assessment['message']) is str and bool(assessment['message'].strip()),
-                            'Direct diagnostic specialist result differs')
+                    require(type(answer) is dict and set(answer) == {'agent_action'}, 'Direct diagnostic answer has incorrect outer shape')
+                    action = answer['agent_action']
+                    require(type(action) is dict and set(action) == {'action_type', 'task_result'} and action['action_type'] == 'submit_result', 'Direct diagnostic action differs')
+                    assessment = action['task_result']
+                    require(type(assessment) is dict and set(assessment) == {'response_type', 'assignment_status', 'response_text'} and assessment['response_type'] == 'specialist_assignment_result' and assessment['assignment_status'] == 'supports_proposal' and type(assessment['response_text']) is str and bool(assessment['response_text'].strip()), 'Direct diagnostic specialist result differs')
                     if fault == 'known_error':
                         require(result.response_diagnostic is not None, 'Recovered native envelope not retained')
                     outcomes.append({'fault': fault, 'accepted': True})
@@ -1513,12 +1393,10 @@ class ConversationCase:
         proof = json.loads((Path(call['directory']) / 'injected-delta.sanitized.json').read_text())
         require(proof['physical_calls_spent'] + 1 == project_collaboration_history(history).physical_calls_spent
                 == len(self.observer.calls), 'Budget injection used a different durable lineage count')
-        delivered = json.loads((Path(call['directory']) / 'delivered.stdout').read_bytes())['structured_output']['action']['result']
-        require(synthesis.message == delivered['message']
-                and list(synthesis.unresolved_input_ids) == delivered['unresolved_input_ids']
-                and json.loads(json.dumps(dataclasses.asdict(synthesis.next_intent))) == delivered['next_intent']
-                and synthesis.evidence == proposed.proposal.basis.evidence,
-                'Durable budget synthesis differs from the exact delivered result')
+        delivered = json.loads((Path(call['directory']) / 'delivered.stdout').read_bytes())['structured_output']['agent_action']['task_result']
+        from tests.provider_wire_fixture import result as wire_result
+        expected_intent = wire_result({'next_intent': dataclasses.asdict(synthesis.next_intent)}, 'consultation-summary-v4')['follow_up_consultation']
+        require(synthesis.message == delivered['response_text'] and expected_intent == delivered['follow_up_consultation'] and synthesis.evidence == proposed.proposal.basis.evidence, 'Durable budget synthesis differs from the exact delivered result')
         require('exceeds its remaining call budget' in completed.message,
                 'Visible budget completion notice absent')
         require(project_collaboration_history(history).current_state is CollaborationStepState.COMPLETED

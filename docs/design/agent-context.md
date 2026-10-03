@@ -23,7 +23,7 @@ cycle:
 | `agent_context.continuation` | Shared process-local Lead session transaction; defer coverage commitment until authoritative result publication. |
 | `agent_context.actions` | SEARCH/READ/ANSWER values, policies, correlations, opaque handles, evidence authorization, and provider observations. |
 | `agent_context.sources` | Bounded searchable source capture and drift checks; separate exact retained-session-history capture for Lead continuation. |
-| `agent_context.service` | Provider-neutral typed wire-v9 call loop, local reference loading, lifecycle authority, source/action orchestration, checkpoint commit, usage aggregation, and optional progress observer. |
+| `agent_context.service` | Provider-neutral agent-provider-wire-v10 call loop, local reference loading, lifecycle authority, source/action orchestration, checkpoint commit, usage aggregation, and optional progress observer. |
 
 The retained execution entry points are backend/provider component interfaces,
 plus the runtime's lead-turn and confirmed-consultation composition.
@@ -42,7 +42,7 @@ focused user input + zero or more ${path} / ${path}#Lx-Ly references
   -> PREPARE: validate observer, scope, request, references, and source authorities
   -> PLAN: inventory current sources -> manifest -> bootstrap/delta projection
   -> local authorization reads every explicit reference exactly
-  -> runtime builds one per-call typed-v8 schema plus compact input payload
+  -> runtime builds one per-call descriptive schema plus guided input payload
   -> selected adapter invokes Codex or Antigravity
   -> provider returns exactly one typed SEARCH, READ, or ANSWER action
      SEARCH -> runtime searches only authorized sources and returns fresh handles
@@ -342,134 +342,45 @@ targets need attached-reference or READ evidence; a metadata revision is kept
 distinct from the recaptured whole-file digest and selected-boundary digest.
 
 <!-- Historical audit-link alias only; the visible normative contract is v8. -->
-<a id="compact-provider-wire-v5"></a>
-<a id="typed-provider-wire-v7"></a>
-<a id="typed-provider-wire-v8"></a>
-<a id="typed-provider-wire-v9"></a>
-## Typed provider wire v9
+<a id="agent-provider-wire-v10"></a>
 
-Contextual bindings define `agent-context-wire-v9`. Initial payloads use `c`
-(correlation), `q` (phase/result contract), and `i` (required current input),
-with required Lead session memory `h`, applicable compact candidate `n`, selected
-documents `docs`, projection `p`, and tombstone/record `t` data. Mandatory
-reference bodies appear as locally authorized
-`untrusted_writing_artifact_context`. Continuations contain correlation,
-contract, and the new observation (`c`, `q`, `o`).
+## Descriptive agent provider wire
 
-The Lead `h` object contains required visible history, `delivery_mode` and
-`current_state` session directives. Its projection removes storage bookkeeping and
-absent optional fields while preserving exact readable content, selectable identities
-and necessary workflow facts. Verified continuations omit empty unchanged conversations
-and text present in current input. Core-status objects contain only `locator`, `status`
-and current `evidence_id`; full integrity metadata stays host-owned. Remembered history
-never satisfies current evidence or reference obligations, even for zero P3 budgets or
-`workflow_meta` calls.
+Contextual and direct calls use `agent-provider-wire-v10`. The
+[agent JSON field guide](../reference/provider-wire.md) specifies the request
+properties, named context records, action variants, result schemas, and field
+meanings. Built-in result objects include explicit `response_type` values.
 
-Wire v9 shares repeated runtime-owned dictionaries within an initial request.
-Only when both the complete encoded payload and its recursive property count
-become smaller, `context_encoding` declares
-`shared-objects-v1` and its substitution instructions, and `context_objects`
-stores literal objects under request-local aliases such as `o1`. An exact
-`{"context_ref":"o1"}` at an eligible slot substitutes that table value. Every
-physical request includes its own complete table; aliases never resolve through
-provider memory, a previous request, or external storage.
+Contextual initial requests contain `request_correlation_token`,
+`response_contract`, `task_input`, and applicable `session_history`, `current_draft`,
+`context_documents`, `context_record_updates`, and `context_removals`. Continuations
+carry current controls and `context_observation`. Every physical request includes
+`protocol_version` and guidance for its actual input and response schema.
 
-Eligible slots are history-record `details`, history/current
-`artifact_objectives`, and `structured_recommendation_execution`'s `request`,
-`decision`, `start`, and selected-input `conversation_event`. Only dictionaries
-of at least 256 canonical UTF-8 bytes appearing at least twice are considered.
-Equality uses strict sorted-key JSON, preserving strings, array order, and JSON
-scalar types. Object-member order need not match. Reserved encoding/table keys
-or reference-shaped values at eligible slots disable compaction. Pool contents
-and arbitrary user data are never recursively interpreted as references.
+The projection preserves exact readable content, selectable identities, source
+ranges, provenance, digests, and byte counts. Source and history records use named
+objects. `core_document_statuses` distinguishes `has_content`, `empty_file`, and
+`missing_file`. Remembered history does not satisfy a current READ or explicit
+reference obligation. Untrusted source text remains opaque and cannot redefine
+runtime instructions.
 
-Compaction preserves each original slot's authority: history remains context,
-and references confer no confirmation or evidence authority. Mandatory-reference
-bodies and paths, finer component annotations, and independent source/history
-limits are preserved. The same projection runs before both physical-payload
-capacity checks. Reference wrappers retain their original accounting category;
-table structure and guidance count as control bytes. A pooled object counts
-once as current input if any occurrence comes from `i`, otherwise as conversation
-context. Nonprofitable requests retain their original encoded bytes.
+Repeated runtime-owned dictionaries can share a request-local object table when
+both total encoded bytes and recursive property count become smaller.
+`context_reuse` declares reconstruction instructions; `shared_context_objects`
+contains literal values. An exact `{"shared_context_object_id":"o1"}` at an
+eligible slot refers to that request's table. Each request carries its complete
+table. The runtime does not recursively interpret arbitrary story JSON as references.
 
-The wire-version change invalidates incompatible checkpoint/thread fingerprints
-and causes fresh bootstrap. It does not change response schemas, semantic result
-contract IDs such as `lead-outcome-v5`, provider-specific schema translation,
-stored conversations, or exchange-record schemas. Providers must still return
-the complete schema-selected output, never output encoded with `context_ref`.
+Eligible repeated slots include history record details, `document_change_requests`,
+`confirmed_proposal_drafting_context` records, and selected conversation events.
+Sharing uses strict canonical JSON equality and measures the actual descriptive
+wire representation. It does not omit mandatory reference bodies. Component paths
+follow projected and shared fields so request, schema, guide, and bound-instruction
+bytes remain included in context accounting.
 
-Provider results are exact closed objects with `action` as their only required
-root field. Runtime derives correlation and action-index facts from the active
-invocation. `action` is one schema-selected closed variant:
-
-```json
-{"action":{"kind":"search","queries":[{"text":"opening reveal","source_kinds":["writing_artifact"]}]}}
-```
-
-```json
-{"action":{"kind":"read","handles":["<issued-handle>"]}}
-```
-
-```json
-{"action":{"kind":"answer","result":{"message":"What would you like to work on?","authoring_scope":{"activity":"workflow","target_paths":[],"domains":[],"task":"task_demo@1"}}}}
-```
-
-The third example uses the complete workflow-meta `lead-outcome-v5` answer variant
-with illustrative offered task `task_demo` at revision `1`. Every provider-
-produced direct Lead result requires this compact semantic scope; runtime does
-not infer a missing scope as workflow. A missing scope is rejected, receives
-one bounded structured repair, and then becomes a runtime-owned visible no-
-action fallback if repair also fails. That fallback is not part of the closed
-provider schema. The default answer omits `kind`, while questions and critiques
-add it. The live ANSWER schema embeds the invocation-specific result schema at
-`action.result`. There is no JSON-in-string layer and no compatibility decoder
-for an older action envelope. Runtime associates successful READ receipts with
-the final answer; the provider does not echo their handles.
-SEARCH/READ observations retain the full authoritative identity, revision,
-boundary, digest, size, provenance, handle, and untrusted content required for
-provider reasoning, even though the input payload remains compact.
-
-For a lead initial call, `core_statuses` is an additional top-level list beside
-`c`, `q`, and `i`. The final `action.result` contains `message`, compact
-`authoring_scope`, and only the semantic fields required by its selected
-`lead-outcome-v5` variant. The default direct answer omits `kind`; questions,
-critiques, recommendations, and proposals include the kind selected by their
-variant. Omitted objective intent makes no transition; `start`,
-`continue`, and `cancel` follow the strict
-[objective contract](../reference/runtime-api.md#contextual-authoring-objectives).
-Fresh recommendations require `recommended_action`; other variants omit it.
-Confirm permits one Lead preparation, returning
-a separately confirmable proposal or a material question. Ordinary contextual
-approval remains a new instruction and supersedes a pending recommendation.
-Those semantic fields are decoded by orchestration only after context ANSWER
-authorization. Specialist output uses `specialist-reply-v2` with only
-`assessment` and `message`; runtime owns assignment and mode metadata.
-The Lead selects an exact offered task/revision and discloses activity, targets,
-domains, and interpretation; current evidence validation and specialist routing
-are independent requirements. Invalid, invented,
-reordered, stale, or matrix-incompatible evidence rejects that physical
-response, which is never replayed. With fresh authority and remaining budget,
-runtime may request one bounded same-turn correction. A second deterministic
-rejection returns a visible safe no-action reply and keeps the conversation
-open. A selected objective PREPARE cannot
-downgrade to advice in that correction. A known read-only provider failure,
-including after references, is retryable once its exact history and reference
-accounting close; it leaves an open objective unchanged. An unresolved
-submitted outcome instead remains
-`outcome_unknown` with `inspect_and_resolve_outcome` and is never replayed.
-Uncertain cleanup or closure remains recovery-gated.
-
-The runtime supplies a deterministic Lead v5 overlay. Fresh defaults use v5. The
-context action envelope stays wire v9. Ordinary synthesis uses `lead-synthesis-v3`
-with a nullable action, mutually exclusive with `next_intent`; its durable
-historical codec is unchanged. Specialist and artifact-review synthesis results
-retain their own contracts.
-
-The built-in runtime uses provider-managed context and empty mutable-core
-bindings. Package-internal `story_session_context` remains an internal capture
-and direct-compatibility input; it is not the current provider wire. Direct
-noncontextual definitions still preserve their exact eager bytes,
-fingerprints, and adapter behavior.
+The single current wire version participates in provider continuation fingerprints.
+No migration, old-format response decoder, or alternate field spelling is provided.
+Public Python domain values and history storage have independent interfaces.
 
 <a id="candidate-pointer-single-splice-and-fallback"></a>
 ## Candidate pointer, single splice, and fallback

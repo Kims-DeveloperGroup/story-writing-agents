@@ -117,7 +117,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
                 self.assertNotEqual(result.turn_id, failed.turn_id)
                 self.assertEqual(len(backend.calls), 1)
                 self.assertIsNone(backend.calls[0].expected_thread_id)
-                self.assertEqual(backend.calls[0].payload["h"]["delivery_mode"], "bootstrap")
+                self.assertEqual(backend.calls[0].payload["session_history"]["context_delivery_mode"], "bootstrap")
                 history = self.history(conversation)
                 self.assertEqual(history[:len(prefix)], prefix)
                 texts = [event.payload.content for event in history
@@ -125,7 +125,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
                 self.assertEqual(texts.count(original), 1)
                 self.assertEqual(texts.count("Explicit retry after restart."), 1)
                 self.assertEqual(self.failures(conversation), closure)
-                self.assertIn("provider_timed_out", json.dumps(backend.calls[0].payload["h"]))
+                self.assertIn("provider_timed_out", json.dumps(backend.calls[0].payload["session_history"]))
                 self.assertEqual({agent for agent, _ in backend.call_records}, {LEAD_ORCHESTRATOR})
 
     async def test_legacy_bare_prepared_and_submitted_tails_close_only_on_new_input(self):
@@ -164,7 +164,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         await self.answer(conversation, "Retry after interrupted native work.", runtime=restarted)
         self.assertIn(retained_thread, self.backend.tainted_thread_ids)
         self.assertIsNone(self.backend.calls[-1].expected_thread_id)
-        self.assertEqual(self.backend.calls[-1].payload["h"]["delivery_mode"], "bootstrap")
+        self.assertEqual(self.backend.calls[-1].payload["session_history"]["context_delivery_mode"], "bootstrap")
 
     async def test_abandoned_turn_preserves_other_conversation_successful_checkpoint(self):
         failed_conversation, successful_conversation = self.conversation(), self.conversation()
@@ -178,7 +178,7 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         restarted = StoryRuntime(self.workspace, self.backend)
         await self.answer(failed_conversation, "Explicit retry in failed conversation.", runtime=restarted)
         self.assertEqual(self.backend.calls[-1].expected_thread_id, retained_thread)
-        self.assertEqual(self.backend.calls[-1].payload["h"]["delivery_mode"], "delta")
+        self.assertEqual(self.backend.calls[-1].payload["session_history"]["context_delivery_mode"], "delta")
         self.assertEqual(self.backend.tainted_thread_ids, before_taints)
 
     async def test_revision_timeout_keeps_superseded_confirmation_non_authorizing(self):

@@ -38,8 +38,8 @@ def scoped_proposal(*agents, activity="draft", paths=(OUTLINE,), domains=(), sel
                                                "input_ids": list(dict.fromkeys(["user_input", *ids])), "mode": mode,
                                                "review_basis": None if mode == "draft" else {"schema_version":1,"candidate_input_ids":ids,"criteria":"Assess chronology and motivation."}}
                                               for agent in agents]} if kind == "proposal" else None}
-        statuses = call.payload.get("core_statuses", [])
-        status = next((s for s in statuses if s["locator"] in paths), statuses[0] if statuses else None)
+        statuses = call.payload.get("core_document_statuses", [])
+        status = next((s for s in statuses if s["artifact_path"] in paths), statuses[0] if statuses else None)
         if status is not None: value["evidence_ids"] = [status["evidence_id"]]
         if mutate: mutate(value, material)
         return _provider_envelope(call, value)
@@ -137,7 +137,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         pending = await self.proposal_for(conversation)
         task_id = pending.proposal.authoring_scope.task_id
         self.workspace.path(OUTLINE).unlink()
-        response = _artifact_outcome(operations=[{"kind":"create", "suggested_path":OUTLINE, "new_text":"Current synthetic candidate."}], evidence_status="missing", evidence_ids=lambda call,m:[next(x["evidence_id"] for x in call.payload["core_statuses"] if x["locator"] == OUTLINE)])
+        response = _artifact_outcome(operations=[{"kind":"create", "suggested_path":OUTLINE, "new_text":"Current synthetic candidate."}], evidence_status="missing", evidence_ids=lambda call,m:[next(x["evidence_id"] for x in call.payload["core_document_statuses"] if x["artifact_path"] == OUTLINE)])
         def selected_review(call, provider):
             value = json.loads(response(call, provider))
             material = _workflow_material(call.payload)
@@ -187,7 +187,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         response = _artifact_outcome(
             operations=[{"kind":"create", "suggested_path":path,
                          "new_text":"Summons leads to a choice; the choice causes a consequence.\n"}],
-            evidence_status="incomplete", evidence_ids=lambda call,m:[call.payload["core_statuses"][0]["evidence_id"]])
+            evidence_status="incomplete", evidence_ids=lambda call,m:[call.payload["core_document_statuses"][0]["evidence_id"]])
         def integrate(call, provider):
             value = json.loads(response(call, provider))
             material = _workflow_material(call.payload)
@@ -270,7 +270,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertIsNone(invalid.proposal)
         self.assertIs(invalid.next_action,c.CollaborationNextAction.CONTINUE_WITH_LEAD)
         self.workspace.path(OUTLINE).unlink()
-        response=_artifact_outcome(operations=[{"kind":"create","suggested_path":OUTLINE,"new_text":"Candidate for the revised task."}],evidence_status="missing",evidence_ids=lambda call,m:[next(x["evidence_id"] for x in call.payload["core_statuses"] if x["locator"]==OUTLINE)])
+        response=_artifact_outcome(operations=[{"kind":"create","suggested_path":OUTLINE,"new_text":"Candidate for the revised task."}],evidence_status="missing",evidence_ids=lambda call,m:[next(x["evidence_id"] for x in call.payload["core_document_statuses"] if x["artifact_path"]==OUTLINE)])
         def stale(call,provider):
             result=json.loads(response(call,provider))
             material=_workflow_material(call.payload)
