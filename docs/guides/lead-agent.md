@@ -199,6 +199,21 @@ a real new instruction, superseding an unconfirmed recommendation without
 creating a structured Confirm. With sufficient scope and current evidence,
 the Lead can prepare its exact candidate from that ordinary input.
 
+When you approve a completed draft and ask for a new document, the Lead retains
+the draft's current task and specialist provenance. It can use the approved text
+for candidate preparation without asking the specialists to draft it again when
+all required current-task drafts are already present. A preparation recommendation
+can select the earlier draft as context; confirming that recommendation binds
+the exact selected draft to the preparation request. A prior draft's event ID is
+not automatically an input for a new specialist assignment.
+
+New manuscript documents use an unused `manuscript/PART/PATH.md` destination,
+such as `manuscript/essays/approved-draft.md`. The part and filename components
+follow the existing ASCII path rules; a title and body in Korean or another
+language remain inside the document. The Lead discloses the chosen destination
+and exact candidate before review and Apply confirmation. A request for a new
+document does not itself create or save a file.
+
 Use `decide_lead_recommendation()` on either runtime facade; it returns the
 existing `LeadTurnResult`. The complete
 [decision example](../reference/runtime-api.md#leadrecommendationdecision)

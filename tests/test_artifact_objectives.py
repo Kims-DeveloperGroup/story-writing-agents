@@ -90,28 +90,37 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         index = next((i for i, task in enumerate(tasks) if task["task_id"] == task_id), -1)
         return lead._live_scope(call, activity=activity, paths=(OUTLINE,), task_index=index)
 
-    async def start(self, conversation_id=None, *, message=DRAFT, objective_id=None):
+    async def start(self, conversation_id=None, *, message=DRAFT, objective_id=None,
+                    target_path=OUTLINE, specialist_ids=(PLOT_ARCHITECT,)):
         from tests.test_specialist_routing_runtime import scoped_proposal
 
         conversation_id = conversation_id or self.conversation()
+        paths = () if target_path is None else (target_path,)
         intent = {
             "action": "start", "request": "Prepare the approved synthetic outline.",
-            "target_paths": [OUTLINE], "next_step": "consult", "draft_source_event_ids": [],
+            "target_paths": list(paths), "next_step": "consult", "draft_source_event_ids": [],
         }
         if objective_id is not None:
             intent = {"action": "continue", "objective_id": objective_id,
                       "next_step": "consult", "draft_source_event_ids": []}
+        elif target_path is None:
+            intent = None
         self.backend.enqueue(scoped_proposal(
-            PLOT_ARCHITECT, paths=(OUTLINE,),
+            *specialist_ids, paths=paths,
+            domains=(() if target_path is not None and specialist_ids == (PLOT_ARCHITECT,) else
+                     tuple({"plot_architect": "plot_structure", "character_custodian": "character_world",
+                            "execution_specialist": "tone_execution"}[agent] for agent in specialist_ids)),
             selected=self.objective_tasks.get(objective_id),
             mutate=lambda value, _material: value.update(objective_intent=intent),
         ))
         proposed = await self.runtime.lead_turn(self.session_id, conversation_id,
-            f"Draft {OUTLINE} from this brief: a lantern vanishes, its keeper is found, and it returns.")
+            f"Draft {target_path or 'a synthetic scene'} from this brief: a lantern vanishes, its keeper is found, and it returns.")
         self.assertIs(proposed.kind, c.LeadOutcomeKind.PROPOSAL, proposed)
-        self.assertEqual(proposed.proposal.participants, (PLOT_ARCHITECT,))
-        self.objective_tasks[self.objective(conversation_id).facts.objective_id] = proposed.proposal.authoring_scope.task_id
-        self.backend.enqueue_for(PLOT_ARCHITECT, lead._specialist_outcome("drafted", message))
+        self.assertEqual(proposed.proposal.participants, specialist_ids)
+        if intent is not None:
+            self.objective_tasks[self.objective(conversation_id).facts.objective_id] = proposed.proposal.authoring_scope.task_id
+        for agent in specialist_ids:
+            self.backend.enqueue_for(agent, lead._specialist_outcome("drafted", message))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, lead._synthesis_outcome(message=message))
         completed = await self.runtime.decide_lead_step(lead._decision(proposed, c.CollaborationConfirmationDecision.CONFIRM))
         turn = completed.turn

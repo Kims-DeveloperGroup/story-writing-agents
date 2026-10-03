@@ -99,6 +99,9 @@ class LeadRecommendationTests(RecommendationCase):
         self.assertIs(projection.current_state, c.CollaborationStepState.AWAITING_CONFIRMATION)
         self.assertEqual(self.snapshots(), before)
 
+        for call in self.backend.calls:
+            self.assertNotIn("response_correction", lead._workflow_material(call.payload))
+            self.assertNotIn("structured_response_repair", call.payload)
         for aliases, omit_source in (((), False), (("recommendation_request",), False),
                                      (("recommendation_decision",), False),
                                      (("recommendation_request", "recommendation_decision"), True)):

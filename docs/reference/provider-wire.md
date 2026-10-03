@@ -290,6 +290,13 @@ Select an exact offered task/revision pair. Specialist assignments have
 `agent_id`, `task_instructions`, `input_source_ids`, and `assignment_type`
 (`draft_content` or `review_content`).
 
+`task_input.provider_constraints.available_assignment_input_source_ids` lists
+the input aliases available to specialist assignments. Copy exact aliases from
+that list, or use evidence IDs returned by completed authorized READs when the
+current contract permits them. `required_input_source_ids` describes required
+coverage; it is separate from the list of available inputs. A SEARCH hit or an
+earlier draft's event ID does not itself become an assignment input.
+
 ## Drafting a proposal and tracking a document change
 
 `task_input.available_proposal_drafting_source_ids` lists the sources a proposal
@@ -297,6 +304,21 @@ drafting request may select. Copy the offered identifiers exactly. The reserved
 `current_response` choice refers to this response's complete visible text; other
 choices identify offered prior messages or input sources. These source choices
 provide context and do not replace current document evidence.
+
+The same recommendation offer is exposed in
+`task_input.provider_constraints.available_proposal_drafting_source_ids`, with
+`recommendation_source_membership` guidance separate from assignment
+`source_membership`. `current_response` and historical draft event IDs belong
+to this preparation-source list. After exact preparation confirmation, the
+runtime binds the selected historical sources to that request; an event ID can
+then appear in its available assignment inputs. Selecting a draft source never
+grants artifact evidence, specialist execution, Apply, or Commit authority.
+
+`artifact_path_rule` describes the existing canonical destination grammar.
+New manuscript documents use an unused `manuscript/PART/PATH.md` path with
+permitted ASCII components. The document's title and body may use any supported
+UTF-8 text, including Korean. Prior completed current-task specialist drafts
+can support preparation of the approved text without repeating drafting work.
 
 A `proposal_drafting_request` asks the Lead to produce a concrete proposal for
 later confirmation. Its `action_type` is `draft_document_change_proposal` or
