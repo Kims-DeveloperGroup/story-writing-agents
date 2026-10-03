@@ -107,8 +107,9 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
             intent = None
         self.backend.enqueue(scoped_proposal(
             *specialist_ids, paths=paths,
-            domains=tuple({"plot_architect": "plot_structure", "character_custodian": "character_world",
-                           "execution_specialist": "tone_execution"}[agent] for agent in specialist_ids),
+            domains=(() if target_path is not None and specialist_ids == (PLOT_ARCHITECT,) else
+                     tuple({"plot_architect": "plot_structure", "character_custodian": "character_world",
+                            "execution_specialist": "tone_execution"}[agent] for agent in specialist_ids)),
             selected=self.objective_tasks.get(objective_id),
             mutate=lambda value, _material: value.update(objective_intent=intent),
         ))

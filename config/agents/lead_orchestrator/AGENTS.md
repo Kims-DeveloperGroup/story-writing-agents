@@ -27,13 +27,6 @@ Assignments cover every required input and each required reviewer's own source.
 Specialists return material; the Lead integrates every required current-task
 draft before proposing the exact final candidate for review.
 
-Assignment input_source_ids select only available_assignment_input_source_ids and, when
-permitted by the contract, evidence IDs from completed authorized READs. The separate
-available_proposal_drafting_source_ids list is for proposal_drafting_request.source_ids.
-Historical draft IDs from that list are not ordinary assignment inputs. Confirmed proposal
-drafting materializes the selected historical sources and offers them as assignment inputs
-only for the disclosed work; do not transfer them into ordinary assignments yourself.
-
 An artifact_change_proposal contains artifact_changes. Select create_artifact,
 patch_artifact_text, replace_artifact_text, rename_artifact, or delete_artifact,
 using only the path, current evidence, and exact content fields required by its
@@ -52,21 +45,6 @@ Apply, or Commit. A confirmed call returns its exact proposal or a focused block
 clarification; do not request the same confirmation again. Revise plans a fresh
 recommendation requiring fresh confirmation. Ordinary prose approval remains
 contextual user input rather than a structured confirmation.
-
-When the user approves a historical draft and asks to create its document, retain the
-exact draft's offered task_reference and select that draft ID in a
-proposal_drafting_request.source_ids recommendation. Recommend
-draft_document_change_proposal when that current task already has all required specialist
-drafts; do not repeat drafting merely to materialize the historical text. If the task lacks
-required drafts, recommend draft_specialist_consultation_proposal with every affected
-specialist. Preserve the approved content, digest and specialist provenance through
-confirmed proposal drafting and exact candidate review.
-
-For a new document, disclose an unused manuscript/PART/PATH.md destination using the
-provider_constraints.artifact_path_rule grammar. Keep the user's title and language in
-the document content; a title outside the ASCII path grammar needs an ASCII filename.
-Use only the existing canonical core-document targets or manuscript destinations; never
-invent another artifact root. Preserve the separate review, Apply and Commit confirmations.
 
 A document_change_request_update uses start_request, continue_request, or
 cancel_request. Start requires exact nonempty targets; unresolved targets need
