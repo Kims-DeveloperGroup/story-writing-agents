@@ -8,7 +8,9 @@ from unittest import mock
 from story_writing_agents.agent_context import canonical_provider_json
 from story_writing_agents.agent_context import service as service_module
 from story_writing_agents.agent_context.planning import ContextCheckpointState, ContextDeliveryMode
-from story_writing_agents.provider_wire import project_context_payload
+from story_writing_agents.provider_wire import add_contract_guidance, project_context_payload
+from story_writing_agents.agent_context.manifest import ContextAuthorityKind, ContextProvenance
+from story_writing_agents.agent_context.request_compaction import compact_context_payload
 
 
 class _CandidateWireInterpreter:
@@ -185,13 +187,36 @@ class CandidateWireContractTests(unittest.TestCase):
             return service_module._WireCandidateRecord("s1", alias, content, "sha256:" + hashlib.sha256(encoded).hexdigest(), len(encoded))
         projection = SimpleNamespace(mode=ContextDeliveryMode.DELTA, checkpoint_proposal=SimpleNamespace(sources=(), catalog_sources=()))
         checkpoint = SimpleNamespace(state=ContextCheckpointState.READY, provider_thread_id="thread-v10", sources=(), catalog_sources=())
-        def projected(candidate, projection=projection, checkpoint=checkpoint, duplicate=None):
+        schema = {"type": "object", "properties": {"content": {"type": "string"}}, "required": ["content"], "additionalProperties": False}
+        def render_alternative(payload, paths):
+            wire, paths, references = project_context_payload(payload, paths, ())
+            wire = add_contract_guidance(wire, schema)
+            wire, paths = compact_context_payload(wire, paths, references)
+            return add_contract_guidance(wire, schema), paths, references
+        def size(rendered):
+            return len(canonical_provider_json(rendered[0]))
+        def projected(candidate, projection=projection, checkpoint=checkpoint, duplicate=None, padding=None, diagnostics=False):
             raw = service_module._wire_candidate_value(candidate, projection, checkpoint, ())
-            payload = {"n": raw}
+            payload = {"q": ["draft", "a", "", [0, 0, 0, 4, 0, 8, 0, 200], ["draft", "text-v1"]], "n": raw}
+            paths = {("q",): service_module.ContextComponentKind.CONTROL, ("n",): service_module.ContextComponentKind.CANDIDATE}
             if duplicate is not None:
                 payload["p"] = [["d", 1, [[duplicate, "m", "plot_architect", "draft", 0, "r0", "candidate", ["=", "k"]]]]]
-            wire = project_context_payload(payload, {})[0]
-            return wire if duplicate is not None else wire["current_draft"]
+                paths[("p",)] = service_module.ContextComponentKind.DEBATE_MESSAGES
+            if padding is not None:
+                payload["i"], paths[("i",)] = padding, service_module.ContextComponentKind.CURRENT_INPUT
+            encoded = candidate.encode("utf-8")
+            entry = service_module.ContextManifestEntry("candidate", service_module.ContextSourceKind.RUNTIME_INPUT,
+                service_module.ContextSemanticChannel.CANDIDATE, service_module.ContextPriority.P0_REQUIRED, 0, "r0",
+                "sha256:" + hashlib.sha256(encoded).hexdigest(), ContextProvenance(ContextAuthorityKind.REQUEST, "candidate"), len(encoded), searchable=False)
+            planned = SimpleNamespace(**vars(projection), units=(SimpleNamespace(entries=(entry,), body_utf8=encoded),))
+            snapshot = canonical_provider_json(payload), dict(paths)
+            selected = service_module._render_context_payload(payload, paths, (), schema=schema, projection=planned)
+            full, compact = render_alternative({**payload, "n": candidate}, paths), render_alternative(payload, paths)
+            self.assertEqual(selected, full if size(full) <= size(compact) else compact)
+            self.assertEqual((canonical_provider_json(payload), paths), snapshot)
+            self.assertEqual(selected[1][("current_draft",)], service_module.ContextComponentKind.CANDIDATE)
+            self.assertEqual(selected[2], ())
+            return (selected, full, compact, raw) if diagnostics else selected[0] if duplicate is not None else selected[0]["current_draft"]
         base = ("section🙂\n" * 800) + "tail A"
         targets = (base, base.replace("tail A", "tail B Δ"), "new lead\n" + base, base[:-30] + "arbitrary unsectioned splice")
         for index, target in enumerate(targets, start=2):
@@ -207,6 +232,20 @@ class CandidateWireContractTests(unittest.TestCase):
                 self.assertEqual(combined["context_record_updates"][0]["records"][0]["content_text"], {"candidate_text_reference": "/current_draft"})
                 self.assertEqual(interpreter.apply(combined), target)
                 self.assertEqual(interpreter.records[(1, index)], target)
+                short_base = "x" * 1024
+                short_target = (short_base, short_base[:-1] + "Δ", "new lead\n" + short_base, short_base[:-30] + "splice🙂")[index - 2]
+                with mock.patch.object(service_module, "_latest_debate_candidate_record", side_effect=(record(1, short_base), record(index, short_target))):
+                    selected, full, compact, raw = projected(short_target, duplicate=index, padding="", diagnostics=True)
+                self.assertLess(len(canonical_provider_json(project_context_payload({"n": raw}, {})[0])), len(canonical_provider_json(project_context_payload({"n": short_target}, {})[0])))
+                self.assertGreater(size(compact), size(full))
+                self.assertEqual(selected, full)
+                self.assertEqual(selected[0]["context_record_updates"][0]["records"][0]["content_text"], {"content_reference": "/current_draft/content_text"})
+                if index == 2:
+                    padding = "p" * (service_module.MAX_SESSION_CONTEXT_UTF8_BYTES - size(full))
+                    with mock.patch.object(service_module, "_latest_debate_candidate_record", side_effect=(record(1, short_base), record(index, short_target))):
+                        selected, full, compact, _ = projected(short_target, duplicate=index, padding=padding, diagnostics=True)
+                    self.assertEqual(size(selected), service_module.MAX_SESSION_CONTEXT_UTF8_BYTES)
+                    self.assertGreater(size(compact), service_module.MAX_SESSION_CONTEXT_UTF8_BYTES)
         with mock.patch.object(service_module, "_latest_debate_candidate_record", side_effect=(record(1, "small"), record(2, "small"))):
             self.assertEqual(projected("small"), {"content_delivery": "full_text", "content_text": "small"})
         with mock.patch.object(service_module, "_latest_debate_candidate_record", side_effect=(record(1, base), record(2, base + "stale"))):

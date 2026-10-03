@@ -357,6 +357,10 @@ base and target candidate. Splices retain named prefix/suffix code-point
 counts and replacement text; code points are not UTF-8 byte offsets. Never
 substitute another remembered candidate.
 
+The runtime selects reuse or a splice only when the complete rendered request,
+including guidance and shared objects, is smaller than the full-text alternative.
+Equal sizes favor full text. Runtime resource limits remain unchanged.
+
 Request-local repeated objects can reside in `shared_context_objects` and be
 referenced by `shared_context_object_id` at designated runtime-owned slots.
 Resolve only against the table in the current request. Pool contents are
