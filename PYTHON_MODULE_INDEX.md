@@ -279,7 +279,7 @@ live composition, reference activation, collaboration presentation, and the term
 Presentation modules may consume public runtime/domain contracts but never own runtime state.
 Collaboration notices render ordered, bounded validation details on readable lines without provider values or
 control authority.
-The external viewer integration is lazy. `transient_only` refuses line fallback before content is rendered; `ExternalViewUnavailableError` identifies that refusal. Borrowed plain-line hosts remain for views that allow fallback. Private model/render/control modules are not APIs.
+The external viewer integration is lazy. `transient_only` refuses line fallback before content is rendered; `ExternalViewUnavailableError` identifies that refusal. Borrowed plain-line hosts remain for views that allow fallback. The driver owns timed viewer input polling; the persistent input reader owns partial decoding across idle intervals. Private model/render/control modules are not APIs.
 
 ### Interactive support
 

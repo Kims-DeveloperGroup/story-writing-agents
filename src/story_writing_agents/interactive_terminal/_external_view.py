@@ -33,7 +33,7 @@ class ExternalViewerHost(Protocol):
         ...
 
     def read_event(self) -> str | None:
-        """Return normalized text/key/literal-line transport or ``None`` for EOF."""
+        """Return text/key/literal-line transport, optional ``idle``, or EOF ``None``."""
 
         ...
 

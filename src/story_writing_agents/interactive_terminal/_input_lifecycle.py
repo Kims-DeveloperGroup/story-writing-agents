@@ -16,6 +16,10 @@ _STRICT_HANDLER = codecs.lookup_error("strict")
 _SURROGATEESCAPE_HANDLER = codecs.lookup_error("surrogateescape")
 
 
+class LiveInputIdle(Exception):
+    """Pause a readiness-gated read without discarding partial decoding."""
+
+
 class TerminalInputMode(StrEnum):
     """The irreversible source selected by one terminal driver."""
 
@@ -158,9 +162,8 @@ class LiveCharacterReader:
         """Return a code point or stable empty string, gating each byte if asked.
 
         The optional callback runs before every physical byte read, including
-        continuation bytes. Callback failures follow ordinary sticky transport
-        failure semantics; they cannot release an incomplete character as later
-        input. The reader owns no readiness clock or feature-specific policy.
+        continuation bytes. LiveInputIdle preserves incomplete decoding; other
+        failures remain sticky. The reader owns no readiness clock or policy.
         """
 
         if self._failure is not None:
@@ -195,7 +198,7 @@ class LiveCharacterReader:
                     )
                 decoded = self._decoder.decode(chunk, final=False)
                 self._append_decoded(decoded)
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, LiveInputIdle):
             raise
         except BaseException as failure:
             self._failure = failure

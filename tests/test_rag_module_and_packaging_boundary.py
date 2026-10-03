@@ -38,8 +38,8 @@ _GENERIC_RAG_REQUIREMENT = (
     f"generic-rag @ git+{_GENERIC_RAG_REPOSITORY}@{_GENERIC_RAG_PIN}"
 )
 _OLD_JSONL_VIEWER_PIN = "1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec"
-_JSONL_VIEWER_PIN = "5d352c5741669365ae981ae2ed117ff4f59568c9"
-_JSONL_VIEWER_VERSION = "0.4.2"
+_JSONL_VIEWER_PIN = "9bb12d228313420345910bad99cc955bfbb6b367"
+_JSONL_VIEWER_VERSION = "0.5.0"
 _JSONL_VIEWER_REPOSITORY = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git"
 _JSONL_VIEWER_REQUIREMENT = (
     f"jsonl-viewer @ git+{_JSONL_VIEWER_REPOSITORY}@{_JSONL_VIEWER_PIN}"
@@ -1590,69 +1590,68 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 ("editable-viewer-extra", ["-e", f"{story_project}[viewer]"]),
             )
             for mode, target in modes:
-                with self.subTest(mode=mode):
-                    environment = root / f"venv-{mode}"
-                    created = subprocess.run(
-                        [
-                            sys.executable,
-                            "-m",
-                            "venv",
-                            str(environment),
-                        ],
-                        text=True,
-                        capture_output=True,
-                        check=False,
-                    )
-                    self.assertEqual(
-                        created.returncode,
-                        0,
-                        f"stdout:\n{created.stdout}\nstderr:\n{created.stderr}",
-                    )
-                    python = environment / "bin" / "python"
-                    installed = subprocess.run(
-                        [
-                            str(python),
-                            "-m",
-                            "pip",
-                            "install",
-                            "--ignore-installed",
-                            "--no-build-isolation",
-                            *target,
-                        ],
-                        env=install_environment,
-                        text=True,
-                        capture_output=True,
-                        check=False,
-                    )
-                    self.assertEqual(
-                        installed.returncode,
-                        0,
-                        f"stdout:\n{installed.stdout}\nstderr:\n{installed.stderr}",
-                    )
-                    checked = subprocess.run(
-                        [str(python), "-m", "pip", "check"],
-                        env=install_environment,
-                        text=True,
-                        capture_output=True,
-                        check=False,
-                    )
-                    self.assertEqual(
-                        checked.returncode,
-                        0,
-                        f"stdout:\n{checked.stdout}\nstderr:\n{checked.stderr}",
-                    )
-                    verified = subprocess.run(
-                        [str(python), "-I", "-W", "error", "-c", probe, mode],
-                        env=install_environment,
-                        text=True,
-                        capture_output=True,
-                        check=False,
-                    )
-                    self.assertEqual(
-                        verified.returncode,
-                        0,
-                        f"stdout:\n{verified.stdout}\nstderr:\n{verified.stderr}",
-                    )
+                environment = root / f"venv-{mode}"
+                created = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "venv",
+                        str(environment),
+                    ],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(
+                    created.returncode,
+                    0,
+                    f"stdout:\n{created.stdout}\nstderr:\n{created.stderr}",
+                )
+                python = environment / "bin" / "python"
+                installed = subprocess.run(
+                    [
+                        str(python),
+                        "-m",
+                        "pip",
+                        "install",
+                        "--ignore-installed",
+                        "--no-build-isolation",
+                        *target,
+                    ],
+                    env=install_environment,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(
+                    installed.returncode,
+                    0,
+                    f"stdout:\n{installed.stdout}\nstderr:\n{installed.stderr}",
+                )
+                checked = subprocess.run(
+                    [str(python), "-m", "pip", "check"],
+                    env=install_environment,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(
+                    checked.returncode,
+                    0,
+                    f"stdout:\n{checked.stdout}\nstderr:\n{checked.stderr}",
+                )
+                verified = subprocess.run(
+                    [str(python), "-I", "-W", "error", "-c", probe, mode],
+                    env=install_environment,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(
+                    verified.returncode,
+                    0,
+                    f"stdout:\n{verified.stdout}\nstderr:\n{verified.stderr}",
+                )
 
     @unittest.skipUnless(
         importlib.util.find_spec("setuptools") is not None,
