@@ -73,12 +73,9 @@ depend on terminal presentation or concrete persistence.
 - `agents`, `models`, `errors`, `config`, `prompts`, `directives`, `artifact_proposals`
 - `specialist_routing`, `reply_trace`, `run_inputs`
 
-Primary access is the root facade. `specialist_routing` owns the pure shared
-`AuthoringIntent`, independently of activity; conversations codecs preserve its
-immutable task lineage. `config` owns configuration loading. `prompts` owns
-captured policy bytes, stable fingerprints, and runtime authority invariants; stages stay
-invocation data, without provider execution. `models` carries optional diagnostics and the
-keyword-only `AgentRequest.expected_reviewed_proposal` identity hint, without next-action authority.
+Primary access is the root facade. `specialist_routing` owns pure shared `AuthoringIntent`, independent of activity; conversation codecs preserve its immutable task lineage. `config` owns configuration loading.
+`prompts` owns captured policy bytes, stable fingerprints and runtime authority invariants; stages remain invocation data without provider execution.
+`models` carries optional diagnostics and keyword-only `AgentRequest.expected_reviewed_proposal` and `review_only` hints, without next-action authority.
 
 ### Runtime orchestration and providers
 
@@ -187,16 +184,10 @@ facade; contracts and projections remain infrastructure-neutral.
 - `consensus.serialization`, `consensus.runtime_adapter`
 - `consensus.event_store`, `consensus.material_store`
 
-Execution depends on contracts/projection; serialization depends on contracts/projection;
-stores own durable workspace records. Contracts must not import execution or stores. Consensus contracts bind the shared
-pure intent and typed INPUT_ADOPTION/REVIEW_COMPLETION phases; execution performs
-these phases without providers through existing material ports and confirmation
-capabilities. The supported consensus facade re-exports the owned intent enum.
-Serialization writes v4 and strictly admits historical v3 AUTHORING shapes/digests.
-Existing result/projection owners retain the review-only synthesis report for
-inspection; report text grants no authority.
-Consensus results may carry ordered provider validation details; historical serialized
-results without this optional field remain valid.
+Execution and serialization depend on contracts/projection; stores own durable workspace records. Contracts must not import execution or stores.
+Consensus contracts bind shared pure intent and INPUT_ADOPTION/REVIEW_COMPLETION phases; execution uses existing material ports and confirmation capabilities without providers. The supported facade re-exports the owned intent enum.
+Serialization writes v4 and strictly admits historical v3 AUTHORING shapes/digests. Existing result/projection owners retain review-only synthesis reports for inspection without granting authority.
+Results may carry ordered provider validation details; historical serialized results without the optional field remain valid.
 
 ### Writing artifacts and references
 

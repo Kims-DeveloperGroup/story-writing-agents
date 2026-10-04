@@ -1259,7 +1259,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         collapsed_pair = contract["anyOf"][0]["properties"]["writing_task_scope"]["properties"]["task_reference"]
         self.assertNotIn("anyOf", collapsed_pair); self.assertIn("revision 1", collapsed_pair["description"])
         value = {"kind": "proposal", "message": "Review.", "authoring_scope": {
-            "activity": "review", "domains": ["plot_structure"], "target_paths": [], "task": "task@1"},
+            "activity": "review", "intent": "authoring", "domains": ["plot_structure"], "target_paths": [], "task": "task@1"},
             "proposal": {"assignments": [{"agent_id": PLOT_ARCHITECT, "mode": "review",
                 "instruction": "Review sources.", "input_ids": ["user_input", "outline"]}]}}
         self.assertEqual(diagnose_json_text(json.dumps(wire_result(value, "lead-response-v6")), contract), ())
@@ -1278,7 +1278,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual(facts.diagnose(json.dumps(bad)), (Rule.INPUT_NOT_OFFERED,))
         read_facts = replace(facts, allow_read_sources=True, input_ids=("user_input",), reviewer_inputs=())
         legacy = {"kind": "proposal", "message": "Prepare the approved draft.", "authoring_scope": {
-            "activity": "draft", "domains": ["plot_structure", "character_world", "tone_execution"],
+            "activity": "draft", "intent": "authoring", "domains": ["plot_structure", "character_world", "tone_execution"],
             "target_paths": [], "task": "task@1"}, "proposal": {"assignments": [
                 {"agent_id": agent, "mode": "draft", "instruction": "Use the approved draft.",
                  "input_ids": ["user_input", "historical_synthesis"]}

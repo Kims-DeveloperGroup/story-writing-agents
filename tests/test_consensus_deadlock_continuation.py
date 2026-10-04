@@ -302,11 +302,11 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
                     )
         encoded = serialize_consensus_workflow(stored)
         self.assertEqual(deserialize_consensus_workflow(encoded), stored)
-        self.assertIn(b'"schema_version":3', encoded)
+        self.assertIn(b'"schema_version":4', encoded)
         self.assertNotIn(b"operator ruling", encoded)
         with self.assertRaisesRegex(ValueError, "schema version"):
             deserialize_consensus_workflow(
-                encoded.replace(b'"schema_version":3', b'"schema_version":2', 1)
+                encoded.replace(b'"schema_version":4', b'"schema_version":2', 1)
             )
 
         exact = _decision(self.adapter, self.port, continued)

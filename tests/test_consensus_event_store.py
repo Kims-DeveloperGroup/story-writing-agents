@@ -212,7 +212,7 @@ class ConsensusEventStoreTests(unittest.TestCase):
         submission, request_event = self.request_and_submission()
         self.store.create_workflow(submission, request_event)
         request = request_event.payload
-        decision = replace(_phase_decision(request, request_event, confirmation_id='confirmation-1'), request_event_sequence=1)
+        decision = _phase_decision(request, request_event, confirmation_id='confirmation-1')
         event = ConsensusEvent("decision-event", 2, decision)
 
         def append_once():
