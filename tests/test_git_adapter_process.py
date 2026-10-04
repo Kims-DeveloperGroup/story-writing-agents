@@ -237,6 +237,30 @@ class GitAdapterProcessTests(unittest.TestCase):
             self.assertEqual((result.stdout, len(self.threads) - before, process.wait_timeouts), (b"bounded", 3, [None]))
             self.assertEqual(bytes(process.stdin.data), stdin)
 
+        process = self._pipe_process(b"output", b"error")
+        reader, writer = os.pipe()
+        process.stdin = os.fdopen(writer, "wb", buffering=0)
+        self.addCleanup(process.stdin.close)
+        self.addCleanup(os.close, reader)
+        descriptors = process_module._read_only_pipe_descriptors(process.stdout, process.stderr, process.stdin)
+        self.assertEqual(descriptors, (process.stdout.fileno(), process.stderr.fileno(), process.stdin.fileno()))
+        self.assertIsNone(process_module._read_only_pipe_descriptors(process.stdout, process.stderr, process.stdout))
+        real_write = os.write
+        writes = []
+        def partial_write(descriptor, content):
+            writes.append(len(content))
+            if len(writes) == 1:
+                raise BlockingIOError("retry nonblocking write")
+            return real_write(descriptor, content[:2])
+        before = len(self.threads)
+        with mock.patch.object(process_module.os, "write", side_effect=partial_write):
+            result, _popen = self._run_with_process(process, stdin=b"payload")
+        self.assertEqual((result.stdout, result.returncode), (b"output", 0))
+        self.assertEqual(os.read(reader, 7), b"payload")
+        self.assertEqual(len(self.threads), before)
+        self.assertGreater(len(writes), 2)
+        self.assertTrue(process.stdin.closed and process.stdout.closed and process.stderr.closed)
+
     def test_arguments_stdin_and_identity_environment_are_strictly_bounded(
         self,
     ) -> None:
@@ -320,7 +344,39 @@ class GitAdapterProcessTests(unittest.TestCase):
             if not hold:
                 self.assertTrue(0 < process.wait_timeouts[0] < process_module._PROCESS_TIMEOUT_SECONDS)
 
+        process = self._pipe_process(hold=True)
+        reader, writer = os.pipe()
+        process.stdin = os.fdopen(writer, "wb", buffering=0)
+        self.addCleanup(process.stdin.close)
+        self.addCleanup(os.close, reader)
+        process.wait_results = [stop_timeout, 0]
+        with mock.patch.object(process_module.time, "monotonic", side_effect=(0, 30)), self.assertRaises(adapter_module._AdapterFailure) as caught:
+            self._run_with_process(process, stdin=b"input")
+        self.assertIs(caught.exception.code, GitFailureCode.PROCESS_TIMED_OUT)
+        self.assertEqual((process.terminate_calls, process.kill_calls, process.returncode), (1, 1, 0))
+        self.assertTrue(process.stdin.closed and process.stdout.closed and process.stderr.closed)
+
     def test_oversized_or_invalid_streams_fail_without_exposing_bytes(self) -> None:
+        if os.name == "posix":
+            for close_failure in (False, True):
+                process = self._pipe_process(b"123456789", b"stderr")
+                reader, writer = os.pipe()
+                process.stdin = os.fdopen(writer, "wb", buffering=0)
+                self.addCleanup(process.stdin.close)
+                self.addCleanup(os.close, reader)
+                close_stdout = process.stdout.close
+                self.addCleanup(close_stdout)
+
+                def close_stream():
+                    close_stdout()
+                    if close_failure:
+                        raise OSError("private stream close")
+
+                with mock.patch.object(process.stdout, "close", side_effect=close_stream), mock.patch.object(process_module, "_MAX_STDOUT_BYTES", 8), self.assertRaises(adapter_module._AdapterFailure) as caught:
+                    self._run_with_process(process, stdin=b"input")
+                self.assertIs(caught.exception.code, GitFailureCode.PROCESS_START_FAILED if close_failure else GitFailureCode.PROCESS_OUTPUT_EXCEEDED)
+                self.assertEqual((process.terminate_calls, process.kill_calls, process.returncode), (1, 0, 0))
+                self.assertTrue(process.stdin.closed and process.stdout.closed and process.stderr.closed)
         oversized = b"s" * (process_module._MAX_STDERR_BYTES + 1)  # noqa: SLF001
         cases = (
             (
@@ -515,6 +571,17 @@ class GitAdapterProcessTests(unittest.TestCase):
                 self.assertEqual(exception_graph(caught.exception), (caught.exception,))
                 self.assertNotIn("private", repr(caught.exception))
                 self.assertEqual(process.terminate_calls, 0 if seam == "close" else 1)
+            process = self._pipe_process()
+            reader, writer = os.pipe()
+            process.stdin = os.fdopen(writer, "wb", buffering=0)
+            self.addCleanup(process.stdin.close)
+            self.addCleanup(os.close, reader)
+            with mock.patch.object(process_module.os, "write", side_effect=BrokenPipeError("private broken pipe")), self.assertRaises(adapter_module._AdapterFailure) as caught:
+                self._run_with_process(process, stdin=b"input")
+            self.assertIs(caught.exception.code, GitFailureCode.PROCESS_START_FAILED)
+            self.assertEqual(process.terminate_calls, 1)
+            self.assertEqual(process.returncode, 0)
+            self.assertTrue(process.stdin.closed and process.stdout.closed and process.stderr.closed)
 
 
 if __name__ == "__main__":

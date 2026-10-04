@@ -217,8 +217,8 @@ only their intentional contract paths.
 - `git.session_contracts`, `git.session_resources`, `git.session_history_contracts`, `git.session_history`
 - `git.session_checkpoint_contracts`, `git.session_checkpoints`, `git.story_commit_contracts`, `git.story_commit_candidates`, `git.story_commits`
 
-`git.process` owns fixed-profile children, bounded pipes and call-local selectors; `repository_lock` owns cross-process serialization.
-Resource/history/checkpoint/commit services depend inward on these owners; general contracts must not import workflow services.
+`git.process` owns fixed-profile children, bounded nonblocking read-only pipes and call-local selectors; `repository_lock` owns cross-process serialization.
+Resource/history/checkpoint/commit services depend inward on these owners; general contracts must not import workflow services. Bounded loose-ref snapshots retain named descriptors and Git fallback; object batches, actual raw-tree namespace proofs, and immutable root proofs remain inspection-local.
 Generation capture and pinning remain opaque internal contracts. Bound history and story-commit services validate
 exact generation without exporting descriptors or general mutation authority.
 `git.session_resources` proves the literal top-level `.agents` namespace and every case variant

@@ -91,7 +91,7 @@ from story_writing_agents.workspace.initialization import (
 
 from tests.provider_wire_fixture import answer as wire_answer, contract_id as wire_contract_id, scenario_input, response as wire_response, result as wire_result, assert_guidance, capture_sample
 from tests.collaboration_contract_fixture import contract_batches
-from tests.helpers import pristine_initialized_workspace
+from tests.helpers import materialize_pristine_initialized_workspace
 from tests.test_agent_context_accounting import _expanded_context_payload
 from story_writing_agents.specialist_routing import (
     ArtifactReviewDomain, AuthoringActivity, AuthoringScope, ReviewBasis,
@@ -843,7 +843,7 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="lead-orchestration-")
         self.addCleanup(temporary.cleanup)
-        self.control_workspace = Workspace(f"{temporary.name}/story").initialize()
+        self.control_workspace = materialize_pristine_initialized_workspace(f"{temporary.name}/story")
         self.session_id = "story_session"
         ready = provision_session_resources(
             self.control_workspace.root,
@@ -1088,6 +1088,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 self.assertIs(
                     result.next_action,
                     CollaborationNextAction.CONTINUE_WITH_LEAD,
+                    result.message,
                 )
                 self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
                 self.assertIn("no action was taken", result.message)
