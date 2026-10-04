@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 import json
 import io
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import call, patch
+from unittest.mock import Mock, call, patch
 
 from tests import suite_budget
 
@@ -106,6 +107,13 @@ class SuiteBudgetTests(unittest.TestCase):
         from tests.local_ci_state import LocalCIError
         from types import SimpleNamespace
 
+        def invoke(function, error=None, message=""):
+            with self.assertRaisesRegex(error, message) if error else nullcontext():
+                return function()
+
+        def assert_fields(record, **expected):
+            self.assertEqual({key: record[key] for key in expected}, expected)
+
         ci_identity_values = {"NAME": "Story Tests", "EMAIL": "story-tests@example.invalid"}
         caller_identity = {
             "GIT_AUTHOR_NAME": "Caller Author", "GIT_AUTHOR_EMAIL": "author@example.invalid",
@@ -152,22 +160,19 @@ class SuiteBudgetTests(unittest.TestCase):
                                  {key: value for key, value in invalid_environment.items() if key.startswith("GIT_")})
                 self.assertEqual(dict(worker.os.environ), invalid_environment)
 
-        worker_calls = []
+        worker_calls = Mock()
         worker_arguments = ["snapshot", "harmless-fixture"]
-        with patch.object(worker.os, "umask", side_effect=lambda value: worker_calls.append(("umask", value))) as mask, patch.object(
-            worker.argparse, "ArgumentParser", side_effect=lambda **kwargs: worker_calls.append(("parser", None)) or parser.return_value
-        ) as parser, patch.object(
-            worker, "snapshot", side_effect=lambda path: worker_calls.append(("snapshot", path)) or {"safe": True}
-        ) as snapshot, patch.object(worker.sys, "stdout", io.StringIO()) as output:
-            parser.return_value.parse_args.side_effect = lambda arguments: worker_calls.append(("parse_args", arguments)) or SimpleNamespace(**dict(zip(("command", "checkout"), worker_arguments)))
+        worker_calls.parser.return_value.parse_args.return_value = SimpleNamespace(**dict(zip(("command", "checkout"), worker_arguments)))
+        worker_calls.snapshot.return_value = {"safe": True}
+        with patch.object(worker.os, "umask", worker_calls.umask), patch.object(
+            worker.argparse, "ArgumentParser", worker_calls.parser
+        ), patch.object(worker, "snapshot", worker_calls.snapshot), patch.object(worker.sys, "stdout", io.StringIO()) as output:
             self.assertEqual(worker.main(worker_arguments), 0)
-            mask.assert_called_once_with(0o077)
-            parser.return_value.parse_args.assert_called_once_with(worker_arguments)
-            snapshot.assert_called_once_with(Path("harmless-fixture"))
             self.assertEqual(output.getvalue(), '{"safe": true}\n')
-        self.assertEqual(worker_calls, [
-            ("umask", 0o077), ("parser", None), ("parse_args", worker_arguments),
-            ("snapshot", Path("harmless-fixture")),
+        startup = {"umask", "parser", "parser().parse_args", "snapshot"}
+        self.assertEqual([row for row in worker_calls.mock_calls if row[0] in startup], [
+            call.umask(0o077), call.parser(*worker_calls.parser.call_args.args, **worker_calls.parser.call_args.kwargs),
+            call.parser().parse_args(worker_arguments), call.snapshot(Path("harmless-fixture")),
         ])
 
         runner = suite_budget.runner
@@ -181,33 +186,24 @@ class SuiteBudgetTests(unittest.TestCase):
             execute.assert_not_called()
         host_exists = Path.exists
         lima_markers = {"/run/lima-ssh-ready", "/var/run/lima-ssh-ready", "/run/lima-guestagent.pid"}
-        with patch.object(Path, "exists", new=lambda path: str(path) not in lima_markers and host_exists(path)), patch.dict(local_ci.os.environ, {"GITHUB_ACTIONS": ""}), patch.object(
-            local_ci, "admitted_worker", return_value=False
-        ) as inherited, patch.object(local_ci, "submit", return_value="owned") as submit, patch.object(
-            local_ci, "wait_job", return_value={"exit_code": 17}
-        ) as wait:
-            self.assertEqual(local_ci.runner_admission(arguments), 17)
-            self.assertEqual(submit.call_args.args[1], arguments)
-            wait.assert_called_once_with("owned")
-            submit.reset_mock()
-            inherited.return_value = True
-            self.assertIsNone(local_ci.runner_admission(arguments))
-            submit.assert_not_called()
-            inherited.return_value = False
-            inherited.reset_mock()
-            with patch.dict(local_ci.os.environ, {"GITHUB_ACTIONS": "true"}):
-                self.assertIsNone(local_ci.runner_admission(arguments))
-            inherited.assert_called_once_with()
-            submit.assert_not_called()
-            real_exists = Path.exists
-            with patch.object(Path, "exists", new=lambda path: path == Path("/run/lima-ssh-ready") or real_exists(path)), patch.object(
-                local_ci, "state_root"
-            ) as state_root:
-                with self.assertRaisesRegex(LocalCIError, "submit through the host"):
-                    local_ci.runner_admission(arguments)
-                inherited.return_value = True
-                self.assertIsNone(local_ci.runner_admission(arguments))
-                submit.assert_not_called()
+        for guest_marker, managed, hosted, expected, error in (
+            (False, False, "", 17, None),
+            (False, True, "", None, None),
+            (False, False, "true", None, None),
+            (True, False, "", None, LocalCIError),
+            (True, True, "", None, None),
+        ):
+            with patch.object(Path, "exists", new=lambda path: guest_marker and path == Path("/run/lima-ssh-ready") or str(path) not in lima_markers and host_exists(path)), patch.dict(
+                local_ci.os.environ, {"GITHUB_ACTIONS": hosted}
+            ), patch.object(local_ci, "admitted_worker", return_value=managed) as inherited, patch.object(
+                local_ci, "submit", return_value="owned"
+            ) as submit, patch.object(local_ci, "wait_job", return_value={"exit_code": 17}) as wait, patch.object(local_ci, "state_root") as state_root:
+                self.assertEqual(invoke(lambda: local_ci.runner_admission(arguments), error, "submit through the host"), expected)
+                inherited.assert_called_once_with()
+                self.assertEqual(wait.call_args_list, [call("owned")] if expected == 17 else [])
+                self.assertEqual(submit.call_count, int(expected == 17))
+                if expected == 17:
+                    self.assertEqual(submit.call_args.args[1], arguments)
                 state_root.assert_not_called()
 
         launched = []
@@ -266,8 +262,7 @@ class SuiteBudgetTests(unittest.TestCase):
                 uncertain.update(state="running", descendant_death_uncertain=False)
                 with patch.object(queue, "group_members", return_value=[]), patch.object(queue, "live_owned", return_value=[]):
                     restarted.finish(uncertain, code)
-                self.assertEqual(uncertain["state"], "quarantined")
-                self.assertTrue(uncertain["descendant_death_uncertain"])
+                assert_fields(uncertain, state="quarantined", descendant_death_uncertain=True)
             uncertain.update(state="running", descendant_death_uncertain=False)
             with patch.object(queue, "group_members", return_value=[]), patch.object(queue, "live_owned", return_value=[12345]):
                 restarted.finish(uncertain, 0)
@@ -297,8 +292,7 @@ class SuiteBudgetTests(unittest.TestCase):
                     self.assertEqual(signals.call_args_list,
                                      [call(child, queue.signal.SIGINT, outside_group=uncertain["pid"])] if expected_state == "cancelling" else [])
                     kill.assert_not_called()
-                    self.assertEqual(uncertain["owned_processes"], expected_owned)
-                    self.assertEqual(uncertain["state"], expected_state)
+                    assert_fields(uncertain, owned_processes=expected_owned, state=expected_state)
                     persisted = next(job for job in json.loads(restarted.path.read_text())["jobs"] if job["id"] == uncertain["id"])
                     self.assertEqual(persisted["owned_processes"], expected_owned)
             for index, (exit_code, replacement, grouped, owned, tracked, uncertain_before, expected) in enumerate((
@@ -332,8 +326,7 @@ class SuiteBudgetTests(unittest.TestCase):
                 observed.assert_called_once_with(21000)
                 signals.assert_not_called()
                 kill.assert_not_called()
-                self.assertEqual(tracked_job["owned_processes"], old_owned)
-                self.assertEqual(tracked_job["state"], expected)
+                assert_fields(tracked_job, owned_processes=old_owned, state=expected)
                 self.assertEqual(len(refresh.active()), int(expected != "finished"))
                 if expected == "finished":
                     self.assertEqual((tracked_job["exit_code"], tracked_job["source_valid"]), (0, True))
@@ -478,20 +471,34 @@ class SuiteBudgetTests(unittest.TestCase):
                     "limactl", "shell", "--workdir", control["directory"], "guest", "env",
                     "PYTHONPATH=" + control["directory"], control["python"], control["entry"], operation, "owned-job",
                 ])
-            guest = root / "guest-state"
-            guest.mkdir()
-            worker.write_json(guest / "state.json", {"state": "running", "pid": 99999, "boot_identity": "sysctl:{ sec = 200, usec = 3 } Wed Oct 7 03:00:00 UTC"})
+            guest = state.owner_directory(root / "guest-state", create=True)
+            supervisor = {"pid": 777, "process_identity": "supervisor", "boot_identity": "sysctl:200:3"}
+            quarantined = {"state": "quarantined", "descendant_death_uncertain": True}
+            running = {"state": "running", "descendant_death_uncertain": False}
+            completed = {"state": "finished", "descendant_death_uncertain": False, "exit_code": 0, "source_valid": True}
+            terminated = {"state": "terminated", "descendant_death_uncertain": False, "source_valid": False, "boot_recovery": True}
+            guest_base = {"state": "running", "pid": 99999, "owned_processes": {}, "descendant_death_uncertain": False,
+                          "boot_identity": "sysctl:{ sec = 200, usec = 3 } Wed Oct 7 03:00:00 UTC"}
             with patch.object(worker, "guest_job", return_value=guest), patch.object(worker, "group_members", return_value=[]), patch.object(
                 worker, "live_owned", return_value=[]
-            ), patch.object(worker, "boot_identity", return_value="sysctl:200:3") as guest_boot:
-                unknown = worker.probe_guest("owned-job")
-                self.assertEqual(unknown["state"], "quarantined")
-                self.assertTrue(unknown["descendant_death_uncertain"])
-                guest_boot.return_value = "sysctl:201:3"
-                invalid = worker.probe_guest("owned-job")
-                self.assertEqual(invalid["state"], "terminated")
-                self.assertFalse(invalid["source_valid"])
-                self.assertTrue(invalid["boot_recovery"])
+            ), patch.object(worker, "boot_identity") as guest_boot, patch.object(worker, "process_identity") as birth:
+                for record, identities, extra, reboot, finalize, expected in (
+                    (None, (), {}, False, False, quarantined),
+                    (None, (), quarantined, True, False, terminated),
+                    (supervisor, ("supervisor", "supervisor"), {}, False, False, running),
+                    (supervisor, (None, None), {}, False, False, quarantined),
+                    (supervisor, ("replacement", "replacement"), {}, False, False, quarantined),
+                    (supervisor, ("supervisor", None), {}, False, False, quarantined),
+                    (supervisor, ("supervisor", "supervisor"), quarantined, False, False, quarantined),
+                    (supervisor, (None, None), completed, False, False, completed),
+                    (supervisor, (), {"descendant_death_uncertain": True}, False, True, {**quarantined, "exit_code": 0, "source_valid": True}),
+                ):
+                    worker.write_json(guest / "state.json", {**guest_base, **({"supervisor": record} if record else {}), **extra})
+                    birth.side_effect = identities
+                    guest_boot.return_value = "sysctl:201:3" if reboot else "sysctl:200:3"
+                    observed = worker.update_guest(guest / "state.json", completed) if finalize else worker.probe_guest("owned-job")
+                    for record in (observed, worker.read_json(guest / "state.json")):
+                        assert_fields(record, **expected)
             for replacement in ("replacement", None):
                 guest_state = {"state": "running", "pid": 99999, "process_identity": "owned", "token": "capability", "owned_processes": {}}
                 guest_child = {"100000": {"pid": 100000, "identity": "owned-child", "pgid": 100000}}
@@ -504,11 +511,7 @@ class SuiteBudgetTests(unittest.TestCase):
                     worker.time, "monotonic", side_effect=iter(range(0, 100, 4))
                 ), patch.object(worker.time, "sleep") as sleep, patch.object(worker, "signal_owned") as signals:
                     signals.side_effect = lambda *args, **kwargs: setattr(leader, "return_value", replacement)
-                    if replacement is not None:
-                        with self.assertRaisesRegex(LocalCIError, "identity changed"):
-                            worker.cancel_guest("owned-job", "capability")
-                    else:
-                        worker.cancel_guest("owned-job", "capability")
+                    invoke(lambda: worker.cancel_guest("owned-job", "capability"), LocalCIError if replacement is not None else None, "identity changed")
                     observed.assert_called_once_with(99999)
                     guest_kill.assert_called_once_with(99999, worker.signal.SIGINT)
                     actions = [worker.signal.SIGINT] if replacement is not None else [worker.signal.SIGINT, worker.signal.SIGTERM, worker.signal.SIGKILL]
@@ -516,9 +519,7 @@ class SuiteBudgetTests(unittest.TestCase):
                         ((guest_child, action), {"outside_group": 99999 if index == 0 else None}) for index, action in enumerate(actions)])
                     sleep.assert_not_called()
                 persisted = worker.read_json(guest / "state.json")
-                self.assertEqual(persisted["state"], "quarantined")
-                self.assertTrue(persisted["descendant_death_uncertain"])
-                self.assertEqual(persisted["owned_processes"], guest_child)
+                assert_fields(persisted, state="quarantined", descendant_death_uncertain=True, owned_processes=guest_child)
             old_boot = "sysctl:{ sec = 100, usec = 2 } Mon Oct 5 12:00:00 KST"
             same_boot = "sysctl:{ sec = 100, usec = 2 } Mon Oct 5 03:00:00 UTC"
             self.assertEqual(state.normalize_boot_identity(old_boot), "sysctl:100:2")

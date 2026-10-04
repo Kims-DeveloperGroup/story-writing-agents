@@ -15,7 +15,7 @@ from pathlib import Path
 
 from tests.local_ci_state import (LocalCIError, environment, group_members, owner_directory,
                                   process_identity, read_json, snapshot, write_json)
-from tests.local_ci_state import boot_identity, live_owned, observed_descendants, prepare_service, service_sources, signal_owned, verified_boot_change
+from tests.local_ci_state import boot_identity, live_owned, normalize_boot_identity, observed_descendants, prepare_service, service_sources, signal_owned, verified_boot_change
 
 
 def guest_root() -> Path:
@@ -66,7 +66,12 @@ def update_guest(path: Path, updates: dict, *, owned: dict | None = None) -> dic
     try:
         fcntl.flock(descriptor, fcntl.LOCK_EX)
         value = read_json(path)
+        uncertain = value.get("descendant_death_uncertain", False)
         value.update(updates)
+        if uncertain:
+            value["descendant_death_uncertain"] = True
+        if value.get("descendant_death_uncertain") and value.get("state") in {"finished", "terminated"}:
+            value["state"] = "quarantined"
         if owned:
             value.setdefault("owned_processes", {}).update(owned)
         write_json(path, value)
@@ -156,6 +161,8 @@ def execute_guest(spec: dict) -> int:
     before = snapshot(checkout, exclude=tuple(spec.get("excluded_outputs", ())))
     state = {"id": spec["id"], "token": spec["token"], "state": "starting",
              "before": before, "environment": environment(), "started_at": time.time(), "boot_identity": boot_identity()}
+    state["supervisor"] = {"pid": os.getpid(), "process_identity": process_identity(os.getpid()),
+                           "boot_identity": state["boot_identity"]}
     write_json(path, state, exclusive=True)
     if before != spec["source"]:
         state.update(state="finished", exit_code=2, source_valid=False, error="guest source differs from host")
@@ -204,10 +211,16 @@ def execute_native(spec: dict, *, guest: bool = False) -> int:
     state = {"id": spec["id"], "token": spec["token"], "state": "running",
              "pid": os.getpid(), "process_identity": process_identity(os.getpid()),
              "before": before, "environment": environment(), "boot_identity": boot_identity()}
-    write_json(path, state, exclusive=not guest)
+    if guest:
+        state = update_guest(path, state)
+    else:
+        write_json(path, state, exclusive=True)
     if before != spec["source"]:
         state.update(state="stale", error="source changed before worker execution")
-        write_json(path, state)
+        if guest:
+            update_guest(path, {"state": "stale", "error": "source changed before worker execution"})
+        else:
+            write_json(path, state)
         return 2
     env = test_environment(spec)
     env.update(PYTHONPATH="src", STORY_LOCAL_CI_JOB=spec["id"],
@@ -250,24 +263,49 @@ def campaign_guest(operation: str, spec: dict) -> dict:
             "reconciliation": base64.b64encode(path.read_bytes()).decode("ascii") if path.exists() else None}
 
 
+def _supervisor_live(record: object, current_boot: str) -> bool:
+    if not isinstance(record, dict):
+        return False
+    pid, identity = record.get("pid"), record.get("process_identity")
+    previous_boot = normalize_boot_identity(record.get("boot_identity"))
+    return (isinstance(pid, int) and not isinstance(pid, bool) and pid > 0
+            and isinstance(identity, str) and bool(identity)
+            and previous_boot is not None and previous_boot == normalize_boot_identity(current_boot)
+            and process_identity(pid) == identity)
+
+
 def probe_guest(identifier: str) -> dict:
     path = guest_job(identifier) / "state.json"
     if not path.exists():
         return {"state": "unknown", "reason": "guest has no durable execution record"}
-    state = read_json(path)
-    if verified_boot_change(state.get("boot_identity"), boot_identity()):
-        return update_guest(path, {"state": "terminated", "remaining": [], "source_valid": False,
-                                   "boot_recovery": True, "descendant_death_uncertain": False})
-    pid = state.get("pid")
-    remaining = sorted(set(group_members(pid) if isinstance(pid, int) else [])
-                       | set(live_owned(state.get("owned_processes", {}))))
-    state["remaining"] = remaining
-    if remaining or state.get("descendant_death_uncertain"):
-        state["state"] = "quarantined"
-    elif state["state"] in {"running", "quarantined"}:
-        state = update_guest(path, {"state": "quarantined", "descendant_death_uncertain": True,
-                                   "recovery": "guest supervisor exit unknown; escaped descendants cannot be excluded"})
-    return state
+    descriptor = os.open(path.parent / "state.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        # The finalizer uses this same lock, so no stale observation can replace its outcome.
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        state = read_json(path)
+        current_boot = boot_identity()
+        if verified_boot_change(state.get("boot_identity"), current_boot):
+            state.update(state="terminated", remaining=[], source_valid=False,
+                         boot_recovery=True, descendant_death_uncertain=False)
+            write_json(path, state)
+            return state
+        supervisor = state.get("supervisor")
+        supervisor_before = _supervisor_live(supervisor, current_boot)
+        pid = state.get("pid")
+        remaining = sorted(set(group_members(pid) if isinstance(pid, int) else [])
+                           | set(live_owned(state.get("owned_processes", {}))))
+        supervisor_after = _supervisor_live(supervisor, boot_identity())
+        state["remaining"] = remaining
+        if remaining or state.get("descendant_death_uncertain"):
+            state["state"] = "quarantined"
+        elif state["state"] in {"running", "quarantined"}:
+            if not (state["state"] == "running" and supervisor_before and supervisor_after):
+                state.update(state="quarantined", descendant_death_uncertain=True,
+                             recovery="guest supervisor exit unknown; escaped descendants cannot be excluded")
+                write_json(path, state)
+        return state
+    finally:
+        os.close(descriptor)
 
 
 def cancel_guest(identifier: str, token: str) -> dict:
