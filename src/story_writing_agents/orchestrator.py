@@ -491,10 +491,25 @@ def _proposal_result_schema(
         "maxItems": len(facts.preparation_specialists) or len(SPECIALIST_IDS),
     }}
     objective = facts.objective_schema("consult")
-    with_objective = _closed_result_object({**assignments, "objective_intent": objective})
+    with_objective = _closed_result_object({**assignments, "objective_intent": objective},
+        description=(
+            "Propose specialist work that starts or advances a document change request; "
+            "confirmation authorizes the assignments, not document changes."
+        ),
+    )
     if facts.preparation_kind:
-        return with_objective if facts.preparation_objective_id else _closed_result_object(assignments)
-    return {"anyOf": [_closed_result_object(assignments), with_objective]}
+        return with_objective if facts.preparation_objective_id else _closed_result_object(assignments,
+            description=(
+                "Propose specialist work when no document change request update is needed; "
+                "confirmation authorizes only these disclosed assignments."
+            ),
+        )
+    return {"anyOf": [_closed_result_object(assignments,
+        description=(
+            "Propose specialist work when no document change request update is needed; "
+            "confirmation authorizes only these disclosed assignments."
+        ),
+    ), with_objective]}
 
 
 def _artifact_intent_result_schema(
@@ -506,34 +521,54 @@ def _artifact_intent_result_schema(
                 "kind": {"enum": ["create"], "type": "string"},
                 "suggested_path": {"type": "string"},
                 "new_text": {"type": "string"},
-            }
+            },
+            description=(
+                "Create a document when the canonical destination is new; provide its complete "
+                "UTF-8 text and proposed workspace-relative path."
+            ),
         ),
         _closed_result_object(
             {
                 "kind": {"enum": ["patch"], "type": "string"},
                 "evidence_id": {"type": "string"},
                 "replacement_text": {"type": "string"},
-            }
+            },
+            description=(
+                "Patch only the exact span identified by completed READ evidence when a local "
+                "edit suffices; provide its replacement text."
+            ),
         ),
         _closed_result_object(
             {
                 "kind": {"enum": ["replace"], "type": "string"},
                 "evidence_id": {"type": "string"},
                 "new_text": {"type": "string"},
-            }
+            },
+            description=(
+                "Replace all text when a whole-document rewrite is needed; select completed "
+                "whole-file READ evidence and provide complete new text."
+            ),
         ),
         _closed_result_object(
             {
                 "kind": {"enum": ["rename"], "type": "string"},
                 "evidence_id": {"type": "string"},
                 "suggested_destination": {"type": "string"},
-            }
+            },
+            description=(
+                "Rename the document identified by completed READ evidence when only its location"
+                " changes; propose a new canonical workspace-relative destination."
+            ),
         ),
         _closed_result_object(
             {
                 "kind": {"enum": ["delete"], "type": "string"},
                 "evidence_id": {"type": "string"},
-            }
+            },
+            description=(
+                "Delete the document identified by completed READ evidence when its removal is "
+                "intended; this proposes deletion without executing it."
+            ),
         ),
     ]
     operations = {
@@ -546,10 +581,20 @@ def _artifact_intent_result_schema(
     facts = constraints or LeadProviderConstraints()
     with_objective = _closed_result_object({
         **operations, "objective_intent": facts.objective_schema("prepare"),
-    })
+    },
+        description=(
+            "Prepare exact changes while starting or advancing a document change request; review "
+            "and Apply still require separate confirmation."
+        ),
+    )
     if facts.preparation_kind:
         return with_objective
-    return {"anyOf": [_closed_result_object(operations), with_objective]}
+    return {"anyOf": [_closed_result_object(operations,
+        description=(
+            "Prepare exact changes without a document change request update when none is needed; "
+            "review and Apply still require separate confirmation."
+        ),
+    ), with_objective]}
 
 
 def _recommended_action_result_schema(
@@ -559,8 +604,14 @@ def _recommended_action_result_schema(
 
 
 def _objective_intent_result_schema() -> dict[str, object]:
-    return {"anyOf": [{"type": "null"},
-        LeadProviderConstraints().objective_schema("clarify", cancel=True)]}
+    return {"anyOf": [
+        {"type": "null", "description": "Leave document change request tracking unchanged when no lifecycle update is needed."},
+        {**LeadProviderConstraints().objective_schema("clarify", cancel=True),
+         "description": (
+             "Update request tracking when the user starts, continues, or explicitly cancels "
+             "a document change request."
+         )},
+    ]}
 
 
 def _provider_result_contract(contract_id: str, schema: dict[str, object]) -> ContextJsonObjectResultContract:
@@ -575,9 +626,25 @@ def _lead_front_result_contract(
 ) -> ContextJsonObjectResultContract:
     facts = constraints or LeadProviderConstraints(input_ids=input_ids, task_revisions=task_revisions)
     scoped = {"message": nonempty_text_schema(), "authoring_scope": facts.scope_schema()}
+    proposal_meanings = {
+        "proposal": (
+            "Propose specialist consultation when the affected domains need drafting or "
+            "review; disclose the assignments for separate confirmation."
+        ),
+        "artifact_intent": (
+            "Propose exact artifact changes when content and READ evidence are ready for "
+            "specialist review; separate review, Apply, and Commit confirmations remain "
+            "required."
+        ),
+    }
     recommendation = _closed_result_object({**scoped,
         "kind": {"enum": ["recommendation"], "type": "string"},
-        "recommended_action": facts.recommendation_schema()})
+        "recommended_action": facts.recommendation_schema()},
+        description=(
+            "Recommend one proposal-drafting step when preparation should be confirmed before "
+            "forming the full specialist or document-change proposal."
+        ),
+    )
     if facts.recommendation_only:
         variants = [recommendation]
     elif facts.preparation_kind:
@@ -585,16 +652,39 @@ def _lead_front_result_contract(
         intent = (_artifact_intent_result_schema(facts) if field == "artifact_intent" else
                   _proposal_result_schema(expected_relation, input_ids, facts))
         variants = [
-            _closed_result_object({**scoped, "kind": {"enum": ["question"], "type": "string"}}),
-            _closed_result_object({**scoped, "kind": {"enum": ["proposal"], "type": "string"}, field: intent}),
+            _closed_result_object({**scoped, "kind": {"enum": ["question"], "type": "string"}},
+                description=(
+                    "Ask a clarification question when required information is missing from the "
+                    "confirmed preparation; preserve its scope."
+                ),
+            ),
+            _closed_result_object({**scoped, "kind": {"enum": ["proposal"], "type": "string"}, field: intent},
+                description=proposal_meanings[field],
+            ),
         ]
     else:
         variants = [
-            _closed_result_object(scoped),
-            _closed_result_object({**scoped, "kind": {"enum": ["question", "critique"], "type": "string"}}),
+            _closed_result_object(scoped,
+                description=(
+                    "Answer workflow or status questions directly when no clarification, request "
+                    "update, or specialist proposal is needed."
+                ),
+            ),
+            _closed_result_object({**scoped, "kind": {"enum": ["question", "critique"], "type": "string"}},
+                description=(
+                    "Ask for missing information with clarification_question, or explain a scoped"
+                    " concern with critique, when no document request update or proposal is "
+                    "needed."
+                ),
+            ),
             _closed_result_object({**scoped,
                 "kind": {"enum": ["question"], "type": "string"},
-                "objective_intent": facts.objective_schema("clarify")}),
+                "objective_intent": facts.objective_schema("clarify")},
+                description=(
+                    "Ask for missing information while starting or continuing the associated "
+                    "document change request; keep that request pending."
+                ),
+            ),
             recommendation,
         ]
         if facts.objective_ids is None or facts.objective_ids:
@@ -606,13 +696,34 @@ def _lead_front_result_contract(
                     LeadOutcomeKind.PROPOSAL, LeadOutcomeKind.RECOMMENDATION, LeadOutcomeKind.QUESTION}], "type": "string"},
                 "objective_intent": _closed_result_object({
                     "action": {"enum": ["cancel"], "type": "string"}, "objective_id": identity,
-                }),
-            }))
+                },
+                    description=(
+                        "Close only the selected request that the user explicitly cancelled; this"
+                        " performs no document change."
+                    ),
+                ),
+            },
+                description=(
+                    "Acknowledge explicit user cancellation with an answer or critique and close "
+                    "the selected pending document change request without applying changes."
+                ),
+            ))
         for field, intent in (("proposal", _proposal_result_schema(expected_relation, input_ids, facts)),
                               ("artifact_intent", _artifact_intent_result_schema(facts))):
             variants.append(_closed_result_object({**scoped,
-                "kind": {"enum": ["proposal"], "type": "string"}, field: intent}))
-    return _provider_result_contract("lead-response-v6", alternatives(variants))
+                "kind": {"enum": ["proposal"], "type": "string"}, field: intent},
+                description=proposal_meanings[field],
+            ))
+    schema = alternatives(variants)
+    schema["description"] = (
+        (
+            "Respond as Lead within the current writing scope. Choose the permitted result "
+            "that advances the user's request; proposals and recommendations grant no "
+            "execution or write authority. "
+        )
+        + schema.get("description", "")
+    ).rstrip()
+    return _provider_result_contract("lead-response-v6", schema)
 
 
 def _specialist_result_contract(
@@ -633,7 +744,16 @@ def _specialist_result_contract(
                     "type": "string",
                 },
                 "message": nonempty_text_schema(),
-            }
+            },
+            description=(
+            "Return the assigned draft in response_text with draft_completed, or report "
+            "insufficient_evidence when the task cannot be grounded; do not write documents."
+        ) if assignment.mode is SpecialistAssignmentMode.DRAFT else (
+            "Review the assigned sources: use supports_proposal for support, concerns_found "
+            "for reservations, conflicts_found for contradictions, or insufficient_evidence "
+            "when a grounded judgment is impossible. Explain the assessment without writing "
+            "documents."
+        ),
         ),
     )
 
@@ -655,7 +775,12 @@ def _lead_synthesis_result_contract(
     message = {"message": nonempty_text_schema()}
     contract_id = "consultation-summary-v4"
     if not artifact_review:
-        variants = [_closed_result_object(message)]
+        variants = [_closed_result_object(message,
+            description=(
+                "Conclude this consultation when the replies support a complete synthesis and no "
+                "additional specialist round or proposal-drafting recommendation is needed."
+            ),
+        )]
         if allow_next_intent:
             variants.append(_closed_result_object({
                 **message,
@@ -667,13 +792,35 @@ def _lead_synthesis_result_contract(
                         "minItems": 1,
                         "type": "array",
                     },
-                }),
-            }))
+                },
+                    description=(
+                        "Describe the unresolved purpose and assign every affected specialist the"
+                        " required prior inputs and replies."
+                    ),
+                ),
+            },
+                description=(
+                    "Request another specialist round when unresolved issues require more work "
+                    "and the offered round budget permits it; preserve concerns and source "
+                    "lineage."
+                ),
+            ))
         variants.append(_closed_result_object({
             **message,
             "recommended_action": facts.recommendation_schema(),
-        }))
-        return _provider_result_contract(contract_id, {"anyOf": variants})
+        },
+            description=(
+                "Recommend a separately confirmed proposal-drafting step when the consultation "
+                "has established what should be prepared next."
+            ),
+        ))
+        return _provider_result_contract(contract_id, {
+            "anyOf": variants,
+            "description": (
+                "Synthesize the specialist replies independently, retaining every material "
+                "concern and grounding the result in their shared task and evidence."
+            ),
+        })
     contract_id = "artifact-review-summary-v4"
     return _provider_result_contract(
         contract_id,
@@ -683,7 +830,14 @@ def _lead_synthesis_result_contract(
                 "type": "string",
             },
             **message,
-        }),
+        },
+            description=(
+                "Integrate all reviews of the exact immutable candidate: "
+                "ready_for_apply_confirmation only when it is ready, revision_required when "
+                "changes are needed, or rejected when unsuitable. Review never grants Apply or "
+                "Commit authority."
+            ),
+        ),
     )
 
 

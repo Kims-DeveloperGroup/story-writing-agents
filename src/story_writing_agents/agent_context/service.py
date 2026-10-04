@@ -928,6 +928,12 @@ def _validate_provider_schema_node(schema: object) -> None:
         if type(variants) is not list or len(variants) < 2:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         for variant in variants:
+            if (
+                type(variant) is not dict
+                or type(variant.get("description")) is not str
+                or not variant["description"].strip()
+            ):
+                raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
             _validate_provider_schema_node(variant)
         return
     schema_types = _schema_types(schema)
@@ -3225,7 +3231,12 @@ def _context_action_schema(
                 "type": "array",
             },
         }
-        variants.append(_closed_provider_object_schema(search_properties))
+        variants.append(_closed_provider_object_schema(search_properties,
+            description=(
+                "Search authorized sources when evidence is missing and no artifact-directory "
+                "restriction is needed; results issue handles for a later read_context action."
+            ),
+        ))
         if ContextSourceKind.WRITING_ARTIFACT in allowed_search_source_kinds:
             artifact_query = _closed_provider_object_schema({
                 "text": {"type": "string", "description": "Nonempty literal search text."},
@@ -3239,8 +3250,13 @@ def _context_action_schema(
                 "queries": {"type": "array", "items": artifact_query,
                             "minItems": 1, "maxItems": query_limit},
                 "path_prefix": {"type": "string",
-                                "description": "Normalized relative artifact directory; writing_artifact queries only."},
-            }))
+                                "description": "Normalized workspace-relative artifact directory; story_document queries only."},
+            },
+                description=(
+                    "Search story documents when evidence gathering is restricted to one artifact"
+                    " directory; results issue handles for a later read_context action."
+                ),
+            ))
     if "read" in allowed_actions:
         handle_limit = min(action_limits[5], action_limits[6])
         variants.append(
@@ -3254,7 +3270,10 @@ def _context_action_schema(
                         "type": "array",
                     },
                 },
-                description="READ: retrieve one or more SEARCH result handles.",
+                description=(
+                    "Read invocation-issued search handles when source contents are needed to "
+                    "complete the task; the runtime returns bounded content and evidence IDs."
+                ),
             )
         )
     if "answer" in allowed_actions:
@@ -3265,8 +3284,8 @@ def _context_action_schema(
                     "result": result_contract.schema_value(),
                 },
                 description=(
-                    "ANSWER: return only the exact semantic result. Runtime "
-                    "attaches successful READ receipts."
+                    "Submit the completed task once sufficient evidence is available, using the "
+                    "task_result contract. The runtime attaches successful READ receipts."
                 ),
             )
         )
@@ -3278,8 +3297,9 @@ def _context_action_schema(
     schema = _closed_provider_object_schema(
         {"action": action_schema},
         description=(
-            "Return exactly one schema-selected context action. The runtime "
-            "owns correlation and action-index bookkeeping."
+            "Gather needed evidence, then return the task result. Choose one currently permitted "
+            "agent_action; search finds sources, read obtains contents, and submit_result "
+            "completes the task. The runtime owns correlation and action bookkeeping."
         ),
     )
     schema = project_action_schema(schema)

@@ -83,6 +83,9 @@ _SCOPE = ContextScope(
 )
 
 
+from tests.provider_wire_fixture import assert_schema_descriptions
+
+
 class StructuredOutputValidationTests(unittest.TestCase):
     def test_diagnose_json_text_reports_all_independent_safe_issues(self) -> None:
         schema = {
@@ -866,12 +869,21 @@ class CompactWireDecoderTests(unittest.TestCase):
                 set(variant["properties"]),
             )
         search, prefixed_search, read, answer = action_variants
+        assert_schema_descriptions(self, schema)
+        self.assertNotEqual(search["description"], prefixed_search["description"])
+        self.assertIn("directory", prefixed_search["description"].lower())
+        self.assertIn("no artifact-directory restriction", search["description"].lower())
+        collapsed = service_module._context_action_schema(allowed_actions=("search",), result_contract=self.result_contract,
+            allowed_search_source_kinds=(ContextSourceKind.CONVERSATION,), action_limits=limits)
+        assert_schema_descriptions(self, collapsed)
+        self.assertNotIn("anyOf", collapsed["properties"]["agent_action"])
+        self.assertEqual(collapsed["properties"]["agent_action"]["description"], search["description"])
         self.assertNotIn("artifact_directory_prefix", search["properties"])
         self.assertIn("artifact_directory_prefix", prefixed_search["properties"])
         self.assertEqual(search["properties"]["queries"]["maxItems"], 4)
         query_schema = search["properties"]["queries"]["items"]
         source_kinds_schema = query_schema["properties"]["source_types"]
-        self.assertIn("source types permitted by the active response contract", source_kinds_schema["description"])
+        self.assertIn("Choose distinct allowed source kinds", source_kinds_schema["description"])
         self.assertEqual(
             set(source_kinds_schema),
             {"description", "items", "maxItems", "minItems", "type"},

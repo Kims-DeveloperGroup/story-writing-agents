@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import json
 import unittest
+from tests.provider_wire_fixture import assert_schema_descriptions
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import FrozenInstanceError, fields, replace
@@ -851,6 +852,11 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         with mock.patch.object(service_module, "diagnose_json_text", side_effect=verified):
             result = await self.invoke(provider, request)
         self.assertEqual(verified_schemas, [call.schema for call in provider.calls])
+        for call in provider.calls:
+            assert_schema_descriptions(self, call.schema)
+        final_action = provider.calls[-1].schema["properties"]["agent_action"]
+        self.assertNotIn("anyOf", final_action)
+        self.assertIn("result", final_action["description"].lower())
 
         self.assertEqual(len(provider.calls), 3)
         self.assertEqual(
@@ -917,12 +923,29 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
                                         "state": "open", "context_ref": "literal-user-data"}}
         custom_schema = _closed_schema({"content": {"type": "string"}, "opaque_customer_value": {
             "type": "string", "enum": ["owner_only_value"], "description": "Caller-owned label; copy the offered value."}})
+        self.assertEqual(ContextJsonObjectResultContract("plain-owner-v1", custom_schema).schema_value(), custom_schema)
+        choice = {"type": "array", "items": {"anyOf": [
+            {"type": "string", "enum": ["owner_symbol"], "description": "  Use the owner symbol when selecting the named customer option.\nOwner wording 한🙂 stays exact.  "},
+            {"type": "integer", "description": "Use the owner's explicit count when reporting a numeric customer quantity."}]}}
+        custom_schema["properties"]["owner/path~choice"] = choice
+        custom_schema["required"].append("owner/path~choice")
         request = self.request(materials=_materials(current), result_contract=ContextJsonObjectResultContract("owner-contract-v1", custom_schema))
-        response_value = {"content": _PRIVATE_ANSWER, "opaque_customer_value": "owner_only_value"}
+        response_value = {"content": _PRIVATE_ANSWER, "opaque_customer_value": "owner_only_value", "owner/path~choice": ["owner_symbol"]}
         provider = _ScriptedProvider(
             (lambda call, provider: json.dumps({"agent_action": {"action_type": "submit_result", "task_result": response_value}}),),
             usage=ProviderUsage(input_tokens=0, output_tokens=3),
         )
+        for invalid in (None, "", " \n", 7, False, {}, []):
+            malformed = json.loads(json.dumps(custom_schema))
+            branch = malformed["properties"]["owner/path~choice"]["items"]["anyOf"][1]
+            if invalid is None:
+                del branch["description"]
+            else:
+                branch["description"] = invalid
+            with self.assertRaises(ContextExecutionError) as rejected:
+                ContextJsonObjectResultContract("invalid-owner-v1", malformed)
+            self.assertIs(rejected.exception.code, ContextExecutionErrorCode.INVALID_VALUE)
+            self.assertEqual(provider.calls, [])
         hook_calls = 0
 
         def assert_reserved(_call: ContextProviderCallRequest) -> None:

@@ -76,7 +76,7 @@ from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
 
-from tests.provider_wire_fixture import direct_response, direct_reply
+from tests.provider_wire_fixture import direct_response, direct_reply, assert_schema_descriptions
 from tests.helpers import (
     SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE,
     pristine_initialized_workspace,
@@ -916,16 +916,20 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         from story_writing_agents.provider_process import ProcessResult
 
         schema = {
-            "type": "object", "properties": {
+            "type": "object", "description": "Return the selected owner value with exact invocation counters.", "properties": {
                 "round_number": {"type": "null", "enum": [None]},
                 "invocation_ordinal": {"type": "integer", "enum": [1]},
                 "attempt": {"type": "integer", "enum": [1]},
+                "owner/path~choice": {"anyOf": [
+                    {"type": "string", "enum": ["symbol"], "description": "Use symbol when selecting the named owner option."},
+                    {"type": "string", "enum": ["literal"], "description": "Use literal when the owner requests its literal label."}]},
             },
         }
+        assert_schema_descriptions(self, schema)
         original_schema = canonical_provider_json(schema)
         payload = {"q": "schema accounting 한🙂"}
         original_payload = canonical_provider_json(payload)
-        output = {"round_number": None, "invocation_ordinal": 1, "attempt": 1}
+        output = {"round_number": None, "invocation_ordinal": 1, "attempt": 1, "owner/path~choice": "symbol"}
         for vendor in ("antigravity", "codex"):
             with self.subTest(vendor=vendor, contextual=contextual):
                 session = "schema-" + vendor + ("-context" if contextual else "-standard")

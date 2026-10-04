@@ -6,6 +6,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 from story_writing_agents.agent_context import canonical_provider_json
+from story_writing_agents.agent_context.accounting import account_provider_payload
 from story_writing_agents.agent_context import service as service_module
 from story_writing_agents.agent_context.planning import ContextCheckpointState, ContextDeliveryMode
 from story_writing_agents.provider_wire import add_contract_guidance, project_context_payload
@@ -187,7 +188,9 @@ class CandidateWireContractTests(unittest.TestCase):
             return service_module._WireCandidateRecord("s1", alias, content, "sha256:" + hashlib.sha256(encoded).hexdigest(), len(encoded))
         projection = SimpleNamespace(mode=ContextDeliveryMode.DELTA, checkpoint_proposal=SimpleNamespace(sources=(), catalog_sources=()))
         checkpoint = SimpleNamespace(state=ContextCheckpointState.READY, provider_thread_id="thread-v10", sources=(), catalog_sources=())
-        schema = {"type": "object", "properties": {"content": {"type": "string"}}, "required": ["content"], "additionalProperties": False}
+        schema = {"type": "object", "description": "Return exact candidate content or report that none is available.",
+            "properties": {"content": {"anyOf": [{"type": "string", "description": "Return the exact reconstructed candidate when available."},
+                {"type": "null", "description": "Return null only when no candidate is available."}]}}, "required": ["content"], "additionalProperties": False}
         def render_alternative(payload, paths):
             wire, paths, references = project_context_payload(payload, paths, ())
             wire = add_contract_guidance(wire, schema)
@@ -216,6 +219,9 @@ class CandidateWireContractTests(unittest.TestCase):
             self.assertEqual((canonical_provider_json(payload), paths), snapshot)
             self.assertEqual(selected[1][("current_draft",)], service_module.ContextComponentKind.CANDIDATE)
             self.assertEqual(selected[2], ())
+            encoded_payload, accounting = account_provider_payload(schema, selected[0], component_paths=selected[1])
+            self.assertEqual(accounting.serialized_input_utf8_bytes, len(encoded_payload) + len(canonical_provider_json(schema)))
+            self.assertLessEqual(accounting.serialized_input_utf8_bytes, size(full) + len(canonical_provider_json(schema)))
             return (selected, full, compact, raw) if diagnostics else selected[0] if duplicate is not None else selected[0]["current_draft"]
         base = ("section🙂\n" * 800) + "tail A"
         targets = (base, base.replace("tail A", "tail B Δ"), "new lead\n" + base, base[:-30] + "arbitrary unsectioned splice")

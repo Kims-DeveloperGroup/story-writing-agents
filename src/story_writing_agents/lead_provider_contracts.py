@@ -188,7 +188,7 @@ class LeadProviderConstraints:
         task: dict[str, object] = {"type": "string"}
         if tokens:
             task["enum"] = list(tokens)
-        return closed_object({
+        return {**closed_object({
             "activity": {"type": "string", "enum": ([scope.activity.value] if scope else
                           [item.value for item in AuthoringActivity])},
             "target_paths": string_array(
@@ -203,7 +203,11 @@ class LeadProviderConstraints:
                 maximum=len(scope.domains) if scope else len(ArtifactReviewDomain),
             ),
             "task": task,
-        })
+        }), "description": (
+            "Classify the current work and include every affected specialist domain and "
+            "canonical workspace-relative target. Preserve the bound scope and task/revision "
+            "when supplied."
+        )}
 
     def assignment_schema(self) -> dict[str, object]:
         required = () if self.scope is None else required_authoring_specialists(self.scope)
@@ -215,7 +219,21 @@ class LeadProviderConstraints:
             + "Preparation recommendation sources are not assignment inputs unless confirmed preparation has "
             "materialized and offered them here. Preserve all required inputs and each reviewer's own source."
         )
-        return alternatives([closed_object({
+        assignment_purposes = {
+            "plot_architect": (
+                "Assign Plot when plot, causality, pacing, or outline structure is affected; "
+                "request its scoped draft or review."
+            ),
+            "character_custodian": (
+                "Assign Character when characterization, motivation, or relationships are "
+                "affected; request its scoped draft or review."
+            ),
+            "execution_specialist": (
+                "Assign Execution when scene prose, narrative voice, or narrative rules are "
+                "affected; request its scoped draft or review."
+            ),
+        }
+        return alternatives([{**closed_object({
             "agent_id": {"type": "string", "enum": [agent]},
             "instruction": nonempty_text_schema(),
             "input_ids": {
@@ -224,29 +242,45 @@ class LeadProviderConstraints:
                 "description": input_rule,
             },
             "mode": {"type": "string", "enum": [mode] if agent in required else ["draft", "review"]},
-        }) for agent in agents])
+        }), "description": assignment_purposes[agent]} for agent in agents])
 
     def objective_schema(self, step: str | None, *, cancel: bool = False) -> dict[str, object]:
         if self.preparation_kind:
             if self.preparation_objective_id is not None:
-                return closed_object({"action": {"type": "string", "enum": ["continue"]},
+                return {**closed_object({"action": {"type": "string", "enum": ["continue"]},
                     "objective_id": {"type": "string", "enum": [self.preparation_objective_id]},
-                    "next_step": {"type": "string", "enum": [step]}})
-            return closed_object({"action": {"type": "string", "enum": ["start"]},
+                    "next_step": {"type": "string", "enum": [step]}}), "description": (
+                        "Advance the matching pending document change request through this "
+                        "workflow step; preserve its identity and do not claim it is applied."
+                    )}
+            return {**closed_object({"action": {"type": "string", "enum": ["start"]},
                 "target_paths": string_array(self.preparation_targets, minimum=len(self.preparation_targets),
                                              maximum=len(self.preparation_targets)),
-                "next_step": {"type": "string", "enum": [step]}})
-        variants = [closed_object({"action": {"type": "string", "enum": ["start"]},
-            "target_paths": string_array(minimum=1), "next_step": {"type": "string", "enum": [step]}})]
+                "next_step": {"type": "string", "enum": [step]}}), "description": (
+                    "Start a document change request when no matching request exists; track "
+                    "the selected targets without treating preparation as Apply."
+                )}
+        variants = [{**closed_object({"action": {"type": "string", "enum": ["start"]},
+            "target_paths": string_array(minimum=1), "next_step": {"type": "string", "enum": [step]}}), "description": (
+                "Start a document change request when no matching request exists; track the "
+                "selected targets without treating preparation as Apply."
+            )}]
         if self.objective_ids is None or self.objective_ids:
             identity: dict[str, object] = {"type": "string"}
             if self.objective_ids:
                 identity["enum"] = list(self.objective_ids)
-            variants.append(closed_object({"action": {"type": "string", "enum": ["continue"]},
-                "objective_id": identity, "next_step": {"type": "string", "enum": [step]}}))
+            variants.append({**closed_object({"action": {"type": "string", "enum": ["continue"]},
+                "objective_id": identity, "next_step": {"type": "string", "enum": [step]}}), "description": (
+                    "Advance the matching pending document change request through this "
+                    "workflow step; preserve its identity and do not claim it is applied."
+                )})
             if cancel:
-                variants.append(closed_object({"action": {"type": "string", "enum": ["cancel"]},
-                                               "objective_id": identity}))
+                variants.append({**closed_object({"action": {"type": "string", "enum": ["cancel"]},
+                                               "objective_id": identity}), "description": (
+                                                   "Cancel the selected document change request only on explicit"
+                                                   " user cancellation; close tracking without changing "
+                                                   "documents."
+                                               )})
         return alternatives(variants)
 
     def recommendation_schema(self) -> dict[str, object]:
@@ -267,13 +301,33 @@ class LeadProviderConstraints:
             objectives.append({"objective_id": identity})
         variants = []
         for objective in objectives:
+            association_description = (
+                "Continue the identified pending document change request."
+                if objective else
+                "Use this variant when no existing document change request is being continued."
+            )
             variants.extend([
-                closed_object({**common, **objective, "kind": {"type": "string", "enum": ["prepare_artifact"]},
-                               "target_paths": string_array(minimum=1)}),
-                closed_object({**common, **objective, "kind": {"type": "string", "enum": ["prepare_consultation"]},
-                               "specialist_ids": string_array(tuple(SPECIALIST_IDS), minimum=1, maximum=len(SPECIALIST_IDS))}),
+                {**closed_object({**common, **objective, "kind": {"type": "string", "enum": ["prepare_artifact"]},
+                               "target_paths": string_array(minimum=1)}), "description": (
+                                   "Draft a document-change proposal when the selected sources "
+                                   "already support exact changes to these targets. "
+                               ) + association_description},
+                {**closed_object({**common, **objective, "kind": {"type": "string", "enum": ["prepare_consultation"]},
+                               "specialist_ids": string_array(tuple(SPECIALIST_IDS), minimum=1, maximum=len(SPECIALIST_IDS))}), "description": (
+                                   "Draft a specialist consultation proposal when further "
+                                   "drafting or review is needed; include every affected "
+                                   "specialist. "
+                               ) + association_description},
             ])
-        return alternatives(variants)
+        result = alternatives(variants)
+        result["description"] = (
+            (
+                "Request confirmation for one Lead proposal-drafting step, not specialist "
+                "execution, Apply, or Commit. "
+            )
+            + result.get("description", "")
+        ).rstrip()
+        return result
 
     def diagnose(self, answer: str, *, read_ids: tuple[str, ...] = (),
                  read_reviewers: tuple[tuple[str, str], ...] = ()) -> tuple[DomainValidationRule, ...]:
