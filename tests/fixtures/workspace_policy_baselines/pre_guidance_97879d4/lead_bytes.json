@@ -1,0 +1,9 @@
+{
+  "source_commit": "97879d49b095ca37dd4f65ff8ba698569762adba",
+  "measurement": "default contextual Lead; exact UTF-8 composed policy and native definition renderings before #794",
+  "system_prompt_utf8_bytes": 16861,
+  "codex_definition_utf8_bytes": 18602,
+  "antigravity_definition_utf8_bytes": 18667,
+  "full_policy_occurrences": 2,
+  "composed_sha256": "ff855d58b90bbb92c6da029702f50be5df712e296658591c5ecc040f4acc3244"
+}

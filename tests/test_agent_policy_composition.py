@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
+import json
+from pathlib import Path
 import unittest
 from unittest import mock
 
@@ -37,8 +40,6 @@ class AgentPolicyCompositionTests(unittest.TestCase):
         }
 
     def test_policy_order_composition_and_role_isolation_are_exact(self) -> None:
-        from story_writing_agents import prompts
-
         raw_policy_files = {
             path: self.workspace.path(path).read_bytes()
             for agent_id in ROSTER
@@ -61,15 +62,12 @@ class AgentPolicyCompositionTests(unittest.TestCase):
             )
             self.assertEqual(paths, expected)
             expected_components = tuple(raw_policy_files[path] for path in expected)
-            if agent_id == LEAD_ORCHESTRATOR:
-                expected_components = (
-                    *expected_components[:-1],
-                    expected_components[-1] + b"\n\n" + prompts._LEAD_CONTEXTUAL_CONTRACT_OVERLAY,
-                )
             self.assertEqual(
                 tuple(item.content for item in definition.behavior_policy_components),
                 expected_components,
             )
+            self.assertEqual(tuple(item.sha256 for item in definition.behavior_policy_components),
+                             tuple(hashlib.sha256(content).hexdigest() for content in expected_components))
             self.assertEqual(
                 definition.system_prompt_file.content,
                 b"\n\n".join(expected_components) + b"\n\n" + definition.runtime_behavior_policy,
@@ -142,17 +140,21 @@ class AgentPolicyCompositionTests(unittest.TestCase):
                         behavior_policy_files(PLOT_ARCHITECT)
 
     def test_provider_bindings_use_captured_composed_bytes_after_source_mutation(self) -> None:
-        definition = self._definitions()[PLOT_ARCHITECT]
+        definition = self._definitions()[LEAD_ORCHESTRATOR]
         captured = definition.system_prompt_file.content
+        baseline = json.loads((Path(__file__).parent / "fixtures/workspace_policy_baselines/pre_guidance_97879d4/lead_bytes.json").read_text())
+        self.assertEqual(captured.count(b"# Lead Orchestrator Policy"), 1)
+        self.assertLess(len(captured), baseline["system_prompt_utf8_bytes"])
         for component in definition.behavior_policy_components:
             component.path.write_text("MUTATED_AFTER_BINDING", encoding="utf-8")
 
         codex_bytes, codex_components = CodexAdapter._definition_file(definition)
         antigravity_bytes, antigravity_components = AntigravityAdapter._definition_file(definition)
-        self.assertIn(b"Do not invoke tools except the bound provider's required structured-result\ndelivery mechanism", captured)
-        self.assertIn(b"Use that mechanism only to deliver the current schema-conforming response.", captured)
-        self.assertIn(b"invoke other agents, subagents, providers, shell commands, web search, filesystem\noperations, or Git.", captured)
-        self.assertNotIn(b"Do not invoke tools, other agents", captured)
+        permission_text = b" ".join(captured.split())
+        self.assertIn(b"Do not invoke tools except the bound provider's required structured-result delivery mechanism", permission_text)
+        self.assertIn(b"Use it only to deliver the current schema-conforming response.", permission_text)
+        self.assertIn(b"Do not invoke other agents, providers, shell commands, web search, filesystem operations, or Git.", permission_text)
+        self.assertNotIn(b"Do not invoke tools, other agents", permission_text)
         self.assertIn(captured, codex_bytes)
         self.assertIn(captured, antigravity_bytes)
         self.assertEqual(definition.system_prompt_file.content, captured)
@@ -161,10 +163,13 @@ class AgentPolicyCompositionTests(unittest.TestCase):
             (antigravity_bytes, antigravity_components),
         ):
             self.assertNotIn(b"MUTATED_AFTER_BINDING", provider_bytes)
+            self.assertIn(b"subagents", provider_bytes)
             self.assertEqual(
                 len(provider_bytes),
                 sum(component.serialized_utf8_bytes for component in components),
             )
+        self.assertLess(len(codex_bytes), baseline["codex_definition_utf8_bytes"])
+        self.assertLess(len(antigravity_bytes), baseline["antigravity_definition_utf8_bytes"])
 
 
     def test_runtime_policy_reaches_custom_prompts_without_overwriting_and_refreshes_binding(self):
@@ -182,6 +187,9 @@ class AgentPolicyCompositionTests(unittest.TestCase):
         with mock.patch.object(module, "_RUNTIME_BEHAVIOR_POLICY", module._RUNTIME_BEHAVIOR_POLICY + b"\nPolicy revision."):
             revised = self._definitions()
         self.assertTrue(all(revised[a].fingerprint != definitions[a].fingerprint for a in ROSTER))
+        with mock.patch.object(module, "_LEAD_RUNTIME_BEHAVIOR_POLICY", module._LEAD_RUNTIME_BEHAVIOR_POLICY + b"\nLead authority revision."):
+            revised = self._definitions()
+        self.assertEqual({a for a in ROSTER if revised[a].fingerprint != definitions[a].fingerprint}, {LEAD_ORCHESTRATOR})
         self.assertEqual({p:self.workspace.path(p).read_bytes() for p in paths}, before)
         definition = definitions[PLOT_ARCHITECT]
         with self.assertRaisesRegex(ValueError, "requires composed behavior components"):

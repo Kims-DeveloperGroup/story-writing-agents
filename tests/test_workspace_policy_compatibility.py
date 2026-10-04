@@ -2,35 +2,24 @@
 
 from __future__ import annotations
 
-import errno
 import hashlib
 import json
 import os
 from pathlib import Path
 import stat
-import sys
-import tempfile
 import unittest
 from unittest import mock
 
 from story_writing_agents import Workspace
-from story_writing_agents.agents import AGENT_SPECS, PLOT_ARCHITECT, ROSTER
+from story_writing_agents.agents import LEAD_ORCHESTRATOR, ROSTER
 from story_writing_agents.antigravity_adapter import AntigravityAdapter
 from story_writing_agents.codex_adapter import CodexAdapter
-from story_writing_agents.config import ConfigManager
-from story_writing_agents.errors import WorkspaceFormatError, WorkspaceSecurityError
 from story_writing_agents.git import GitBaselineManifest, GitManifestEntry
-from story_writing_agents.git.session_contracts import GitSessionResourceState
 from story_writing_agents.prompts import PromptAssembler
-from story_writing_agents import prompts as prompts_module
 from story_writing_agents.workspace import initialization
 from story_writing_agents.workspace.schema import (
-    WORKSPACE_INITIALIZATION_JOURNAL_PATH,
-    WORKSPACE_MARKER_PATH,
-    WorkspaceInitializationJournal,
     WorkspaceScaffoldEntry,
     canonical_initializer_scaffold,
-    encode_initialization_journal,
 )
 
 from tests.git_contract_fixture import DisposableGitTestCase
@@ -38,7 +27,8 @@ from tests.git_contract_fixture import DisposableGitTestCase
 
 _FIXTURES = Path(__file__).parent / "fixtures/workspace_policy_baselines"
 _PUBLISHED_COMMIT = "68a07827924598571ff8e3f6e4a602ad1a52b771"
-_CURRENT_MANIFEST = "eb7f56021f514b6db7d266ba416e994e2eceb0d6ba977ece97423c1eda1efd85"
+_CURRENT_MANIFEST = "11a75b3724d164ce94f4df0cde90909516d256ffbfbb007cf0c47ee975fcde2e"
+_PRE_GUIDANCE = _FIXTURES / "pre_guidance_97879d4"
 _LEGACY_MANIFEST = "c42681a04c910fd3632dc4987148c0664e1e30b77c0bc1e564b40da52745642f"
 
 
@@ -66,35 +56,33 @@ def _manifest(scaffold: tuple[WorkspaceScaffoldEntry, ...]) -> GitBaselineManife
 
 
 class PublishedWorkspacePolicyFixtureTests(unittest.TestCase):
-    def test_independent_published_main_baseline_is_exact(self) -> None:
-        fixtures = _FIXTURES / "published_main_1e482fe"
-        provenance = json.loads((fixtures / "manifest.json").read_text())
-        self.assertEqual(provenance["source_commit"], "1e482fe9ed37f94da0e747a8cb54240af2624f5c")
-        self.assertEqual(len(provenance["files"]), 6)
+    def _published(self, fixtures: Path, source_commit: str) -> dict[str, bytes]:
+        provenance = json.loads((fixtures / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(provenance["source_commit"], source_commit)
         policies = _legacy_policies(fixtures)
+        self.assertEqual(len(policies), 6)
         for path, content in policies.items():
             self.assertEqual(hashlib.sha256(content).hexdigest(), provenance["files"][path]["sha256"])
+        return policies
+
+    def test_independent_published_main_baseline_is_exact(self) -> None:
+        fixtures = _FIXTURES / "published_main_1e482fe"
+        policies = self._published(fixtures, "1e482fe9ed37f94da0e747a8cb54240af2624f5c")
         self.assertNotEqual(policies, _legacy_policies())
         self.assertNotEqual(policies, _legacy_policies(_FIXTURES / "published_2e9"))
 
     def test_independent_published_objective_baseline_is_exact(self) -> None:
         fixtures = _FIXTURES / "published_2e9"
-        provenance = json.loads((fixtures / "manifest.json").read_text())
-        self.assertEqual(provenance["source_commit"], "2e9ef969bd07ee71356e91573068876e5c6f2d0d")
-        self.assertEqual(len(provenance["files"]), 6)
-        for path, content in _legacy_policies(fixtures).items():
-            self.assertEqual(hashlib.sha256(content).hexdigest(), provenance["files"][path]["sha256"])
+        self._published(fixtures, "2e9ef969bd07ee71356e91573068876e5c6f2d0d")
         self.assertEqual(_manifest(_legacy_scaffold(fixtures)).manifest_digest,
                          "59a1cbe0231b02c8fe40844add06bbe6434274e8a9f93cd3a6b8b15324c4d6d4")
         self.assertNotEqual(_legacy_policies(fixtures), _legacy_policies())
 
     def test_independent_published_bytes_and_current_initializer_are_exact(self) -> None:
-        provenance = json.loads((_FIXTURES / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(provenance["source_commit"], _PUBLISHED_COMMIT)
-        policies = _legacy_policies()
-        self.assertEqual(len(policies), 6)
-        for path, content in policies.items():
-            self.assertEqual(hashlib.sha256(content).hexdigest(), provenance["files"][path]["sha256"])
+        policies = self._published(_FIXTURES, _PUBLISHED_COMMIT)
+        self._published(_PRE_GUIDANCE, "97879d49b095ca37dd4f65ff8ba698569762adba")
+        self.assertEqual(_manifest(_legacy_scaffold(_PRE_GUIDANCE)).manifest_digest,
+                         "eb7f56021f514b6db7d266ba416e994e2eceb0d6ba977ece97423c1eda1efd85")
         current = canonical_initializer_scaffold()
         legacy = _legacy_scaffold()
         self.assertEqual(len(current), 25)
@@ -109,12 +97,6 @@ class PublishedWorkspacePolicyFixtureTests(unittest.TestCase):
 
 class WorkspacePolicyCompatibilityTests(DisposableGitTestCase):
     """Use real disposable Git roots; patch only historical fixture creation."""
-
-    policy_fixtures = _FIXTURES
-
-
-    def _scaffold(self):
-        return _legacy_scaffold(self.policy_fixtures)
 
     def setUp(self) -> None:
         super().setUp()
@@ -134,12 +116,12 @@ class WorkspacePolicyCompatibilityTests(DisposableGitTestCase):
                 adapter, "invoke", side_effect=AssertionError("provider invocation forbidden")
             ))
 
-    def _initialize(self, name: str, *, legacy: bool = True) -> Path:
+    def _initialize(self, name: str, fixtures: Path | None) -> Path:
         root = self.test_root / name
-        if legacy:
+        if fixtures is not None:
             # This fixture substitutes independently published bytes only while
             # creating the original baseline, never during the admission under test.
-            with mock.patch.object(initialization, "canonical_initializer_scaffold", return_value=self._scaffold()):
+            with mock.patch.object(initialization, "canonical_initializer_scaffold", return_value=_legacy_scaffold(fixtures)):
                 Workspace(root).initialize()
         else:
             Workspace(root).initialize()
@@ -179,11 +161,11 @@ class WorkspacePolicyCompatibilityTests(DisposableGitTestCase):
 
 
     def test_fresh_legacy_and_current_main_admission_are_isolated_and_read_only(self) -> None:
-        legacy = self._initialize("legacy")
-        current = self._initialize("current", legacy=False)
-        before = self._snapshot(legacy, current)
+        fixtures = (_FIXTURES, _FIXTURES / "published_2e9", _FIXTURES / "published_main_1e482fe", _PRE_GUIDANCE, None)
+        roots = tuple(self._initialize(str(index), fixture) for index, fixture in enumerate(fixtures))
+        before = self._snapshot(*roots)
         fingerprints = {}
-        for root in (legacy, current, legacy, current):
+        for root in (*roots, *roots):
             definitions = self._definitions(root)
             observed = {agent: definition.fingerprint for agent, definition in definitions.items()}
             if root in fingerprints:
@@ -192,8 +174,12 @@ class WorkspacePolicyCompatibilityTests(DisposableGitTestCase):
             for definition in definitions.values():
                 self.assertTrue(definition.runtime_behavior_policy)
                 self.assertIn(definition.runtime_behavior_policy, definition.system_prompt_file.content)
-        self.assertNotEqual(fingerprints[legacy], fingerprints[current])
-        self.assertEqual(self._snapshot(legacy, current), before)
+                for component in definition.behavior_policy_components:
+                    self.assertEqual(component.content, component.path.read_bytes())
+                    self.assertEqual(component.sha256, hashlib.sha256(component.content).hexdigest())
+            self.assertIn(b"takes precedence", definitions[LEAD_ORCHESTRATOR].runtime_behavior_policy)
+        self.assertEqual(len({tuple(sorted(value.items())) for value in fingerprints.values()}), len(roots))
+        self.assertEqual(self._snapshot(*roots), before)
 
 
 
