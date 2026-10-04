@@ -953,7 +953,7 @@ logical cursor, mode, search, match position, footer result/index, and help
 state are process-local and discarded on close;
 that does not erase exchange files, process memory, scrollback, screenshots, or
 copied frames. See [Inspect agent exchanges](../guides/agent-exchanges.md) and
-the pinned external [design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/9076e74e7a1e42ca2bce55b3c8059b65dbec753f/docs/design-system.md).
+the pinned external [design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/ed5cc46c964a2dbfb4a0c58cd81c5aef102bd8f3/docs/design-system.md).
 
 Retention is bounded but not secure erasure. Per-stream rotation and global
 oldest-record pruning use ordinary unlink or replacement. User deletion,
