@@ -683,7 +683,7 @@ Simple/Verbose, gutter, search, color, responsive, recursive nested-JSON
 expansion, leaf-only truncation, and help rules
 remain solely in the pinned external [design
 system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/9076e74e7a1e42ca2bce55b3c8059b65dbec753f/docs/design-system.md)
-and its [fourteen deterministic samples](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/9076e74e7a1e42ca2bce55b3c8059b65dbec753f/docs/samples).
+and its [fifteen deterministic samples](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/9076e74e7a1e42ca2bce55b3c8059b65dbec753f/docs/samples).
 
 Main-view `h/j/k/l` moves character focus, Enter folds the focused container,
 arrows retain record navigation, and `?` opens help. The external renderer owns
