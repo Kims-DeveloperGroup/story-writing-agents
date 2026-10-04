@@ -105,6 +105,21 @@ available. Neither is free-form text the agent may replace with a new identity.
 The common instructions explain the guide's own structure without recursively
 generating guidance for guidance fields.
 
+An authoring collaboration carries its shared editorial brief in the existing
+scope interpretation, derived from the Lead's disclosed response text. The same
+immutable scope reaches specialist assignments and Lead synthesis; its wire
+projection is `writing_task_scope`. Selected source inputs remain specific to
+each disclosed assignment. Briefs and recommendation treatments use existing
+prose fields rather than adding fields to closed result schemas.
+
+Editorial guidance asks for the intended reader effect, editing goal, protected
+elements, permitted changes, exclusions and success criteria. Synthesis explains
+which material recommendations it accepts, modifies, defers or rejects, including
+reasons and residual costs. It distinguishes facts, interpretations, provisional
+ideas and unknowns, while preserving intentional ambiguity and every required
+unresolved concern. These instructions do not establish factual interpretation
+or creative quality, replace exact candidate review, or authorize Apply or Commit.
+
 The bound definition captures each common and role policy file once, with its
 original bytes and content hash. The runtime adds its own routing and Lead
 authority rules after the captured policies. These rules and the current schema
