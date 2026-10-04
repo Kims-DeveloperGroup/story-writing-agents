@@ -235,7 +235,15 @@ class LeadProviderConstraints:
         }
         return alternatives([{**closed_object({
             "agent_id": {"type": "string", "enum": [agent]},
-            "instruction": nonempty_text_schema(),
+            "instruction": {
+                **nonempty_text_schema(),
+                "description": (
+                    "Nonempty UTF-8 task instructions specifying this specialist's "
+                    "concrete deliverable and success criteria "
+                    "against the shared writing-task brief. Preserve its protected elements, "
+                    "change boundaries, and exact offered task/source identities."
+                ),
+            },
             "input_ids": {
                 **string_array(None if self.allow_read_sources else self.input_ids, minimum=1,
                                maximum=None if self.allow_read_sources else len(self.input_ids) or None),

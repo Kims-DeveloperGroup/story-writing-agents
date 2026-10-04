@@ -107,6 +107,9 @@ class PromptAssemblerTests(unittest.TestCase):
         for phrase in required:
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, normalized)
+        self.assertTrue(all(phrase in normalized for phrase in (
+            "intended reader effect", "protected elements", "observable success criteria",
+            "Reuse answers already present", "provisional ideas", "missing explanation alone")))
         self.assertNotIn("objective_intent", normalized)
         self.assertNotIn("recommended_action", normalized)
 
@@ -115,6 +118,9 @@ class PromptAssemblerTests(unittest.TestCase):
             prompt = self.assembler.build_definition(session_id="specialist-policy", agent_id=agent_id).system_prompt_file.read_text()
             normalized = " ".join(prompt.split())
             with self.subTest(agent_id=agent_id):
+                self.assertTrue(all(phrase in normalized for phrase in (
+                    "character self-contradiction", "limited point of view", "intentionally unresolved elements",
+                    "never present a proposed idea as a source fact")))
                 for phrase in ("exact assignment", "contract_guidance", "response_type specialist_assignment_result", "assignment_status", "draft_completed", "supports_proposal", "concerns_found", "conflicts_found", "insufficient_evidence", "neither review support", "permission to Apply or Commit"):
                     self.assertIn(phrase, normalized)
 

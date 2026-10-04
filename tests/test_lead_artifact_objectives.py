@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import replace
+from dataclasses import asdict, replace
 from unittest import mock
 
 from story_writing_agents import StoryRuntime
@@ -12,6 +12,7 @@ from story_writing_agents import conversations as c
 from story_writing_agents.agents import PLOT_ARCHITECT
 from story_writing_agents.writing_artifacts import ArtifactApplicationError, ArtifactApplicationErrorCode
 from tests import test_artifact_objectives as objectives
+from tests import test_artifact_proposal_orchestration as artifact
 from tests import test_lead_orchestration as lead
 from tests import test_lead_artifact_application as application
 from tests import test_lead_story_commit as commit
@@ -24,14 +25,18 @@ class LeadArtifactObjectiveTests(RecommendationCase):
 
     async def test_only_matching_successful_apply_satisfies_objective(self):
         path = "manuscript/part-01/approved-draft.md"
-        text = "# 승인된 초안\r\n" + objectives.DRAFT
+        text = "# 승인된 초안\r\nThe bridge collapsed at 09:00. At 21:00 Mina claims she crossed it; her account is deliberately unreliable.\r\n" + objectives.DRAFT
+        brief = "Reader effect: unease. Goal: restrained tension. Protect unreliable narration and unresolved allegiance; change only rhythm and gestures; exclude exposition and new crossings. Success: preserve ambiguity while exposing factual uncertainty."
+        account = "Fact: the bridge collapsed. Interpretation: Mina may be unreliable. Adopt Character: preserve ambiguity. Modify Plot: strengthen hesitation without revealing allegiance. Reject an invented crossing; no source supports it. Defer Execution’s literal-crossing concern pending evidence, retaining every concern ID. Cost: the physical route remains unknown. A gesture is a provisional idea. Reviewed does not mean unanimous support, publication, or a fulfilled document request."
         pristine = self.snapshots()
-        conversation_id, _ = await self.start(message=text, target_path=None, specialist_ids=ROSTER)
+        original_result = lead._live_result
+        with mock.patch.object(lead, "_live_result", side_effect=lambda call, value: original_result(call, {**value, "message": brief} if value.get("kind") == "proposal" else value)):
+            conversation_id, _ = await self.start(message=text, target_path=None, specialist_ids=ROSTER)
         source = self.projection(conversation_id).offered_draft_sources[-1]
         scope = next(e.payload.authoring_scope for e in self.history(conversation_id) if e.event_id == source.event_id)
         self.assertEqual(scope.target_paths, ())
         self.assertEqual(self.projection(conversation_id).artifact_objectives, ())
-        self.backend.enqueue(recommendation(message="Prepare the approved draft as a new document.",
+        self.backend.enqueue(recommendation(message=brief,
             recommended_action=action(source_ids=(source.event_id,),
                 target_paths=(path,), instruction="Preserve the exact approved draft.", specialist_ids=ROSTER),
             authoring_scope=lambda call: lead._live_scope(call, activity="review", paths=(path,),
@@ -53,6 +58,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL, prepared)
         self.assertEqual(prepared.proposal.participants, ROSTER)
         self.assertEqual(prepared.proposal.authoring_scope, request.authoring_scope)
+        self.assertEqual(request.authoring_scope.interpretation, brief)
         historical = next(item for item in prepared.proposal.basis.inputs if item.input_id == source.event_id)
         self.assertIs(historical.kind, c.CollaborationInputKind.CONVERSATION_EVENT)
         self.assertEqual(historical.revision_digest, source.content_digest)
@@ -60,7 +66,17 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual((operation.operation_kind.value, operation.path, operation.content),
                          ("create", path, text.encode()))
         self.assertEqual(self.objective(conversation_id).draft_sources, (source,))
-        reviewed = await self.review(prepared)
+        for assignment in prepared.proposal.assignments:
+            self.backend.enqueue_for(assignment.specialist_id, lead._specialist_outcome(
+                "concern" if assignment.specialist_id == lead.EXECUTION_SPECIALIST else "supports",
+                "The source-bound bridge crossing remains uncertain." if assignment.specialist_id == lead.EXECUTION_SPECIALIST else "Preserve the intentional ambiguity; strengthen hesitation."))
+        self.backend.enqueue_for(lead.LEAD_ORCHESTRATOR, artifact._artifact_synthesis_outcome(message=account))
+        reviewed = (await self.runtime.decide_lead_step(lead._decision(prepared, c.CollaborationConfirmationDecision.CONFIRM))).turn
+        self.assertIsNotNone(reviewed.artifact_application_request, reviewed)
+        review = self.projection(conversation_id).current_reviewed_artifact_proposal
+        self.assertEqual([item.assessment.value for item in review.reviews], ["supports", "supports", "concern"])
+        self.assertEqual(review.unresolved_input_ids, prepared.proposal.assignments[-1].input_ids)
+        self.assertEqual(self.payload_events(conversation_id, c.ArtifactReviewSynthesisPayload)[-1].payload.message, account)
         self.assertEqual(reviewed.artifact_application_request.application_request.candidate_digest,
                          prepared.artifact_proposal.candidate.candidate.candidate_digest)
         self.assertEqual(self.objective(conversation_id).candidate_binding.candidate_digest,
@@ -72,6 +88,15 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         for call in self.backend.calls:
             self.assertNotIn("response_correction", lead._workflow_material(call.payload))
             self.assertNotIn("structured_response_repair", call.payload)
+            if "replies" in lead._live_material(call):
+                self.assertIn("residual costs", json.dumps(call.schema, default=dict))
+        materials = [lead.scenario_input((lead._expanded_context_payload(call.payload) if "shared_context_objects" in call.payload else call.payload)["task_input"]) for call in self.backend.calls]
+        for is_review, expected_scope in ((False, scope), (True, request.authoring_scope)):
+            phase = [item for item in materials if ("assignment" in item or "replies" in item) and (item.get("assignment", {}).get("mode") == "review" or "artifact_candidate" in item) == is_review]
+            self.assertEqual(len(phase), len(ROSTER) + 1)
+            self.assertTrue(all(item["authoring_scope"] == json.loads(json.dumps(asdict(expected_scope))) for item in phase))
+            self.assertTrue(all(item["inputs"] == phase[0]["inputs"] for item in phase))
+        self.assertEqual(next(item for item in phase[0]["inputs"] if item["input_id"] == source.event_id)["revision_digest"], source.content_digest)
         dispatches = self.payload_events(conversation_id, c.CollaborationAssignmentDispatchPayload)
         self.assertEqual([e.payload.assignment.mode.value for e in dispatches].count("draft"), len(ROSTER))
         self.assertEqual([e.payload.assignment.mode.value for e in dispatches].count("review"), len(ROSTER))

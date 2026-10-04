@@ -152,11 +152,12 @@ def _artifact_synthesis_outcome(
     decision: str = "propose",
     *,
     malformed: str | None = None,
+    message: str = "The exact candidate review is complete.",
 ):
     def respond(call, _provider):
         value = {
             "decision": decision,
-            "message": "The exact candidate review is complete.",
+            "message": message,
         }
         if malformed == "omit_rationale":
             value.pop("message")

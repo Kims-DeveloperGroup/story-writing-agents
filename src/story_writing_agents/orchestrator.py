@@ -772,7 +772,20 @@ def _lead_synthesis_result_contract(
     facts = constraints or LeadProviderConstraints(
         input_ids=(*input_ids, *reply_event_ids), scope=authoring_scope, continuation=True,
     )
-    message = {"message": nonempty_text_schema()}
+    message = {"message": {
+        **nonempty_text_schema(),
+        "description": (
+            "Nonempty UTF-8 editorial account against the shared brief, with treatments, "
+            "reasons, and residual costs for each material recommendation."
+        ),
+    }}
+    synthesis_guidance = (
+        "Account for each material recommendation as adopted, modified, deferred, or "
+        "rejected; explain its treatment against the shared brief and remaining tradeoffs. "
+        "Distinguish factual conflict, predicted effect, preference, and missing information. "
+        "Rejecting a remedy never erases its concern. Reviewed or completed does not mean "
+        "unanimous support, publication, or satisfaction of a pending document-change request."
+    )
     contract_id = "consultation-summary-v4"
     if not artifact_review:
         variants = [_closed_result_object(message,
@@ -818,7 +831,8 @@ def _lead_synthesis_result_contract(
             "anyOf": variants,
             "description": (
                 "Synthesize the specialist replies independently, retaining every material "
-                "concern and grounding the result in their shared task and evidence."
+                "concern and grounding the result in their shared task and evidence. "
+                + synthesis_guidance
             ),
         })
     contract_id = "artifact-review-summary-v4"
@@ -835,7 +849,8 @@ def _lead_synthesis_result_contract(
                 "Integrate all reviews of the exact immutable candidate: "
                 "ready_for_apply_confirmation only when it is ready, revision_required when "
                 "changes are needed, or rejected when unsuitable. Review never grants Apply or "
-                "Commit authority."
+                "Commit authority. "
+                + synthesis_guidance
             ),
         ),
     )
@@ -5581,6 +5596,7 @@ class StoryRuntime:
         )
         value = {
             "provider_constraints": constraints.prompt_facts(),
+            "authoring_scope": authoring_scope_to_dict(proposal.authoring_scope),
             "conversation_id": conversation_id,
             "artifact_objectives": artifact_objective_context(project_collaboration_history(events)),
             "inputs": [

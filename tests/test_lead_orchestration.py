@@ -733,6 +733,18 @@ def _specialist_outcome(
     return respond
 
 
+def _event_payloads(history, payload_type):
+    return tuple(event.payload for event in history if type(event.payload) is payload_type)
+
+
+def _submitted_calls(history):
+    return tuple(
+        event.payload for event in history
+        if type(event.payload) is CollaborationProviderCallPayload
+        and event.payload.state is CollaborationProviderCallState.SUBMITTED
+    )
+
+
 def _synthesis_outcome(
     *,
     message: str = "The specialist evidence supports proceeding.",
@@ -1102,11 +1114,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         for event in history
                     )
                 )
-                failures = tuple(
-                    event.payload
-                    for event in history
-                    if type(event.payload) is CollaborationLeadOutcomeFailurePayload
-                )
+                failures = _event_payloads(history, CollaborationLeadOutcomeFailurePayload)
                 self.assertEqual(len(failures), 1)
                 self.assertIs(
                     failures[0].code,
@@ -1186,6 +1194,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertTrue(all("writing_task_scope" in v["required"] for v in schema["anyOf"]))
         self.assertFalse(any(set(v["properties"]) in ({"response_text"}, {"response_type", "response_text"}) for v in schema["anyOf"]))
         encoded = json.dumps(schema, separators=(",", ":"))
+        self.assertIn("concrete deliverable and success criteria", encoded)
         self.assertLessEqual(len(encoded.encode("utf-8")), 64 * 1024)
         for metadata in ("null", "correlation", "schema_version", "evidence_status", "evidence_ids",
                          "interpretation", "review_basis",
@@ -1551,11 +1560,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         )
         self.assertNotIn("Outline first line", repr(proposal))
         history = self.history(conversation_id)
-        call_payloads = tuple(
-            event.payload
-            for event in history
-            if type(event.payload) is CollaborationProviderCallPayload
-        )
+        call_payloads = _event_payloads(history, CollaborationProviderCallPayload)
         self.assertEqual(
             tuple(item.state for item in call_payloads),
             (
@@ -1845,11 +1850,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 "recommended_action": {**action, "kind": "prepare_artifact", "target_paths": paths}})))
         reopened = compose_filesystem_conversation_storage(self.control_workspace).event_store
         history = reopened.read(self.session_id, conversation_id)
-        submitted = tuple(
-            event.payload for event in history
-            if type(event.payload) is CollaborationProviderCallPayload
-            and event.payload.state is CollaborationProviderCallState.SUBMITTED
-        )
+        submitted = _submitted_calls(history)
         self.assertEqual(len(submitted), 1)
         self.assertEqual(submitted[0].validation_details, ())
         notices = tuple(detail for event in history
@@ -2208,11 +2209,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 )
 
                 history = self.history(conversation_id)
-                call_events = tuple(
-                    event.payload
-                    for event in history
-                    if type(event.payload) is CollaborationProviderCallPayload
-                )
+                call_events = _event_payloads(history, CollaborationProviderCallPayload)
                 submitted = tuple(
                     event
                     for event in call_events
@@ -2325,17 +2322,8 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             if type(event.payload) is CollaborationProviderCallPayload
             and event.payload.state is CollaborationProviderCallState.PREPARED
         )
-        submitted = tuple(
-            event.payload
-            for event in history
-            if type(event.payload) is CollaborationProviderCallPayload
-            and event.payload.state is CollaborationProviderCallState.SUBMITTED
-        )
-        failures = tuple(
-            event.payload
-            for event in history
-            if type(event.payload) is CollaborationLeadOutcomeFailurePayload
-        )
+        submitted = _submitted_calls(history)
+        failures = _event_payloads(history, CollaborationLeadOutcomeFailurePayload)
         self.assertIsNone(result.state)
         self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
         self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
@@ -2430,17 +2418,8 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         )
 
         history = self.history(conversation_id)
-        submitted = tuple(
-            event.payload
-            for event in history
-            if type(event.payload) is CollaborationProviderCallPayload
-            and event.payload.state is CollaborationProviderCallState.SUBMITTED
-        )
-        failures = tuple(
-            event.payload
-            for event in history
-            if type(event.payload) is CollaborationLeadOutcomeFailurePayload
-        )
+        submitted = _submitted_calls(history)
+        failures = _event_payloads(history, CollaborationLeadOutcomeFailurePayload)
         self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
         self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
         self.assertEqual(len(backend.calls), 2)
@@ -2510,9 +2489,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         prepared = tuple(event.payload for event in history
                          if type(event.payload) is CollaborationProviderCallPayload
                          and event.payload.state is CollaborationProviderCallState.PREPARED)
-        submitted = tuple(event.payload for event in history
-                          if type(event.payload) is CollaborationProviderCallPayload
-                          and event.payload.state is CollaborationProviderCallState.SUBMITTED)
+        submitted = _submitted_calls(history)
         self.assertEqual(len(prepared), 2)
         self.assertEqual(len(submitted), 2)
         self.assertTrue(all(not payload.validation_details for payload in prepared))
@@ -2565,9 +2542,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 reopened = compose_filesystem_conversation_storage(self.control_workspace).event_store
                 history = reopened.read(self.session_id, conversation_id)
                 project_collaboration_history(history)
-                submitted = tuple(event.payload for event in history
-                                  if type(event.payload) is CollaborationProviderCallPayload
-                                  and event.payload.state is CollaborationProviderCallState.SUBMITTED)
+                submitted = _submitted_calls(history)
                 self.assertEqual(len(backend.calls), 3)
                 self.assertEqual(len(submitted), 3)
                 self.assertEqual(submitted[0].validation_details, ())
@@ -2659,9 +2634,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                             for item in result.validation_details))
         reopened = compose_filesystem_conversation_storage(self.control_workspace).event_store
         history = reopened.read(self.session_id, conversation_id)
-        submitted = tuple(event.payload for event in history
-                          if type(event.payload) is CollaborationProviderCallPayload
-                          and event.payload.state is CollaborationProviderCallState.SUBMITTED)
+        submitted = _submitted_calls(history)
         self.assertEqual(len(submitted), 2)
         self.assertEqual(submitted[0].validation_details, result.validation_details)
         self.assertEqual(submitted[1].validation_details, ())
@@ -2701,9 +2674,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
 
         reopened = compose_filesystem_conversation_storage(self.control_workspace).event_store
         history = reopened.read(self.session_id, conversation_id)
-        submitted = tuple(event.payload for event in history
-                          if type(event.payload) is CollaborationProviderCallPayload
-                          and event.payload.state is CollaborationProviderCallState.SUBMITTED)
+        submitted = _submitted_calls(history)
         self.assertEqual(len(submitted), 2)
         self.assertTrue(submitted[0].validation_details == details,
                         "durable provider report differs from returned report")
@@ -2743,12 +2714,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         )
 
         history = self.history(conversation_id)
-        submitted = tuple(
-            event.payload
-            for event in history
-            if type(event.payload) is CollaborationProviderCallPayload
-            and event.payload.state is CollaborationProviderCallState.SUBMITTED
-        )
+        submitted = _submitted_calls(history)
         self.assertEqual(result.message, "Incomplete referenced result.")
         self.assertEqual(len(backend.providers), 1)
         self.assertEqual(len(backend.calls), 1)
@@ -2856,9 +2822,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         reopened = compose_filesystem_conversation_storage(self.control_workspace).event_store
         history = reopened.read(self.session_id, conversation_id)
         self.assertEqual(project_collaboration_history(history).physical_calls_spent, 1)
-        submitted = tuple(event.payload for event in history
-                          if type(event.payload) is CollaborationProviderCallPayload
-                          and event.payload.state is CollaborationProviderCallState.SUBMITTED)
+        submitted = _submitted_calls(history)
         self.assertEqual(len(submitted), 1)
         self.assertEqual(submitted[0].validation_details, result.validation_details)
         messages = tuple(event.payload.content for event in history

@@ -1,0 +1,31 @@
+{
+  "source_commit": "09db65c28ac38130a4e299aeb75a162413cfff46",
+  "source_method": "git show <source_commit>:<repository_path>; independently copied before importing retained runtime constants",
+  "manifest_digest": "11a75b3724d164ce94f4df0cde90909516d256ffbfbb007cf0c47ee975fcde2e",
+  "files": {
+    "config/agents/character_custodian/AGENTS.md": {
+      "fixture": "character_custodian.md",
+      "sha256": "806db0bae145e2ba50e920174299de06c20c083e45bba04b76ffe9c2d550e923"
+    },
+    "config/agents/common/AGENTS.md": {
+      "fixture": "common.md",
+      "sha256": "eb78a7d3a5a3d83291b188f5109f3b3132582109e1211e30bac7e33a9eab18a5"
+    },
+    "config/agents/execution_specialist/AGENTS.md": {
+      "fixture": "execution_specialist.md",
+      "sha256": "4a3ead3e2389bda9662989d02bb8817ad1ec2d7b4d4f322b246b892545d3979b"
+    },
+    "config/agents/lead_orchestrator/AGENTS.md": {
+      "fixture": "lead_orchestrator.md",
+      "sha256": "497c0927a7733fc37c553aefd056753246bfd0554331bfd64dd6f6ccd6cf1160"
+    },
+    "config/agents/plot_architect/AGENTS.md": {
+      "fixture": "plot_architect.md",
+      "sha256": "e59aba2b2e750c7b9ef00b2c3f1ea4e7e9b2889f7abf25a840d7db781d5d93e7"
+    },
+    "config/agents/specialist_collaboration/AGENTS.md": {
+      "fixture": "specialist_collaboration.md",
+      "sha256": "4ab83f3792a2598a174e6bfb02511162e26f963b5fe73c661afcfdaa3a5afcc3"
+    }
+  }
+}
