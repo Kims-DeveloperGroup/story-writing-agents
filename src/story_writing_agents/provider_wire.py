@@ -129,9 +129,13 @@ def project_result_schema(schema: Mapping, contract_id: str) -> dict:
                 continue
             wire_name = _result_field(name, shape)
             if name == "task" and shape == "authoring_scope":
-                variants = [_closed({"task_id": {"type": "string", "enum": [pair["task_id"]]},
-                                     "task_revision": {"type": "integer", "enum": [pair["task_revision"]]}})
-                            for token in child.get("enum", ()) for pair in [_task_reference(token)]]
+                variants = [{
+                    **_closed({"task_id": {"type": "string", "enum": [pair["task_id"]]}, "task_revision": {"type": "integer", "enum": [pair["task_revision"]]}}),
+                    "description": (
+                        f"Continue task {pair['task_id']} at revision {pair['task_revision']} "
+                        "when this is the task being addressed; copy this exact pair together."
+                    ),
+                } for token in child.get("enum", ()) for pair in [_task_reference(token)]]
                 properties[wire_name] = (variants[0] if len(variants) == 1 else {"anyOf": variants}) if variants else _closed({"task_id": {"type": "string"}, "task_revision": {"type": "integer"}})
                 continue
             projected = visit(child, name)
@@ -910,29 +914,28 @@ for _domain, _wire in SOURCE_TYPES.items():
 
 
 def describe_schema(schema: Mapping) -> dict:
-    """Add concise, idempotent semantics without discarding owner constraints."""
+    """Preserve owner prose and reject undescribed built-in contract choices."""
     result = deepcopy(dict(schema))
-    def visit(node: dict, name: str | None = None, *, field: bool = True) -> None:
-        description = field_description(name) if name and field else "Use this shape with all required properties."
-        if "enum" in node:
-            meanings = []
-            for value in node["enum"]:
-                meaning = ENUM_MEANINGS.get(value) if isinstance(value, str) else None
-                if meaning:
-                    meanings.append(f"{value}: {meaning}")
-                elif name in DYNAMIC_CHOICE_FIELDS:
-                    meanings.append(f"{value}: exact runtime-offered choice; copy unchanged")
-                else:
-                    raise ValueError(f"provider wire catalog has no enum meaning for {name}")
-            description += " Allowed choices: " + "; ".join(meanings) + "."
-        owner_description = node.get("description", "").split("Wire semantics: ", 1)[0].rstrip()
-        node["description"] = ((owner_description + "\n") if owner_description else "") + "Wire semantics: " + description
+    def require_description(node: Mapping) -> None:
+        description = node.get("description")
+        if not isinstance(description, str) or not description.strip():
+            raise ValueError("provider schema choice requires an owner-authored description")
+
+    def visit(node: Mapping, name: str | None = None) -> None:
+        for value in node.get("enum", ()):
+            if name not in DYNAMIC_CHOICE_FIELDS and not (
+                isinstance(value, str) and value in ENUM_MEANINGS
+            ):
+                raise ValueError(f"provider wire catalog has no enum meaning for {name}")
         for child_name, child in node.get("properties", {}).items():
+            field_description(child_name)
             visit(child, child_name)
         if "items" in node:
-            visit(node["items"], name, field=False)
+            visit(node["items"], name)
         for child in node.get("anyOf", ()):
-            visit(child, name, field=False)
+            require_description(child)
+            visit(child, name)
+    require_description(result)
     visit(result)
     return result
 
@@ -1109,7 +1112,7 @@ def add_contract_guidance(payload: Mapping, schema: Mapping) -> dict:
 
 def common_contract_guide() -> str:
     return ("Agent provider protocol " + WIRE_VERSION + ". Use the request's contract_guidance.input_fields for field meanings and contract_guidance.response_rules for the current response rules. "
-            "The supplied response schema defines exact required fields, allowed enum values, and available identities. Built-in semantic results include response_type; caller-owned contracts follow their exact supplied schema. "
+            "Use the schema root description for shared requirements and each alternative description to choose by its stated purpose and conditions. The schema defines exact fields, values, and identities. Built-in semantic results include response_type; caller-owned contracts follow their exact supplied schema. "
             "The schema selects the action family: contextual story calls allow search_context/read_context/submit_result; conversation retrieval allows search_conversation_history/read_conversation_history/submit_result. Each agent_action uses action_type; submit_result contains task_result. "
             "A proposal_drafting_request asks to draft a proposal. A document_change_request remains pending until exact successful Apply or explicit cancellation. "
             "content_reference selects literal text at an exact request-local pointer; candidate_text_reference selects the verified reconstructed current_draft text. "
@@ -1120,10 +1123,10 @@ def common_contract_guide() -> str:
 
 
 def project_action_schema(schema: Mapping) -> dict:
-    """Project the contextual action envelope, preserving its owner's result schema."""
+    """Project contextual actions without replacing owner-authored meanings."""
     def action(node: Mapping) -> dict:
         if "anyOf" in node:
-            return {"anyOf": [action(item) for item in node["anyOf"]]}
+            return {**deepcopy(dict(node)), "anyOf": [action(item) for item in node["anyOf"]]}
         properties = {}
         for name, spec in node["properties"].items():
             wire = {"kind": "action_type", "result": "task_result", "handles": "read_handles", "path_prefix": "artifact_directory_prefix", "query": "search_query", "start_sequence": "start_sequence_number", "end_sequence": "end_sequence_number", "verdict": "candidate_review_status", "next": "next_consensus_step"}.get(name, name)
@@ -1135,18 +1138,22 @@ def project_action_schema(schema: Mapping) -> dict:
                 query["properties"] = {"search_text": query["properties"]["text"], "source_types": query["properties"]["source_kinds"]}
                 query["required"] = ["search_text", "source_types"]
                 query["properties"]["source_types"]["items"]["enum"] = [SOURCE_TYPES[item] for item in query["properties"]["source_types"]["items"]["enum"]]
-            if name != "result":
-                # Annotate only runtime-owned action properties. The result
-                # subtree has already been described by its declaring owner.
-                child = describe_schema(_closed({wire: child}))["properties"][wire]
             properties[wire] = child
-        branch = _closed(properties)
-        branch["description"] = "Return exactly this action variant with every required property; use only the allowed action type."
+        branch = {**_closed(properties), "description": node["description"]}
+        # Result contracts have their own owner validation; caller-owned result
+        # names and enums must never enter the built-in vocabulary catalog.
+        describe_schema({
+            **branch,
+            "properties": {name: spec for name, spec in properties.items() if name != "task_result"},
+        })
+        if "task_result" in properties:
+            field_description("task_result")
         return branch
-    envelope = _closed({"agent_action": action(schema["properties"]["action"])})
-    envelope["description"] = "Return one agent_action conforming to the current allowed variant; runtime correlation is not echoed."
-    envelope["properties"]["agent_action"]["description"] = field_description("agent_action")
-    return envelope
+    field_description("agent_action")
+    return {
+        **_closed({"agent_action": action(schema["properties"]["action"])}),
+        "description": schema["description"],
+    }
 
 
 class WireShapeError(ValueError):
@@ -1210,7 +1217,7 @@ def project_direct_schema(schema: Mapping, phase: str) -> dict:
             mapping = DIRECT_REVIEW if name == "verdict" else DIRECT_NEXT
             child["enum"] = [mapping[item] for item in child["enum"]]
         properties[target] = child
-    return describe_schema(_closed(properties))
+    return describe_schema({**_closed(properties), "description": schema["description"]})
 
 
 def normalize_direct_result(value: object, phase: str) -> dict:
@@ -1234,14 +1241,17 @@ def project_retrieval_schema(schema: Mapping) -> dict:
     for branch in schema["properties"]["action"]["anyOf"]:
         kind = branch["properties"]["kind"]["enum"][0]
         fields = {"action_type": {"type": "string", "enum": [RETRIEVAL_ACTIONS[kind]]}}
-        for name, spec in branch["properties"].items():
-            if name == "kind":
-                continue
-            fields[{"query": "search_query", "start_sequence": "start_sequence_number", "end_sequence": "end_sequence_number", "message": "response_text"}.get(name, name)] = deepcopy(spec)
+        for name, child in branch["properties"].items():
+            if name != "kind":
+                wire = {"query": "search_query", "start_sequence": "start_sequence_number", "end_sequence": "end_sequence_number", "message": "response_text"}.get(name, name)
+                fields[wire] = deepcopy(child)
         if kind == "answer":
             fields = {"action_type": fields.pop("action_type"), "task_result": _closed({"response_type": {"type": "string", "enum": ["conversation_answer"]}, **fields})}
-        branches.append(_closed(fields))
-    return describe_schema(_closed({"agent_action": {"anyOf": branches}}))
+        branches.append({**_closed(fields), "description": branch["description"]})
+    return describe_schema({
+        **_closed({"agent_action": {"anyOf": branches}}),
+        "description": schema["description"],
+    })
 
 
 def normalize_retrieval_action(value: object) -> dict:

@@ -68,17 +68,26 @@ or `agent_instructions`; their presence does not make them searchable.
 
 ## Guidance actually delivered to agents
 
-The private runtime wire catalog is the common source for property names,
-enum explanations, schema descriptions, and guide rendering. Guidance has
-three delivery points:
+The private runtime wire catalog supplies field meanings and rendering rules.
+Guidance has three delivery points:
 
-1. Every provider-bound role receives common instructions for interpreting the
-   protocol, context trust, references, actions, and response structure.
+1. Every provider-bound role receives common instructions for the protocol,
+   context trust, references, actions, and response structure.
 2. Every request includes `contract_guidance.input_fields` and
-   `contract_guidance.response_rules` for its active input shape and result
+   `contract_guidance.response_rules` for its actual input shape and result
    contract. Repeated input records use wildcard paths in the guide.
-3. Response-schema `description` annotations explain objects, branches,
-   properties, and the meaning of each currently permitted enum value.
+3. The response schema's root `description` explains its shared purpose and
+   function. Each `anyOf` alternative has a concise `description` explaining
+   its distinguishing purpose, when to select it, and what it does or returns.
+   Property descriptions
+   retain necessary field-specific details rather than repeating that guidance.
+
+Selection guidance lives in the schema. There is no parallel
+`contract_guidance.response_schema_alternatives` list, preference, or ranking.
+The order of `anyOf` alternatives does not indicate priority. Shared behavior is
+explained once at the relevant parent; branch descriptions add their own
+selection conditions. The runtime removes generated response-description
+boilerplate while preserving caller-authored descriptions.
 
 Field guidance distinguishes runtime-issued values from values the agent may
 copy, select, or author. It explains units, presence, relationships, and
@@ -121,9 +130,10 @@ runtime builds it in this order:
    for fields needed by that branch, `enum` for allowed choices, and `anyOf` for
    distinct object variants. Do not add unused fields with `null` unless that
    exact schema explicitly accepts it.
-4. Attach catalog descriptions explaining properties, branches, and enum meanings.
-   Generate the accompanying input guide for the actual payload, then account
-   the complete rendered request before calling the provider.
+4. Preserve explicitly authored root and alternative descriptions through
+   projection, filtering, and wrapping. Generate the input guide from the actual
+   payload, then account for the complete rendered request before submission.
+   A pruned or collapsed choice describes only the behavior still available.
 
 The contextual contract accepts these schema keywords: `type`, `properties`,
 `required`, `additionalProperties`, `items`, `minItems`, `maxItems`, `enum`,
@@ -205,10 +215,53 @@ Conversation retrieval has its own action variants. Custom
 `ContextJsonObjectResultContract` schemas keep their caller-declared semantic
 fields: the runtime does not invent a `response_type` or rename those fields.
 Built-in contracts use the catalog and the explicit types listed below.
-For a custom contract, use each property's `description` to explain its meaning
-and any allowed enum values. Explain caller-owned input data in the task
-instructions. The runtime preserves that schema instead of guessing semantics
-from custom names.
+For a custom contract, supply a nonblank string `description` for every
+`anyOf` child, including nested choices. Explain the alternative's purpose,
+selection condition, and function in concise prose; field and enum names alone
+do not provide that decision rule. Missing, blank, or incorrectly typed
+alternative descriptions are rejected before provider submission. Custom
+schemas without `anyOf` retain their existing acceptance behavior. Use property
+descriptions for non-obvious field details and explain caller-owned input data
+in the task instructions. The runtime preserves caller-authored descriptions
+and names rather than guessing their meaning.
+
+### Choosing an `anyOf` alternative
+
+`anyOf` requires a response to satisfy at least one offered shape. The agent uses
+the task, current controls, root description, and branch descriptions to choose
+an appropriate shape; valid structure alone does not identify the intended
+workflow outcome. For nested choices, apply the description at that level.
+
+For “Find timeline references only within `manuscript/part_1`,” the scoped SEARCH
+branch explains when the directory restriction is appropriate. This annotation
+excerpt omits the existing type, enum, required, and closed-object constraints:
+
+```json
+{
+  "description": "Gather needed evidence, then return the assignment result. SEARCH finds sources and issues READ handles; READ obtains source contents. Choose one currently permitted action.",
+  "properties": {
+    "agent_action": {
+      "anyOf": [
+        {"description": "Search allowed sources when evidence is missing and no artifact-directory restriction is needed."},
+        {"description": "Search story documents when the task restricts evidence gathering to one artifact directory."},
+        {"description": "Read issued handles when source contents are needed to complete the assignment."},
+        {"description": "Submit the completed assignment using its required result contract."}
+      ]
+    }
+  }
+}
+```
+
+The agent can select scoped SEARCH and return:
+
+```json
+{"agent_action":{"action_type":"search_context","artifact_directory_prefix":"manuscript/part_1","queries":[{"search_text":"timeline","source_types":["story_document"]}]}}
+```
+
+The complete schema still determines which actions, fields, sources, and bounds
+are currently available. Descriptions neither grant source access nor change
+confirmation authority. Continuation and correction calls carry descriptions
+for their own offered choices; no branch index is a durable identity.
 
 ## Selecting an action
 

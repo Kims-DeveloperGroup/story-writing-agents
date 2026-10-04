@@ -6028,6 +6028,7 @@ class AgentBackend:
         def action_schema(
             kind: ConversationRetrievalActionKind,
             properties: dict[str, Any],
+            description: str,
         ) -> dict[str, Any]:
             """Create one exact branch with caller-supplied ordered fields."""
 
@@ -6036,6 +6037,7 @@ class AgentBackend:
                 **properties,
             }
             return {
+                "description": description,
                 "type": "object",
                 "properties": all_properties,
                 "required": list(all_properties),
@@ -6046,6 +6048,10 @@ class AgentBackend:
             action_schema(
                 ConversationRetrievalActionKind.SEARCH_CONVERSATIONS,
                 {"query": {"type": "string"}},
+                description=(
+                    "Search conversation history when relevant evidence is missing; matches "
+                    "provide citation IDs and sequence locations for reading."
+                ),
             ),
             action_schema(
                 ConversationRetrievalActionKind.READ_HISTORY,
@@ -6054,6 +6060,10 @@ class AgentBackend:
                     "start_sequence": {"type": "integer", "minimum": 1},
                     "end_sequence": {"type": "integer", "minimum": 1},
                 },
+                description=(
+                    "Read an exact inclusive sequence window when both its start and end are "
+                    "known; select an invocation-issued citation ID."
+                ),
             ),
             action_schema(
                 ConversationRetrievalActionKind.READ_HISTORY,
@@ -6061,6 +6071,10 @@ class AgentBackend:
                     "citation_id": {"type": "string"},
                     "start_sequence": {"type": "integer", "minimum": 1},
                 },
+                description=(
+                    "Read forward from a known start when no explicit end is needed; the runtime "
+                    "bounds the returned history window."
+                ),
             ),
             action_schema(
                 ConversationRetrievalActionKind.ANSWER,
@@ -6072,6 +6086,10 @@ class AgentBackend:
                         "minItems": 0,
                     },
                 },
+                description=(
+                    "Answer once the available evidence is sufficient; cite only identifiers from"
+                    " this invocation's scoped RAG excerpts or retrieval observations."
+                ),
             ),
         ]
         action = {
@@ -6084,6 +6102,11 @@ class AgentBackend:
             ]
         }
         return project_retrieval_schema({
+            "description": (
+                "Gather scoped conversation evidence, then answer. Choose one currently "
+                "permitted action. History sequence numbers are one-based and ranges include "
+                "both endpoints; citations never grant access outside the supplied scope."
+            ),
             "type": "object",
             "properties": {"action": action},
             "required": ["action"],
@@ -6370,6 +6393,10 @@ class AgentBackend:
 
         properties = {"message": {"type": "string", "minLength": 1}}
         return project_direct_schema({
+            "description": (
+                "Answer the current conversation turn in nonempty UTF-8 response_text, "
+                "grounded in the supplied context; return no runtime correlation fields."
+            ),
             "type": "object",
             "properties": properties,
             "required": ["message"],
@@ -6473,7 +6500,34 @@ class AgentBackend:
         else:
             properties = {"message": {"type": "string"}}
             required = ["message"]
+        descriptions = {
+            Phase.DRAFT: (
+                "Write the initial complete candidate from the authorized task and sources in"
+                " response_text; return text without changing files."
+            ),
+            Phase.PROPOSE_REVISION: (
+                "Revise the current candidate to address the supplied conflicts and operator "
+                "constraints; return its complete new text without changing files."
+            ),
+            Phase.AUDIT: (
+                "Review the exact current candidate independently: use no_conflicts_found "
+                "when supported, or conflicts_found for unresolved conflicts. Explain the "
+                "grounded findings in response_text."
+            ),
+            Phase.SYNTHESIZE: (
+                "Integrate all review findings: choose revise_candidate for actionable "
+                "unresolved issues, finalize_reviewed_proposal only when ready, or "
+                "report_deadlock when conflicts cannot be resolved within the allowed "
+                "process. Explain the choice without erasing concerns."
+            ),
+            Phase.FINALIZE: (
+                "Confirm only the exact offered reviewed_proposal_id and "
+                "reviewed_proposal_digest; this confirms an immutable reviewed candidate and "
+                "does not publish, Apply, or Commit it."
+            ),
+        }
         return project_direct_schema({
+            "description": descriptions[phase],
             "type": "object",
             "properties": properties,
             "required": required,
