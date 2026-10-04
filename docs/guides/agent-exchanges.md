@@ -25,9 +25,15 @@ Or install the distribution normally:
 python -m pip install story-writing-agents
 ```
 
-Both forms install the required independent `jsonl-viewer` 0.5.2 from its exact
+Viewer 0.5.3 lets all `h/j/k/l` cursor keys cross page edges. Forward
+crossing lands on the next page’s first JSON row; backward crossing lands on
+the preceding page’s last. Page Up also opens the previous record’s final
+page when the current record’s beginning is visible. Page Down lands on the
+next page’s first row. Vertical cursor movement preserves its preferred column.
+
+Both forms install the required independent `jsonl-viewer` 0.5.3 from its exact
 HTTPS VCS requirement at
-`802128778a35069e58d501fd88f8531a4d9ce69a`. A first install normally needs
+`9076e74e7a1e42ca2bce55b3c8059b65dbec753f`. A first install normally needs
 Git, network access, and repository access. Installation does not invoke a
 story provider, open an exchange, or enable a service. The historical
 `story-writing-agents[viewer]` and editable `'.[viewer]'` forms remain accepted
@@ -41,7 +47,7 @@ pulling updated Story source, rerun the normal editable installation:
 python -m pip install --editable .
 ```
 
-That ordinary reinstall upgrades older viewer installations to required 0.5.2
+That ordinary reinstall upgrades older viewer installations to required 0.5.3
 without an uninstall, `--force-reinstall`, or `--ignore-installed`. Reserve a forced
 reinstall for a genuinely damaged same-version installation, as described in
 [Troubleshooting](troubleshooting.md#exchanges-does-not-open-the-expected-response).
@@ -63,7 +69,7 @@ the vendored repository, while installed metadata retains the required VCS
 dependency. The external package is Python 3.11+, MIT licensed, has no runtime
 dependencies, and has no Story import. Story loads and validates its exact
 three-name API and physical-input capability only when `/exchanges` prepares a
-view. Versions 0.1.1 and 0.2.0 lack the required 0.5.2 contract and are
+view. Versions 0.1.1 and 0.2.0 lack the required 0.5.3 contract and are
 rejected before Story opens the viewer terminal. Required installation does
 not create a static Story-to-viewer import.
 
@@ -136,17 +142,18 @@ h/j/k/l cursor • Enter fold • ↑/↓ records • PgUp/PgDn • / search •
 This preview shows the renderer's topology, not a retained Story screenshot.
 The external repository owns the byte-tested renderer contract:
 
-- [Terminal design system and Story-hosted scenario](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/802128778a35069e58d501fd88f8531a4d9ce69a/docs/design-system.md)
-- [Thirteen deterministic complete sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/802128778a35069e58d501fd88f8531a4d9ce69a/docs/samples)
+- [Terminal design system and Story-hosted scenario](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/9076e74e7a1e42ca2bce55b3c8059b65dbec753f/docs/design-system.md)
+- [Fifteen deterministic complete sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/9076e74e7a1e42ca2bce55b3c8059b65dbec753f/docs/samples)
 
 Expanded records use well-formatted multiline JSON. The left gutter repeats
 the physical JSONL source-record line on continuation rows, so `g` can move to
 an exact positive source line. Up/Down changes records; Page Up/Page
 Down or `b`/Space pages within a large record and across record boundaries.
 
-At a JSON row's end, `l` moves to the next visible row's first character. At
-its beginning, `h` moves to the previous row's last character. These moves skip
-gutters and annotations and stop at the viewport edges without scrolling.
+At a JSON row’s end, `l` moves to the next row’s first character; `h`
+at its beginning moves to the preceding row’s last character. All four
+`h/j/k/l` keys reveal adjacent pages at viewport edges, skipping gutters
+and annotations. Vertical movement keeps its preferred column.
 
 In the main view, `h`/`l` moves the character cursor left/right and `j`/`k`
 moves it down/up through visible JSON. Enter folds or unfolds the innermost
@@ -168,12 +175,14 @@ bracket, the cursor's underline blinks. Any input restores visible focus.
 Help and prompt editing pause blinking. Interactive NO_COLOR output blinks the
 caret while retaining its row; ordinary-line fallback remains static.
 
-Up/Down cycle through records: Up wraps first to last and Down wraps last to first.
-Page Up/Down (`b`/Space) scroll within the current record first, then cycle records
-at its boundary. Endpoint arrival shows `First record.`, `Last record.`, or
-`Only record.`; each traversal resets the viewport and cursor. Notices persist
-through idle/redraw, clear on ordinary cursor movement or interior destinations,
-and Escape dismisses them before clearing active search.
+Up/Down cycle through records and reset to the first visible JSON character.
+Page Up/Down (`b`/Space) scroll within the current record first, then cycle
+records. Page Up focuses the prior page’s final JSON row and opens the prior
+record’s final page at a record boundary; Page Down focuses the next page’s
+first row. Endpoint notices are `First record.` and `Last record.`; a
+single-record snapshot shows `Only record.`. Notices survive idle/redraw and
+clear on ordinary cursor movement. Escape dismisses a notice before clearing
+an active search.
 
 Use `J` and `K` to jump to the next/previous sibling property key, from anywhere
 in its key or value. They use the nearest object's displayed order, including
@@ -441,9 +450,9 @@ Common bounded failures are:
 | --- | --- |
 | No attached session | Attach the intended session, then retry bare `/exchanges`. |
 | No records for the session | Run the intended provider work; do not invoke it merely to manufacture diagnostics. |
-| Viewer 0.1.1, 0.2.0, 0.3.0, 0.4.0, 0.4.1, 0.4.2, 0.5.0, or 0.5.1 remains after updating a checkout | Rerun the normal editable Story install to upgrade it to required 0.5.2; do not force or uninstall. |
+| Viewer 0.1.1, 0.2.0, 0.3.0, 0.4.0, 0.4.1, 0.4.2, 0.5.0, 0.5.1, or 0.5.2 remains after updating a checkout | Rerun the normal editable Story install to upgrade it to required 0.5.3; do not force or uninstall. |
 | Required viewer unavailable | Rerun the normal Story installation, then retry. The compatibility extra is not a separate repair path. |
-| Viewer 0.5.2 is installed but incompatible or damaged | Verify the approved exact pin, then use the bounded forced-repair path in Troubleshooting. |
+| Viewer 0.5.3 is installed but incompatible or damaged | Verify the approved exact pin, then use the bounded forced-repair path in Troubleshooting. |
 | Store busy | Retry after the concurrent exchange write completes. |
 | Unsafe, corrupt, or uncorrelatable records | Preserve the workspace and inspect the content-safe runtime diagnostic before retrying. |
 | Selected stream disappeared | Rerun `/exchanges` to refresh retained inventory. |
