@@ -6,7 +6,7 @@ from unittest import mock
 from story_writing_agents import StoryRuntime
 from story_writing_agents import conversations as c
 from story_writing_agents.agents import PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR
-from story_writing_agents.specialist_routing import AuthoringActivity, AuthoringScope, ArtifactReviewDomain, SpecialistAssignmentMode, ReviewBasis
+from story_writing_agents.specialist_routing import AuthoringActivity, AuthoringIntent, AuthoringScope, ArtifactReviewDomain, SpecialistAssignmentMode, ReviewBasis
 from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
 from tests.test_lead_orchestration import (
     LeadOrchestrationTestCase, _LeadBackend, _compact_scope, _decision, _provider_envelope,
@@ -20,13 +20,14 @@ ROSTER = (PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST)
 
 
 def scoped_proposal(*agents, activity="draft", paths=(OUTLINE,), domains=(), selected=None,
-                    candidate_ids=None, kind="proposal", mutate=None):
+                    candidate_ids=None, kind="proposal", intent=None, mutate=None):
     def respond(call, provider):
         material = _workflow_material(call.payload)
         tasks = material["authoring_tasks"]
         index = next((i for i, t in enumerate(tasks) if t["task_id"] == selected), len(tasks)-1)
         scope = _live_scope(call, activity=activity, paths=paths, domains=domains, task_index=index)
         scope["interpretation"] = "Draft from the current synthetic brief." if activity == "draft" else "Review the supplied concrete synthetic candidate."
+        scope["intent"] = "authoring" if intent is None else intent
         mode = "review" if activity == "review" else "draft"
         ids = ["user_input"] if candidate_ids is None else list(candidate_ids)
         value = {"authoring_scope": scope, "kind": kind, "message": "The scoped work requires its disclosed specialists.",
@@ -103,9 +104,19 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.workspace.path(OUTLINE).write_bytes(b"")
         bad = await self.proposal_for(self.conversation(), scoped_proposal(PLOT_ARCHITECT, activity="review", candidate_ids=("reference_1",)), text="Assess the concrete candidate ${core_documents/global_outline.md}.")
         self.assertIsNone(bad.proposal)
-        good = await self.proposal_for(self.conversation(), scoped_proposal(PLOT_ARCHITECT, activity="review", candidate_ids=("user_input",)), text="Candidate: a summons precedes a choice, and the consequence follows the choice.")
+        conversation = self.conversation()
+        original, before = "완성 원고.\r\nCafé.  \r\n", self.artifact_bytes()
+        good = await self.proposal_for(conversation, scoped_proposal(PLOT_ARCHITECT, activity="review", intent="review_only"), text=original)
         self.assertIs(good.kind, c.LeadOutcomeKind.PROPOSAL)
         self.assertEqual(good.proposal.assignments[0].review_basis.candidate_input_ids, ("user_input",))
+        self.assertIs(good.proposal.authoring_scope.intent, AuthoringIntent.REVIEW_ONLY)
+        self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome(message="Suggested edits remain findings until a fresh authoring request."))
+        reviewed = await self.runtime.decide_lead_step(_decision(good, c.CollaborationConfirmationDecision.CONFIRM))
+        self.assertEqual([item["text"].encode() for agent, call in self.backend.call_records if agent == PLOT_ARCHITECT for item in _workflow_material(call.payload)["inputs"] if item["input_id"] == "user_input"], [original.encode()])
+        self.assertEqual(self.artifact_bytes(), before)
+        self.assertTrue(all(request is None for request in (reviewed.turn.artifact_application_request, reviewed.turn.story_commit_request)))
+        self.assertFalse(any(type(e.payload) in (c.ArtifactObjectivePayload, c.ArtifactObjectivePayloadV2) for e in self.history(conversation)))
 
     async def test_wrong_task_pair_rejects_before_dispatch(self):
         def wrong_pair(value, material): value["authoring_scope"]["task_revision"] += 1

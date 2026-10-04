@@ -466,7 +466,7 @@ def _live_scope(call, *, activity="workflow", domains=(), paths=(), task_index=-
     if "authoring_tasks" not in material:
         return dict(material["answer_contract"]["authoring_scope"])
     task = material["authoring_tasks"][task_index]
-    return {"activity": activity, "target_paths": list(paths),
+    return {"activity": activity, "intent": "authoring", "target_paths": list(paths),
             "domains": list(domains),
             "task_id": task["task_id"], "task_revision": task["task_revision"]}
 
@@ -594,6 +594,8 @@ def _compact_scope(value):
         key: value[key]
         for key in ("activity", "target_paths", "domains")
     }
+    if "intent" in value:
+        compact["intent"] = value["intent"]
     compact["task"] = f"{value['task_id']}@{value['task_revision']}"
     return compact
 

@@ -11,11 +11,9 @@ from unittest import mock
 from story_writing_agents import Workspace
 from story_writing_agents.consensus import (
     ConsensusAuditVerdict,
-    ConsensusDecision,
     ConsensusEvent,
     ConsensusInputKind,
     ConsensusPhase,
-    ConsensusPhaseDecision,
     ConsensusPhaseState,
     ConsensusProviderResult,
     ConsensusRuntimeAdapter,
@@ -39,6 +37,9 @@ from story_writing_agents.consensus.event_store import (
 from story_writing_agents.consensus.execution import ConsensusPhaseOutputKind
 from story_writing_agents.consensus.serialization import serialize_consensus_workflow
 
+from tests.test_consensus_projection import _phase_decision
+
+from tests.test_consensus_runtime_adapter import _runtime_decision
 from tests.helpers import pristine_initialized_workspace
 
 
@@ -194,17 +195,7 @@ class ConsensusEventStoreTests(unittest.TestCase):
         submission, request_event = self.request_and_submission()
         self.store.create_workflow(submission, request_event)
         request = request_event.payload
-        decision = ConsensusPhaseDecision(
-            confirmation_id="confirmation-1",
-            phase_request_id=request.phase_request_id,
-            request_event_id=request_event.event_id,
-            request_event_sequence=request_event.sequence,
-            proposal_id=request.proposal_id,
-            execution_identity=request.execution_identity,
-            revision_id=request.revision_id,
-            request_digest=request.request_digest,
-            decision=ConsensusDecision.CONFIRM,
-        )
+        decision = _phase_decision(request, request_event, confirmation_id='confirmation-1')
         event = ConsensusEvent("decision-event", 2, decision)
         self.store.append_event("session-1", "conversation-1", "workflow-1", 1, event)
         loaded = self.store.load_workflow("session-1", "conversation-1", "workflow-1")
@@ -221,17 +212,7 @@ class ConsensusEventStoreTests(unittest.TestCase):
         submission, request_event = self.request_and_submission()
         self.store.create_workflow(submission, request_event)
         request = request_event.payload
-        decision = ConsensusPhaseDecision(
-            confirmation_id="confirmation-1",
-            phase_request_id=request.phase_request_id,
-            request_event_id=request_event.event_id,
-            request_event_sequence=1,
-            proposal_id=request.proposal_id,
-            execution_identity=request.execution_identity,
-            revision_id=request.revision_id,
-            request_digest=request.request_digest,
-            decision=ConsensusDecision.CONFIRM,
-        )
+        decision = replace(_phase_decision(request, request_event, confirmation_id='confirmation-1'), request_event_sequence=1)
         event = ConsensusEvent("decision-event", 2, decision)
 
         def append_once():
@@ -318,20 +299,7 @@ class DurableConsensusRestartTests(unittest.IsolatedAsyncioTestCase):
                     event = port.load_workflow(
                         "session-1", "conversation-1", workflow_id,
                     ).events[-1]
-                    request = event.payload
-                    return ConsensusRuntimeDecision(
-                        workflow_id=request.workflow_id,
-                        execution_identity=request.execution_identity,
-                        phase_request_id=request.phase_request_id,
-                        proposal_id=request.proposal_id,
-                        revision_id=request.revision_id,
-                        request_digest=request.request_digest,
-                        request_event_id=event.event_id,
-                        request_event_sequence=event.sequence,
-                        current_tail_sequence=event.sequence,
-                        confirmation_id=f"confirmation-{event.sequence}",
-                        decision=ConsensusDecision.CONFIRM,
-                    )
+                    return _runtime_decision(event, f'confirmation-{event.sequence}')
 
                 draft = await adapter.confirm(decision_for_tail())
                 self.assertIs(draft.execution.state, ConsensusPhaseState.COMPLETED)
@@ -407,20 +375,7 @@ class DurableConsensusRestartTests(unittest.IsolatedAsyncioTestCase):
         request_event = port.load_workflow(
             "session-1", "conversation-1", workflow_id
         ).events[-1]
-        request = request_event.payload
-        decision = ConsensusRuntimeDecision(
-            workflow_id=request.workflow_id,
-            execution_identity=request.execution_identity,
-            phase_request_id=request.phase_request_id,
-            proposal_id=request.proposal_id,
-            revision_id=request.revision_id,
-            request_digest=request.request_digest,
-            request_event_id=request_event.event_id,
-            request_event_sequence=request_event.sequence,
-            current_tail_sequence=request_event.sequence,
-            confirmation_id="confirmation-1",
-            decision=ConsensusDecision.CONFIRM,
-        )
+        decision = _runtime_decision(request_event, 'confirmation-1')
         completed = await adapter.confirm(decision)
         self.assertIsNotNone(completed.execution)
         return workspace, workflow_id, details, completed.execution
@@ -483,22 +438,8 @@ class DurableConsensusRestartTests(unittest.IsolatedAsyncioTestCase):
         )
         stored = port.load_workflow("session-1", "conversation-1", submitted.submission.workflow_id)
         request_event = stored.events[-1]
-        request = request_event.payload
-        from story_writing_agents.consensus import ConsensusRuntimeDecision
 
-        decision = ConsensusRuntimeDecision(
-            workflow_id=request.workflow_id,
-            execution_identity=request.execution_identity,
-            phase_request_id=request.phase_request_id,
-            proposal_id=request.proposal_id,
-            revision_id=request.revision_id,
-            request_digest=request.request_digest,
-            request_event_id=request_event.event_id,
-            request_event_sequence=request_event.sequence,
-            current_tail_sequence=request_event.sequence,
-            confirmation_id="confirmation-1",
-            decision=ConsensusDecision.CONFIRM,
-        )
+        decision = _runtime_decision(request_event, 'confirmation-1')
         restarted = ConsensusRuntimeAdapter(_DurableConsensusPort(workspace))
         resumed = restarted.resume(
             session_id="session-1",

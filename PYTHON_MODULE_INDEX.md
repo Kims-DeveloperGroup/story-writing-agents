@@ -73,7 +73,9 @@ depend on terminal presentation or concrete persistence.
 - `agents`, `models`, `errors`, `config`, `prompts`, `directives`, `artifact_proposals`
 - `specialist_routing`, `reply_trace`, `run_inputs`
 
-Primary access is the root facade. `config` owns configuration loading. `prompts` owns
+Primary access is the root facade. `specialist_routing` owns the pure shared
+`AuthoringIntent`, independently of activity; conversations codecs preserve its
+immutable task lineage. `config` owns configuration loading. `prompts` owns
 captured policy bytes, stable fingerprints, and runtime authority invariants; stages stay
 invocation data, without provider execution. `models` carries optional diagnostics and the
 keyword-only `AgentRequest.expected_reviewed_proposal` identity hint, without next-action authority.
@@ -186,7 +188,13 @@ facade; contracts and projections remain infrastructure-neutral.
 - `consensus.event_store`, `consensus.material_store`
 
 Execution depends on contracts/projection; serialization depends on contracts/projection;
-stores own durable workspace records. Contracts must not import execution or stores.
+stores own durable workspace records. Contracts must not import execution or stores. Consensus contracts bind the shared
+pure intent and typed INPUT_ADOPTION/REVIEW_COMPLETION phases; execution performs
+these phases without providers through existing material ports and confirmation
+capabilities. The supported consensus facade re-exports the owned intent enum.
+Serialization writes v4 and strictly admits historical v3 AUTHORING shapes/digests.
+Existing result/projection owners retain the review-only synthesis report for
+inspection; report text grants no authority.
 Consensus results may carry ordered provider validation details; historical serialized
 results without this optional field remain valid.
 

@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import fields, replace
+import hashlib
+import json
+from pathlib import Path
 import pickle
 import unittest
 
 from story_writing_agents.consensus import (
+    AuthoringIntent,
     CONSENSUS_AUDITORS,
     ConsensusAudit,
     ConsensusAuditVerdict,
@@ -16,6 +20,7 @@ from story_writing_agents.consensus import (
     ConsensusNextAction,
     ConsensusPhase,
     ConsensusPhaseDecision,
+    ConsensusPhaseRequest,
     ConsensusPhaseResult,
     ConsensusPhaseState,
     ConsensusInputKind,
@@ -46,6 +51,26 @@ _INPUT_MATERIAL = artifact_material_handle("core_documents/global_outline.md", _
 _CANDIDATE_MATERIAL = candidate_material_handle(_CANDIDATE)
 
 
+def _phase_decision(
+    request,
+    request_event: ConsensusEvent,
+    choice: ConsensusDecision = ConsensusDecision.CONFIRM,
+    *,
+    confirmation_id: str = "confirmation-1",
+) -> ConsensusPhaseDecision:
+    return ConsensusPhaseDecision(
+        confirmation_id=confirmation_id,
+        **{field: getattr(request, field) for field in (
+            "phase_request_id", "proposal_id", "execution_identity", "revision_id", "request_digest")},
+        request_event_id=request_event.event_id,
+        request_event_sequence=request_event.sequence,
+        decision=choice,
+        revision_request="Repair the conflict."
+        if choice is ConsensusDecision.REVISE
+        else None,
+    )
+
+
 class ConsensusProjectionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.owner = object()
@@ -59,6 +84,7 @@ class ConsensusProjectionTests(unittest.TestCase):
         tail: int = 0,
         previous: str | None = None,
         request_id: str = "request-1",
+        intent=AuthoringIntent.AUTHORING,
     ):
         return prepare_consensus_phase(
             owner=self.owner,
@@ -68,34 +94,14 @@ class ConsensusProjectionTests(unittest.TestCase):
             execution_identity=_IDENTITY,
             phase=phase,
             revision_id=revision_id,
-            input_material=_INPUT_MATERIAL,
+            input_material=candidate_material if intent is AuthoringIntent.REVIEW_ONLY else _INPUT_MATERIAL,
+            intent=intent,
             candidate_material=candidate_material,
             base_tail_sequence=tail,
             previous_result_event_id=previous,
         )
 
-    @staticmethod
-    def decision(
-        request,
-        request_event: ConsensusEvent,
-        choice: ConsensusDecision = ConsensusDecision.CONFIRM,
-        *,
-        confirmation_id: str = "confirmation-1",
-    ) -> ConsensusPhaseDecision:
-        return ConsensusPhaseDecision(
-            confirmation_id=confirmation_id,
-            phase_request_id=request.phase_request_id,
-            request_event_id=request_event.event_id,
-            request_event_sequence=request_event.sequence,
-            proposal_id=request.proposal_id,
-            execution_identity=request.execution_identity,
-            revision_id=request.revision_id,
-            request_digest=request.request_digest,
-            decision=choice,
-            revision_request="Repair the conflict."
-            if choice is ConsensusDecision.REVISE
-            else None,
-        )
+    decision = staticmethod(_phase_decision)
 
     @staticmethod
     def result(
@@ -109,6 +115,8 @@ class ConsensusProjectionTests(unittest.TestCase):
         prior: str | None = None,
     ) -> ConsensusPhaseResult:
         return ConsensusPhaseResult(
+            intent=request.intent,
+            review_findings="Retained deadlock findings." if request.intent is AuthoringIntent.REVIEW_ONLY and request.phase is ConsensusPhase.SYNTHESIS and state is ConsensusPhaseState.DEADLOCKED else None,
             result_id=f"result-{decision_event.sequence}",
             phase_request_id=request.phase_request_id,
             decision_event_id=decision_event.event_id,
@@ -152,7 +160,7 @@ class ConsensusProjectionTests(unittest.TestCase):
             for index, specialist in enumerate(CONSENSUS_AUDITORS)
         )
 
-    def deadlocked_projection(self, phase: ConsensusPhase):
+    def deadlocked_projection(self, phase: ConsensusPhase, intent=AuthoringIntent.AUTHORING):
         events: list[ConsensusEvent] = []
         previous_result_event_id: str | None = None
 
@@ -165,6 +173,7 @@ class ConsensusProjectionTests(unittest.TestCase):
             nonlocal previous_result_event_id
             request, _ = self.request(
                 phase=current_phase,
+                intent=intent,
                 candidate_material=(
                     None
                     if current_phase is ConsensusPhase.DRAFT
@@ -206,7 +215,7 @@ class ConsensusProjectionTests(unittest.TestCase):
             return result
 
         append_terminal(
-            ConsensusPhase.DRAFT,
+            ConsensusPhase.INPUT_ADOPTION if intent is AuthoringIntent.REVIEW_ONLY else ConsensusPhase.DRAFT,
             ConsensusPhaseState.COMPLETED,
             next_phase=ConsensusPhase.AUDIT,
         )
@@ -550,7 +559,7 @@ class ConsensusProjectionTests(unittest.TestCase):
         self.assertEqual(serialize_consensus_workflow(workflow), encoded)
         self.assertEqual(deserialize_consensus_workflow(encoded), workflow)
         self.assertIn(b'"locator":"artifact:core_documents/global_outline.md"', encoded)
-        self.assertIn(b'"schema_version":3', encoded)
+        self.assertIn(b'"schema_version":4', encoded)
         self.assertIn(
             b'"execution_identity":{"conversation_id":"conversation-1",'
             b'"session_id":"session-1"}',
@@ -561,6 +570,19 @@ class ConsensusProjectionTests(unittest.TestCase):
             deserialize_consensus_workflow(
                 encoded.replace(b'{"events":', b'{"events":[],"events":', 1)
             )
+        golden = (Path(__file__).parent / "fixtures/consensus_compatibility/authoring_v3_c20dc40.json").read_bytes()
+        self.assertEqual(hashlib.sha256(golden).hexdigest(), "173023d5484c9e85c3ddf2fb2a08bcf3294c85e9a39c0ded51dc4bb96d554d2c")
+        historical = deserialize_consensus_workflow(golden)
+        expected = json.loads(golden)
+        expected["schema_version"] = 4
+        self.assertEqual(json.loads(serialize_consensus_workflow(historical)), expected)
+        self.assertEqual(str(historical.submission.intent), "authoring")
+        self.assertTrue(all(str(event.payload.intent) == "authoring" for event in historical.events if type(event.payload) is ConsensusPhaseRequest))
+        for wrong in (golden.replace(b'"input_kind":', b'"intent":"review_only","input_kind":', 1),
+                      golden.replace(b'"phase":"draft"', b'"phase":"input_adoption"', 1),
+                      golden.replace(b'"audits":', b'"review_findings":"report","audits":', 1)):
+            with self.assertRaises(ValueError):
+                deserialize_consensus_workflow(wrong)
 
     def test_material_locator_factories_accept_only_canonical_candidate_and_artifact_locations(
         self,
@@ -657,6 +679,8 @@ class ConsensusProjectionTests(unittest.TestCase):
         self.assertEqual(
             reaudit.candidate_material, candidate_material_handle(_REPAIRED)
         )
+        _, review = self.deadlocked_projection(ConsensusPhase.SYNTHESIS, intent=AuthoringIntent.REVIEW_ONLY)
+        self.assertEqual((review.next_action, review.publication_allowed, review.review_findings), (ConsensusNextAction.INSPECT_FAILURE, False, "Retained deadlock findings."))
 
 
 if __name__ == "__main__":

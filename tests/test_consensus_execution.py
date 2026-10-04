@@ -13,13 +13,11 @@ from story_writing_agents import (
 )
 from story_writing_agents.consensus import (
     ConsensusAuditVerdict,
-    ConsensusDecision,
     ConsensusDurability,
     ConsensusEvent,
     ConsensusExecutionCoordinator,
     ConsensusNextAction,
     ConsensusPhase,
-    ConsensusPhaseDecision,
     ConsensusPhaseState,
     ConsensusProviderOutcomeUnknown,
     ConsensusProviderResult,
@@ -34,6 +32,8 @@ from story_writing_agents.consensus.contracts import (
 )
 from story_writing_agents.consensus.execution import ConsensusPhaseOutputKind
 
+
+from tests.test_consensus_projection import _phase_decision
 
 _INPUT = "1" * 64
 _CANDIDATE = "2" * 64
@@ -78,17 +78,7 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def events(request, *, start: int = 1):
         request_event = ConsensusEvent(f"request-event-{start}", start, request)
-        decision = ConsensusPhaseDecision(
-            confirmation_id=f"confirmation-{start}",
-            phase_request_id=request.phase_request_id,
-            request_event_id=request_event.event_id,
-            request_event_sequence=request_event.sequence,
-            proposal_id=request.proposal_id,
-            execution_identity=request.execution_identity,
-            revision_id=request.revision_id,
-            request_digest=request.request_digest,
-            decision=ConsensusDecision.CONFIRM,
-        )
+        decision = _phase_decision(request, request_event, confirmation_id=f'confirmation-{start}')
         return request_event, ConsensusEvent(
             f"decision-event-{start + 1}", start + 1, decision
         )

@@ -30,6 +30,7 @@ from ..structured_output_validation import validate_details
 from ..specialist_routing import (
     ArtifactReviewDomain,
     AuthoringActivity,
+    AuthoringIntent,
     AuthoringScope,
     ReviewBasis,
     SpecialistAssignmentMode,
@@ -1372,6 +1373,15 @@ class LeadProviderOutcome:
                 'lead outcome and intent authoring scopes must agree',
             )
 
+        if self.authoring_scope and self.authoring_scope.intent is AuthoringIntent.REVIEW_ONLY:
+            if self.artifact_intent is not None or self.objective_intent is not None:
+                raise validation_failure(ValueError('review-only work cannot prepare or advance an artifact objective'), '$.authoring_scope.intent', 'review_only permits findings and suggestions without artifact or objective authority')
+            if self.recommended_action is not None and (
+                self.recommended_action.kind is not LeadRecommendationActionKind.PREPARE_CONSULTATION
+                or self.recommended_action.objective_id is not None
+            ):
+                raise validation_failure(ValueError('review-only work cannot recommend artifact preparation'), '$.recommended_action', 'review_only permits only another review consultation without an artifact objective')
+
 
 class CollaborationInvocationKind(StrEnum):
     """Closed semantic role of one provider-call lineage."""
@@ -1760,6 +1770,13 @@ class LeadRecommendationRequestPayload:
         object.__setattr__(self, "action_digest", "sha256:" + hashlib.sha256(
             json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest())
+
+        if self.authoring_scope and self.authoring_scope.intent is AuthoringIntent.REVIEW_ONLY and (
+            self.kind is not LeadRecommendationActionKind.PREPARE_CONSULTATION
+            or self.objective_id is not None
+            or self.target_paths
+        ):
+            raise ValueError("review-only recommendation cannot bind artifact authority")
 
 
 @dataclass(frozen=True, slots=True)
@@ -2475,6 +2492,9 @@ class CollaborationLeadSynthesisPayload:
                     '$.authoring_scope',
                     'synthesis continuation must retain task correlation',
                 )
+
+        if self.next_intent and self.authoring_scope and self.next_intent.authoring_scope and self.next_intent.authoring_scope.intent is not self.authoring_scope.intent:
+            raise validation_failure(ValueError('synthesis cannot change task intent'), '$.next_intent.authoring_scope.intent', 'preserve task intent; requested authoring needs a fresh task')
 
 
 @dataclass(frozen=True, slots=True)
@@ -3923,6 +3943,7 @@ def authoring_scope_to_dict(scope: AuthoringScope) -> dict[str, object]:
     if type(scope) is not AuthoringScope:
         raise TypeError("authoring scope must be an AuthoringScope")
     return {
+        **({"intent": scope.intent.value} if scope.schema_version == 2 else {}),
         "activity": scope.activity.value,
         "domains": [domain.value for domain in scope.domains],
         "interpretation": scope.interpretation,
@@ -3935,11 +3956,12 @@ def authoring_scope_to_dict(scope: AuthoringScope) -> dict[str, object]:
 
 def authoring_scope_from_dict(value: object) -> AuthoringScope:
     """Decode a complete strict scope; absent legacy fields are handled outside."""
-    item = _object(value, {
-        "activity", "domains", "interpretation", "schema_version",
-        "target_paths", "task_id", "task_revision",
-    }, label="authoring scope")
+    fields = {"activity", "domains", "interpretation", "schema_version", "target_paths", "task_id", "task_revision"}
+    if type(value) is dict and value.get("schema_version") == 2:
+        fields.add("intent")
+    item = _object(value, fields, label="authoring scope")
     return AuthoringScope(
+        intent=validation_call('$.intent', _enum, AuthoringIntent, item.get("intent", "authoring"), label="authoring intent"),
         activity=validation_call(
             '$.activity',
             _enum,
@@ -6519,6 +6541,8 @@ def _validate_scoped_assignments(
         if scope.activity is AuthoringActivity.REVIEW
         else SpecialistAssignmentMode.DRAFT
     )
+    if scope.intent is AuthoringIntent.REVIEW_ONLY and any(mode is not SpecialistAssignmentMode.REVIEW for mode in modes):
+        raise validation_failure(ValueError('review-only assignments cannot draft'), '$', 'review-only assignments must review the supplied material')
     required = required_authoring_specialists(scope)
     if any(
         mode is not expected_mode

@@ -71,7 +71,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         scope = self.scope()
         with self.assertRaises(FrozenInstanceError): scope.task_revision = 2
         self.assertNotIn(scope.interpretation, repr(scope))
-        bad = ({"schema_version": True}, {"schema_version": 2}, {"task_revision": True},
+        bad = ({"schema_version": True}, {"schema_version": 3}, {"task_revision": True},
                {"task_revision": 0}, {"task_id": "../task"}, {"activity": "draft"},
                {"target_paths": []}, {"domains": (Domain.PLOT_STRUCTURE, Domain.PLOT_STRUCTURE)},
                {"domains": ()}, {"interpretation": " "},
@@ -97,7 +97,7 @@ class SpecialistRoutingTests(unittest.TestCase):
         with self.assertRaises(ValueError): ReviewBasis((), "No candidate.")
 
     def test_scope_and_review_basis_codecs_are_closed_and_round_trip(self):
-        for value, encode, decode in ((self.scope(), c.authoring_scope_to_dict, c.authoring_scope_from_dict),
+        for value, encode, decode in ((self.scope(schema_version=1), c.authoring_scope_to_dict, c.authoring_scope_from_dict),
                                      (ReviewBasis(("candidate",), "Assess supplied candidate."), c.review_basis_to_dict, c.review_basis_from_dict)):
             wire = encode(value)
             self.assertEqual(decode(wire), value)

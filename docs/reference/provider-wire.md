@@ -369,8 +369,14 @@ Artifact review uses `ready_for_apply_confirmation`, `revision_required`, or
 Apply decision. It grants no write or commit authority.
 
 `writing_task_scope` names `activity_type`, `specialist_domains`,
-`target_artifact_paths`, and `task_reference: {task_id, task_revision}`. Activities
-are `workflow_guidance`, `draft_writing`, `revise_writing`, and `review_writing`.
+`target_artifact_paths`, and `task_reference: {task_id, task_revision}`. Activities are `workflow_guidance`,
+`draft_writing`, `revise_writing`, and `review_writing`. The `writing_intent` field selects `authoring` or `review_only`.
+Review-only intent requires `review_writing`; that activity can also belong to an
+AUTHORING task. Intent is separate from activity: historical review activity
+remains AUTHORING. A captured
+REVIEW_ONLY task permits findings and suggestions against its exact supplied
+candidate, but cannot acquire drafting, replacement, artifact-objective or Apply
+authority. Requested revision needs fresh authoring work and confirmation.
 Select an exact offered task/revision pair. Specialist assignments have
 `agent_id`, `task_instructions`, `input_source_ids`, and `assignment_type`
 (`draft_content` or `review_content`).
@@ -482,6 +488,13 @@ then use its text. It does not substitute the candidate representation object as
 story text. Reference-like keys inside opaque story content are ordinary data.
 
 ## Direct conversation, retrieval, and consensus
+
+A review-only consensus SYNTHESIZE invocation offers `complete_review` or
+`report_deadlock`, selected through the bound `AgentRequest.review_only` fact.
+`complete_review` maps to the distinct review_completion successor, without
+new reply fields or kinds. INPUT_ADOPTION and REVIEW_COMPLETION are runtime
+operations and never become provider requests. Default AUTHORING choices retain
+their existing meanings.
 
 Direct provider calls use descriptive `user_input_text`, `task_instructions`,
 `candidate_text`, `conversation_history`, `debate_history`, and

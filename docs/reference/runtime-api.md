@@ -217,6 +217,7 @@ StoryRuntime.submit_consensus_prompt(
 ) -> ConsensusRuntimeInspection
 StoryRuntime.submit_consensus_draft(
     session_id: str, conversation_id: str, draft: str,
+    *, intent: AuthoringIntent = AuthoringIntent.AUTHORING,
 ) -> ConsensusRuntimeInspection
 StoryRuntime.inspect_consensus(
     session_id: str, conversation_id: str, workflow_id: str,
@@ -258,6 +259,7 @@ from `story_writing_agents.consensus`:
 
 ```python
 from story_writing_agents.consensus import (
+    AuthoringIntent,
     ConsensusDecision,
     ConsensusContinuationMode,
     ConsensusDurability,
@@ -270,10 +272,14 @@ from story_writing_agents.consensus import (
 )
 ```
 
-Submission creates a durable DRAFT request and returns without calling a
-provider. Prompt and supplied-draft input both require confirmation; the latter
-is transformed by the Execution Specialist into newly authored `r0` before
-audit. `request_next_consensus_phase()` creates, but does not execute, the
+Default AUTHORING submission creates a durable DRAFT request without calling a
+provider. Confirming it runs the Execution Specialist, transforming even a supplied
+draft into newly authored `r0` before audit. For a supplied draft, opt in with
+`intent=AuthoringIntent.REVIEW_ONLY` to create an INPUT_ADOPTION request instead.
+Its exact confirmation adopts the verified original UTF-8 bytes without provider
+work. Separate confirmations run all three AUDIT participants and SYNTHESIS, then
+provider-free REVIEW_COMPLETION. Review-only workflows cannot repair, finalize an
+artifact proposal or publish; revision requires a fresh AUTHORING submission. `request_next_consensus_phase()` creates, but does not execute, the
 successor request. `confirm_consensus()` accepts Confirm only;
 `decide_consensus()` also accepts Reject and Revise.
 
@@ -326,11 +332,18 @@ The projection states are `awaiting_confirmation`, `confirmed`, `running`,
 `request_decision`, `start_confirmed_phase`, `wait_for_phase`,
 `request_next_phase`, `inspect_failure`, `operator_recovery`,
 `continue_deadlock`, or `none`.
-`publication_allowed` is always false. A terminal SYNTHESIS deadlock reports
+`publication_allowed` is always false. A terminal AUTHORING SYNTHESIS deadlock reports
 `next_action=continue_deadlock`; a REPAIR or FINALIZATION fallback deadlock
 reports `next_action=inspect_failure`.
 
-The normal phase graph is DRAFT → AUDIT → SYNTHESIS. Lead synthesis selects
+A REVIEW_ONLY synthesis deadlock reports `next_action=inspect_failure` and
+requires fresh AUTHORING work for a requested revision.
+
+For REVIEW_ONLY, `projection.review_findings` exposes the actual terminal
+synthesis report after completion and restart. It remains untrusted report text
+and cannot authorize candidate replacement, repair, Apply or Git Commit.
+
+The normal AUTHORING phase graph is DRAFT → AUDIT → SYNTHESIS. Lead synthesis selects
 REPAIR → REAUDIT → SYNTHESIS, FINALIZATION, or deadlock. Every phase is a new
 request and confirmation. Audits invoke all three specialists against the same
 revision; the lead synthesizes and finalizes but does not vote. Finalization is
@@ -1264,6 +1277,7 @@ RuntimeSession.submit_consensus_prompt(
 ) -> ConsensusRuntimeInspection
 RuntimeSession.submit_consensus_draft(
     conversation_id: str, draft: str,
+    *, intent: AuthoringIntent = AuthoringIntent.AUTHORING,
 ) -> ConsensusRuntimeInspection
 RuntimeSession.inspect_consensus(
     conversation_id: str, workflow_id: str,

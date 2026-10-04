@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import contextmanager
 from dataclasses import replace
 import hashlib
+import json
 import unittest
 from unittest import mock
 
@@ -17,6 +17,8 @@ from story_writing_agents.agents import (
     PLOT_ARCHITECT,
 )
 from story_writing_agents.consensus import (
+    AuthoringIntent,
+    CONSENSUS_AUDITORS,
     ConsensusContinuation,
     ConsensusContinuationMode,
     ConsensusDecision,
@@ -30,8 +32,10 @@ from story_writing_agents.consensus.contracts import (
     ConsensusExecutionIdentity,
     ConsensusPhaseRequest,
     artifact_material_handle,
+    candidate_material_handle,
 )
 from story_writing_agents.consensus.material_store import ConsensusMaterialStore
+from story_writing_agents.consensus.serialization import serialize_consensus_workflow, deserialize_consensus_workflow
 from story_writing_agents.models import AgentReplyNextPhase
 from story_writing_agents.workspace.initialization import (
     SessionArtifactBindingError,
@@ -41,14 +45,12 @@ from story_writing_agents.writing_artifacts.read_actions import (
     ReferenceReadAction,
     ReferenceReadActionKind,
 )
-from story_writing_agents.writing_artifacts.authorization import (
-    ReferenceOperationState,
-)
-from story_writing_agents.writing_artifacts.runtime_references import (
-    prepare_runtime_reference_operation,
-)
 
+from tests.test_consensus_runtime_adapter import _runtime_decision
 from tests.helpers import initialized_workspace, pristine_initialized_workspace
+
+
+REVIEW_FINDINGS = "검토 결과.\r\nPreserve the ambiguity.  \r\n"
 
 
 class _BoundAgent:
@@ -79,12 +81,14 @@ class _BoundAgent:
             source = request.user_payload or request.candidate_payload or "missing"
             return AgentReply.candidate(request.revision_id, f"authored::{source}")
         if request.phase is Phase.AUDIT:
+            if request.review_only and request.agent_id == CHARACTER_CUSTODIAN:
+                return AgentReply.conflict(request.revision_id, "Setting concern 한글\r\n")
             return AgentReply.approval(request.revision_id)
         if request.phase is Phase.SYNTHESIZE:
             return AgentReply.synthesis(
                 request.revision_id,
-                "ready",
-                AgentReplyNextPhase.FINALIZATION,
+                REVIEW_FINDINGS if request.review_only else "ready",
+                AgentReplyNextPhase.REVIEW_COMPLETION if request.review_only else AgentReplyNextPhase.FINALIZATION,
             )
         if request.phase is Phase.FINALIZE:
             return AgentReply.finalization(
@@ -127,24 +131,8 @@ def _decision(
     )
     assert stored is not None
     request_event = stored.events[-1]
-    request = request_event.payload
-    assert type(request) is ConsensusPhaseRequest
-    return ConsensusRuntimeDecision(
-        execution_identity=submission.execution_identity,
-        workflow_id=submission.workflow_id,
-        phase_request_id=request.phase_request_id,
-        proposal_id=request.proposal_id,
-        revision_id=request.revision_id,
-        request_digest=request.request_digest,
-        request_event_id=request_event.event_id,
-        request_event_sequence=request_event.sequence,
-        current_tail_sequence=request_event.sequence,
-        confirmation_id=runtime.new_id("confirmation"),
-        decision=choice,
-        revision_request=(
-            "Please revise this phase." if choice is ConsensusDecision.REVISE else None
-        ),
-    )
+    assert type(request_event.payload) is ConsensusPhaseRequest
+    return _runtime_decision(request_event, runtime.new_id('confirmation'), choice=choice, revision_request='Please revise this phase.' if choice is ConsensusDecision.REVISE else None)
 
 
 class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
@@ -249,14 +237,10 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
     async def test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails(
         self,
     ) -> None:
-        workspace = pristine_initialized_workspace(self)
-        ready = provision_session_resources(workspace.root, "story_session")
-        backend = _Backend()
-        runtime = StoryRuntime(workspace, backend)  # type: ignore[arg-type]
-        materials = ConsensusMaterialStore(workspace.root)
+        ready = provision_session_resources(self.workspace.root, "story_session")
         path = "core_documents/global_outline.md"
         artifact = ready.identity.worktree_root / path
-        artifact.write_text("authorized artifact input\n", encoding="utf-8")
+        artifact.write_bytes("검토할 원고.\r\nCafé.  \r\n".encode("utf-8"))
         original = artifact.read_bytes()
         handle = artifact_material_handle(path, hashlib.sha256(original).hexdigest())
         invocation = ConsensusPhaseInvocation(
@@ -275,29 +259,67 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with mock.patch.object(
-            runtime,
+            self.runtime,
             "_reconcile_reference_operations_at_boundary",
-            wraps=runtime._reconcile_reference_operations_at_boundary,
+            wraps=self.runtime._reconcile_reference_operations_at_boundary,
         ) as reconciled:
-            result = await runtime.invoke_provider(invocation)
+            result = await self.runtime.invoke_provider(invocation)
         reconciled.assert_called_once()
-        self.assertEqual(backend.reference_contents, [(original,)])
-        self.assertIsNotNone(backend.reference_reads[-1])
-        request = backend.requests[-1]
+        self.assertEqual(self.backend.reference_contents, [(original,)])
+        self.assertIsNotNone(self.backend.reference_reads[-1])
+        request = self.backend.requests[-1]
         self.assertEqual(request.user_payload, f"${{{path}}}")
         self.assertNotIn(original.decode(), request.user_payload)
         self.assertEqual(
-            materials.read_text(result.candidate_material),
+            self.materials.read_text(result.candidate_material),
             f"authored::${{{path}}}",
         )
 
         artifact.write_text("drifted outline\n", encoding="utf-8")
-        calls_before = len(backend.requests)
+        calls_before = len(self.backend.requests)
         with self.assertRaisesRegex(ValueError, "authorization is stale"):
-            await runtime.invoke_provider(
+            await self.runtime.invoke_provider(
                 replace(invocation, phase_request_id="stale")
             )
-        self.assertEqual(len(backend.requests), calls_before)
+        self.assertEqual(len(self.backend.requests), calls_before)
+        before = len(self.backend.requests)
+        review = self.session.submit_consensus_draft("review", original.decode(), intent=AuthoringIntent.REVIEW_ONLY)
+        self.assertIs(review.projection.phase, ConsensusPhase.INPUT_ADOPTION)
+        adopted = await self.session.confirm_consensus(_decision(self.runtime, review))
+        self.assertEqual((adopted.execution.provider_results, len(self.backend.requests)), ((), before))
+        for phase in (ConsensusPhase.INPUT_ADOPTION, ConsensusPhase.REVIEW_COMPLETION):
+            with self.assertRaises(ValueError):
+                replace(invocation, phase=phase, intent=AuthoringIntent.REVIEW_ONLY)
+        for phase in (ConsensusPhase.AUDIT, ConsensusPhase.SYNTHESIS, ConsensusPhase.REVIEW_COMPLETION):
+            inspection = self.session.request_next_consensus_phase("review", review.submission.workflow_id)
+            self.assertEqual((inspection.projection.phase, inspection.projection.candidate_digest), (phase, review.submission.input_digest))
+            result = await self.session.confirm_consensus(_decision(self.runtime, inspection))
+            self.assertEqual(self.materials.read_text(candidate_material_handle(result.inspection.projection.candidate_digest)).encode(), original)
+            self.assertEqual((result.execution.state, result.inspection.projection.publication_allowed, result.inspection.projection.review_findings), (ConsensusPhaseState.COMPLETED, False, None if phase is ConsensusPhase.AUDIT else REVIEW_FINDINGS))
+            if phase is ConsensusPhase.AUDIT:
+                audit_event = result.execution.terminal_event
+            if phase is ConsensusPhase.REVIEW_COMPLETION:
+                self.assertEqual(result.execution.provider_results, ())
+        calls = self.backend.requests[before:]
+        self.assertEqual([(r.agent_id, r.phase) for r in calls], [(a, Phase.AUDIT) for a in CONSENSUS_AUDITORS] + [(LEAD_ORCHESTRATOR, Phase.SYNTHESIZE)])
+        self.assertTrue(all(r.review_only and r.candidate_payload.encode() == original for r in calls))
+        facts = [json.loads(m.content) for m in calls[-1].messages]
+        expected = [dict(source_event_id=audit_event.event_id, verdict=a.verdict.value, candidate_digest=a.candidate_digest,
+                         audit_digest=a.audit_digest, conflict_text="Setting concern 한글\r\n" if a.specialist_id == CHARACTER_CUSTODIAN else None)
+                    for a in audit_event.payload.audits]
+        self.assertEqual(facts, expected)
+        self.assertEqual(tuple(m.sender for m in calls[-1].messages), CONSENSUS_AUDITORS)
+        fresh = self.session.submit_consensus_draft("review", original.decode())
+        self.assertEqual((fresh.submission.intent, fresh.projection.phase, fresh.projection.review_findings), (AuthoringIntent.AUTHORING, ConsensusPhase.DRAFT, None))
+        self.assertNotEqual(fresh.submission.workflow_id, review.submission.workflow_id)
+        encoded = serialize_consensus_workflow(self.runtime.load_workflow("story_session", "review", review.submission.workflow_id))
+        for wrong in (encoded.replace(b'"intent":"review_only",', b'', 1),
+                      encoded.replace(b'"intent":"review_only"', b'"intent":"unknown"', 1)):
+            with self.assertRaises(ValueError):
+                deserialize_consensus_workflow(wrong)
+        for inspection in (self.session.inspect_consensus("review", review.submission.workflow_id),
+                           StoryRuntime(self.workspace, _Backend()).resume_consensus("story_session", "review", review.submission.workflow_id)):
+            self.assertEqual((inspection.projection.review_findings, inspection.capability_available, inspection.projection.publication_allowed), (REVIEW_FINDINGS, False, False))
 
 
 

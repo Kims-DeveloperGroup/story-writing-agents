@@ -17,7 +17,7 @@ from enum import StrEnum
 from pathlib import PurePosixPath
 
 
-AUTHORING_SCOPE_SCHEMA_VERSION = 1
+AUTHORING_SCOPE_SCHEMA_VERSION = 2
 REVIEW_BASIS_SCHEMA_VERSION = 1
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 
@@ -28,6 +28,13 @@ class ArtifactReviewDomain(StrEnum):
     PLOT_STRUCTURE = "plot_structure"
     CHARACTER_WORLD = "character_world"
     TONE_EXECUTION = "tone_execution"
+
+
+class AuthoringIntent(StrEnum):
+    """Exclusive review intent, independently of the current work activity."""
+
+    AUTHORING = "authoring"
+    REVIEW_ONLY = "review_only"
 
 
 class AuthoringActivity(StrEnum):
@@ -125,9 +132,32 @@ class AuthoringScope:
     task_id: str
     task_revision: int
     schema_version: int = AUTHORING_SCOPE_SCHEMA_VERSION
+    intent: AuthoringIntent = field(default=AuthoringIntent.AUTHORING, kw_only=True)
 
     def __post_init__(self) -> None:
-        _version(self.schema_version, AUTHORING_SCOPE_SCHEMA_VERSION)
+        if (
+            type(self.schema_version) is not int
+            or self.schema_version not in {1, AUTHORING_SCOPE_SCHEMA_VERSION}
+        ):
+            raise validation_failure(
+                ValueError('authoring scope version is unsupported'),
+                '$.schema_version', 'expected authoring scope version 1 or 2',
+            )
+        if type(self.intent) is not AuthoringIntent:
+            raise validation_failure(
+                TypeError('authoring intent must be an AuthoringIntent'),
+                '$.intent', 'expected authoring or review_only',
+            )
+        if self.schema_version == 1 and self.intent is not AuthoringIntent.AUTHORING:
+            raise validation_failure(
+                ValueError('legacy scope cannot carry review-only intent'),
+                '$.intent', 'review_only requires authoring scope version 2',
+            )
+        if self.intent is AuthoringIntent.REVIEW_ONLY and self.activity is not AuthoringActivity.REVIEW:
+            raise validation_failure(
+                ValueError('review-only scope cannot authorize authoring'),
+                '$.activity', 'review_only requires review activity',
+            )
         if type(self.activity) is not AuthoringActivity:
             raise validation_failure(
                 TypeError('authoring activity must be an AuthoringActivity'),
@@ -421,6 +451,7 @@ __all__ = [
     "REVIEW_BASIS_SCHEMA_VERSION",
     "ArtifactReviewDomain",
     "AuthoringActivity",
+    "AuthoringIntent",
     "AuthoringScope",
     "ReviewBasis",
     "SpecialistAssignmentMode",

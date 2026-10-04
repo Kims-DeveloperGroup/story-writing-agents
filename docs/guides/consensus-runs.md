@@ -47,7 +47,7 @@ submit prompt or supplied draft
   -> separately propose and Confirm Git Commit
 ```
 
-Both input forms begin with a DRAFT confirmation. A supplied draft is not
+Both default AUTHORING input forms begin with a DRAFT confirmation. A supplied draft is not
 silently accepted as `r0`: the Execution Specialist transforms it before any
 audit. Audits always call all three voters against the same candidate digest.
 Synthesis is a nonvoting lead judgment. Repair creates a new unpublished
@@ -69,15 +69,15 @@ does not grant authority.
 | --- | --- | --- |
 | `awaiting_confirmation` | Review the exact request and choose Confirm, Reject, or Revise. | The request is durable; same-process one-use authority may be available. No provider ran. |
 | `confirmed` | Wait for the result; do not decide again. | The decision is durable; execution is starting or awaiting projection. |
-| `running` | Wait, or interrupt from another task. | The running checkpoint was saved before the provider call. |
-| `completed` | If `next_action=request_next_phase`, explicitly request it. After finalization, continue to Apply separately. | The phase result is durable; publication remains forbidden. |
+| `running` | Wait, or interrupt from another task. | The running checkpoint was saved before the phase operation; adoption/completion do not call a provider. |
+| `completed` | If `next_action=request_next_phase`, explicitly request it. After AUTHORING finalization, continue to Apply separately; REVIEW_ONLY completion ends the review. | The phase result is durable; publication remains forbidden. |
 | `rejected` | This phase is closed. | No provider ran and no authority remains. |
 | `superseded` | Request a replacement for the same phase. | Revise closed the old request and invalidated its authority. |
 | `interrupted` | Inspect the failure; begin a new workflow if appropriate. | The exact running task was cancelled and closed durably. |
 | `failed` | Inspect diagnostics; retry only with a new workflow after correction. | Execution definitely failed and nothing was published; specifically, exhausted DRAFT repair retains no candidate. |
 | `outcome_unknown` | Stop automation and perform operator recovery. | Provider outcome cannot be proved; replay may duplicate work. |
 | `recovery_required` | Reconcile durable storage before proceeding. | Runtime cannot prove a safe append/interruption boundary. |
-| `deadlocked` | For SYNTHESIS, review the unresolved critiques and either stop or explicitly prepare a continuation. For REPAIR or FINALIZATION, inspect the failure; continuation is unavailable. | The trusted candidate remains immutable, no successor was selected, and nothing was published. |
+| `deadlocked` | For AUTHORING SYNTHESIS, review the unresolved critiques and either stop or explicitly prepare a continuation. For REPAIR or FINALIZATION, inspect the failure; continuation is unavailable. | The trusted candidate remains immutable, no successor was selected, and nothing was published. |
 
 `capability_available=True` means this process holds private one-use authority
 for the exact pending request. After restart, `awaiting_confirmation` may be
@@ -149,6 +149,44 @@ or `ConsensusDecision.REVISE` with a nonempty `revision_request`. Revise returns
 the same phase with new one-use authority. `decide_consensus()` accepts all
 three decisions; `confirm_consensus()` accepts Confirm only.
 
+## Review a supplied draft without rewriting it
+
+```python
+from story_writing_agents.consensus import AuthoringIntent
+
+view = session.submit_consensus_draft(
+    conversation_id, complete_draft_text, intent=AuthoringIntent.REVIEW_ONLY,
+)
+print(view.projection.phase.value, view.projection.state.value)
+# input_adoption awaiting_confirmation
+```
+
+Present the exact input-adoption request to the user and construct its decision
+only after their choice, using the same decision fields shown above. Confirm
+verifies and adopts the supplied bytes as `r0`; it makes no provider call and does
+not trim whitespace, change line endings or rewrite the draft. Each next phase
+requires a fresh request and confirmation:
+
+```text
+INPUT_ADOPTION (0 provider calls)
+  -> AUDIT (all three auditors inspect the exact adopted original)
+  -> SYNTHESIS (Lead integrates findings; no vote)
+  -> REVIEW_COMPLETION (0 provider calls; nonpublishing)
+```
+
+A successful complete review uses four provider calls: three audits and one
+synthesis. A deadlock retains the original and unresolved concerns. Review-only
+work cannot enter drafting, repair, re-audit or artifact finalization, including
+through deadlock continuation. Request a revision by submitting fresh AUTHORING
+work and confirming it separately; earlier adoption or audit decisions cannot
+authorize that work. Findings and suggested edits do not create an artifact Apply
+or Git Commit request.
+
+Read the synthesized report from
+`session.inspect_consensus(conversation_id, workflow_id).projection.review_findings`.
+The report remains available after review completion and restart; it is findings
+and suggestions only and grants no write authority.
+
 ## Provider-call input
 
 After Confirm is durable, runtime selects the agent and builds data equivalent
@@ -197,7 +235,7 @@ cleanup nor the old operation ID as a live-owner exclusion. With no registered
 cleanup the call performs no artifact scan merely to discover one; a restart
 orphan is instead reconciled at the next artifact-sensitive boundary.
 
-## Continue a synthesis deadlock without copying the candidate
+## Continue an AUTHORING synthesis deadlock without copying the candidate
 
 A terminal synthesis deadlock exposes `next_action=continue_deadlock`. The
 application may offer two choices:
@@ -308,8 +346,11 @@ ruling, candidate, or critique text.
 If another synthesis deadlocks while rounds remain, the user can prepare
 another continuation from that exact new deadlock. If no repair round remains,
 runtime rejects another repair request. Every deadlock and repeated deadlock
-remains nonpublishing. Consensus workflow serialization uses strict format
-version 3; older consensus workflow bytes are rejected rather than migrated.
+remains nonpublishing. Consensus workflow serialization writes version 4 and accepts strict historical
+version-3 AUTHORING records. Historical nested request/proposal shapes and digests
+remain valid; reserialization changes the envelope version. Version 3 cannot
+carry review-only intent or its new phases. Older unsupported formats remain
+rejected rather than migrated.
 
 ## Interruption and recovery
 

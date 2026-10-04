@@ -1,0 +1,21 @@
+{
+  "byte_count": 3738,
+  "fixture": "ordinary_v1_c20dc40.json",
+  "generation_method": "Read-only accepted-base source snapshot; resolved package/test __file__ verified inside snapshot, Python3.11.16 with PYTHONDONTWRITEBYTECODE. Pure fixtures only, no unittest/coordinator/provider. AuthoringScope(REVIEW, (core_documents/global_outline.md,), (), Review the exact supplied original., legacy_review_task, 1) uses historical version1. Legacy make_assignment(input_ids=(input_outline,)) supplies make_proposal budget/basis; replace assignment with mode REVIEW and ReviewBasis((input_outline,), Assess the supplied original without replacement.); replace_proposal binds both assignment and scope atomically and recomputes the accepted-base proposal digest. make_input uses global_outline locator/SHA256-prefixed exact source UTF8 digest. Scope canonical JSON is sorted compact ensure_ascii=False; proposal uses encode_collaboration_proposal. Fixture strings preserve exact bytes. Do not regenerate from changed source.",
+  "proposal_byte_count": 3191,
+  "proposal_digest": "sha256:0c4c3d0d9279e767b974a143b8cbff20d17a2fec649091fe00bcbcaed6d88c0a",
+  "proposal_id": "proposal_a",
+  "proposal_sha256": "2d3e372d323748486ce1bb75d9888a95ba90d0d98b777451ab350888aa6c9403",
+  "python_version": "3.11.16",
+  "scope_byte_count": 209,
+  "scope_sha256": "d248bd80f5de369b9abe590e17f1ce3cd1a2bea0a967758ac591f0d8800272f0",
+  "sha256": "b0f2c20d888222e16addfa05807df63dfb3fe8e0379adddb2d75f137b5c0ca1d",
+  "source_commit": "c20dc409e5b769f8992eb09310b51e7ff0984969",
+  "source_digest": "sha256:c9fb6363ddbd3654960673e004ea39cf0f92423fbeaba58d65a8da0898740ee7",
+  "source_sha256": {
+    "src/story_writing_agents/conversations/events.py": "ce20f570a18858e1394c79e1eb12a2a2afbef7e5ad15617d91b64097da7c681f",
+    "src/story_writing_agents/specialist_routing.py": "ba08c5fe8f138d15c3428320edb8592bdfb3ff69df49c41d4b554d2512cdc60c",
+    "tests/collaboration_contract_fixture.py": "acf2d1b9b2c1b10909891128801dfcbe3f27f28210d0180ac6c80d3e7a99a412"
+  },
+  "source_text": "검토할 원고입니다.\r\nLa narratrice hésite.  \r\n끝.\r\n"
+}

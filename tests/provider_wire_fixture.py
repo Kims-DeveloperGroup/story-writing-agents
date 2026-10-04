@@ -7,7 +7,8 @@ import json
 
 _FIELDS = {
     "message": "response_text", "authoring_scope": "writing_task_scope",
-    "activity": "activity_type", "domains": "specialist_domains",
+    "activity": "activity_type",
+    "intent": "writing_intent", "domains": "specialist_domains",
     "target_paths": "target_artifact_paths", "proposal": "specialist_consultation_proposal",
     "artifact_intent": "artifact_change_proposal", "next_intent": "follow_up_consultation",
     "instruction": "task_instructions", "input_ids": "input_source_ids",
@@ -189,7 +190,7 @@ def direct_response(text, payload):
             value["candidate_review_status"] = {"approve": "no_conflicts_found", "conflict": "conflicts_found"}.get(verdict, verdict)
         if "next" in value:
             next_step = value.pop("next")
-            value["next_consensus_step"] = {"repair": "revise_candidate", "finalization": "finalize_reviewed_proposal", "deadlock": "report_deadlock"}.get(next_step, next_step)
+            value["next_consensus_step"] = {"repair": "revise_candidate", "finalization": "finalize_reviewed_proposal", "review_completion": "complete_review", "deadlock": "report_deadlock"}.get(next_step, next_step)
     return json.dumps(value, ensure_ascii=True, separators=(",", ":"))
 
 

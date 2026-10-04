@@ -13,7 +13,6 @@ from story_writing_agents.consensus import (
     ConsensusExecutionCoordinator,
     ConsensusInputKind,
     ConsensusPhase,
-    ConsensusPhaseDecision,
     ConsensusPhaseState,
     ConsensusProviderResult,
     ConsensusRuntimeAdapter,
@@ -31,6 +30,8 @@ from story_writing_agents.consensus.execution import ConsensusPhaseOutputKind
 from story_writing_agents.consensus.serialization import ConsensusRuntimeOutcomeUnknown
 
 
+from tests.test_consensus_projection import _phase_decision
+
 _PROMPT = "1" * 64
 _DRAFT = "2" * 64
 _CANDIDATE = "3" * 64
@@ -40,6 +41,20 @@ _DRAFT_MATERIAL = artifact_material_handle(
     "manuscript/part-1/supplied-draft.md", _DRAFT
 )
 _CANDIDATE_MATERIAL = candidate_material_handle(_CANDIDATE)
+
+
+def _runtime_decision(request_event, confirmation_id, choice=ConsensusDecision.CONFIRM, revision_request=None):
+    request = request_event.payload
+    return ConsensusRuntimeDecision(
+        **{field: getattr(request, field) for field in (
+            "workflow_id", "execution_identity", "phase_request_id", "proposal_id", "revision_id", "request_digest")},
+        request_event_id=request_event.event_id,
+        request_event_sequence=request_event.sequence,
+        current_tail_sequence=request_event.sequence,
+        confirmation_id=confirmation_id,
+        decision=choice,
+        revision_request=revision_request,
+    )
 
 
 class FakeConsensusPort:
@@ -118,23 +133,7 @@ class ConsensusRuntimeAdapterTests(unittest.IsolatedAsyncioTestCase):
             inspection.submission.workflow_id,
         )
         request_event = stored.events[-1]
-        request = request_event.payload
-        return ConsensusRuntimeDecision(
-            workflow_id=inspection.submission.workflow_id,
-            execution_identity=inspection.submission.execution_identity,
-            phase_request_id=request.phase_request_id,
-            proposal_id=request.proposal_id,
-            revision_id=request.revision_id,
-            request_digest=request.request_digest,
-            request_event_id=request_event.event_id,
-            request_event_sequence=request_event.sequence,
-            current_tail_sequence=request_event.sequence,
-            confirmation_id=self.port.new_id("confirmation"),
-            decision=choice,
-            revision_request="Revise the draft."
-            if choice is ConsensusDecision.REVISE
-            else None,
-        )
+        return _runtime_decision(request_event, self.port.new_id('confirmation'), choice=choice, revision_request='Revise the draft.' if choice is ConsensusDecision.REVISE else None)
 
     def submit_prompt(self):
         return self.adapter.submit_prompt(
@@ -427,17 +426,7 @@ class ConsensusRuntimeAdapterTests(unittest.IsolatedAsyncioTestCase):
                 previous_result_event_id=prior,
             )
             request_event = ConsensusEvent(f"request-{tail + 1}", tail + 1, request)
-            decision = ConsensusPhaseDecision(
-                confirmation_id=f"confirmation-{tail + 1}",
-                phase_request_id=request.phase_request_id,
-                request_event_id=request_event.event_id,
-                request_event_sequence=request_event.sequence,
-                proposal_id=request.proposal_id,
-                execution_identity=request.execution_identity,
-                revision_id=request.revision_id,
-                request_digest=request.request_digest,
-                decision=ConsensusDecision.CONFIRM,
-            )
+            decision = _phase_decision(request, request_event, confirmation_id=f'confirmation-{tail + 1}')
             decision_event = ConsensusEvent(f"decision-{tail + 2}", tail + 2, decision)
             history.extend((request_event, decision_event))
 

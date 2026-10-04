@@ -13,7 +13,7 @@ from typing import Mapping, Protocol
 from ..errors import SessionIdError
 from ..reply_trace import ReplyTrace
 from ..structured_output_validation import validate_details
-from ..specialist_routing import SpecialistAssignmentMode
+from ..specialist_routing import AuthoringIntent, SpecialistAssignmentMode
 from .events import (
     ArtifactDraftSource,
     ArtifactObjectiveCandidateBinding,
@@ -1760,6 +1760,14 @@ def project_collaboration_history(
         if type(event) is not CollaborationEventV2:
             raise TypeError("collaboration history must contain canonical v2 events")
     _validate_stored_collaboration_batches(events)
+    task_intents: dict[str, AuthoringIntent] = {}
+    for event in events:
+        scope = getattr(event.payload, "authoring_scope", None)
+        if scope is not None:
+            prior_intent = task_intents.get(scope.task_id)
+            if prior_intent is not None and prior_intent is not scope.intent:
+                raise ValueError("collaboration history changed an existing task intent")
+            task_intents[scope.task_id] = scope.intent
     return _project_validated_collaboration_history(events)
 
 
@@ -2233,6 +2241,8 @@ def _project_artifact_review_history(
                 raise ValueError("artifact candidate must be disclosed atomically")
             proposal = proposals[0]
             judgment = judgments[0]
+            if proposal.authoring_scope and proposal.authoring_scope.intent is AuthoringIntent.REVIEW_ONLY:
+                raise ValueError("review-only disclosure cannot create an artifact candidate")
             if (
                 proposal.step_kind
                 is not CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION
@@ -2523,7 +2533,8 @@ def _project_lead_recommendation_history(
                 source_scope = source.payload.authoring_scope
                 scope = payload.authoring_scope
                 if (source_scope is None
-                    or (scope.task_id, scope.task_revision) != (source_scope.task_id, source_scope.task_revision)
+                    or scope.intent is not source_scope.intent
+                        or (scope.task_id, scope.task_revision) != (source_scope.task_id, source_scope.task_revision)
                     or not set(source_scope.domains).issubset(scope.domains)
                     or not set(source_scope.target_paths).issubset(scope.target_paths)):
                     raise ValueError("recommendation must retain its exact source authoring task and obligations")
@@ -2534,6 +2545,7 @@ def _project_lead_recommendation_history(
                     prior_scope = prior_request.authoring_scope
                     if (scope.task_id != prior_scope.task_id
                         or scope.task_revision != prior_scope.task_revision + 1
+                        or scope.intent is not prior_scope.intent
                         or not set(prior_scope.domains).issubset(scope.domains)
                         or not set(prior_scope.target_paths).issubset(scope.target_paths)):
                         raise ValueError("recommendation revision must retain its authoring task and obligations")
@@ -3386,6 +3398,7 @@ def _project_validated_collaboration_history(
                     next_scope = payload.next_intent.authoring_scope
                     if prior_scope is not None and (
                         next_scope is None
+                        or next_scope.intent is not prior_scope.intent
                         or not set(prior_scope.target_paths).issubset(next_scope.target_paths)
                         or not set(prior_scope.domains).issubset(next_scope.domains)
                     ):
@@ -3719,6 +3732,13 @@ def _project_artifact_objective_history(
                 facts = payload.facts
                 previous = objectives.get(facts.objective_id)
                 judgment = by_id.get(payload.lead_result_event_id)
+                if (
+                    judgment is not None
+                    and type(judgment.payload) is CollaborationLeadJudgmentPayload
+                    and judgment.payload.authoring_scope is not None
+                    and judgment.payload.authoring_scope.intent is AuthoringIntent.REVIEW_ONLY
+                ):
+                    raise ValueError("review-only disclosure cannot create or advance an artifact objective")
                 if (
                     facts.origin_conversation_id != event.conversation_id
                     or judgment is None or judgment not in batch

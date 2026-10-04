@@ -45,7 +45,7 @@ LEAD_RESPONSES = {"answer": "answer", "question": "clarification_question", "cri
                   "recommendation": "proposal_drafting_recommendation"}
 RESULT_FIELDS = {
     "message": "response_text", "authoring_scope": "writing_task_scope",
-    "activity": "activity_type", "domains": "specialist_domains", "target_paths": "target_artifact_paths",
+    "activity": "activity_type", "intent": "writing_intent", "domains": "specialist_domains", "target_paths": "target_artifact_paths",
     "proposal": "specialist_consultation_proposal", "artifact_intent": "artifact_change_proposal",
     "next_intent": "follow_up_consultation", "instruction": "task_instructions",
     "input_ids": "input_source_ids", "mode": "assignment_type", "purpose": "consultation_purpose",
@@ -466,7 +466,7 @@ def project_attached_reference(item: Mapping) -> dict:
     return result
 
 
-DIRECT_FIELDS = {"phase": "consensus_phase", "round_number": "consensus_round_number", "revision_id": "candidate_revision_id",
+DIRECT_FIELDS = {"intent": "writing_intent", "phase": "consensus_phase", "round_number": "consensus_round_number", "revision_id": "candidate_revision_id",
                  "task": "task_instructions", "user_payload": "user_input_text", "content": "user_input_text", "candidate_payload": "candidate_text",
                  "messages": "debate_history", "agent_state": "prior_agent_outcomes", "conversation_context": "conversation_history", "context": "conversation_history",
                  "operation": "request_type", "retrieval": "conversation_retrieval_control", "observation": "conversation_retrieval_observation",
@@ -658,6 +658,7 @@ _catalog("agent_action", "Exactly one agent-selected action object. It must matc
 _catalog("queries", "Ordered context search query objects. Each selects search text and currently permitted source types within the request's query limits.")
 _catalog("search_text search_query", "Agent-authored literal search phrase for locating relevant authorized source material; this is not a shell or filesystem command.")
 _catalog("writing_task_scope confirmed_scope", "The interpreted writing activity, exact artifact targets, specialist domains, and selected task/revision. Confirmed scope must remain exact.")
+_catalog("writing_intent", "Explicit task intent: review_only preserves the supplied original and permits findings or suggestions; authoring retains separately confirmed writing and artifact workflows.")
 _catalog("activity_type", "Whether this is workflow guidance, drafting, revision, or review. Substantive writing requires the complete affected specialist set.")
 _catalog("specialist_domains domain_order", "Affected writing domains: plot/structure, character/continuity, and execution/prose. Preserve the canonical offered ordering and include the full required union.")
 _catalog("assignment_type", "draft_content produces new material from a sufficient brief; review_content assesses concrete supplied material against criteria.")
@@ -904,6 +905,9 @@ ENUM_MEANINGS = {
     "conversation_answer": "answer using only currently valid cited conversation sources",
     "no_conflicts_found": "the candidate review found no blocking conflicts",
     "revise_candidate": "request another candidate revision",
+    "complete_review": "Request separately confirmed provider-free completion of this exact review, without authoring or publication authority",
+    "review_only": "Evaluate the exact supplied original without drafting or artifact-objective authority",
+    "authoring": "Use the separately confirmed authoring workflow; current review activity does not imply exclusive review-only intent",
     "finalize_reviewed_proposal": "proceed to exact reviewed-proposal identity confirmation",
     "report_deadlock": "report unresolved disagreements without finalization",
     "search_conversation_history": "find relevant conversation history and citation IDs",
@@ -951,7 +955,7 @@ OPAQUE_FIELDS = frozenset("details record_content conversation_event metadata co
 
 INPUT_ENUM_FIELDS = frozenset({
     "workflow_type", "workflow_phase", "consensus_phase", "phase", "input_type", "domain_order", "actor_type", "context_scope", "allowed_action_types", "searchable_source_types",
-    "source_type", "authorized_source_types", "input_source_type", "authority_type", "context_mode", "decision_type", "evidence_scope", "evidence_status", "assignment_type", "assignment_status", "activity_type", "specialist_domains",
+    "source_type", "authorized_source_types", "input_source_type", "authority_type", "context_mode", "decision_type", "evidence_scope", "evidence_status", "assignment_type", "assignment_status", "activity_type", "writing_intent", "specialist_domains",
     "review_outcome", "request_status", "requested_workflow_step", "update_type", "action_type",
     "context_delivery_mode", "conversation_status", "change_type", "document_status", "range_type", "content_delivery", "observation_type", "removal_type",
 })
@@ -1230,7 +1234,7 @@ def normalize_context_action(value: object) -> dict:
 
 DIRECT_RESPONSE_TYPES = {"conversation": "conversation_reply", "draft": "candidate_draft", "propose_revision": "candidate_revision", "audit": "candidate_review", "synthesize": "consensus_next_step", "finalize": "reviewed_proposal_confirmation"}
 DIRECT_REVIEW = {"approve": "no_conflicts_found", "conflict": "conflicts_found"}
-DIRECT_NEXT = {"repair": "revise_candidate", "finalization": "finalize_reviewed_proposal", "deadlock": "report_deadlock"}
+DIRECT_NEXT = {"review_completion": "complete_review", "repair": "revise_candidate", "finalization": "finalize_reviewed_proposal", "deadlock": "report_deadlock"}
 
 
 def project_direct_schema(schema: Mapping, phase: str) -> dict:

@@ -283,6 +283,7 @@ class _PhaseReplyConstraintError(BackendProtocolError):
         "message": "$.message: expected nonempty text",
         "digest": "$.reviewed_proposal_digest: expected sha256: followed by exactly 64 lowercase hexadecimal digits",
         "identity": "$.reviewed_proposal_id: expected a canonical reviewed proposal identifier",
+        "next": "$.next: next step must match the runtime-offered writing intent",
         "expected_identity": "$.reviewed_proposal_id: ID and digest must match the exact runtime-offered reviewed proposal",
     }
 
@@ -3619,6 +3620,10 @@ class AgentBackend:
                 reply.reviewed_proposal_id, reply.reviewed_proposal_digest
             ) != request.expected_reviewed_proposal:
                 raise _PhaseReplyConstraintError("expected_identity")
+            if reply.kind is AgentReplyKind.SYNTHESIS:
+                allowed_next = {AgentReplyNextPhase.REVIEW_COMPLETION} if request.review_only else {AgentReplyNextPhase.REPAIR, AgentReplyNextPhase.FINALIZATION}
+                if reply.next_phase not in allowed_next:
+                    raise _PhaseReplyConstraintError("next")
             if reply.revision_id != request.revision_id:
                 raise BackendProtocolError(
                     f"{_provider_name} reply revision_id does not match its request"
@@ -3665,7 +3670,7 @@ class AgentBackend:
                 )
             raise BackendProtocolError("agent request phase has no safe fallback")
 
-        schema = self._output_schema(request.phase, expected_reviewed_proposal=request.expected_reviewed_proposal)
+        schema = self._output_schema(request.phase, expected_reviewed_proposal=request.expected_reviewed_proposal, review_only=request.review_only)
         payload = self._request_payload(request)
         if reference_read is None:
             return await self._invoke_provider_structured_resilient(
@@ -5794,6 +5799,8 @@ class AgentBackend:
             "candidate_payload": request.candidate_payload,
             "messages": [message.to_dict() for message in request.messages],
         }
+        if request.review_only:
+            payload["intent"] = "review_only"
         if request.expected_reviewed_proposal is not None:
             payload["expected_reviewed_proposal"] = {
                 "reviewed_proposal_id": request.expected_reviewed_proposal[0],
@@ -6463,7 +6470,10 @@ class AgentBackend:
     @staticmethod
     def _output_schema(
         phase: Phase, *, expected_reviewed_proposal: tuple[str, str] | None = None,
+        review_only: bool = False,
     ) -> dict[str, Any]:
+        if review_only and phase not in {Phase.AUDIT, Phase.SYNTHESIZE}:
+            raise ValueError("review-only provider schema cannot authorize authoring")
         if expected_reviewed_proposal is not None:
             if phase is not Phase.FINALIZE:
                 raise ValueError("expected reviewed identity requires finalization")
@@ -6478,7 +6488,7 @@ class AgentBackend:
             properties = {
                 "next": {
                     "type": "string",
-                    "enum": ["repair", "finalization", "deadlock"],
+                    "enum": ["review_completion", "deadlock"] if review_only else ["repair", "finalization", "deadlock"],
                 },
                 "message": {"type": "string"},
             }
@@ -6526,6 +6536,12 @@ class AgentBackend:
                 "does not publish, Apply, or Commit it."
             ),
         }
+        if review_only:
+            descriptions[phase] = (
+                "Review only the exact supplied original. Preserve its bytes and every concern; "
+                "report findings and optional suggestions without drafting or artifact authority. "
+                + ("For this synthesis choose complete_review or report_deadlock." if phase is Phase.SYNTHESIZE else "Report only findings on this exact candidate.")
+            )
         return project_direct_schema({
             "description": descriptions[phase],
             "type": "object",
@@ -6663,11 +6679,12 @@ class AgentBackend:
             if next_phase not in {
                     AgentReplyNextPhase.REPAIR.value,
                     AgentReplyNextPhase.FINALIZATION.value,
+                    AgentReplyNextPhase.REVIEW_COMPLETION.value,
                 }:
                 raise validation_failure(
                     BackendProtocolError(f'{provider_name} synthesis response is ambiguous'),
                     '$.next',
-                    'expected repair, finalization, or deadlock',
+                    'expected repair, finalization, review_completion, or deadlock',
                 )
             return _validated_phase_reply(AgentReply.synthesis, revision_id, content, AgentReplyNextPhase(next_phase))
         if set(value) != {"message"}:
