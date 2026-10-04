@@ -986,7 +986,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 with owner.open_ready_resources() as access:
                     access.install_provider_role(plan)
                 original_inode = target.stat().st_ino
-                target.unlink()
+                target.rename(ready.identity.worktree_root / f"original-{session_id}.bin")
                 outside = self.workspace.path(f"outside-{session_id}.bin")
                 outside.write_bytes(b"PRIVATE_OUTSIDE_ROLE")
                 if kind == "content-mismatch":
