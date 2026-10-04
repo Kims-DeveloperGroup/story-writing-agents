@@ -533,29 +533,57 @@ the runtime fast lane and reconciliation use Ubuntu x64. Both architectures
 use the same locked dependencies and test inventory. Full-suite selection
 includes test-only changes. The fixed timing limits still apply to every
 selected full shard; a diagnostic run never replaces this evidence.
-For a local full-suite run, use the same commands. Start no more than these
-two test processes concurrently, preserve both reports, and then reconcile
-them:
+
+Independent task threads share a host queue with four executing test processes;
+a campaign still runs only two full shards. Local `tests.runner run` commands
+enter this queue automatically. Queue waiting is separate from test wall time.
+
+Use the host campaign command to execute the lanes selected by the pinned
+workflow, plus the affected modules you specify. It captures static checks,
+fast and affected tests, both full shards, reconciliation, and the strict budget
+check. Prepare a clean checkout and its locked Python 3.11 `.venv` first:
 
 ```bash
-report_dir="$(mktemp -d "${TMPDIR:-/tmp}/story-tests.XXXXXXXXXX")"
+base_sha="$(git rev-parse origin/main)"
+head_sha="$(git rev-parse HEAD)"
+report_dir="$(mktemp -d "${TMPDIR:-/tmp}/story-local-ci.XXXXXXXXXX")"
 chmod 700 "$report_dir"
-PYTHONPATH=src python -m tests.runner run --shard 1/2 --json "$report_dir/shard-1.json" &
-shard_one_pid=$!
-PYTHONPATH=src python -m tests.runner run --shard 2/2 --json "$report_dir/shard-2.json" &
-shard_two_pid=$!
-shard_status=0
-wait "$shard_one_pid" || shard_status=1
-wait "$shard_two_pid" || shard_status=1
-test "$shard_status" -eq 0
-PYTHONPATH=src python -m tests.runner reconcile \
-  "$report_dir/shard-1.json" \
-  "$report_dir/shard-2.json" \
-  --json "$report_dir/reconciliation.json"
-PYTHONPATH=src python -m tests.suite_budget --base-ref main \
-  --report "$report_dir/shard-1.json" \
-  --report "$report_dir/shard-2.json"
+PYTHONPATH=src .venv/bin/python -m tests.local_ci run \
+  --checkout "$PWD" --base-sha "$base_sha" --head-sha "$head_sha" \
+  --report-dir "$report_dir" --task "my task" \
+  --module tests.test_artifact_proposals \
+  --module tests.test_artifact_proposal_orchestration \
+  --timing-mode isolated
 ```
+
+Choose `--timing-mode shared` for concurrent task feedback. Isolated mode drains
+active executions and reserves the host for the campaign; use it for performance
+measurements. Isolated campaigns run the two full shards sequentially on their
+executor by default; shared campaigns permit both concurrently. Set
+`--full-concurrency 1` or `2` to choose explicitly. Campaign metadata records the
+resolved value. The strict 1,080/540-second limits still apply in either mode.
+Run status and capability-authorized cancellation from a checkout containing
+the queue utilities; campaigns can target older prepared checkouts with
+`--checkout`:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m tests.local_ci status
+PYTHONPATH=src .venv/bin/python -m tests.local_ci cancel JOB_ID \
+  --owner-file "$HOME/.cache/story-local-ci/jobs/JOB_ID/ownership.json"
+```
+
+The owner-only state lives outside checkouts under `~/.cache/story-local-ci`.
+Workers create files and directories with an owner-only mask (`077`), including
+in Lima, so new fixture repositories satisfy the directory safety guards.
+Uncertain worker termination retains its permit in quarantine. Running-job
+cancellation can retain a slot even after its original process group exits,
+because separately spawned children may survive. Preserve the logs; only
+complete death proof, including a verified executor restart, retires uncertain
+workers, and their evidence remains invalid.
+For Lima, run this same host command with `--executor lima:INSTANCE` and
+`--guest-checkout /absolute/prepared/guest/checkout`. The guest needs matching
+source and a locked Python 3.11 `.venv`; its workers use the same four host
+permits. A guest must not start an independent local queue.
 
 Each example creates a fresh, unpredictable, owner-only report directory. Keep
 every report filename absent before its command runs: runner JSON output uses

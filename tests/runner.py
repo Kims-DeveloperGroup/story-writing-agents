@@ -773,6 +773,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"digest: {manifest['digest']}")
                 _write_policy_human(selected.metadata, sys.stdout)
             return 0
+        # Hosted shards retain their existing execution behavior. Independent
+        # local invocations share host admission across every checkout.
+        from tests.local_ci import runner_admission
+        from tests.local_ci_state import LocalCIError
+
+        try:
+            admitted = runner_admission(list(argv) if argv is not None else sys.argv[1:])
+        except LocalCIError as error:
+            raise RunnerError(str(error)) from error
+        if admitted is not None:
+            return admitted
         execution = _execute(selection, stream=sys.stderr, failfast=args.failfast)
         report = _run_report(
             canonical,

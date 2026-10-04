@@ -279,10 +279,19 @@ When annotations, logs, or service status establish that Actions cannot execute 
 billing/quota, disabled execution, or an infrastructure outage, the root records the evidence
 and runs the applicable CI commands locally without another confirmation. Use the canonical
 [local CI procedure](.agents/skills/github-task-lifecycle/references/local-ci-fallback.md):
+
 pin base/head and the checkout tree, use the locked Python 3.11 environment, select every lane
 from the current workflow, and retain commands, exit codes, exact test IDs, artifacts, and
 platform limits. Static-only changes run all static steps; runtime/test changes also run the
 fast tier, affected runtime tests, both full shards, reconciliation, and frozen-budget checks.
+
+Independent local task threads use the host-wide `tests.local_ci` coordinator.
+It admits four executing top-level test processes across native and Lima
+workers, with two full shards per campaign. Isolated campaigns drain and reserve
+the host for timing evidence and run their full shards sequentially by default;
+shared campaigns permit both full shards concurrently. `--full-concurrency 1`
+or `2` overrides that choice; campaign metadata records the resolved value.
+Queue wait and uncertain-worker quarantine remain visible in durable job state.
 An actual validation failure must be diagnosed and fixed; switching execution locations does
 not erase it. Unknown failure causes are not an established outage.
 

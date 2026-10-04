@@ -45,6 +45,25 @@ time. The budget gate uses the wall time in the current Python 3.11 runner
 reports. Report the observed full and shard times and any platform limitation
 when recalibrating weights.
 
+## Parallel local validation
+
+Independent task threads share one host-wide queue with four executing top-level
+test processes. The limit covers every checkout and native or Lima executor;
+each campaign still runs only two full shards. Waiting jobs do not consume an
+execution slot. Use the host coordinator in `tests.local_ci`; guest workers must
+be admitted by that same host queue before they run.
+
+Shared campaigns provide concurrent feedback. Budget-restoration measurements
+use isolated campaigns: drain active jobs, reserve the host, then execute only
+the two complementary shards. Their default concurrency is one for isolated
+campaigns and two for shared campaigns; `--full-concurrency 1` or `2` overrides
+that scheduling choice, which remains explicit in campaign metadata. Both
+complete reports remain required even if the first shard fails. Queue waiting
+time is recorded separately from
+canonical test durations. Shared execution does not waive a failed timing gate,
+and contention is not grounds for automatic wall-time authorization. Preserve
+the existing 1,080/540-second ceilings; aim for 900/450 seconds to leave margin.
+
 ## Explicit wall-time exception
 
 A maintainer may authorize extra validation time for a specific PR and record the
