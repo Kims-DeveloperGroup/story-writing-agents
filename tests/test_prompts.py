@@ -60,6 +60,11 @@ class PromptAssemblerTests(unittest.TestCase):
             )
         self.assembler = PromptAssembler(self.workspace)
 
+    def _definition(self, session_id: str, *, contextual: bool = False, fresh: bool = False):
+        assembler = PromptAssembler(self.workspace) if fresh else self.assembler
+        build = assembler.build_contextual_definition if contextual else assembler.build_definition
+        return build(session_id=session_id, agent_id=PLOT_ARCHITECT)
+
     def test_request_contains_turn_payloads_but_no_system_prompt(self) -> None:
         visible_message = DebateMessage(
             sender="plot_architect",
@@ -98,7 +103,7 @@ class PromptAssemblerTests(unittest.TestCase):
     def test_lead_prompt_is_front_channel_router_watcher_critic_and_non_authority(self):
         prompt = self.assembler.build_definition(session_id="lead-policy", agent_id=LEAD_ORCHESTRATOR).system_prompt_file.read_text()
         normalized = " ".join(prompt.split())
-        required = ("sole ordinary user-facing coordinator", "Answer workflow and factual status questions directly", "complete affected specialist union", "Do not omit a specialist to fit a budget", "explicitly states response_type", "clarification_question", "proposal_drafting_recommendation", "writing_task_scope", "exact offered task_reference object", "exact task_id/task_revision pair", "draft_content", "review_content", "every required input", "artifact_changes", "Existing empty documents require replacement", "completed READ evidence", "proposal_drafting_request", "document_change_request_update", "Only exact successful Apply", "ready_for_apply_confirmation", "Neither synthesis result", "report unresolved concerns")
+        required = ('sole ordinary user-facing coordinator', 'answer workflow and factual status questions directly', 'complete specialist union', 'Do not omit a required specialist to fit a budget', 'current invocation schema', 'integrate required current-task drafts', 'fresh complete user-supplied candidate', 'Preserve exact offered task/revision, source, evidence, and candidate identities', 'Status is not a READ receipt', 'Nonempty artifact changes require current attached reference or completed authorized READ evidence', 'Empty-file status proves only the exact empty target', 'Confirm authorizes only the exact disclosed step', 'Proposal preparation, specialist execution, candidate review, Apply, and Commit have separate authority boundaries', 'Confirmed preparation returns its exact proposal or asks a material clarification', 'does not repeat confirmation or silently downgrade to advice', 'Prose approval and retained decisions grant no current execution or write authority', 'Only its exact successful Apply (applied or unchanged) satisfies it', 'explicit cancellation closes it without writing', 'Lead does not vote', "never use a majority to erase a specialist's concern", 'Continuation must cover all original inputs and reply-event inputs', 'Never request a continuation the current schema does not offer')
         for phrase in required:
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, normalized)
@@ -115,20 +120,24 @@ class PromptAssemblerTests(unittest.TestCase):
 
     def test_lead_overlay_supersedes_retained_policy_and_preserves_specialist_bytes(self):
         from story_writing_agents.agents import behavior_policy_files
-        baseline = {agent: self.assembler.build_definition(session_id="overlay", agent_id=agent).system_prompt_file.content for agent in ROSTER}
+        baseline = {agent: self.assembler.build_definition(session_id="overlay", agent_id=agent) for agent in ROSTER}
         policy = next(path for path in behavior_policy_files(LEAD_ORCHESTRATOR) if "lead" in path)
         original = self.workspace.path(policy).read_bytes()
         retained = b"\nRetained older policy fixture: return only the seven legacy front-channel fields.\n"
         self.workspace.path(policy).write_bytes(original + retained)
-        changed = {agent: PromptAssembler(self.workspace).build_definition(session_id="overlay", agent_id=agent).system_prompt_file.content for agent in ROSTER}
+        changed = {agent: PromptAssembler(self.workspace).build_definition(session_id="overlay", agent_id=agent) for agent in ROSTER}
         lead = changed[LEAD_ORCHESTRATOR]
-        self.assertIn(retained.strip(), lead)
-        overlay = lead[lead.rindex(b"# Lead Orchestrator Policy"):]
-        for phrase in (b"explicitly states response_type", b"document_change_request_update", b"proposal_drafting_request", b"current_response selects", b"Only exact successful Apply", b"Existing empty documents require replacement"):
-            self.assertIn(phrase, overlay)
-        self.assertNotIn(b"objective_intent", overlay)
-        self.assertNotIn(b"recommended_action", overlay)
-        self.assertGreater(lead.rindex(b"# Lead Orchestrator Policy"), lead.index(retained.strip()))
+        self.assertEqual(lead.behavior_policy_components[-1].content, original + retained)
+        self.assertEqual(lead.behavior_policy_components[-1].sha256, hashlib.sha256(original + retained).hexdigest())
+        self.assertIn(retained.strip(), lead.system_prompt_file.content)
+        authority = lead.runtime_behavior_policy
+        for phrase in (b"takes precedence", b"current invocation schema owns available stage outcomes", b"exact offered task/revision, source, evidence, and candidate identities", b"Status is not a READ receipt", b"separate authority", b"exact successful Apply"):
+            self.assertIn(phrase, authority)
+        self.assertNotIn(b"objective_intent", authority)
+        self.assertNotIn(b"recommended_action", authority)
+        self.assertGreater(lead.system_prompt_file.content.index(authority), lead.system_prompt_file.content.index(retained.strip()))
+        self.assertNotEqual(lead.fingerprint, baseline[LEAD_ORCHESTRATOR].fingerprint)
+        self.assertEqual(self.workspace.path(policy).read_bytes(), original + retained)
         for agent in ROSTER[1:]:
             self.assertEqual(changed[agent], baseline[agent])
 
@@ -572,14 +581,8 @@ class PromptAssemblerTests(unittest.TestCase):
     ) -> None:
         """Keep mutable core bytes out of runtime bindings without breaking callers."""
 
-        contextual_before = self.assembler.build_contextual_definition(
-            session_id="contextual_session",
-            agent_id=PLOT_ARCHITECT,
-        )
-        legacy_before = self.assembler.build_definition(
-            session_id="contextual_session",
-            agent_id=PLOT_ARCHITECT,
-        )
+        contextual_before = self._definition('contextual_session', contextual=True)
+        legacy_before = self._definition('contextual_session')
 
         self.assertEqual(contextual_before.context_document_files, ())
         self.assertEqual(
@@ -600,14 +603,8 @@ class PromptAssemblerTests(unittest.TestCase):
             "CONTEXT_TOKEN::changed-outline",
             encoding="utf-8",
         )
-        contextual_after = self.assembler.build_contextual_definition(
-            session_id="contextual_session",
-            agent_id=PLOT_ARCHITECT,
-        )
-        legacy_after = self.assembler.build_definition(
-            session_id="contextual_session",
-            agent_id=PLOT_ARCHITECT,
-        )
+        contextual_after = self._definition('contextual_session', contextual=True)
+        legacy_after = self._definition('contextual_session')
 
         self.assertEqual(contextual_after, contextual_before)
         self.assertNotEqual(legacy_after.fingerprint, legacy_before.fingerprint)
@@ -619,14 +616,8 @@ class PromptAssemblerTests(unittest.TestCase):
     def test_fingerprint_is_deterministic_and_tracks_effective_definition(
         self,
     ) -> None:
-        first = self.assembler.build_definition(
-            session_id="fingerprint_session",
-            agent_id=PLOT_ARCHITECT,
-        )
-        identical = PromptAssembler(self.workspace).build_definition(
-            session_id="fingerprint_session",
-            agent_id=PLOT_ARCHITECT,
-        )
+        first = self._definition('fingerprint_session')
+        identical = self._definition('fingerprint_session', fresh=True)
         self.assertEqual(first, identical)
         self.assertEqual(len(first.fingerprint), 64)
 
@@ -634,10 +625,7 @@ class PromptAssemblerTests(unittest.TestCase):
             "fingerprint_session",
             {"language": "FR", "persona": None, "agents": {}},
         )
-        changed = self.assembler.build_definition(
-            session_id="fingerprint_session",
-            agent_id=PLOT_ARCHITECT,
-        )
+        changed = self._definition('fingerprint_session')
         self.assertEqual(changed.language, "FR")
         self.assertNotEqual(changed.fingerprint, first.fingerprint)
         self.assertEqual(

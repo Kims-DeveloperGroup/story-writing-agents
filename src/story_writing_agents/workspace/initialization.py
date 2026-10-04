@@ -76,7 +76,12 @@ from ..writing_artifacts.repository import (
     WritingArtifactRepository,
     create_guarded_writing_artifact_repository,
 )
-from ._policy_baselines import LEGACY_V2_POLICY_FILES, OBJECTIVE_V2_POLICY_FILES, MAIN_V2_POLICY_FILES
+from ._policy_baselines import (
+    LEGACY_V2_POLICY_FILES,
+    OBJECTIVE_V2_POLICY_FILES,
+    MAIN_V2_POLICY_FILES,
+    PRE_GUIDANCE_V2_POLICY_FILES,
+)
 from .schema import (
     WORKSPACE_DIRECTORIES,
     WORKSPACE_INITIALIZATION_JOURNAL_PATH,
@@ -1800,7 +1805,12 @@ def _known_initializer_scaffold(
     current_policies = {entry.path: entry.content for entry in policy_scaffold}
     if observed == current_policies:
         return scaffold
-    for published in (legacy_policies, dict(OBJECTIVE_V2_POLICY_FILES), dict(MAIN_V2_POLICY_FILES)):
+    for published in (
+        legacy_policies,
+        dict(OBJECTIVE_V2_POLICY_FILES),
+        dict(MAIN_V2_POLICY_FILES),
+        dict(PRE_GUIDANCE_V2_POLICY_FILES),
+    ):
         if observed == published:
             return tuple(
                 WorkspaceScaffoldEntry(

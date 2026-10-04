@@ -75,7 +75,10 @@ Guidance has three delivery points:
    context trust, references, actions, and response structure.
 2. Every request includes `contract_guidance.input_fields` and
    `contract_guidance.response_rules` for its actual input shape and result
-   contract. Repeated input records use wildcard paths in the guide.
+   contract. Repeated input records use wildcard paths in the guide. When the
+   schema offers `action_type` or `response_type` choices, response rules list
+   only the values present in that invocation's schema. Regenerating guidance
+   replaces these choice lists rather than retaining earlier stage choices.
 3. The response schema's root `description` explains its shared purpose and
    function. Each `anyOf` alternative has a concise `description` explaining
    its distinguishing purpose, when to select it, and what it does or returns.
@@ -101,6 +104,20 @@ while `response_contract.allowed_action_types` is the set of actions currently
 available. Neither is free-form text the agent may replace with a new identity.
 The common instructions explain the guide's own structure without recursively
 generating guidance for guidance fields.
+
+The bound definition captures each common and role policy file once, with its
+original bytes and content hash. The runtime adds its own routing and Lead
+authority rules after the captured policies. These rules and the current schema
+take precedence over conflicting custom policies or retained response forms.
+Previously published policy sets remain admissible without rewriting workspaces.
+The binding fingerprint includes the captured policy hashes, runtime rules and
+common protocol guide. Invocation-specific schemas, stage choices and input
+guidance do not change that fingerprint; editing a policy file does.
+
+When comparing request size, measure rendered instructions, schema and payload
+separately. Guidance is part of the payload. Removing duplicate instructions
+does not imply that schema bytes decreased, and native provider rendering can
+add bytes beyond the provider-neutral instruction text.
 
 An incomplete built-in field catalog or inconsistent guide is a request-construction
 error before provider submission. Caller-owned custom result schemas retain their

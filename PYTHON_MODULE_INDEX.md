@@ -73,10 +73,10 @@ depend on terminal presentation or concrete persistence.
 - `agents`, `models`, `errors`, `config`, `prompts`, `directives`, `artifact_proposals`
 - `specialist_routing`, `reply_trace`, `run_inputs`
 
-Primary public access is through the root facade for stable library types. `config` owns
-runtime configuration loading; `prompts` owns prompt assembly, not provider execution.
-`models` carries additive, optional validation diagnostics and the optional keyword-only
-`AgentRequest.expected_reviewed_proposal` identity hint without granting next-action authority.
+Primary access is the root facade. `config` owns configuration loading. `prompts` owns
+captured policy bytes, stable fingerprints, and runtime authority invariants; stages stay
+invocation data, without provider execution. `models` carries optional diagnostics and the
+keyword-only `AgentRequest.expected_reviewed_proposal` identity hint, without next-action authority.
 
 ### Runtime orchestration and providers
 
@@ -98,8 +98,8 @@ source-authored domain findings. Domain validators identify the rejected propert
 orchestration and adapters retain findings through exception translation and map domain
 fields to provider wire paths. This package-internal boundary owns no provider state,
 persistence, or authority and is not a public facade.
-`provider_wire` is a stateless stdlib leaf for provider vocabulary, known-shape projections,
-guidance, schemas, and diagnostics; semantic owners retain domain APIs, storage, and state.
+`provider_wire` is a stateless stdlib leaf for vocabulary, projections, schemas, diagnostics, and invocation
+guidance derived from current schema choices; semantic owners retain domain APIs, storage, and state.
 `lead_provider_contracts` owns immutable Lead choice snapshots shared by schema projections,
 prompt facts, and closed validation rules. It depends on domain contracts; orchestration
 retains confirmation, current-source membership, READ receipt, and lifecycle authority.
@@ -236,7 +236,7 @@ state paths, manage session lifecycle, and assess/reconcile recovery transitions
 
 `workspace.core` owns path validation and session source/configuration views; `initialization` owns creation,
 session artifact bindings, guarded repositories, and opaque generation-pin composition. Views borrow retained session
-roots through bounded owner contracts. `schema` owns schema-v2 validation; `_policy_baselines` is private immutable policy data.
+roots through bounded owner contracts. `schema` owns schema-v2 validation and current initializer defaults; `_policy_baselines` retains immutable published bytes for exact initialization compatibility.
 The binding calls the Git owner's index and effective-ignore proof after exclusion preparation
 and again after role publication. `session_role_projection` owns create-only, read-only native
 role files and the private Git exclusion: `/.agents/` must be its final nonempty record, and

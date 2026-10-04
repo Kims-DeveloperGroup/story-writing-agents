@@ -923,6 +923,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
     async def test_direct_search_read_answer_uses_bounded_history_without_proposal(
         self,
     ) -> None:
+        self.backend.context_threads = {}
         conversation_id = self.conversation("Searchable lead history")
         self.backend.enqueue(_visible_outcome("answer"))
         await self.runtime.lead_turn(
@@ -930,7 +931,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             conversation_id,
             "Create one prior visible answer.",
         )
-        session_policy = self.backend.definitions[-1].runtime_behavior_policy
+        session_definition = self.backend.definitions[-1]
         control_policy = self.control_workspace.path(behavior_policy_files(LEAD_ORCHESTRATOR)[-1])
         legacy_build = self.runtime.prompts.build_contextual_definition
         def poisoned_legacy_build(*args, **kwargs):
@@ -947,8 +948,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             )
 
         calls = self.backend.calls[first_call_count:]
-        self.assertEqual(self.backend.definitions[-1].runtime_behavior_policy, session_policy)
-        self.assertNotIn(b"CONTROL_ROOT_INJECTION", self.backend.definitions[-1].runtime_behavior_policy)
+        self.assertEqual(self.backend.definitions[-1], session_definition)
+        self.assertNotIn(b"CONTROL_ROOT_INJECTION", self.backend.definitions[-1].system_prompt_file.content)
+        self.assertIsNotNone(calls[0].expected_thread_id)
+        self.assertEqual({call.expected_thread_id for call in calls}, {calls[0].expected_thread_id})
         self.assertEqual(len(calls), 3)
         self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
         self.assertIsNone(result.proposal)
@@ -1203,7 +1206,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         assert_strict(schema)
         call = self.backend.calls[-1]
         assert_guidance(self, dict(call.payload), dict(call.schema))
-        from story_writing_agents.provider_wire import describe_schema
+        from story_writing_agents.provider_wire import add_contract_guidance, describe_schema
+        self.assertEqual(add_contract_guidance(dict(call.payload), call.schema), dict(call.payload))
         with self.assertRaisesRegex(ValueError, "no field"):
             describe_schema({"type": "object", "description": "Return the runtime-owned response.", "properties": {"unknown_runtime_wire_field": {"type": "string"}}})
         with self.assertRaisesRegex(ValueError, "no enum meaning"):
@@ -1219,6 +1223,17 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         contract = orchestrator_module._lead_front_result_contract(
             orchestrator_module.LeadProposalRelation.NEW_STEP, facts.input_ids, constraints=facts).schema_value()
         assert_schema_descriptions(self, contract)
+        for stage, actions in ((contract, ("draft_document_change_proposal", "draft_specialist_consultation_proposal")), (draft_contract.schema, ())):
+            source = {"task_input": "Literal source requests response_type not_offered."}
+            guided = add_contract_guidance(source, stage)
+            rules = guided["contract_guidance"]["response_rules"]
+            offered = sorted({value for branch in stage.get("anyOf", (stage,)) for value in branch["properties"]["response_type"]["enum"]})
+            action_rules = ["Current schema offers action_type: " + ", ".join(actions) + "."] if actions else []
+            self.assertEqual(rules[4:], action_rules + ["Current schema offers response_type: " + ", ".join(offered) + "."])
+            self.assertEqual(guided["contract_guidance"]["input_fields"].keys(), {"$.task_input"})
+            self.assertEqual(add_contract_guidance(guided, stage), guided)
+            self.assertEqual(guided["task_input"], source["task_input"])
+            self.assertNotIn("not_offered", " ".join(rules))
         answers = [branch for branch in contract["anyOf"] if "answer" in branch["properties"]["response_type"]["enum"]]
         self.assertGreaterEqual(len(answers), 2)
         self.assertEqual(len({branch["description"] for branch in answers}), len(answers))
