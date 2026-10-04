@@ -89,7 +89,7 @@ from story_writing_agents.workspace.initialization import (
     provision_session_resources,
 )
 
-from tests.provider_wire_fixture import answer as wire_answer, contract_id as wire_contract_id, scenario_input, response as wire_response, result as wire_result, assert_guidance, capture_sample
+from tests.provider_wire_fixture import answer as wire_answer, contract_id as wire_contract_id, scenario_input, response as wire_response, result as wire_result, assert_guidance, assert_schema_descriptions, capture_sample
 from tests.collaboration_contract_fixture import contract_batches
 from tests.helpers import materialize_pristine_initialized_workspace
 from tests.test_agent_context_accounting import _expanded_context_payload
@@ -1205,19 +1205,33 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         assert_guidance(self, dict(call.payload), dict(call.schema))
         from story_writing_agents.provider_wire import describe_schema
         with self.assertRaisesRegex(ValueError, "no field"):
-            describe_schema({"type": "object", "properties": {"unknown_runtime_wire_field": {"type": "string"}}})
+            describe_schema({"type": "object", "description": "Return the runtime-owned response.", "properties": {"unknown_runtime_wire_field": {"type": "string"}}})
         with self.assertRaisesRegex(ValueError, "no enum meaning"):
-            describe_schema({"type": "string", "enum": ["unknown_static_wire_choice"]})
+            describe_schema({"type": "string", "description": "Choose the runtime-owned value.", "enum": ["unknown_static_wire_choice"]})
         self.assertEqual(call.payload["response_contract"]["result_contract_id"], "lead-response-v6")
         draft_contract = orchestrator_module._specialist_result_contract(type("Assignment", (), {"mode": orchestrator_module.SpecialistAssignmentMode.DRAFT})())
-        description = draft_contract.schema["properties"]["assignment_status"]["description"]
-        self.assertIn("draft_completed", description); self.assertIn("without review or write authority", description)
+        description = draft_contract.schema["description"]
+        self.assertIn("draft_completed", description); self.assertIn("do not write documents", description)
         self.assertEqual(diagnose_json_text(json.dumps({"response_type": "specialist_assignment_result", "assignment_status": "draft_completed", "response_text": "Synthetic draft."}), draft_contract.schema), ())
         facts = LeadProviderConstraints(input_ids=("user_input", "outline"),
             reviewer_inputs=((PLOT_ARCHITECT, "outline"),), task_revisions=(("task", 1),),
             source_ids=("current_response", "historical_synthesis"), objective_ids=("objective",))
         contract = orchestrator_module._lead_front_result_contract(
             orchestrator_module.LeadProposalRelation.NEW_STEP, facts.input_ids, constraints=facts).schema_value()
+        assert_schema_descriptions(self, contract)
+        answers = [branch for branch in contract["anyOf"] if "answer" in branch["properties"]["response_type"]["enum"]]
+        self.assertGreaterEqual(len(answers), 2)
+        self.assertEqual(len({branch["description"] for branch in answers}), len(answers))
+        self.assertTrue(any("cancel" in branch["description"].lower() for branch in answers))
+        self.assertTrue(any("status" in branch["description"].lower() for branch in answers))
+        expanded = orchestrator_module._lead_front_result_contract(orchestrator_module.LeadProposalRelation.NEW_STEP,
+            facts.input_ids, constraints=replace(facts, task_revisions=(("task", 1), ("task", 2)))).schema_value()
+        assert_schema_descriptions(self, expanded)
+        pairs = expanded["anyOf"][0]["properties"]["writing_task_scope"]["properties"]["task_reference"]["anyOf"]
+        self.assertEqual([pair["properties"]["task_revision"]["enum"] for pair in pairs], [[1], [2]])
+        self.assertIn("revision 1", pairs[0]["description"]); self.assertIn("revision 2", pairs[1]["description"])
+        collapsed_pair = contract["anyOf"][0]["properties"]["writing_task_scope"]["properties"]["task_reference"]
+        self.assertNotIn("anyOf", collapsed_pair); self.assertIn("revision 1", collapsed_pair["description"])
         value = {"kind": "proposal", "message": "Review.", "authoring_scope": {
             "activity": "review", "domains": ["plot_structure"], "target_paths": [], "task": "task@1"},
             "proposal": {"assignments": [{"agent_id": PLOT_ARCHITECT, "mode": "review",
@@ -1336,6 +1350,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         )
         self.assertEqual(persisted.trace, result.trace)
         self.assertEqual(len(self.backend.calls), 2)
+        for call in self.backend.calls:
+            assert_guidance(self, dict(call.payload), dict(call.schema))
         repair = _workflow_material(self.backend.calls[-1].payload)
         self.assertIn("response_correction", repair)
 
