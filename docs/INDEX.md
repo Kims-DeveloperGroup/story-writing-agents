@@ -81,6 +81,7 @@ that matches your task.
 - [Privacy and provider exposure](operations/privacy-and-provider.md)
 - [Terminal safety](operations/terminal-safety.md)
 - [Recovery and limitations](operations/recovery-and-limitations.md)
+- [Editorial evaluation cases and comparison protocol](evaluations/lead-editorial-coordination.md)
 - [Production-module inventory](../PYTHON_MODULE_INDEX.md)
 
 Long design and audit documents can describe earlier execution surfaces as
