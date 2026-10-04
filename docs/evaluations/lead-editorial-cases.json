@@ -1,0 +1,883 @@
+{
+  "format_version": 1,
+  "dataset_id": "lead-editorial-coordination-v1",
+  "constructed_fixtures": true,
+  "quality_evidence_status": "not_run",
+  "live_execution_authorized": false,
+  "source_baseline": {
+    "repository": "Kims-DeveloperGroup/story-writing-agents",
+    "commit": "c10741ea040a7df47b01074b78b0220e82a8e1b0",
+    "report_issue": 791,
+    "source_inspection_only": true,
+    "references": [
+      "README.md",
+      "docs/guides/lead-agent.md",
+      "docs/guides/consensus-runs.md",
+      "src/story_writing_agents/prompts.py",
+      "src/story_writing_agents/lead_provider_contracts.py"
+    ]
+  },
+  "scoring_dimensions": [
+    "intent_fulfillment",
+    "voice_preservation",
+    "important_error_avoidance",
+    "edit_restraint",
+    "approval_burden"
+  ],
+  "required_report_case_indices": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "cases": [
+    {
+      "case_id": "dialogue-boundaries",
+      "report_section": 13,
+      "report_case_index": 1,
+      "report_case_label": "대사만 자연스럽게 다듬기",
+      "constructed_fixture": true,
+      "source_ids": [
+        "dialogue-outline-v1",
+        "dialogue-draft-v1"
+      ],
+      "sources": [
+        {
+          "source_id": "dialogue-outline-v1",
+          "artifact_path": "core_documents/global_outline.md",
+          "encoding": "utf-8",
+          "sha256": "46af816a5e060d7aa82ad6e4069bd834302b216740c849d4c4c198fc3a2b0a56",
+          "text": "Mina must hand the key to Joon at the station. She distrusts the guards, not Joon. The key's owner remains unknown.\n"
+        },
+        {
+          "source_id": "dialogue-draft-v1",
+          "artifact_path": "manuscript/chapter-01.md",
+          "encoding": "utf-8",
+          "sha256": "0fccf50dcb3f2f9aa7c042b5bc05130e16d6f739cb55159fa0502d5cf0b46e81",
+          "text": "Mina said, \"I—I guess you should take it. I mean, if you can.\"\nJoon said, \"I can take it. You can trust me.\"\n"
+        }
+      ],
+      "user_prompts": [
+        "Polish only the dialogue in ${manuscript/chapter-01.md}. Keep Mina's hesitation, Joon's reassurance, the key handoff, and the existing relationship."
+      ],
+      "editorial_brief": {
+        "intended_effect": "Natural spoken rhythm without changing what happens.",
+        "preserve": [
+          "Hesitation and reassurance",
+          "Key handoff",
+          "Trust between Mina and Joon"
+        ],
+        "permitted_changes": [
+          "Dialogue wording and punctuation"
+        ],
+        "success_criteria": [
+          "More natural dialogue with the same events, motivation, and voice"
+        ]
+      },
+      "context_material": [],
+      "workflow_steps": [],
+      "current_baseline": {
+        "status": "source_inspected",
+        "behavior": "Ordinary substantive story work requires affected specialists; runtime evidence does not establish stylistic quality."
+      },
+      "target_behavior": {
+        "status": "proposed",
+        "description": "Give specialists the same preserve/change brief and justify any material editorial choice.",
+        "delivery_issues": [
+          795,
+          797
+        ]
+      },
+      "expected_observations": [
+        {
+          "observation_id": "dialogue-source-grounding",
+          "category": "workflow",
+          "expectation": "Source-dependent advice uses actual runtime READ evidence for the selected fixture sources.",
+          "evidence_required": "Recorded READ citations and source hashes"
+        },
+        {
+          "observation_id": "dialogue-restraint",
+          "category": "editorial",
+          "expectation": "Changes stay within dialogue expression; no new event, motivation, or relationship is introduced.",
+          "evidence_required": "Original/output diff and blinded human scores"
+        }
+      ],
+      "scoring_dimensions": [
+        "intent_fulfillment",
+        "voice_preservation",
+        "important_error_avoidance",
+        "edit_restraint",
+        "approval_burden"
+      ],
+      "acceptance_criteria": [
+        "AC1",
+        "AC2",
+        "AC3",
+        "AC4"
+      ]
+    },
+    {
+      "case_id": "intentional-unreliable-narrator",
+      "report_section": 13,
+      "report_case_index": 2,
+      "report_case_label": "의도적 불신뢰 화자",
+      "constructed_fixture": true,
+      "source_ids": [
+        "unreliable-outline-v1",
+        "unreliable-draft-v1"
+      ],
+      "sources": [
+        {
+          "source_id": "unreliable-outline-v1",
+          "artifact_path": "core_documents/global_outline.md",
+          "encoding": "utf-8",
+          "sha256": "0dd401ae2e2038a4619ff9663531d2e3900d9e606a16eeed6219ca8f4103b02d",
+          "text": "The narrator lies about returning the key. The contradiction is deliberate; whether the room exists stays unresolved.\n"
+        },
+        {
+          "source_id": "unreliable-draft-v1",
+          "artifact_path": "manuscript/chapter-01.md",
+          "encoding": "utf-8",
+          "sha256": "5fb327a846047401a397b9589ecba3bb9d2a14178cebd55317c325f303cb4998",
+          "text": "I never returned the key. I know that much.\nYet every night I hear it turn in the lock of the room I swore I had never entered.\n"
+        }
+      ],
+      "user_prompts": [
+        "Review ${manuscript/chapter-01.md} for clarity while preserving the deliberately unreliable narrator and uncertainty about the room."
+      ],
+      "editorial_brief": {
+        "intended_effect": "Unease through deliberate inconsistency.",
+        "preserve": [
+          "Narrator's unreliable claim",
+          "Room's unresolved existence"
+        ],
+        "permitted_changes": [
+          "Clarity of expression",
+          "A question about unintended confusion"
+        ],
+        "success_criteria": [
+          "Intentional ambiguity is distinguished from an actual setting error"
+        ]
+      },
+      "context_material": [],
+      "workflow_steps": [],
+      "current_baseline": {
+        "status": "source_inspected",
+        "behavior": "Required specialist scope and exact candidate review exist; there is no deterministic test of whether ambiguity is intentional."
+      },
+      "target_behavior": {
+        "status": "proposed",
+        "description": "Classify fact, viewpoint, interpretation, and intentional ambiguity before proposing a correction.",
+        "delivery_issues": [
+          795,
+          797,
+          799
+        ]
+      },
+      "expected_observations": [
+        {
+          "observation_id": "unreliable-classification",
+          "category": "editorial",
+          "expectation": "Do not resolve the narrator's lie or assert that the room exists merely to eliminate contradiction.",
+          "evidence_required": "Findings with source rationale and human review"
+        },
+        {
+          "observation_id": "unreliable-no-fabricated-fact",
+          "category": "workflow",
+          "expectation": "A model interpretation is not recorded as a read fact or an approved/applied decision.",
+          "evidence_required": "READ evidence and decision provenance"
+        }
+      ],
+      "scoring_dimensions": [
+        "intent_fulfillment",
+        "voice_preservation",
+        "important_error_avoidance",
+        "edit_restraint",
+        "approval_burden"
+      ],
+      "acceptance_criteria": [
+        "AC1",
+        "AC2",
+        "AC3",
+        "AC4"
+      ]
+    },
+    {
+      "case_id": "stronger-effect",
+      "report_section": 13,
+      "report_case_index": 3,
+      "report_case_label": "“더 강렬하게”라는 요청",
+      "constructed_fixture": true,
+      "source_ids": [
+        "effect-outline-v1",
+        "effect-draft-v1"
+      ],
+      "sources": [
+        {
+          "source_id": "effect-outline-v1",
+          "artifact_path": "core_documents/global_outline.md",
+          "encoding": "utf-8",
+          "sha256": "bdca2f1333c16d6921f00b3a6852e08609d7776fd72e58c0d643778a33e339fb",
+          "text": "The reunion should feel threatening without violence or a new betrayal. Mina remains unsure of the stranger's intention.\n"
+        },
+        {
+          "source_id": "effect-draft-v1",
+          "artifact_path": "manuscript/chapter-01.md",
+          "encoding": "utf-8",
+          "sha256": "5fcdfb0a307a8603d537ce5187c411f51c56fff3b8b0df78152a13df49a78e67",
+          "text": "The stranger stood by the door. Mina waited for him to speak.\n"
+        }
+      ],
+      "user_prompts": [
+        "Make ${manuscript/chapter-01.md} more intense."
+      ],
+      "editorial_brief": {
+        "intended_effect": "Threatening anticipation.",
+        "preserve": [
+          "No violence",
+          "No new betrayal",
+          "Uncertain intention"
+        ],
+        "permitted_changes": [
+          "Timing, sensory detail, and dialogue"
+        ],
+        "success_criteria": [
+          "A grounded interpretation or one material clarification, without invented plot escalation"
+        ]
+      },
+      "context_material": [],
+      "workflow_steps": [],
+      "current_baseline": {
+        "status": "source_inspected",
+        "behavior": "The Lead can clarify and route work; source validation does not judge whether an editorial interpretation is useful."
+      },
+      "target_behavior": {
+        "status": "proposed",
+        "description": "Establish an effect-led brief, using a material clarification only when the available intent leaves a meaningful choice unresolved.",
+        "delivery_issues": [
+          795
+        ]
+      },
+      "expected_observations": [
+        {
+          "observation_id": "effect-brief",
+          "category": "editorial",
+          "expectation": "Identify the intended effect and keep the known boundaries; ask only a materially useful question if needed.",
+          "evidence_required": "Brief, questions, final output, and blinded scores"
+        },
+        {
+          "observation_id": "effect-no-unsourced-escalation",
+          "category": "editorial",
+          "expectation": "Do not substitute a fight, death, or betrayal for intensity.",
+          "evidence_required": "Source/output diff and important-error assessment"
+        }
+      ],
+      "scoring_dimensions": [
+        "intent_fulfillment",
+        "voice_preservation",
+        "important_error_avoidance",
+        "edit_restraint",
+        "approval_burden"
+      ],
+      "acceptance_criteria": [
+        "AC1",
+        "AC2",
+        "AC3",
+        "AC4"
+      ]
+    },
+    {
+      "case_id": "minority-setting-error",
+      "report_section": 13,
+      "report_case_index": 4,
+      "report_case_label": "두 전문가 찬성, 한 전문가 설정 오류 지적",
+      "constructed_fixture": true,
+      "source_ids": [
+        "bridge-setting-v1",
+        "bridge-candidate-v1"
+      ],
+      "sources": [
+        {
+          "source_id": "bridge-setting-v1",
+          "artifact_path": "core_documents/global_outline.md",
+          "encoding": "utf-8",
+          "sha256": "8f803ee6cf5cb74220e1ff4527a80f20e526a31b8be9d66719e5895303a7ae8f",
+          "text": "The only bridge collapsed at 09:00 and remains impassable throughout the chapter. No alternate crossing is established.\n"
+        },
+        {
+          "source_id": "bridge-candidate-v1",
+          "artifact_path": "manuscript/chapter-01.md",
+          "encoding": "utf-8",
+          "sha256": "014b6b615208cd428d9baaeb7ec65c5d4a411d83c19a535344ca5cede4392cf2",
+          "text": "At 21:00 Mina ran across the bridge and reached Joon before the guards.\n"
+        }
+      ],
+      "user_prompts": [
+        "Assess the proposed escape in ${manuscript/chapter-01.md} against ${core_documents/global_outline.md} and explain your editorial decision."
+      ],
+      "editorial_brief": {
+        "intended_effect": "Urgent but causally sound escape.",
+        "preserve": [
+          "Established bridge collapse",
+          "No invented alternate crossing"
+        ],
+        "permitted_changes": [
+          "Revise the escape after checking its premise",
+          "Defer the choice with the contradiction disclosed"
+        ],
+        "success_criteria": [
+          "A source-bound setting error is resolved or explicitly deferred, never outvoted"
+        ]
+      },
+      "context_material": [
+        {
+          "kind": "constructed_specialist_recommendation",
+          "role": "plot_architect",
+          "position": "support",
+          "text": "The crossing makes the escape urgent."
+        },
+        {
+          "kind": "constructed_specialist_recommendation",
+          "role": "character_custodian",
+          "position": "support",
+          "text": "Mina choosing Joon expresses loyalty."
+        },
+        {
+          "kind": "constructed_specialist_recommendation",
+          "role": "execution_specialist",
+          "position": "concern",
+          "text": "The bridge collapsed at 09:00; the 21:00 crossing conflicts with the supplied setting."
+        }
+      ],
+      "workflow_steps": [],
+      "current_baseline": {
+        "status": "source_inspected",
+        "behavior": "Runtime validates reviewer identity and evidence. These checks alone do not determine the creative merit or truth of the synthesis."
+      },
+      "target_behavior": {
+        "status": "proposed",
+        "description": "Give a reasoned disposition to each material recommendation and disclose unresolved costs; reviewer unanimity is not an automatic rule.",
+        "delivery_issues": [
+          795,
+          797
+        ]
+      },
+      "expected_observations": [
+        {
+          "observation_id": "minority-reasoned-disposition",
+          "category": "editorial",
+          "expectation": "Two supportive recommendations do not erase the documented bridge contradiction.",
+          "evidence_required": "Source-bound finding, synthesis rationale, and human assessment"
+        },
+        {
+          "observation_id": "minority-no-false-consensus",
+          "category": "workflow",
+          "expectation": "Do not claim that a source-bound concern was resolved merely because other reviewers support the candidate.",
+          "evidence_required": "Specialist materials and final synthesis"
+        }
+      ],
+      "scoring_dimensions": [
+        "intent_fulfillment",
+        "voice_preservation",
+        "important_error_avoidance",
+        "edit_restraint",
+        "approval_burden"
+      ],
+      "acceptance_criteria": [
+        "AC1",
+        "AC2",
+        "AC3",
+        "AC4"
+      ]
+    },
+    {
+      "case_id": "incompatible-recommendations",
+      "report_section": 13,
+      "report_case_index": 5,
+      "report_case_label": "제안들이 양립 불가능",
+      "constructed_fixture": true,
+      "source_ids": [
+        "ambiguity-outline-v1",
+        "ambiguity-draft-v1"
+      ],
+      "sources": [
+        {
+          "source_id": "ambiguity-outline-v1",
+          "artifact_path": "core_documents/global_outline.md",
+          "encoding": "utf-8",
+          "sha256": "e6a402e6cd9eb134f46d2b0c204533cafd1ed63f9a799dca155b8719be7be77b",
+          "text": "The stranger's allegiance must remain unresolved through this chapter. A later chapter reveals it.\n"
+        },
+        {
+          "source_id": "ambiguity-draft-v1",
+          "artifact_path": "manuscript/chapter-01.md",
+          "encoding": "utf-8",
+          "sha256": "6caede0d3f80b980a285c78629ae744bc099ba6a7d2fda81bbdfe4097e91689a",
+          "text": "The stranger left the key on the table and closed the door without looking back.\n"
+        }
+      ],
+      "user_prompts": [
+        "Improve the ending of ${manuscript/chapter-01.md} while preserving uncertainty about the stranger's allegiance."
+      ],
+      "editorial_brief": {
+        "intended_effect": "A tense unresolved ending.",
+        "preserve": [
+          "No allegiance reveal",
+          "Later reveal remains possible"
+        ],
+        "permitted_changes": [
+          "Ending rhythm, gesture, and implication"
+        ],
+        "success_criteria": [
+          "A coherent choice with explicit tradeoffs, rather than a contradictory compromise"
+        ]
+      },
+      "context_material": [
+        {
+          "kind": "constructed_specialist_recommendation",
+          "role": "plot_architect",
+          "text": "Reveal that the stranger is the traitor for a sharp twist."
+        },
+        {
+          "kind": "constructed_specialist_recommendation",
+          "role": "character_custodian",
+          "text": "Keep his allegiance uncertain so Mina's distrust stays meaningful."
+        },
+        {
+          "kind": "constructed_specialist_recommendation",
+          "role": "execution_specialist",
+          "text": "Strengthen the final gesture without stating what it means."
+        }
+      ],
+      "workflow_steps": [],
+      "current_baseline": {
+        "status": "source_inspected",
+        "behavior": "The Lead integrates specialist work; evidence identity checks do not evaluate whether incompatible advice is coherently resolved."
+      },
+      "target_behavior": {
+        "status": "proposed",
+        "description": "Accept, modify, defer, or reject incompatible suggestions against the shared brief and explain the cost of the chosen direction.",
+        "delivery_issues": [
+          795,
+          797
+        ]
+      },
+      "expected_observations": [
+        {
+          "observation_id": "incompatible-choice",
+          "category": "editorial",
+          "expectation": "Do not simultaneously reveal the allegiance and claim it remains unresolved.",
+          "evidence_required": "Output and rationale scored against the brief"
+        },
+        {
+          "observation_id": "incompatible-cost",
+          "category": "editorial",
+          "expectation": "Explain which advice was used and the loss or cost of rejecting another direction.",
+          "evidence_required": "Recommendation dispositions and human assessment"
+        }
+      ],
+      "scoring_dimensions": [
+        "intent_fulfillment",
+        "voice_preservation",
+        "important_error_avoidance",
+        "edit_restraint",
+        "approval_burden"
+      ],
+      "acceptance_criteria": [
+        "AC1",
+        "AC2",
+        "AC3",
+        "AC4"
+      ]
+    },
+    {
+      "case_id": "review-only-exact-input",
+      "report_section": 13,
+      "report_case_index": 6,
+      "report_case_label": "완성본을 변경하지 않는 검토",
+      "constructed_fixture": true,
+      "source_ids": [
+        "finished-draft-v1"
+      ],
+      "sources": [
+        {
+          "source_id": "finished-draft-v1",
+          "artifact_path": "manuscript/chapter-01.md",
+          "encoding": "utf-8",
+          "sha256": "cc7719526995a478be5472e064809b00e1a368a65a79421ee231f8bf602aec24",
+          "text": "Mina kept the key—then waited.  Nothing moved.\n\"Not yet,\" she said.\n\n"
+        }
+      ],
+      "user_prompts": [
+        "This is my finished draft in ${manuscript/chapter-01.md}. Review it and list findings; do not rewrite or apply changes."
+      ],
+      "editorial_brief": {
+        "intended_effect": "Useful critique of an immutable finished draft.",
+        "preserve": [
+          "Every UTF-8 byte, including doubled spaces and final blank line"
+        ],
+        "permitted_changes": [
+          "Review findings only"
+        ],
+        "success_criteria": [
+          "The selected input is the exact candidate reviewed by every reviewer"
+        ]
+      },
+      "context_material": [],
+      "workflow_steps": [
+        {
+          "instruction": "Evaluate ordinary Lead and consensus flows separately; use the documented existing ordinary review flow and the proposed explicit consensus review-only control when it becomes available."
+        },
+        {
+          "instruction": "Record baseline consensus review-only as not_supported; default transforming authoring is not a review-only pass."
+        }
+      ],
+      "current_baseline": {
+        "status": "source_inspected",
+        "behavior": "Ordinary collaboration supports a disclosed finished-candidate review. Baseline consensus supplied-draft submission instead begins a transforming DRAFT phase; it has no explicit review-only adoption contract."
+      },
+      "target_behavior": {
+        "status": "proposed",
+        "description": "Explicit review-only Lead and consensus workflows preserve supplied text; a requested revision starts fresh authoring authority.",
+        "delivery_issues": [
+          796,
+          797
+        ]
+      },
+      "expected_observations": [
+        {
+          "observation_id": "review-exact-bytes",
+          "category": "workflow",
+          "expectation": "Input, adopted candidate, and every reviewer input have identical SHA-256 values; no normalization or rewrite is allowed.",
+          "evidence_required": "Actual candidate bytes and per-reviewer input hashes"
+        },
+        {
+          "observation_id": "review-separate-authority",
+          "category": "workflow",
+          "expectation": "Review confirmation never grants Apply or Commit authority; a suggested revision needs a fresh requested activity.",
+          "evidence_required": "Structured decisions and operation records"
+        },
+        {
+          "observation_id": "review-useful-findings",
+          "category": "editorial",
+          "expectation": "Findings are concrete and separately identify optional suggestions.",
+          "evidence_required": "Findings and blinded human assessment"
+        }
+      ],
+      "scoring_dimensions": [
+        "intent_fulfillment",
+        "voice_preservation",
+        "important_error_avoidance",
+        "edit_restraint",
+        "approval_burden"
+      ],
+      "acceptance_criteria": [
+        "AC1",
+        "AC2",
+        "AC3",
+        "AC4"
+      ]
+    },
+    {
+      "case_id": "discarded-alternative-history",
+      "report_section": 13,
+      "report_case_index": 7,
+      "report_case_label": "긴 대화에 폐기한 대안이 남음",
+      "constructed_fixture": true,
+      "source_ids": [
+        "protective-brother-v1",
+        "reunion-draft-v1"
+      ],
+      "sources": [
+        {
+          "source_id": "protective-brother-v1",
+          "artifact_path": "core_documents/global_outline.md",
+          "encoding": "utf-8",
+          "sha256": "7d3959442bb3bf8f9bdcd9de4610efd625ed7afe51832e289defbe4c7329d799",
+          "text": "Mina's brother is protective. He must not be made the hidden traitor.\n"
+        },
+        {
+          "source_id": "reunion-draft-v1",
+          "artifact_path": "manuscript/chapter-01.md",
+          "encoding": "utf-8",
+          "sha256": "6b8714c49a042955843626d97bd3d1b522c968b5248a91e15a61ec27af67bc7c",
+          "text": "Her brother was waiting at the station, holding a second ticket.\n"
+        }
+      ],
+      "user_prompts": [
+        "Outline the reunion using the current direction and ${core_documents/global_outline.md}."
+      ],
+      "editorial_brief": {
+        "intended_effect": "A guarded but protective reunion.",
+        "preserve": [
+          "Protective brother",
+          "Explicit rejection of betrayal"
+        ],
+        "permitted_changes": [
+          "Scene structure and emotional pacing"
+        ],
+        "success_criteria": [
+          "Discarded ideas remain history rather than becoming current facts"
+        ]
+      },
+      "context_material": [
+        {
+          "kind": "constructed_conversation_turn",
+          "speaker": "user",
+          "text": "Maybe Mina's brother could be the traitor."
+        },
+        {
+          "kind": "constructed_conversation_turn",
+          "speaker": "lead",
+          "text": "That is one possible direction."
+        },
+        {
+          "kind": "constructed_conversation_turn",
+          "speaker": "user",
+          "text": "Reject the betrayal idea. Keep the brother protective; that is the current direction."
+        }
+      ],
+      "workflow_steps": [],
+      "current_baseline": {
+        "status": "source_inspected",
+        "behavior": "Raw collaboration history and artifact objectives survive restart, but there is no typed editorial-decision ledger distinguishing all rejected alternatives."
+      },
+      "target_behavior": {
+        "status": "proposed",
+        "description": "Retrieve the current decision with its actual user source and retain the rejected alternative as history.",
+        "delivery_issues": [
+          795,
+          799
+        ]
+      },
+      "expected_observations": [
+        {
+          "observation_id": "discarded-not-revived",
+          "category": "editorial",
+          "expectation": "The rejected betrayal is not resurrected as the current plot.",
+          "evidence_required": "Follow-up output and human assessment"
+        },
+        {
+          "observation_id": "discarded-approval-provenance",
+          "category": "workflow",
+          "expectation": "Distinguish a user-approved direction, a rejected idea, and an applied artifact; provider prose alone cannot establish approval or application.",
+          "evidence_required": "Actual user/Apply sources and projected decision state"
+        }
+      ],
+      "scoring_dimensions": [
+        "intent_fulfillment",
+        "voice_preservation",
+        "important_error_avoidance",
+        "edit_restraint",
+        "approval_burden"
+      ],
+      "acceptance_criteria": [
+        "AC1",
+        "AC2",
+        "AC3",
+        "AC4"
+      ]
+    },
+    {
+      "case_id": "exploration-and-controlled-adoption",
+      "report_section": null,
+      "report_case_index": null,
+      "report_case_label": "Extension: explicit exploration and adoption",
+      "constructed_fixture": true,
+      "source_ids": [
+        "exploration-outline-v1"
+      ],
+      "sources": [
+        {
+          "source_id": "exploration-outline-v1",
+          "artifact_path": "core_documents/global_outline.md",
+          "encoding": "utf-8",
+          "sha256": "46af816a5e060d7aa82ad6e4069bd834302b216740c849d4c4c198fc3a2b0a56",
+          "text": "Mina must hand the key to Joon at the station. She distrusts the guards, not Joon. The key's owner remains unknown.\n"
+        }
+      ],
+      "user_prompts": [
+        "Explore two provisional ways Mina could approach the key handoff. Do not change current story facts or files.",
+        "Choose the honest handoff option and prepare ordinary authoring work for it, with fresh confirmations."
+      ],
+      "editorial_brief": {
+        "intended_effect": "Low-commitment exploration followed by deliberate scoped adoption.",
+        "preserve": [
+          "Canonical outline until separately confirmed Apply",
+          "Only the selected option enters ordinary work",
+          "Existing pending Apply/Commit safeguards"
+        ],
+        "permitted_changes": [
+          "Clearly provisional discussion",
+          "New confirmed specialist work after adoption"
+        ],
+        "success_criteria": [
+          "No exploration-to-write or stale-authority shortcut"
+        ]
+      },
+      "context_material": [],
+      "workflow_steps": [
+        {
+          "instruction": "Select the explicit user-owned exploration control introduced by #798; no command or API name is specified by this fixture."
+        },
+        {
+          "instruction": "Repeat adoption with an outstanding Apply/Commit request; existing unresolved-operation safeguards must still hold."
+        },
+        {
+          "instruction": "Baseline capability is not_supported. After-only workflow evidence does not establish a matched before/after creative-quality improvement."
+        }
+      ],
+      "current_baseline": {
+        "status": "not_supported",
+        "behavior": "The baseline has no explicit user-owned exploration mode. Ordinary substantive story work still requires affected specialists; natural language alone must not enable a bypass."
+      },
+      "target_behavior": {
+        "status": "proposed",
+        "description": "A user-owned explicit control enables provisional exploration. Adoption starts a new scoped ordinary task with grounded sources, required specialists, and fresh confirmation.",
+        "delivery_issues": [
+          798
+        ]
+      },
+      "expected_observations": [
+        {
+          "observation_id": "exploration-provisional",
+          "category": "workflow",
+          "expectation": "Exploration does not create canonical facts, satisfy an artifact objective, or grant proposal/Apply/Commit authority.",
+          "evidence_required": "Mode selection, objective state, and operation records"
+        },
+        {
+          "observation_id": "adoption-fresh-authority",
+          "category": "workflow",
+          "expectation": "Only the selected idea enters a fresh ordinary task; provisional ideas and reviews are not reused as confirmed authority.",
+          "evidence_required": "New task/candidate identities and structured confirmations"
+        },
+        {
+          "observation_id": "exploration-creative-usefulness",
+          "category": "editorial",
+          "expectation": "Options differ meaningfully and fit the author brief, with their costs made clear.",
+          "evidence_required": "Provisional options and human assessment"
+        }
+      ],
+      "scoring_dimensions": [
+        "intent_fulfillment",
+        "voice_preservation",
+        "important_error_avoidance",
+        "edit_restraint",
+        "approval_burden"
+      ],
+      "acceptance_criteria": [
+        "AC1",
+        "AC2",
+        "AC3",
+        "AC4"
+      ]
+    },
+    {
+      "case_id": "decision-memory-restart-and-transfer",
+      "report_section": null,
+      "report_case_index": null,
+      "report_case_label": "Extension: approved/applied decision memory after restart and transfer",
+      "constructed_fixture": true,
+      "source_ids": [
+        "memory-outline-v1",
+        "memory-draft-v1"
+      ],
+      "sources": [
+        {
+          "source_id": "memory-outline-v1",
+          "artifact_path": "core_documents/global_outline.md",
+          "encoding": "utf-8",
+          "sha256": "153b9b0f42b6e2a169b4ffa90e1a4b71cf6fd6176d1c2c35cf4eff4ab6ab2514",
+          "text": "Protect the uncertainty about the key's owner. Mina should show doubt rather than make an accusation.\n"
+        },
+        {
+          "source_id": "memory-draft-v1",
+          "artifact_path": "manuscript/chapter-01.md",
+          "encoding": "utf-8",
+          "sha256": "ce6a18e8b735e39c76c129d93fcc3952c3172cfe2594bed2556da2c389f33952",
+          "text": "Mina weighed the key in her hand and let the accusation go unspoken.\n"
+        }
+      ],
+      "user_prompts": [
+        "Keep the doubt and defer the accusation. Reject an immediate owner reveal.",
+        "After restart and transfer, continue the scene using the current direction and explain why the immediate reveal was rejected."
+      ],
+      "editorial_brief": {
+        "intended_effect": "Continuity of a reasoned editorial direction.",
+        "preserve": [
+          "Protected uncertainty",
+          "Rejected immediate reveal",
+          "Distinct user-approved and applied states"
+        ],
+        "permitted_changes": [
+          "Fresh ordinary drafting under the retained direction"
+        ],
+        "success_criteria": [
+          "Current decisions retain reason and actual provenance through supported storage boundaries"
+        ]
+      },
+      "context_material": [],
+      "workflow_steps": [
+        {
+          "instruction": "Use real structured runtime confirmations to create an approved direction and, separately, a matching successful Apply; retain the actual records."
+        },
+        {
+          "instruction": "Also keep one unapproved suggestion and one rejected alternative, then restart and switch conversations."
+        },
+        {
+          "instruction": "Exercise supported filesystem/SQLite archive-transfer boundaries; verify current decision provenance before requesting the follow-up."
+        },
+        {
+          "instruction": "Typed ledger assertions are proposed behavior; raw-history availability alone is not a ledger pass."
+        }
+      ],
+      "current_baseline": {
+        "status": "source_inspected",
+        "behavior": "Schema-v2 collaboration history, artifact objectives, archive, and transfer exist; a typed editorial-decision history/current projection is proposed in #799."
+      },
+      "target_behavior": {
+        "status": "proposed",
+        "description": "Persist current decisions and rejected alternatives through the single collaboration-history authority, with approval/application state and bounded cited retrieval.",
+        "delivery_issues": [
+          799
+        ]
+      },
+      "expected_observations": [
+        {
+          "observation_id": "memory-provenance",
+          "category": "workflow",
+          "expectation": "Approval cites the actual user decision; applied state cites a matching successful Apply. A fixture or provider assertion grants neither.",
+          "evidence_required": "Runtime event identities and decision projection"
+        },
+        {
+          "observation_id": "memory-boundaries",
+          "category": "workflow",
+          "expectation": "Restart, conversation switching, and supported filesystem/SQLite archive-transfer retain current/rejected state without deleting raw history.",
+          "evidence_required": "Before/after projection and archive/transfer records"
+        },
+        {
+          "observation_id": "memory-editorial-continuity",
+          "category": "editorial",
+          "expectation": "Continuation preserves the doubt and correctly explains the rejected reveal without treating it as current setting.",
+          "evidence_required": "Follow-up output, cited reason, and human assessment"
+        }
+      ],
+      "scoring_dimensions": [
+        "intent_fulfillment",
+        "voice_preservation",
+        "important_error_avoidance",
+        "edit_restraint",
+        "approval_burden"
+      ],
+      "acceptance_criteria": [
+        "AC1",
+        "AC2",
+        "AC3",
+        "AC4"
+      ]
+    }
+  ]
+}

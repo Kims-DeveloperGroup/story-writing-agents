@@ -1805,12 +1805,11 @@ print(f"SHELL_VALUE={input('shell> ')}")
         process.wait_for_text("2/14 occurrences • Search all text='개요'", after=mark)
         process.wait_for_text("? help • q close", after=mark)
         # Wait for the final selected-match frame, not an earlier search frame.
-        selected = process.normalized_text.rfind("2/14 occurrences • Search all text='개요'")
-        footer = process.normalized_text.find("? help • q close", selected)
-        if footer < 0:
-            process.wait_for_text("? help • q close", after=selected)
-        active = process.normalized_text.rsplit("\x1b[H\x1b[2J", 1)[1]
-        active = active[:active.index("? help • q close") + len("? help • q close")]
+        selected = process.normalized_bytes.rfind("2/14 occurrences • Search all text='개요'".encode("utf-8"))
+        process.wait_for_text("? help • q close", after=selected)
+        captured = process.normalized_text
+        footer = captured.rfind("? help • q close")
+        active = captured[:footer + len("? help • q close")].rsplit("\x1b[H\x1b[2J", 1)[1]
         self.assertIn('"content": "개요 ⟦개요⟧ 0"', active)
         for draft, prompt in ((b"/JKdraft", "Search query: JKdraft│"), (b"g999", "Go to source line: 999│")):
             mark = process.output_mark()

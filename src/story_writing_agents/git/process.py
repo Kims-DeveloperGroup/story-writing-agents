@@ -171,15 +171,17 @@ class _BoundedCapture:
 def _read_only_pipe_descriptors(
     stdout: object,
     stderr: object,
-) -> tuple[int, int] | None:
+    stdin: object | None = None,
+) -> tuple[int, ...] | None:
     """Admit real POSIX pipes while preserving the injected-stream fallback."""
     if os.name != "posix":
         return None
     try:
-        descriptors = (stdout.fileno(), stderr.fileno())  # type: ignore[attr-defined]
+        streams = (stdout, stderr) + ((stdin,) if stdin is not None else ())
+        descriptors = tuple(stream.fileno() for stream in streams)  # type: ignore[attr-defined]
         if (
             any(type(descriptor) is not int or descriptor < 0 for descriptor in descriptors)
-            or descriptors[0] == descriptors[1]
+            or len(set(descriptors)) != len(descriptors)
             or any(not stat.S_ISFIFO(os.fstat(descriptor).st_mode) for descriptor in descriptors)
         ):
             return None
@@ -192,22 +194,47 @@ def _capture_read_only_pipes(
     process: subprocess.Popen[bytes],
     stdout: _BoundedCapture,
     stderr: _BoundedCapture,
-    descriptors: tuple[int, int],
+    descriptors: tuple[int, ...],
+    stdin: bytes = b"",
 ) -> tuple[int, bool]:
-    """Fairly drain bounded outputs and reap under one call-local deadline."""
+    """Fairly write/drain bounded pipes and reap under one call-local deadline."""
     selector: selectors.BaseSelector | None = None
     close_failed = False
+    input_stream = process.stdin if stdin else None
     try:
         deadline = time.monotonic() + _PROCESS_TIMEOUT_SECONDS
         selector = selectors.DefaultSelector()
-        for descriptor, capture in zip(descriptors, (stdout, stderr), strict=True):
+        for descriptor, capture in zip(descriptors[:2], (stdout, stderr), strict=True):
             os.set_blocking(descriptor, False)
             selector.register(descriptor, selectors.EVENT_READ, capture)
-        while selector.get_map():
+        if stdin:
+            if input_stream is None or len(descriptors) != 3:
+                raise _process_failure(GitFailureCode.PROCESS_START_FAILED)
+            os.set_blocking(descriptors[2], False)
+            selector.register(descriptors[2], selectors.EVENT_WRITE, None)
+        input_offset = 0
+        input_bytes = memoryview(stdin)
+        overflow = False
+        while selector.get_map() and not overflow:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise _process_failure(GitFailureCode.PROCESS_TIMED_OUT)
             for key, _events in selector.select(remaining):
+                if key.data is None:
+                    chunk = input_bytes[input_offset:input_offset + _READ_CHUNK_BYTES]
+                    try:
+                        written = os.write(key.fd, chunk)
+                    except BlockingIOError:
+                        continue
+                    if type(written) is not int or not 0 < written <= len(chunk):
+                        raise _process_failure(GitFailureCode.PROCESS_START_FAILED)
+                    input_offset += written
+                    if input_offset == len(stdin):
+                        selector.unregister(key.fd)
+                        if not _close_stream(input_stream):
+                            raise _process_failure(GitFailureCode.PROCESS_START_FAILED)
+                        input_stream = None
+                    continue
                 try:
                     chunk = os.read(key.fd, _READ_CHUNK_BYTES)
                 except BlockingIOError:
@@ -216,13 +243,21 @@ def _capture_read_only_pipes(
                     selector.unregister(key.fd)
                 else:
                     key.data.retain(chunk)
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise _process_failure(GitFailureCode.PROCESS_TIMED_OUT)
-        try:
-            returncode = process.wait(timeout=remaining)
-        except subprocess.TimeoutExpired:
-            raise _process_failure(GitFailureCode.PROCESS_TIMED_OUT) from None
+                    if key.data.exceeded:
+                        _stop_process(process)
+                        returncode = process.poll()
+                        if returncode is None:
+                            raise _process_failure(GitFailureCode.PROCESS_START_FAILED)
+                        overflow = True
+                        break
+        if not overflow:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _process_failure(GitFailureCode.PROCESS_TIMED_OUT)
+            try:
+                returncode = process.wait(timeout=remaining)
+            except subprocess.TimeoutExpired:
+                raise _process_failure(GitFailureCode.PROCESS_TIMED_OUT) from None
         if returncode is None:
             raise _process_failure(GitFailureCode.PROCESS_START_FAILED)
     except BaseException as failure:
@@ -235,6 +270,7 @@ def _capture_read_only_pipes(
         raise _process_failure(GitFailureCode.PROCESS_START_FAILED) from None
     finally:
         close_failed |= not _close_stream(selector)
+        close_failed |= not _close_stream(input_stream)
         close_failed |= not _close_stream(stdout._stream)
         close_failed |= not _close_stream(stderr._stream)
     return returncode, close_failed
@@ -323,19 +359,21 @@ class GitProcessRunner:
             raise _process_failure(GitFailureCode.PROCESS_START_FAILED)
         stdout = _BoundedCapture(process_stdout, _MAX_STDOUT_BYTES)
         stderr = _BoundedCapture(process_stderr, _MAX_STDERR_BYTES)
-        if selected_profile is GitProcessProfile.READ_ONLY and not stdin:
+        if selected_profile is GitProcessProfile.READ_ONLY:
             try:
-                descriptors = _read_only_pipe_descriptors(process_stdout, process_stderr)
+                descriptors = _read_only_pipe_descriptors(
+                    process_stdout, process_stderr, process_stdin
+                )
             except BaseException as failure:
                 try:
                     _stop_process(process)
                 except BaseException:
                     failure.add_note("Git process cleanup did not finish")
-                _close_streams(process_stdout, process_stderr)
+                _close_streams(process_stdin, process_stdout, process_stderr)
                 raise
             if descriptors is not None:
                 returncode, close_failed = _capture_read_only_pipes(
-                    process, stdout, stderr, descriptors
+                    process, stdout, stderr, descriptors, stdin
                 )
                 return self._capture_result(
                     expected_identity,

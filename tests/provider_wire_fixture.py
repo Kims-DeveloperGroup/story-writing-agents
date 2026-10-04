@@ -202,16 +202,26 @@ def assert_guidance(test, payload, schema):
         if name != "contract_guidance":
             test.assertTrue(guide["input_fields"]["$." + name].strip())
     test.assertIn("schema", " ".join(guide["response_rules"]).lower())
-    def visit(node):
-        if isinstance(node, Mapping):
-            if "type" in node or "anyOf" in node:
-                test.assertTrue(node.get("description", "").strip(), node)
-            for child in node.values():
+    assert_schema_descriptions(test, schema)
+
+
+def assert_schema_descriptions(test, schema):
+    """Inspect schema positions independently; property names are caller data."""
+    def visit(node, required=False):
+        if not isinstance(node, Mapping):
+            return
+        if required:
+            test.assertIsInstance(node.get("description"), str)
+            test.assertTrue(node["description"].strip())
+        for keyword in ("properties", "patternProperties", "$defs", "definitions", "dependentSchemas"):
+            for child in node.get(keyword, {}).values():
                 visit(child)
-        elif isinstance(node, (tuple, list)):
-            for child in node:
-                visit(child)
-    visit(schema)
+        for keyword in ("items", "additionalProperties", "contains", "not", "if", "then", "else", "propertyNames"):
+            visit(node.get(keyword))
+        for keyword in ("anyOf", "allOf", "oneOf", "prefixItems"):
+            for child in node.get(keyword, ()):
+                visit(child, keyword == "anyOf")
+    visit(schema, True)
 
 
 def capture_sample(call, name=None):

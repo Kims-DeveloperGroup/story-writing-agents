@@ -302,8 +302,10 @@ sibling-worktree identity and pins the worktree's physical `(st_dev, st_ino)`
 identity. Each repository or session-source step uses a short synchronous
 outer guard: it holds the cooperating-runtime Git lease and verifies the exact
 semantic READY resources and named physical root once before and once after the
-transaction. Nested repository work reuses that transaction with liveness and
-named-root checks instead of repeating the full READY scan. A guard never spans
+transaction. Nested repository operations retain their own fresh READY checks.
+Within one inspection, bounded Git object batches read the baseline and session
+seed commits, actual trees and manifest blobs; these bytes are never reused across
+inspections. A guard never spans
 a provider await or specialist concurrency; the next filesystem transaction
 reacquires and revalidates it. Direct Lead and Lead-synthesis paths instead
 retain one opaque six-descriptor physical-generation pin through durable
@@ -526,6 +528,12 @@ PYTHONPATH=src python -m tests.runner run \
 ```
 
 For runtime or test changes, CI requires two complementary full-suite shards.
+Hosted full shards use standard Ubuntu 24.04 ARM runners; static validation,
+the runtime fast lane and reconciliation use Ubuntu x64. Both architectures
+use the same locked dependencies and test inventory. Full-suite selection
+includes test-only changes. The fixed timing limits still apply to every
+selected full shard; a diagnostic run never replaces this evidence.
+
 Independent task threads share a host queue with four executing test processes;
 a campaign still runs only two full shards. Local `tests.runner run` commands
 enter this queue automatically. Queue waiting is separate from test wall time.

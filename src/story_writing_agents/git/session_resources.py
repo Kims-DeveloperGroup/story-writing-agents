@@ -5,6 +5,13 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+
+from .inspection_objects import (
+    InspectionObjectFailureKind,
+    InspectionObjectProofError,
+    loose_object_format_width,
+    read_loose_inspection_batch,
+)
 import stat
 import threading
 import time
@@ -24,6 +31,7 @@ from .contracts import (
     GIT_BASELINE_COMMIT_MESSAGE,
     GitBaselineManifest,
     GitEffectiveIdentity,
+    GitFailureCode,
     GitIdentity,
     GitManifestEntry,
     GitOperationError,
@@ -69,8 +77,19 @@ _WORKSPACE_MUTABLE_CONFIGURATION_PATHS = frozenset(
 _OBJECT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _MAX_REFS = 65_536
 _MAX_WORKTREES = 65_536
+_MAX_INSPECTION_OBJECTS = 65_536
 _MAX_ADMIN_FILE_BYTES = 64 * 1024
+_MAX_LOOSE_REF_DESCRIPTORS = 128
+_LOOSE_REF_TIMEOUT_SECONDS = 1.0
 _ZERO_BY_LENGTH = {40: "0" * 40, 64: "0" * 64}
+
+
+class _InspectionBatchOverflow(Exception):
+    """An owned optimistic read exceeded its cap after verified child cleanup."""
+
+
+class _InspectionPrefetchUnsuitable(Exception):
+    """A bounded, safely completed prefetch needs the original verifier."""
 
 
 _GENERATION_DESCRIPTOR_COUNT = 6
@@ -698,15 +717,30 @@ class _Repository:
         *,
         allowed_worktree_changes: tuple[str, ...] = (),
     ) -> GitSessionResourceInspection:
-        refs = self._read_refs()
+        refs = self._read_refs(allow_loose=True)
+        # Immutable-object results live only until this inspection's exit check.
+        internal = next(
+            (oid for name, oid, _ in refs.rows if name == identity.internal_ref), None
+        )
+        commit_objects: dict[str, bytes] = {}
         baseline = self._verify_main(
             manifest,
             refs,
             allowed_worktree_changes=allowed_worktree_changes,
+            commit_objects=commit_objects,
+            internal_tip=internal,
+            allow_loose=True,
         )
         facts = self._facts(refs)
-        result = self._classify(identity, baseline, facts)
-        self._require_refs_current(refs)
+        result = self._classify(
+            identity,
+            baseline,
+            facts,
+            inspected_baseline=baseline,
+            inspected_tip=(internal, commit_objects.get(internal))
+            if internal is not None else None,
+        )
+        self._require_refs_current(refs, allow_loose=True)
         return result
 
     def list(
@@ -919,6 +953,9 @@ class _Repository:
         refs: _RefSnapshot,
         *,
         allowed_worktree_changes: tuple[str, ...] = (),
+        commit_objects: dict[str, bytes] | None = None,
+        internal_tip: str | None = None,
+        allow_loose: bool = False,
     ) -> str:
         baseline = next(
             (
@@ -935,9 +972,41 @@ class _Repository:
                 GitSessionResourceState.RECOVERY_REQUIRED,
                 GitSessionRecoveryAction.OPERATOR_RECOVERY,
             )
-        commit_header = self._required(
-            ("show", "-s", "--format=%P%x00%B", baseline), read_only=True
-        ).stdout
+        tree = None
+        payload = None
+        if commit_objects is not None:
+            try:
+                tree = self._inspection_tree_digests(
+                    manifest, baseline, internal_tip, commit_objects, allow_loose=allow_loose
+                )
+            except (_InspectionBatchOverflow, _InspectionPrefetchUnsuitable):
+                commit_objects.clear()
+                # Retry once through the original formatted-header/blob path.
+                return self._verify_main(
+                    manifest, refs, allowed_worktree_changes=allowed_worktree_changes
+                )
+            payload = commit_objects.get(baseline)
+        if payload is None or any(
+            line.startswith(b"encoding ") for line in payload.partition(b"\n\n")[0].split(b"\n")
+        ):
+            commit_header = self._required(
+                ("show", "-s", "--format=%P%x00%B", baseline), read_only=True
+            ).stdout
+        else:
+            header, separator, message = payload.partition(b"\n\n")
+            if not separator:
+                raise _resource_error(
+                    GitSessionFailureCode.RECOVERY_REQUIRED,
+                    GitSessionOperationKind.INSPECT,
+                    GitSessionResourceState.RECOVERY_REQUIRED,
+                    GitSessionRecoveryAction.OPERATOR_RECOVERY,
+                )
+            parent_ids = b" ".join(
+                line.removeprefix(b"parent ")
+                for line in header.split(b"\n")
+                if line.startswith(b"parent ")
+            )
+            commit_header = parent_ids + b"\x00" + message
         parent_bytes, separator, message_bytes = commit_header.partition(b"\x00")
         if not separator:
             raise _resource_error(
@@ -959,7 +1028,8 @@ class _Repository:
                 GitSessionRecoveryAction.OPERATOR_RECOVERY,
             )
         expected = {entry.path: entry.content_digest for entry in manifest.entries}
-        tree = self._tree_digests(baseline)
+        if tree is None:
+            tree = self._tree_digests(baseline)
         if tree != expected:
             raise _resource_error(
                 GitSessionFailureCode.RECOVERY_REQUIRED,
@@ -1019,7 +1089,110 @@ class _Repository:
             )
         return hashlib.sha256(status + b"\0" + content_delta).hexdigest()
 
-    def _tree_digests(self, commit: str) -> dict[str, str]:
+    def _inspection_tree_digests(
+        self,
+        manifest: GitBaselineManifest,
+        baseline: str,
+        internal_tip: str | None,
+        commit_objects: dict[str, bytes],
+        *,
+        allow_loose: bool = False,
+    ) -> dict[str, str]:
+        """Prove the actual namespace and contents within one bounded batch."""
+        directories, requests, stdin = _inspection_tree_plan(
+            manifest, baseline, internal_tip
+        )
+        output = self._loose_object_output(stdin) if allow_loose else None
+        if output is None:
+            output = self._required(
+                ("cat-file", "--batch", "--buffer"),
+                stdin=stdin,
+                read_only=True,
+                allow_output_overflow=True,
+                allow_unsuitable_result=True,
+            ).stdout
+        frames: dict[str, tuple[bytes, bytes, memoryview]] = {}
+        unsuitable = False
+        try:
+            if type(output) is not bytes:
+                raise ValueError
+            offset = 0
+            for query, role, path in requests:
+                header_end = output.find(b"\n", offset)
+                if header_end < 0:
+                    raise ValueError
+                header = output[offset:header_end]
+                if header == query + b" missing":
+                    offset = header_end + 1
+                    if role == b"commit":
+                        raise ValueError
+                    unsuitable |= role != b"tip"
+                    continue
+                object_id, kind, raw_size = header.split(b" ")
+                if (
+                    _object_id(object_id).encode("ascii") != object_id
+                    or len(object_id) != len(baseline)
+                    or kind not in {b"commit", b"tree", b"blob", b"tag"}
+                    or not raw_size.isdigit()
+                    or len(raw_size) > len(str(_MAX_STDOUT_BYTES))
+                ):
+                    raise ValueError
+                size = int(raw_size)
+                if size > _MAX_STDOUT_BYTES or raw_size != str(size).encode("ascii"):
+                    raise ValueError
+                body_start = header_end + 1
+                body_end = body_start + size
+                if body_end >= len(output) or output[body_end] != 10:
+                    raise ValueError
+                body = memoryview(output)[body_start:body_end]
+                offset = body_end + 1
+                if role in {b"commit", b"tip"}:
+                    if object_id != query or (role == b"commit" and kind != b"commit"):
+                        raise ValueError
+                    if kind == b"commit" and (
+                        role == b"commit" or size <= _MAX_ADMIN_FILE_BYTES
+                    ):
+                        commit_objects[object_id.decode("ascii")] = bytes(body)
+                else:
+                    if path is None:
+                        raise ValueError
+                    unsuitable |= kind != role
+                    frames[path] = object_id, kind, body
+            if offset != len(output):
+                raise ValueError
+        except (ValueError, TypeError, UnicodeError):
+            raise _resource_error(
+                GitSessionFailureCode.RECOVERY_REQUIRED,
+                GitSessionOperationKind.INSPECT,
+                GitSessionResourceState.RECOVERY_REQUIRED,
+                GitSessionRecoveryAction.OPERATOR_RECOVERY,
+            ) from None
+        if unsuitable:
+            raise _InspectionPrefetchUnsuitable
+
+        header, separator, _message = commit_objects[baseline].partition(b"\n\n")
+        tree_ids = [line[5:] for line in header.split(b"\n") if line.startswith(b"tree ")]
+        if not separator or len(tree_ids) != 1 or frames[""][0] != tree_ids[0]:
+            raise _InspectionPrefetchUnsuitable
+        for directory, expected in directories.items():
+            actual = _inspection_tree_children(frames[directory][2], len(baseline) // 2)
+            if actual.keys() != expected.keys():
+                raise _InspectionPrefetchUnsuitable
+            for name, (mode, path) in expected.items():
+                if actual[name] != (mode, frames[path][0]):
+                    raise _InspectionPrefetchUnsuitable
+        return {
+            entry.path: hashlib.sha256(frames[entry.path][2]).hexdigest()
+            for entry in manifest.entries
+        }
+
+    def _tree_digests(
+        self,
+        commit: str,
+        *,
+        commit_ids: tuple[str, ...] = (),
+        commit_objects: dict[str, bytes] | None = None,
+    ) -> dict[str, str]:
         """Read one fresh exact tree through a bounded immutable-object batch."""
 
         failure: GitSessionResourceError | None = None
@@ -1029,11 +1202,14 @@ class _Repository:
             ).stdout
             if type(tree) is not bytes or (tree and not tree.endswith(b"\x00")):
                 raise ValueError
-            if not tree:
+            if not tree and not commit_ids:
                 return {}
-            entries: list[tuple[str, bytes, int]] = []
+            entries: list[tuple[str | None, bytes, int, bytes]] = [
+                (None, _object_id(value.encode("ascii")).encode("ascii"), -1, b"commit")
+                for value in dict.fromkeys(commit_ids)
+            ]
             paths: set[str] = set()
-            for row in tree[:-1].split(b"\x00"):
+            for row in tree[:-1].split(b"\x00") if tree else ():
                 header, raw_path = row.split(b"\t", 1)
                 mode, kind, raw_object_id, padded_size = header.split(b" ", 3)
                 object_id = _object_id(raw_object_id).encode("ascii")
@@ -1052,60 +1228,98 @@ class _Repository:
                     or padded_size != str(size).rjust(7).encode("ascii")
                     or size > _MAX_STDOUT_BYTES
                     or path in paths
-                    or len(entries) >= 65_536
+                    or len(paths) >= 65_536
                 ):
                     raise ValueError
                 paths.add(path)
-                entries.append((path, object_id, size))
+                entries.append((path, object_id, size, kind))
             values: dict[str, str] = {}
 
-            def read_batch(batch: list[tuple[str, bytes, int]]) -> None:
+            def read_batch(batch: list[tuple[str | None, bytes, int, bytes]]) -> None:
+                overflow_option = (
+                    {"allow_output_overflow": True}
+                    if any(path is None for path, _, _, _ in batch) else {}
+                )
                 output = self._required(
                     ("cat-file", "--batch"),
-                    stdin=b"".join(object_id + b"\n" for _, object_id, _ in batch),
+                    stdin=b"".join(object_id + b"\n" for _, object_id, _, _ in batch),
                     read_only=True,
+                    **overflow_option,
                 ).stdout
                 if type(output) is not bytes:
                     raise ValueError
                 offset = 0
-                for path, object_id, size in batch:
+                for path, object_id, size, expected_kind in batch:
                     header_end = output.find(b"\n", offset)
                     if header_end < 0:
                         raise ValueError
-                    observed_id, kind, raw_size = output[offset:header_end].split(b" ")
                     if (
-                        observed_id != object_id
-                        or kind != b"blob"
-                        or raw_size != str(size).encode("ascii")
+                        path is None
+                        and object_id != commit.encode("ascii")
+                        and output[offset:header_end] == object_id + b" missing"
                     ):
+                        offset = header_end + 1
+                        continue
+                    observed_id, kind, raw_size = output[offset:header_end].split(b" ")
+                    if observed_id != object_id:
+                        raise ValueError
+                    if path is None:
+                        if (
+                            kind not in {b"commit", b"blob", b"tree", b"tag"}
+                            or (object_id == commit.encode("ascii") and kind != b"commit")
+                            or not raw_size.isdigit()
+                            or len(raw_size) > len(str(_MAX_STDOUT_BYTES))
+                        ):
+                            raise ValueError
+                        size = int(raw_size)
+                        if size > _MAX_STDOUT_BYTES or raw_size != str(size).encode("ascii"):
+                            raise ValueError
+                    elif kind != expected_kind or raw_size != str(size).encode("ascii"):
                         raise ValueError
                     body_start = header_end + 1
                     body_end = body_start + size
                     if body_end >= len(output) or output[body_end] != 10:
                         raise ValueError
-                    values[path] = hashlib.sha256(
-                        memoryview(output)[body_start:body_end]
-                    ).hexdigest()
+                    if path is None:
+                        if commit_objects is None:
+                            raise ValueError
+                        if kind == b"commit" and (
+                            object_id == commit.encode("ascii")
+                            or size <= _MAX_ADMIN_FILE_BYTES
+                        ):
+                            commit_objects[object_id.decode("ascii")] = output[body_start:body_end]
+                    else:
+                        values[path] = hashlib.sha256(
+                            memoryview(output)[body_start:body_end]
+                        ).hexdigest()
                     offset = body_end + 1
                 if offset != len(output):
                     raise ValueError
 
-            batch: list[tuple[str, bytes, int]] = []
+            batch: list[tuple[str | None, bytes, int, bytes]] = []
             batch_bytes = 0
             for entry in entries:
-                path, object_id, size = entry
-                response_bytes = len(object_id) + len(b" blob ") + len(str(size)) + size + 2
+                path, object_id, size, kind = entry
+                response_bytes = (
+                    len(object_id) + len(kind) + len(str(size)) + size + 4
+                    if size >= 0 else 0
+                )
                 if batch and batch_bytes + response_bytes > _MAX_STDOUT_BYTES:
                     read_batch(batch)
                     batch = []
                     batch_bytes = 0
                 if response_bytes > _MAX_STDOUT_BYTES:
                     blob = self._required(
-                        ("cat-file", "blob", object_id.decode("ascii")), read_only=True
+                        ("cat-file", kind.decode("ascii"), object_id.decode("ascii")), read_only=True
                     ).stdout
                     if type(blob) is not bytes or len(blob) != size:
                         raise ValueError
-                    values[path] = hashlib.sha256(blob).hexdigest()
+                    if path is None:
+                        if commit_objects is None:
+                            raise ValueError
+                        commit_objects[object_id.decode("ascii")] = blob
+                    else:
+                        values[path] = hashlib.sha256(blob).hexdigest()
                 else:
                     batch.append(entry)
                     batch_bytes += response_bytes
@@ -1123,12 +1337,32 @@ class _Repository:
             )
         raise failure
 
-    def _read_refs(self) -> _RefSnapshot:
+    def _loose_ref_output(self) -> bytes | None:
+        return _loose_ref_snapshot(self)
+
+    def _loose_object_output(self, stdin: bytes) -> bytes | None:
+        try:
+            return read_loose_inspection_batch(
+                self.main_root, self.common_git, self.identity, self.common_descriptor, stdin
+            )
+        except InspectionObjectProofError as failure:
+            if failure.kind is InspectionObjectFailureKind.ROOT_UNSAFE:
+                raise _generation_error() from None
+            raise _resource_error(
+                GitSessionFailureCode.RECOVERY_REQUIRED,
+                GitSessionOperationKind.INSPECT,
+                GitSessionResourceState.RECOVERY_REQUIRED,
+                GitSessionRecoveryAction.OPERATOR_RECOVERY,
+            ) from None
+
+    def _read_refs(self, *, allow_loose: bool = False) -> _RefSnapshot:
         """Read bounded, freshly correlated ref IDs and symbolic HEAD identity."""
-        output = self._required(
-            ("for-each-ref", "--format=%(refname)%00%(objectname)%00%(HEAD)"),
-            read_only=True,
-        ).stdout
+        output = self._loose_ref_output() if allow_loose else None
+        if output is None:
+            output = self._required(
+                ("for-each-ref", "--format=%(refname)%00%(objectname)%00%(HEAD)"),
+                read_only=True,
+            ).stdout
         if type(output) is not bytes or (output and not output.endswith(b"\n")):
             raise _resource_error(
                 GitSessionFailureCode.RECOVERY_REQUIRED,
@@ -1169,9 +1403,12 @@ class _Repository:
             rows.append((name, oid, is_head))
         return _RefSnapshot(tuple(rows))
 
-    def _require_refs_current(self, opening: _RefSnapshot) -> None:
+    def _require_refs_current(
+        self, opening: _RefSnapshot, *, allow_loose: bool = False
+    ) -> None:
         """Reject ref changes during a completed logical observation."""
-        if self._read_refs() != opening:
+        current = self._read_refs(allow_loose=True) if allow_loose else self._read_refs()
+        if current != opening:
             raise _resource_error(
                 GitSessionFailureCode.RECOVERY_REQUIRED,
                 GitSessionOperationKind.INSPECT,
@@ -1368,6 +1605,9 @@ class _Repository:
         *,
         journal: GitSessionProvisioningJournal | None = None,
         require_clean_session_index: bool = True,
+        inspected_seed: tuple[str | None, bytes | None] | None = None,
+        inspected_baseline: str | None = None,
+        inspected_tip: tuple[str, bytes | None] | None = None,
     ) -> GitSessionResourceInspection:
         journal = journal or facts.journals.get(identity.session_id)
         branch = facts.branches.get(identity.branch)
@@ -1391,12 +1631,34 @@ class _Repository:
             (True, True, True),
         }:
             return _recovery(identity, baseline)
-        if branch is not None and not self._root_anchor(branch, baseline):
+        if (
+            branch is not None
+            and not (branch == baseline == inspected_baseline)
+            and not self._root_anchor(branch, baseline)
+        ):
             return _recovery(identity, baseline)
         seed = None
         if internal is not None:
-            seed = self._root_commit(internal)
-            if seed is None or not self._verify_seed(seed, identity, journal):
+            seed_verified = False
+            tip_payload = (
+                inspected_tip[1]
+                if inspected_tip is not None and inspected_tip[0] == internal else None
+            )
+            if inspected_seed is not None:
+                seed, payload = inspected_seed
+            elif tip_payload is not None and self._verify_seed(
+                internal, identity, journal, payload=tip_payload
+            ):
+                # Exact seed payloads contain no parents: the TIP is its own root.
+                seed, payload = internal, tip_payload
+                seed_verified = True
+            else:
+                seed = self._root_commit(internal)
+                payload = tip_payload if seed == internal else None
+            if seed is None or (
+                not seed_verified
+                and not self._verify_seed(seed, identity, journal, payload=payload)
+            ):
                 return _recovery(identity, baseline)
         if journal is not None and (
             (branch is not None and branch != baseline)
@@ -1630,6 +1892,8 @@ class _Repository:
         seed: str,
         identity: GitSessionIdentity,
         journal: GitSessionProvisioningJournal | None,
+        *,
+        payload: bytes | None = None,
     ) -> bool:
         try:
             if _OBJECT_ID.fullmatch(seed) is None:
@@ -1640,9 +1904,10 @@ class _Repository:
                 if len(seed) == 40
                 else hashlib.sha256(empty_tree_object).hexdigest()
             )
-            payload = self._required(
-                ("cat-file", "commit", seed), read_only=True
-            ).stdout
+            if payload is None:
+                payload = self._required(
+                    ("cat-file", "commit", seed), read_only=True
+                ).stdout
             if not _valid_seed_payload(
                 payload,
                 identity=identity,
@@ -1692,6 +1957,8 @@ class _Repository:
         stdin: bytes = b"",
         read_only: bool = False,
         identity_environment: dict[str, str] | None = None,
+        allow_output_overflow: bool = False,
+        allow_unsuitable_result: bool = False,
     ) -> GitProcessResult:
         try:
             result = self.runner.run(
@@ -1701,7 +1968,12 @@ class _Repository:
                 read_only=read_only,
                 identity_environment=identity_environment,
             )
-        except GitProcessFailure:
+        except GitProcessFailure as failure:
+            if (
+                read_only and allow_output_overflow
+                and failure.code is GitFailureCode.PROCESS_OUTPUT_EXCEEDED
+            ):
+                raise _InspectionBatchOverflow() from None
             if read_only:
                 raise _resource_error(
                     GitSessionFailureCode.RECOVERY_REQUIRED,
@@ -1716,6 +1988,8 @@ class _Repository:
                 GitSessionRecoveryAction.OPERATOR_RECOVERY,
             ) from None
         if result.returncode != 0:
+            if read_only and allow_unsuitable_result:
+                raise _InspectionPrefetchUnsuitable
             if read_only:
                 raise _resource_error(
                     GitSessionFailureCode.RECOVERY_REQUIRED,
@@ -1730,6 +2004,307 @@ class _Repository:
                 GitSessionRecoveryAction.OPERATOR_RECOVERY,
             )
         return result
+
+
+def _loose_ref_width(config: bytes) -> int | None:
+    return loose_object_format_width(config)
+
+
+def _loose_ref_snapshot(repository: _Repository) -> bytes | None:
+    """Return one freshly bound narrow snapshot, or retain Git's verifier."""
+    descriptors: list[int] = []
+    files: list[tuple[int, str, int, _GenerationFileFacts]] = []
+    directories: list[tuple[int | None, str, int, _GenerationFileFacts]] = []
+    memberships: list[tuple[int, tuple[str, ...]]] = []
+    deadline = time.monotonic() + _LOOSE_REF_TIMEOUT_SECONDS
+    nodes = total_bytes = 0
+    failure: BaseException | None = None
+    root = common_descriptor = None
+    try:
+        common = os.fstat(repository.common_descriptor)
+    except OSError:
+        raise _generation_error() from None
+    common_identity = common.st_dev, common.st_ino
+
+    def require_roots() -> None:
+        try:
+            observed = os.fstat(repository.common_descriptor)
+            owned_roots = [
+                (os.fstat(descriptor), identity)
+                for descriptor, identity in (
+                    (root, repository.identity), (common_descriptor, common_identity)
+                ) if descriptor is not None
+            ]
+        except OSError:
+            observed = None
+            owned_roots = []
+        if (
+            _bind_directory(repository.main_root) != repository.identity
+            or _bind_directory(repository.common_git) != common_identity
+            or observed is None or not stat.S_ISDIR(observed.st_mode)
+            or (observed.st_dev, observed.st_ino) != common_identity
+            or any(not stat.S_ISDIR(value.st_mode)
+                   or (value.st_dev, value.st_ino) != identity
+                   for value, identity in owned_roots)
+        ):
+            raise _generation_error()
+
+    def spend(count: int = 0, size: int = 0) -> None:
+        nonlocal nodes, total_bytes
+        nodes += count
+        total_bytes += size
+        if nodes > _MAX_REFS or total_bytes > _MAX_STDOUT_BYTES or time.monotonic() >= deadline:
+            raise _InspectionPrefetchUnsuitable
+
+    def open_node(parent: int | None, name: str, *, directory: bool = False) -> int:
+        spend(1, len(os.fsencode(name)) + 1)
+        if len(descriptors) >= _MAX_LOOSE_REF_DESCRIPTORS - 1:
+            raise _InspectionPrefetchUnsuitable
+        descriptor = os.open(name, flags | (os.O_DIRECTORY if directory else 0), dir_fd=parent)
+        descriptors.append(descriptor)
+        os.set_inheritable(descriptor, False)
+        observed = os.fstat(descriptor)
+        facts = _generation_file_facts(observed)
+        named = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if facts != _generation_file_facts(named) or os.get_inheritable(descriptor):
+            raise OSError
+        if directory:
+            if not stat.S_ISDIR(observed.st_mode):
+                raise OSError
+            directories.append((parent, name, descriptor, facts))
+        else:
+            if parent is None or not stat.S_ISREG(observed.st_mode) or observed.st_nlink != 1:
+                raise OSError
+            files.append((parent, name, descriptor, facts))
+        return descriptor
+
+    def read_metadata(parent: int, name: str) -> bytes:
+        descriptor = open_node(parent, name)
+        size = os.fstat(descriptor).st_size
+        if not 0 <= size <= _MAX_ADMIN_FILE_BYTES:
+            raise _InspectionPrefetchUnsuitable
+        content = bytearray()
+        while True:
+            spend()
+            chunk = os.read(descriptor, min(8192, _MAX_ADMIN_FILE_BYTES + 1 - len(content)))
+            if not chunk:
+                break
+            spend(size=len(chunk))
+            content.extend(chunk)
+            if len(content) > _MAX_ADMIN_FILE_BYTES:
+                raise _InspectionPrefetchUnsuitable
+        if len(content) != size:
+            raise OSError
+        return bytes(content)
+
+    def members(descriptor: int) -> tuple[str, ...]:
+        spend()
+        if os.lseek(descriptor, 0, os.SEEK_SET) != 0:
+            raise OSError
+        names = []
+        iterator = os.scandir(descriptor)
+        try:
+            for entry in iterator:
+                spend(1, len(entry.name.encode("ascii")) + 1)
+                names.append(entry.name)
+        finally:
+            try:
+                iterator.close()
+            except BaseException:
+                raise _resource_error(
+                    GitSessionFailureCode.RECOVERY_REQUIRED, GitSessionOperationKind.INSPECT,
+                    GitSessionResourceState.RECOVERY_REQUIRED,
+                    GitSessionRecoveryAction.OPERATOR_RECOVERY,
+                ) from None
+        return tuple(sorted(names))
+
+    def absent(common_descriptor: int) -> None:
+        for name in ("packed-refs", "reftable", "config.worktree", "commondir"):
+            spend()
+            try:
+                os.stat(name, dir_fd=common_descriptor, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            raise _InspectionPrefetchUnsuitable
+
+    try:
+        require_roots()
+        required = tuple(getattr(os, name, None) for name in
+                         ("O_NOFOLLOW", "O_NONBLOCK", "O_DIRECTORY"))
+        if os.name != "posix" or any(type(value) is not int or value <= 0 for value in required):
+            return None
+        flags = os.O_RDONLY | required[0] | required[1] | getattr(os, "O_CLOEXEC", 0)
+        if repository.common_git != repository.main_root / ".git":
+            return None
+        root = open_node(None, os.fspath(repository.main_root), directory=True)
+        common_descriptor = open_node(root, ".git", directory=True)
+        if (
+            (os.fstat(root).st_dev, os.fstat(root).st_ino) != repository.identity
+            or (os.fstat(common_descriptor).st_dev,
+                os.fstat(common_descriptor).st_ino) != common_identity
+        ):
+            raise _generation_error()
+        absent(common_descriptor)
+        width = _loose_ref_width(read_metadata(common_descriptor, "config"))
+        head = read_metadata(common_descriptor, "HEAD")
+        if width is None or not head.startswith(b"ref: refs/heads/") or not head.endswith(b"\n"):
+            return None
+        head_name = head[5:-1]
+        rows: dict[bytes, bytes] = {}
+        pending = [(open_node(common_descriptor, "refs", directory=True), b"refs/")]
+        while pending:
+            parent, prefix = pending.pop()
+            names = members(parent)
+            memberships.append((parent, names))
+            for name in names:
+                raw_name = name.encode("ascii")
+                if (re.fullmatch(rb"[A-Za-z0-9_-][A-Za-z0-9._-]*", raw_name) is None
+                    or b".." in raw_name or raw_name.endswith((b".", b".lock"))):
+                    raise _InspectionPrefetchUnsuitable
+                ref_name = prefix + raw_name
+                if ref_name in {b"refs/bisect", b"refs/rewritten", b"refs/worktree"}:
+                    raise _InspectionPrefetchUnsuitable
+                value = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                if stat.S_ISDIR(value.st_mode):
+                    pending.append((open_node(parent, name, directory=True), ref_name + b"/"))
+                else:
+                    oid = read_metadata(parent, name)
+                    if re.fullmatch(rb"[0-9a-f]{" + str(width).encode("ascii") + rb"}\n", oid) is None:
+                        raise _InspectionPrefetchUnsuitable
+                    oid = oid[:-1]
+                    if oid == b"0" * width:
+                        raise _InspectionPrefetchUnsuitable
+                    rows[ref_name] = oid
+        if head_name not in rows:
+            return None
+        objects = open_node(common_descriptor, "objects", directory=True)
+        fanouts: dict[bytes, int] = {}
+        for oid in set(rows.values()):
+            prefix = oid[:2]
+            if prefix not in fanouts:
+                fanouts[prefix] = open_node(objects, prefix.decode("ascii"), directory=True)
+            open_node(fanouts[prefix], oid[2:].decode("ascii"))
+        output = bytearray()
+        for name, oid in sorted(rows.items()):
+            row = name + b"\0" + oid + b"\0" + (b"*" if name == head_name else b" ") + b"\n"
+            spend(size=len(row))
+            output.extend(row)
+        absent(common_descriptor)
+        for parent, names in memberships:
+            if members(parent) != names:
+                raise _InspectionPrefetchUnsuitable
+        for parent, name, descriptor, facts in directories:
+            spend()
+            if (facts != _generation_file_facts(os.fstat(descriptor))
+                or facts != _generation_file_facts(os.stat(name, dir_fd=parent, follow_symlinks=False))
+                or os.get_inheritable(descriptor)):
+                raise _InspectionPrefetchUnsuitable
+        for parent, name, descriptor, facts in files:
+            spend()
+            _require_named_generation_file(parent, name, descriptor, facts)
+        return bytes(output)
+    except (OSError, UnicodeError, ValueError, _InspectionPrefetchUnsuitable):
+        return None
+    except BaseException as caught:
+        failure = caught
+        raise
+    finally:
+        try:
+            require_roots()
+        except BaseException as caught:
+            failure = caught
+        for descriptor in reversed(descriptors):
+            try:
+                os.close(descriptor)
+            except BaseException:
+                if failure is None:
+                    failure = _resource_error(
+                        GitSessionFailureCode.RECOVERY_REQUIRED, GitSessionOperationKind.INSPECT,
+                        GitSessionResourceState.RECOVERY_REQUIRED,
+                        GitSessionRecoveryAction.OPERATOR_RECOVERY,
+                    )
+                failure.add_note("Loose ref descriptor cleanup did not finish")
+        if failure is not None:
+            raise failure
+
+
+def _inspection_tree_plan(
+    manifest: GitBaselineManifest,
+    baseline: str,
+    internal_tip: str | None,
+) -> tuple[
+    dict[str, dict[bytes, tuple[bytes, str]]],
+    list[tuple[bytes, bytes, str | None]],
+    bytes,
+]:
+    """Bound the expected namespace before asking Git for any object bytes."""
+    prefix = baseline.encode("ascii") + b":"
+    requests: list[tuple[bytes, bytes, str | None]] = [
+        (baseline.encode("ascii"), b"commit", None)
+    ]
+    if internal_tip is not None and internal_tip != baseline:
+        requests.append((internal_tip.encode("ascii"), b"tip", None))
+    directories: dict[str, dict[bytes, tuple[bytes, str]]] = {"": {}}
+    request_count = len(requests) + 1 + len(manifest.entries)
+    input_size = sum(len(query) + 1 for query, _, _ in requests) + len(prefix) + 1
+    if request_count > _MAX_INSPECTION_OBJECTS:
+        raise _InspectionPrefetchUnsuitable
+    for entry in manifest.entries:
+        raw_path = entry.path.encode("ascii")
+        input_size += len(prefix) + len(raw_path) + 1
+        parent = ""
+        parts = entry.path.split("/")
+        for index, name in enumerate(parts):
+            path = f"{parent}/{name}" if parent else name
+            mode = b"100644" if index == len(parts) - 1 else b"40000"
+            previous = directories[parent].get(name.encode("ascii"))
+            if previous is not None and previous != (mode, path):
+                raise _InspectionPrefetchUnsuitable
+            directories[parent][name.encode("ascii")] = mode, path
+            if mode == b"40000" and path not in directories:
+                request_count += 1
+                input_size += len(prefix) + len(path.encode("ascii")) + 1
+                directories[path] = {}
+            if request_count > _MAX_INSPECTION_OBJECTS or input_size > _MAX_STDOUT_BYTES:
+                raise _InspectionPrefetchUnsuitable
+            parent = path
+    requests.extend(
+        (prefix + path.encode("ascii"), b"tree", path) for path in directories
+    )
+    requests.extend(
+        (prefix + entry.path.encode("ascii"), b"blob", entry.path)
+        for entry in manifest.entries
+    )
+    return directories, requests, b"".join(query + b"\n" for query, _, _ in requests)
+
+
+def _inspection_tree_children(
+    payload: memoryview, object_id_bytes: int
+) -> dict[bytes, tuple[bytes, bytes]]:
+    """Decode actual tree bytes; unusual namespaces retain the legacy verifier."""
+    raw = bytes(payload)
+    children: dict[bytes, tuple[bytes, bytes]] = {}
+    offset = 0
+    previous: bytes | None = None
+    while offset < len(raw):
+        space = raw.find(b" ", offset)
+        end = raw.find(b"\x00", space + 1)
+        child_end = end + 1 + object_id_bytes
+        if space <= offset or end <= space + 1 or child_end > len(raw):
+            raise _InspectionPrefetchUnsuitable
+        mode, name = raw[offset:space], raw[space + 1:end]
+        order = name + (b"/" if mode == b"40000" else b"\x00")
+        if (
+            mode not in {b"100644", b"40000"}
+            or b"/" in name
+            or name in children
+            or len(children) >= _MAX_INSPECTION_OBJECTS
+            or (previous is not None and previous >= order)
+        ):
+            raise _InspectionPrefetchUnsuitable
+        children[name] = mode, raw[end + 1:child_end].hex().encode("ascii")
+        previous, offset = order, child_end
+    return children
 
 
 class _Facts:

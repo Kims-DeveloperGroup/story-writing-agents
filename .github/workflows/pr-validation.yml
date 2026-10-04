@@ -5,18 +5,31 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, edited]
   merge_group:
     types: [checks_requested]
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: Diagnostic-only standard runner architecture
+        type: choice
+        options: [x64, arm64]
+        default: x64
+      scratch:
+        description: Diagnostic-only temporary filesystem
+        type: choice
+        options: [disk, memory]
+        default: disk
 
 permissions:
   contents: read
   pull-requests: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.merge_group.head_ref || github.ref }}
+  group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-diagnostic-{1}-{2}-{3}', github.workflow, github.ref, inputs.arch, inputs.scratch) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.event.merge_group.head_ref || github.ref) }}
   cancel-in-progress: true
 
 jobs:
   classify:
-    name: Classify changed paths
+    name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - classification skipped' || 'Classify changed paths' }}
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
       runtime: ${{ steps.paths.outputs.runtime }}
@@ -99,7 +112,7 @@ jobs:
               .write();
 
   static:
-    name: Static validation
+    name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - static validation skipped' || 'Static validation' }}
     needs: classify
     runs-on: ubuntu-latest
     steps:
@@ -263,7 +276,7 @@ jobs:
           PY
 
   fast:
-    name: Runtime fast tier
+    name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - fast tier skipped' || 'Runtime fast tier' }}
     needs: classify
     if: needs.classify.outputs.runtime == 'true'
     runs-on: ubuntu-latest
@@ -294,14 +307,14 @@ jobs:
           if-no-files-found: warn
 
   full:
-    name: Full runtime shard ${{ matrix.shard }}/2
+    name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - full suite skipped' || format('Full runtime shard {0}/2', matrix.shard) }}
     needs: classify
-    if: needs.classify.outputs.runtime == 'true' && needs.classify.outputs.full == 'true'
+    if: needs.classify.outputs.full == 'true'
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: ${{ needs.classify.outputs.wall_time_exception == 'true' && 60 || 15 }}
     steps:
       - uses: actions/checkout@v4
@@ -330,7 +343,7 @@ jobs:
           if-no-files-found: error
 
   reconcile-full:
-    name: Reconcile full runtime suite
+    name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - reconciliation skipped' || 'Reconcile full runtime suite' }}
     needs: [classify, full]
     if: >-
       always() && needs.classify.outputs.full == 'true' &&
@@ -370,3 +383,145 @@ jobs:
           name: runtime-full-reconciled
           path: ${{ runner.temp }}/full-reconciled.json
           if-no-files-found: warn
+
+  diagnose-full-budget:
+    name: ${{ github.event_name == 'workflow_dispatch' && format('Diagnostic only ({0}, {1})', inputs.arch, inputs.scratch) || 'Diagnose full-suite timing failure' }}
+    needs: [classify, full, reconcile-full]
+    if: >-
+      always() && (github.event_name == 'workflow_dispatch' ||
+      (needs.full.result == 'success' && needs.reconcile-full.result == 'failure'))
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || needs.classify.outputs.checkout_sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: '0.12.17'
+      - uses: actions/download-artifact@v4
+        if: github.event_name != 'workflow_dispatch'
+        with:
+          pattern: full-*
+          path: ${{ runner.temp }}/diagnostic-inputs
+      - name: Select actual timing failures
+        if: github.event_name != 'workflow_dispatch'
+        id: timing
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          from tests.suite_budget import load_budget
+          root = Path(os.environ["RUNNER_TEMP"]) / "diagnostic-inputs"
+          reports = [json.loads((root / f"full-{i}" / f"full-{i}.json").read_text()) for i in (1, 2)]
+          budget = load_budget()
+          seconds = [report["durations"]["wall_seconds"] for report in reports]
+          over = sum(seconds) > budget["max_sequential_wall_seconds"] or max(seconds) > budget["max_shard_wall_seconds"]
+          selected = over and all(report["outcome"] == "success" for report in reports)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"selected={str(selected).lower()}\n")
+          PY
+      - name: Install diagnostic dependencies
+        if: github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'
+        run: uv sync --locked --all-extras --python 3.11 --no-progress
+      - name: Configure diagnostic test Git identity
+        if: github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'
+        run: |
+          git config --global user.name "Story Tests"
+          git config --global user.email "story-tests@example.invalid"
+      - name: Prepare diagnostic scratch storage
+        if: github.event_name == 'workflow_dispatch'
+        id: scratch
+        env:
+          MEMORY: ${{ inputs.scratch == 'memory' }}
+        run: |
+          scratch="$(mktemp -d "${TMPDIR:-/tmp}/story-timing.XXXXXXXX")"
+          echo "directory=$scratch" >> "$GITHUB_OUTPUT"
+          if [[ "$MEMORY" == "true" ]]; then
+            sudo mount -t tmpfs -o "size=2G,mode=0700,uid=$(id -u),gid=$(id -g)" tmpfs "$scratch"
+          fi
+      - name: Profile an existing objective scenario
+        if: github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true'
+        env:
+          GIT_AUTHOR_NAME: Story Tests
+          GIT_AUTHOR_EMAIL: story-tests@example.invalid
+          GIT_COMMITTER_NAME: Story Tests
+          GIT_COMMITTER_EMAIL: story-tests@example.invalid
+          PYTHONPATH: src
+          PYTHONDONTWRITEBYTECODE: '1'
+          TMPDIR: ${{ steps.scratch.outputs.directory || '/tmp' }}
+        run: |
+          .venv/bin/python - <<'PY'
+          import collections, cProfile, functools, hashlib, json, os, platform, pstats, re, subprocess, sysconfig, tempfile, time
+          from pathlib import Path
+          from story_writing_agents.git import process, session_resources
+          from tests import runner
+          output = Path(os.environ["RUNNER_TEMP"]) / "timing-diagnostic"
+          output.mkdir(mode=0o700)
+          paths = subprocess.check_output(["git", "ls-files", "-z", "src", "tests", "config", "pyproject.toml", "uv.lock"]).decode().split("\0")
+          def hashes():
+              return {path: hashlib.sha256(Path(path).read_bytes()).hexdigest() for path in paths if path}
+          before = hashes()
+          counts = collections.defaultdict(lambda: {"calls": 0, "seconds": 0.0})
+          def record(key, elapsed):
+              counts[key]["calls"] += 1
+              counts[key]["seconds"] += elapsed
+          original_git = process.GitProcessRunner.run
+          @functools.wraps(original_git)
+          def git(self, args, **kwargs):
+              started = time.perf_counter()
+              try:
+                  return original_git(self, args, **kwargs)
+              finally:
+                  record("git:" + args[0], time.perf_counter() - started)
+          process.GitProcessRunner.run = git
+          original_refs = session_resources._Repository._loose_ref_output
+          samples = []
+          @functools.wraps(original_refs)
+          def refs(self):
+              started = time.perf_counter()
+              value = original_refs(self)
+              record("loose_refs:" + ("fallback" if value is None else "bytes"), time.perf_counter() - started)
+              if len(samples) < 8:
+                  with (self.common_git / "config").open("rb") as source:
+                      config = source.read(65536)
+                  safe = re.findall(rb"(?m)^\s*(?:repositoryformatversion|filemode|bare|logallrefupdates|objectformat|submodulepathconfig|relativeworktrees|worktreeconfig)\s*=\s*(?:true|false|0|1|sha1|sha256)\s*$", config)
+                  samples.append({"fallback": value is None, "config_sha256": hashlib.sha256(config).hexdigest(), "format_lines": [line.decode("ascii").strip() for line in safe], "packed_refs": (self.common_git / "packed-refs").exists(), "reftable": (self.common_git / "reftable").exists()})
+              return value
+          session_resources._Repository._loose_ref_output = refs
+          profile = cProfile.Profile()
+          started = time.perf_counter()
+          profile.enable()
+          try:
+              code = runner.main(["run", "--id", "tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_projection_retains_satisfaction_across_later_apply_commit_cycles", "--json", str(output / "instrumented-run.json")])
+          finally:
+              profile.disable()
+              profile.dump_stats(str(output / "profile.pstats"))
+              with (output / "profile.txt").open("w") as stream:
+                  pstats.Stats(profile, stream=stream).strip_dirs().sort_stats("cumulative").print_stats(100)
+              after = hashes()
+              evidence = {"diagnostic_only": True, "source_valid": before == after, "source_before": before, "source_after": after, "instrumented_seconds": time.perf_counter() - started, "counts": dict(counts), "fixture_samples": samples, "platform": platform.platform(), "python": platform.python_version(), "cpu_count": os.cpu_count(), "git": subprocess.check_output(["git", "--version"], text=True).strip()}
+              evidence.update(python_compiler=platform.python_compiler(), python_enable_optimizations_flag="--enable-optimizations" in (sysconfig.get_config_var("CONFIG_ARGS") or ""), temporary_filesystem=subprocess.check_output(["stat", "-f", "-c", "%T", tempfile.gettempdir()], text=True).strip())
+              (output / "counters.json").write_text(json.dumps(evidence, indent=2))
+          raise SystemExit(code if before == after else 2)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always() && (github.event_name == 'workflow_dispatch' || steps.timing.outputs.selected == 'true')
+        with:
+          name: ${{ github.event_name == 'workflow_dispatch' && format('timing-diagnostic-{0}-{1}', inputs.arch, inputs.scratch) || 'timing-diagnostic' }}
+          path: ${{ runner.temp }}/timing-diagnostic
+          if-no-files-found: error
+      - name: Remove diagnostic scratch storage
+        if: always() && steps.scratch.outputs.directory != ''
+        env:
+          SCRATCH: ${{ steps.scratch.outputs.directory }}
+          MEMORY: ${{ inputs.scratch == 'memory' }}
+        run: |
+          if [[ "$MEMORY" == "true" ]] && mountpoint -q "$SCRATCH"; then
+            sudo umount "$SCRATCH"
+          fi
+          rmdir "$SCRATCH"
