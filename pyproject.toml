@@ -5,7 +5,7 @@ description = "A provider-neutral multi-agent runtime for long-form story writin
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "jsonl-viewer @ git+https://github.com/Kims-DeveloperGroup/jsonl-viewer.git@ed5cc46c964a2dbfb4a0c58cd81c5aef102bd8f3",
+    "jsonl-viewer @ git+https://github.com/Kims-DeveloperGroup/jsonl-viewer.git@997f3a2af2c6e9e1f0fa305f6caeb1e0689593ea",
 ]
 
 [project.optional-dependencies]

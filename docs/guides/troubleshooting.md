@@ -254,7 +254,7 @@ incompatible-viewer result means the installed API or required physical-input
 capability does not match the exact required pin. Viewers 0.1.1 and 0.2.0
 are rejected before raw mode or an alternate screen opens; use the ordinary upgrade path
 above. Verify the project requirement and lock identify
-`ed5cc46c964a2dbfb4a0c58cd81c5aef102bd8f3`. Checkout maintainers can also
+`997f3a2af2c6e9e1f0fa305f6caeb1e0689593ea`. Checkout maintainers can also
 initialize the matching submodule for audit or testing; runtime imports never
 come from `vendor/jsonl-viewer`.
 

@@ -33,7 +33,7 @@ next page’s first row. Vertical cursor movement preserves its preferred column
 
 Both forms install the required independent `jsonl-viewer` 0.5.4 from its exact
 HTTPS VCS requirement at
-`ed5cc46c964a2dbfb4a0c58cd81c5aef102bd8f3`. A first install normally needs
+`997f3a2af2c6e9e1f0fa305f6caeb1e0689593ea`. A first install normally needs
 Git, network access, and repository access. Installation does not invoke a
 story provider, open an exchange, or enable a service. The historical
 `story-writing-agents[viewer]` and editable `'.[viewer]'` forms remain accepted
@@ -142,8 +142,8 @@ h/j/k/l cursor • Enter fold • ↑/↓ records • PgUp/PgDn • / search •
 This preview shows the renderer's topology, not a retained Story screenshot.
 The external repository owns the byte-tested renderer contract:
 
-- [Terminal design system and Story-hosted scenario](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/ed5cc46c964a2dbfb4a0c58cd81c5aef102bd8f3/docs/design-system.md)
-- [Sixteen deterministic complete sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/ed5cc46c964a2dbfb4a0c58cd81c5aef102bd8f3/docs/samples)
+- [Terminal design system and Story-hosted scenario](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/997f3a2af2c6e9e1f0fa305f6caeb1e0689593ea/docs/design-system.md)
+- [Sixteen deterministic complete sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/997f3a2af2c6e9e1f0fa305f6caeb1e0689593ea/docs/samples)
 
 Expanded records use well-formatted multiline JSON. The left gutter repeats
 the physical JSONL source-record line on continuation rows, so `g` can move to

@@ -318,7 +318,7 @@ does not parse or restyle those frames: its host admits only printable text, LF,
 and SGR when color is eligible, rejects every other control, and rejects SGR in
 plain mode. Removing the renderer's allowed decoration preserves the exact
 plain text, gutter markers, JSON, search position, and help. The pinned external
-[design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/ed5cc46c964a2dbfb4a0c58cd81c5aef102bd8f3/docs/design-system.md)
+[design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/997f3a2af2c6e9e1f0fa305f6caeb1e0689593ea/docs/design-system.md)
 is authoritative for those roles.
 
 The controller constructs semantic components only from trusted roles/states
