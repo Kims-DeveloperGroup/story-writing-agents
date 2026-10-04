@@ -3284,8 +3284,8 @@ def _context_action_schema(
                     "result": result_contract.schema_value(),
                 },
                 description=(
-                    "Submit the completed task once sufficient evidence is available, using the "
-                    "task_result contract. The runtime attaches successful READ receipts."
+                    "Submit a terminal task_result permitted by its contract, including an "
+                    "evidence limitation when allowed. The runtime attaches successful READ receipts."
                 ),
             )
         )
