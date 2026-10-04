@@ -7,6 +7,7 @@ import hashlib
 import stat
 import tempfile
 import unittest
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
@@ -25,6 +26,7 @@ from story_writing_agents.git.session_contracts import (
     GitSessionResourceState,
 )
 from story_writing_agents.git import session_resources as resources_module
+from story_writing_agents.git import inspection_objects as objects_module
 from story_writing_agents.git.session_resources import _Repository
 from story_writing_agents.workspace.initialization import (
     SessionArtifactBindingError,
@@ -470,7 +472,7 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
                 for actor in ("list", "provision", "inspect"):
                     with mock.patch.object(_Repository, "_required", return_value=GitProcessResult(output, 0)) as required, mock.patch.object(
                         _Repository, "_verify_main", return_value=raw_baseline
-                    ), mock.patch.object(_Repository, "_facts", return_value=resources_module._Facts({}, {}, {}, {})), mock.patch.object(
+                    ) as verify, mock.patch.object(_Repository, "_facts", return_value=resources_module._Facts({}, {}, {}, {})), mock.patch.object(
                         _Repository, "_classify", return_value=created
                     ), mock.patch.object(_Repository, "_require_exhaustive") as exhaustive, mock.patch.object(
                         _Repository, "_loose_ref_output", wraps=loose._loose_ref_output
@@ -479,6 +481,7 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
                         self.assertEqual(actual, resources_module.GitSessionResourceInventory(raw_baseline, ()) if actor == "list" else created)
                         self.assertEqual(fast.call_count, 2 if actor == "inspect" else 0)
                         self.assertEqual(exhaustive.call_count, 1 if actor == "list" else 0)
+                        self.assertEqual(verify.call_args.kwargs.get("allow_loose", False), actor == "inspect")
                         self.assertEqual(required.call_args_list, [] if actor == "inspect" else [mock.call(query, read_only=True)] * 2)
                 optional = heads / "optional"
                 self.assertEqual(loose._loose_ref_output(), output)
@@ -580,6 +583,132 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
                             os.fstat(fd)
                 close_failure = False
                 self.assertEqual(loose._loose_ref_output(), output)
+                def store_object(kind, body):
+                    oid = raw_object_id(kind, body, algorithm)
+                    path = common / "objects" / oid[:2] / oid[2:]
+                    path.parent.mkdir(exist_ok=True)
+                    path.write_bytes(zlib.compress(kind + b" " + str(len(body)).encode() + b"\0" + body))
+                    return oid
+                for oid, kind, body in raw_objects:
+                    self.assertEqual(store_object(kind, body), oid)
+                batch = b"".join(query + b"\n" for query in queries)
+                frames = self.run_git(ref_root, "cat-file", "--batch", "--buffer", input_bytes=batch).stdout
+                self.assertEqual(frames, b"".join(raw_frames))
+                self.assertEqual(loose._loose_object_output(batch), frames)
+                with mock.patch.object(_Repository, "_required") as required:
+                    self.assertEqual(loose._inspection_tree_digests(manifest, raw_baseline, raw_tip, {}, allow_loose=True), expected)
+                    required.assert_not_called()
+                def fallback(allow=True):
+                    with mock.patch.object(_Repository, "_required", return_value=GitProcessResult(frames, 0)) as required:
+                        self.assertEqual(loose._inspection_tree_digests(manifest, raw_baseline, raw_tip, {}, allow_loose=allow), expected)
+                        required.assert_called_once_with(("cat-file", "--batch", "--buffer"), read_only=True, stdin=batch, allow_output_overflow=True, allow_unsuitable_result=True)
+                with mock.patch.object(_Repository, "_loose_object_output", side_effect=AssertionError("loose outside inspect")):
+                    fallback(False)
+                selected = common / "objects" / blob_ids[0][:2] / blob_ids[0][2:]
+                original_object = selected.read_bytes()
+                for payload in (b"", b"not zlib", original_object[:-1], original_object + b"trailing", original_object + zlib.compress(b"blob 0\0"), zlib.compress(b"blob 01\0x"),
+                                zlib.compress(b"blob 1\0wrong size"), zlib.compress(b"unknown 0\0"), zlib.compress(b"blob 1\0x")):
+                    selected.write_bytes(payload)
+                    self.assertIsNone(loose._loose_object_output(batch))
+                    fallback()
+                selected.write_bytes(original_object)
+                for storage in ("missing", "symlink", "hardlink"):
+                    selected.unlink()
+                    if storage == "symlink": selected.symlink_to(object_file)
+                    if storage == "hardlink": os.link(object_file, selected)
+                    self.assertIsNone(loose._loose_object_output(batch))
+                    fallback()
+                    if selected.is_symlink() or selected.exists(): selected.unlink()
+                    selected.write_bytes(original_object)
+                for path in (common / "packed-refs", common / "shallow", common / "refs/replace", common / "info/grafts",
+                             common / "objects/info/alternates", common / "objects/pack/fixture.pack"):
+                    path.parent.mkdir(exist_ok=True)
+                    path.write_bytes(b"unsupported\n")
+                    self.assertIsNone(loose._loose_object_output(batch))
+                    fallback()
+                    path.unlink()
+                for mode in (b"100755", b"120000", b"160000"):
+                    tree = store_object(b"tree", child_tree.replace(b"100644", mode, 1))
+                    commit = store_object(b"commit", root_commit.replace(root_id.encode(), tree.encode(), 1))
+                    self.assertIsNone(loose._loose_object_output(commit.encode() + b":0\n"))
+                empty = store_object(b"tree", b"")
+                self.assertEqual(loose._loose_object_output(empty.encode() + b"\n"), self.run_git(ref_root, "cat-file", "--batch", input_bytes=empty.encode() + b"\n").stdout)
+                unused = store_object(b"tree", b"40000 empty\0" + bytes.fromhex(empty) + raw_root)
+                commit = store_object(b"commit", root_commit.replace(root_id.encode(), unused.encode(), 1))
+                with mock.patch.object(_Repository, "_required") as required, self.assertRaises(resources_module._InspectionPrefetchUnsuitable):
+                    loose._inspection_tree_digests(manifest, commit, raw_tip, {}, allow_loose=True)
+                required.assert_not_called()
+                retained = {}
+                with mock.patch.object(_Repository, "_tree_digests", return_value=expected) as legacy, mock.patch.object(_Repository, "_required", side_effect=(GitProcessResult(formatted, 0), GitProcessResult(b"", 0))):
+                    self.assertEqual(loose._verify_main(manifest, resources_module._RefSnapshot((("refs/heads/main", commit, True),)), commit_objects=retained, internal_tip=raw_tip, allow_loose=True), commit)
+                    self.assertEqual(retained, {})
+                    legacy.assert_called_once_with(commit)
+                selected.write_bytes(zlib.compress(b"blob 8192\0" + b"x" * 8192))
+                with mock.patch.object(objects_module, "MAX_BATCH_BYTES", 2048):
+                    self.assertIsNone(loose._loose_object_output(batch))
+                    fallback()
+                selected.write_bytes(original_object)
+                with mock.patch.object(objects_module, "MAX_BATCH_BYTES", 2048):
+                    self.assertIsNone(loose._loose_object_output((raw_baseline.encode() + b"\n") * 16))
+                for limit, value in (("MAX_DESCRIPTORS", 4), ("MAX_NODES", 1), ("MAX_BATCH_BYTES", 1), ("MAX_METADATA_BYTES", 1), ("DEADLINE_SECONDS", 0)):
+                    opened.clear()
+                    with mock.patch.object(objects_module, limit, value), mock.patch.object(objects_module.os, "open", side_effect=tracked_open): self.assertIsNone(loose._loose_object_output(batch))
+                    if limit == "MAX_DESCRIPTORS": self.assertLessEqual(len(opened), value - 1)
+                    for fd in opened:
+                        with self.assertRaises(OSError): os.fstat(fd)
+                    os.fstat(descriptor)
+                original_read = os.read
+                for target in (common / "config", selected, selected.parent, common / "objects", common / "refs", common / "packed-refs", common / "refs/replace", common / "shallow", common / "info/grafts"):
+                    moved, changed = target.with_name(target.name + ".held"), False
+                    watched = selected.stat().st_ino
+                    present = target.exists()
+                    saved = target.read_bytes() if target.is_file() else None
+                    def race(fd, size):
+                        nonlocal changed
+                        value = original_read(fd, size)
+                        if not value and os.fstat(fd).st_ino == watched and not changed:
+                            changed = True
+                            if not present: target.write_bytes(b"fresh override\n")
+                            elif saved is not None: target.write_bytes(saved + b"changed")
+                            else: target.rename(moved); target.mkdir()
+                        return value
+                    try:
+                        with mock.patch.object(objects_module.os, "read", side_effect=race): self.assertIsNone(loose._loose_object_output(batch))
+                        self.assertTrue(changed)
+                        if target == common / "refs": self.assertEqual(loose._loose_object_output(batch), frames)
+                        else: fallback()
+                    finally:
+                        if not present: target.unlink()
+                        elif saved is not None: target.write_bytes(saved)
+                        else: target.rmdir(); moved.rename(target)
+                mutation, changed = None, False
+                for cleanup_kind in ("iterator", "descriptor", "root", "common"):
+                    opened.clear()
+                    failed_close, close_failure = False, cleanup_kind == "iterator"
+                    target = ref_root if cleanup_kind == "root" else common
+                    moved = target.with_name(target.name + ".held")
+                    def object_cleanup(fd):
+                        nonlocal failed_close
+                        actual_close(fd)
+                        if not failed_close and cleanup_kind != "iterator":
+                            failed_close = True
+                            if cleanup_kind == "descriptor": raise OSError("object cleanup failed")
+                            target.rename(moved); target.mkdir()
+                    try:
+                        with mock.patch.object(objects_module.os, "open", side_effect=tracked_open), mock.patch.object(objects_module.os, "scandir", side_effect=lambda fd: RefIterator(actual_scan(fd))), mock.patch.object(objects_module.os, "close", side_effect=object_cleanup), mock.patch.object(_Repository, "_required") as required:
+                            with self.assertRaises(GitSessionResourceError) as caught: loose._inspection_tree_digests(manifest, raw_baseline, raw_tip, {}, allow_loose=True)
+                            self.assertIs(caught.exception.code, GitSessionFailureCode.UNSAFE_ROOT if cleanup_kind in ("root", "common") else GitSessionFailureCode.RECOVERY_REQUIRED)
+                            required.assert_not_called()
+                        for fd in opened:
+                            with self.assertRaises(OSError): os.fstat(fd)
+                        os.fstat(descriptor)
+                    finally:
+                        if cleanup_kind in ("root", "common") and moved.exists(): target.rmdir(); moved.rename(target)
+                close_failure = False
+                for malformed in (b"", b"\n", b"invalid\n"):
+                    with self.assertRaises(GitSessionResourceError) as caught: loose._loose_object_output(malformed)
+                    self.assertIs(caught.exception.code, GitSessionFailureCode.RECOVERY_REQUIRED)
+                self.assertEqual(loose._loose_object_output(batch), frames)
             finally:
                 os.close(descriptor)
         partial = GitSessionIdentity(root, "Blob_Only")

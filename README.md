@@ -528,6 +528,11 @@ PYTHONPATH=src python -m tests.runner run \
 ```
 
 For runtime or test changes, CI requires two complementary full-suite shards.
+Hosted full shards use standard Ubuntu 24.04 ARM runners; static validation,
+the runtime fast lane and reconciliation use Ubuntu x64. Both architectures
+use the same locked dependencies and test inventory. Full-suite selection
+includes test-only changes. The fixed timing limits still apply to every
+selected full shard; a diagnostic run never replaces this evidence.
 For a local full-suite run, use the same commands. Start no more than these
 two test processes concurrently, preserve both reports, and then reconcile
 them:

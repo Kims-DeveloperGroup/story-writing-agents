@@ -5,6 +5,13 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+
+from .inspection_objects import (
+    InspectionObjectFailureKind,
+    InspectionObjectProofError,
+    loose_object_format_width,
+    read_loose_inspection_batch,
+)
 import stat
 import threading
 import time
@@ -722,6 +729,7 @@ class _Repository:
             allowed_worktree_changes=allowed_worktree_changes,
             commit_objects=commit_objects,
             internal_tip=internal,
+            allow_loose=True,
         )
         facts = self._facts(refs)
         result = self._classify(
@@ -947,6 +955,7 @@ class _Repository:
         allowed_worktree_changes: tuple[str, ...] = (),
         commit_objects: dict[str, bytes] | None = None,
         internal_tip: str | None = None,
+        allow_loose: bool = False,
     ) -> str:
         baseline = next(
             (
@@ -968,7 +977,7 @@ class _Repository:
         if commit_objects is not None:
             try:
                 tree = self._inspection_tree_digests(
-                    manifest, baseline, internal_tip, commit_objects
+                    manifest, baseline, internal_tip, commit_objects, allow_loose=allow_loose
                 )
             except (_InspectionBatchOverflow, _InspectionPrefetchUnsuitable):
                 commit_objects.clear()
@@ -1086,18 +1095,22 @@ class _Repository:
         baseline: str,
         internal_tip: str | None,
         commit_objects: dict[str, bytes],
+        *,
+        allow_loose: bool = False,
     ) -> dict[str, str]:
         """Prove the actual namespace and contents within one bounded batch."""
         directories, requests, stdin = _inspection_tree_plan(
             manifest, baseline, internal_tip
         )
-        output = self._required(
-            ("cat-file", "--batch", "--buffer"),
-            stdin=stdin,
-            read_only=True,
-            allow_output_overflow=True,
-            allow_unsuitable_result=True,
-        ).stdout
+        output = self._loose_object_output(stdin) if allow_loose else None
+        if output is None:
+            output = self._required(
+                ("cat-file", "--batch", "--buffer"),
+                stdin=stdin,
+                read_only=True,
+                allow_output_overflow=True,
+                allow_unsuitable_result=True,
+            ).stdout
         frames: dict[str, tuple[bytes, bytes, memoryview]] = {}
         unsuitable = False
         try:
@@ -1326,6 +1339,21 @@ class _Repository:
 
     def _loose_ref_output(self) -> bytes | None:
         return _loose_ref_snapshot(self)
+
+    def _loose_object_output(self, stdin: bytes) -> bytes | None:
+        try:
+            return read_loose_inspection_batch(
+                self.main_root, self.common_git, self.identity, self.common_descriptor, stdin
+            )
+        except InspectionObjectProofError as failure:
+            if failure.kind is InspectionObjectFailureKind.ROOT_UNSAFE:
+                raise _generation_error() from None
+            raise _resource_error(
+                GitSessionFailureCode.RECOVERY_REQUIRED,
+                GitSessionOperationKind.INSPECT,
+                GitSessionResourceState.RECOVERY_REQUIRED,
+                GitSessionRecoveryAction.OPERATOR_RECOVERY,
+            ) from None
 
     def _read_refs(self, *, allow_loose: bool = False) -> _RefSnapshot:
         """Read bounded, freshly correlated ref IDs and symbolic HEAD identity."""
@@ -1979,43 +2007,7 @@ class _Repository:
 
 
 def _loose_ref_width(config: bytes) -> int | None:
-    """Admit only unambiguous local files-backend configuration."""
-    values: dict[tuple[bytes, bytes], bytes] = {}
-    sections: set[bytes] = set()
-    section = b""
-    for line in config.splitlines(keepends=True):
-        if line in {b"[core]\n", b"[extensions]\n"}:
-            section = line[1:-2]
-            if section in sections:
-                return None
-            sections.add(section)
-            continue
-        match = re.fullmatch(rb"[ \t]+([a-z]+) = ([a-z0-9]+)\n", line)
-        if match is None or not section:
-            return None
-        key, value = match.groups()
-        if (section, key) in values:
-            return None
-        values[section, key] = value
-    booleans = {b"bare", b"filemode", b"logallrefupdates", b"ignorecase",
-                b"precomposeunicode", b"warnambiguousrefs"}
-    for (section, key), value in values.items():
-        if section == b"core" and key in booleans and value in {b"true", b"false"}:
-            continue
-        if (section, key) not in {
-            (b"core", b"repositoryformatversion"), (b"extensions", b"objectformat")
-        }:
-            return None
-    if values.get((b"core", b"bare")) != b"false":
-        return None
-    extensions = {key: value for (section, key), value in values.items()
-                  if section == b"extensions"}
-    version = values.get((b"core", b"repositoryformatversion"))
-    if version == b"0" and not extensions:
-        return 40
-    if version == b"1" and extensions == {b"objectformat": b"sha256"}:
-        return 64
-    return None
+    return loose_object_format_width(config)
 
 
 def _loose_ref_snapshot(repository: _Repository) -> bytes | None:

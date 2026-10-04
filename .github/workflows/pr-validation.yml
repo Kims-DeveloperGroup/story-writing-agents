@@ -309,12 +309,12 @@ jobs:
   full:
     name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - full suite skipped' || format('Full runtime shard {0}/2', matrix.shard) }}
     needs: classify
-    if: needs.classify.outputs.runtime == 'true' && needs.classify.outputs.full == 'true'
+    if: needs.classify.outputs.full == 'true'
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: ${{ needs.classify.outputs.wall_time_exception == 'true' && 60 || 15 }}
     steps:
       - uses: actions/checkout@v4
