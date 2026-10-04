@@ -47,7 +47,9 @@ uv --version
 Do not modify the user's global Git identity. If the runtime suite needs CI's deterministic
 identity, configure it only in the disposable validation checkout. Retain the actual OS,
 Python, tool versions, setup results, and any platform differences; a missing dependency or
-unsupported environment is a gap, not a successful lane.
+unsupported environment is a gap, not a successful lane. A guest wall clock must remain stable
+during validation; record clock corrections and retain resulting timestamp-order
+failures. The coordinator does not reconfigure or restart executors.
 
 In Bash, set these values to the already verified base and head. This example reads the
 verified refs once; recheck them against the GitHub snapshot before accepting the evidence:
@@ -59,139 +61,81 @@ ci_report_dir="$(mktemp -d "${TMPDIR:-/tmp}/story-local-ci.XXXXXXXXXX")"
 chmod 700 "$ci_report_dir"
 ```
 
-## Execute every static step from the workflow
+## Execute the pinned workflow through the host queue
 
-The recipe reads the current static job rather than maintaining another copy of its checks.
-`uv run` supplies Python 3.11 on the child shell's PATH. Each shell uses CI's error and
-pipeline handling. The report retains failures as well as successful checks, the literal
-commands, source hashes, and the checkout identity. It creates a new report exclusively.
-
-```bash
-uv run --locked --all-extras --python 3.11 python - "$ci_report_dir/static.json" <<'PY'
-import hashlib
-import json
-import os
-import platform
-import subprocess
-import sys
-import time
-from pathlib import Path
-
-def git(*args):
-    return subprocess.check_output(["git", *args], text=True).rstrip("\n")
-
-workflow = Path(".github/workflows/pr-validation.yml")
-extract = '''
-document = YAML.safe_load(File.read(ARGV.fetch(0)), aliases: false)
-steps = document.fetch("jobs").fetch("static").fetch("steps")
-print JSON.generate(steps.select { |step| step.key?("run") })
-'''
-steps = json.loads(subprocess.check_output(
-    ["ruby", "-ryaml", "-rjson", "-e", extract, str(workflow)], text=True))
-if not steps:
-    raise SystemExit("Static workflow has no executable steps")
-report = {
-    "base_sha": git("rev-parse", os.environ["BASE_SHA"]),
-    "head_sha": git("rev-parse", os.environ["HEAD_SHA"]),
-    "checkout_sha": git("rev-parse", "HEAD"),
-    "checkout_tree": git("rev-parse", "HEAD^{tree}"),
-    "porcelain": git("status", "--porcelain", "--untracked-files=all"),
-    "workflow_sha256": hashlib.sha256(workflow.read_bytes()).hexdigest(),
-    "environment": {"python": sys.version, "platform": platform.platform()},
-    "checks": [],
-}
-for step in steps:
-    command = step["run"]
-    if "${{" in command:
-        raise SystemExit("Resolve new workflow expressions before executing locally")
-    started = time.monotonic()
-    result = subprocess.run(
-        ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", command],
-        text=True, capture_output=True)
-    report["checks"].append({
-        "name": step.get("name", "Unnamed static step"), "command": command,
-        "exit_code": result.returncode, "stdout": result.stdout, "stderr": result.stderr,
-        "seconds": time.monotonic() - started,
-    })
-    print(f'{step.get("name")}: {"PASS" if result.returncode == 0 else "FAIL"}')
-paths = subprocess.check_output(
-    ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"])
-report["source_sha256"] = {
-    os.fsdecode(raw): hashlib.sha256(Path(os.fsdecode(raw)).read_bytes()).hexdigest()
-    for raw in paths.split(b"\0") if raw and Path(os.fsdecode(raw)).is_file()
-}
-with open(sys.argv[1], "x", encoding="utf-8") as target:
-    json.dump(report, target, indent=2)
-    target.write("\n")
-raise SystemExit(int(any(check["exit_code"] != 0 for check in report["checks"])))
-PY
-```
-
-An unresolved expression or setup failure requires diagnosis before calling the result
-complete. Preserve an interrupted run's available evidence and rerun its missing checks.
-For static-only changes, the runtime lanes below are not selected. Also inspect the final
-diff, links/anchors, policy invariants, and any scenario-specific checks required by the change.
-
-## Execute selected runtime lanes
-
-For runtime/test selection, execute the fast tier before starting the full shards:
+Use the host coordinator from a clean checkout with pinned base/head SHAs. The
+campaign head must exactly equal checkout HEAD. For a disposable prospective
+merge checkout, pin its temporary merge commit as the campaign head and retain
+the original PR head separately in evidence. The coordinator
+reads the workflow's actual classifier, including old and new paths and supplied
+PR labels, and executes every selected static `run` step. Ruby extracts these
+steps; Node executes the classifier. Unresolved workflow expressions, missing
+tools, or unsupported selection fail visibly rather than skipping a check.
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m tests.runner run \
-  --tier fast --json "$ci_report_dir/fast.json"
+PYTHONPATH=src .venv/bin/python -m tests.local_ci run \
+  --checkout "$PWD" --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" \
+  --report-dir "$ci_report_dir" --task "Issue NUMBER local CI" \
+  --module tests.CHOSEN_AFFECTED_MODULE --timing-mode isolated
 ```
 
-For runtime-code changes, also run affected exact modules or IDs with a fresh JSON filename,
-using the canonical runner's `--module`/`--id` selectors chosen from the changed behavior.
-Record those literal selectors and results; fast or aggregate full-suite counts do not
-replace affected-case evidence.
+Supply repeated `--module`/`--id` selectors for affected runtime behavior and
+repeated `--label` values for relevant PR labels, including `test:full`. Static-only
+selection runs all static checks; runtime/test selection also runs fast,
+affected when supplied, two full shards, reconciliation, and the strict frozen
+budget check. Record the selectors and explain any absent affected lane.
 
-Run no more than these two test processes concurrently. Preserve both complete reports and
-logs even when one fails; do not combine partial reruns into a complete shard:
+Every task thread and checkout shares four host execution permits. A campaign
+uses no more than two full shards. Shared mode permits concurrent feedback;
+isolated mode drains active work and reserves the host for measurement. Full
+shards run sequentially by default in isolated mode and concurrently in shared
+mode. `--full-concurrency 1` or `2` overrides this choice; campaign metadata
+records it. A failed first shard does not skip the second. Queue
+wait appears in job metadata, separately from canonical test durations. It never
+waives test time or erases a validation failure. The campaign command provides
+no automatic wall-time exception; an explicitly authorized exception still
+requires the separate record and budget procedure in TEST_POLICY.md.
+
+For Lima, invoke the command on the host with `--executor lima:INSTANCE` and
+`--guest-checkout /absolute/prepared/checkout`. Prepare matching source and a
+locked Python 3.11 `.venv` in the guest. Guest jobs use the host's admission
+permits; direct guest queues are rejected. Retain actual guest environment and
+host/guest source identities. A disconnect or uncertain death quarantines the
+permit until termination is proved.
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m tests.runner run \
-  --shard 1/2 --json "$ci_report_dir/full-1.json" \
-  >"$ci_report_dir/full-1.log" 2>&1 &
-ci_shard_one_pid=$!
-PYTHONPATH=src .venv/bin/python -m tests.runner run \
-  --shard 2/2 --json "$ci_report_dir/full-2.json" \
-  >"$ci_report_dir/full-2.log" 2>&1 &
-ci_shard_two_pid=$!
-ci_shard_one_status=0
-ci_shard_two_status=0
-wait "$ci_shard_one_pid" || ci_shard_one_status=$?
-wait "$ci_shard_two_pid" || ci_shard_two_status=$?
-.venv/bin/python - "$ci_report_dir/full-exit-status.json" \
-  "$ci_shard_one_status" "$ci_shard_two_status" <<'PY'
-import json
-import sys
-statuses = {"full-1": int(sys.argv[2]), "full-2": int(sys.argv[3])}
-with open(sys.argv[1], "x", encoding="utf-8") as target:
-    json.dump(statuses, target)
-    target.write("\n")
-raise SystemExit(int(any(statuses.values())))
-PY
+PYTHONPATH=src .venv/bin/python -m tests.local_ci status
+PYTHONPATH=src .venv/bin/python -m tests.local_ci cancel JOB_ID \
+  --owner-file "$HOME/.cache/story-local-ci/jobs/JOB_ID/ownership.json"
 ```
 
-The per-shard exit-status file identifies which process failed and preserves its actual code,
-including a crash before a canonical JSON report exists. A nonzero code prevents acceptance.
-After successful complete shards, run both reconciliation and the current frozen inventory/time-budget check:
+Running cancellation may retain quarantine after the original group exits;
+separately spawned children cannot be assumed dead. Only complete executor-level
+death proof, including a verified host/guest restart, retires those uncertain
+jobs, with invalid evidence. Executor restarts require separate operator action.
 
-```bash
-PYTHONPATH=src .venv/bin/python -m tests.runner reconcile \
-  "$ci_report_dir/full-1.json" "$ci_report_dir/full-2.json" \
-  --json "$ci_report_dir/full-reconciled.json"
-PYTHONPATH=src .venv/bin/python -m tests.suite_budget \
-  --base-ref "$BASE_SHA" \
-  --report "$ci_report_dir/full-1.json" --report "$ci_report_dir/full-2.json"
-```
+Cancellation requires the owner capability and affects only that job's process
+group or campaign children. Keep the capability file owner-only. Coordinator
+state and per-job evidence live outside repositories under
+`~/.cache/story-local-ci`; a restarted coordinator retains unfinished jobs and
+uncertain permits.
 
-[TEST_POLICY.md](../../../../TEST_POLICY.md) retains its exact inventory, subtest/source-size
-limits, and 1,080-second total / 540-second shard ceilings. Timeout, missing IDs, failures,
-incomplete/overlapping shards, stale source, or exceeded budgets are not passes. Preserve
-diagnostic reruns separately; complete final evidence still needs fresh complete affected
-shards and successful reconciliation/budget checks.
+The fresh report directory contains `static.json`, selected canonical lane
+reports, `full-exit-status.json`, `full-reconciled.json`, and `campaign.json`.
+Per-job state retains
+commands, source hashes at enqueue/start/finish, worker exit codes, and stdout /
+stderr, including crashes before a canonical report is written. Source drift
+makes evidence stale. Preserve failures, cancellations, quarantine, and partial
+reports; diagnostic reruns cannot be assembled into complete shard evidence.
+
+Implementation diagnostics may still use exact `tests.runner run` selectors;
+they enter the host queue automatically and retain dirty-source hashes. Final
+integration evidence requires the clean, pinned, unchanged candidate and every
+selected lane. Recheck base/head and relevant inputs after a campaign finishes.
+
+[TEST_POLICY.md](../../../../TEST_POLICY.md) retains exact IDs, subtest/source caps,
+and 1,080-second total / 540-second shard ceilings. Timeout, missing IDs,
+failures, incomplete/overlapping shards, stale inputs, or exceeded budgets fail.
 
 ## Record and accept evidence
 
