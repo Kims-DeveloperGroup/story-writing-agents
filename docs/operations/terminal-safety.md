@@ -318,7 +318,7 @@ does not parse or restyle those frames: its host admits only printable text, LF,
 and SGR when color is eligible, rejects every other control, and rejects SGR in
 plain mode. Removing the renderer's allowed decoration preserves the exact
 plain text, gutter markers, JSON, search position, and help. The pinned external
-[design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/9076e74e7a1e42ca2bce55b3c8059b65dbec753f/docs/design-system.md)
+[design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/997f3a2af2c6e9e1f0fa305f6caeb1e0689593ea/docs/design-system.md)
 is authoritative for those roles.
 
 The controller constructs semantic components only from trusted roles/states
@@ -811,7 +811,7 @@ The controller lazily validates the exact required `jsonl_viewer` facade,
 constructor and callable signatures, host shape, immutable header/field
 projection, primary-field order, and the `input_protocol="semantic"`
 constructor default before asking the terminal to open. It constructs and
-verifies the specification with `input_protocol="keys"`. The exact 0.5.3
+verifies the specification with `input_protocol="keys"`. The exact 0.5.4
 constructor omits search-field presets; older 0.1.1 and 0.2.0 APIs are rejected.
 Missing or incompatible standard-install packages therefore acquire no raw
 mode or alternate screen and produce fixed repair/reinstall guidance. The
