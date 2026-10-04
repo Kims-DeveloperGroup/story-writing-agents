@@ -9,8 +9,8 @@ source = { git = "https://github.com/Kims-DeveloperGroup/generic-rag.git?rev=c77
 
 [[package]]
 name = "jsonl-viewer"
-version = "0.5.2"
-source = { git = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git?rev=802128778a35069e58d501fd88f8531a4d9ce69a#802128778a35069e58d501fd88f8531a4d9ce69a" }
+version = "0.5.3"
+source = { git = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git?rev=9076e74e7a1e42ca2bce55b3c8059b65dbec753f#9076e74e7a1e42ca2bce55b3c8059b65dbec753f" }
 
 [[package]]
 name = "story-writing-agents"
@@ -28,6 +28,6 @@ rag = [
 [package.metadata]
 requires-dist = [
     { name = "generic-rag", marker = "extra == 'rag'", git = "https://github.com/Kims-DeveloperGroup/generic-rag.git?rev=c77456321c614518e420e45c033e3f71dc5363b8" },
-    { name = "jsonl-viewer", git = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git?rev=802128778a35069e58d501fd88f8531a4d9ce69a" },
+    { name = "jsonl-viewer", git = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git?rev=9076e74e7a1e42ca2bce55b3c8059b65dbec753f" },
 ]
 provides-extras = ["rag", "viewer"]

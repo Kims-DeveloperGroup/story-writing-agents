@@ -648,14 +648,8 @@ class LazyViewerAdapterTests(unittest.TestCase):
             from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
             from story_writing_agents.interactive_controller._exchange_viewer import prepare_agent_exchange_view
 
-            record = {
-                "agent_id": "character_custodian", "content": "body", "content_full_characters": 4,
-                "content_full_utf8_bytes": 4, "content_retained_characters": 4, "content_retained_utf8_bytes": 4,
-                "content_sha256": "sha256:" + "0" * 64, "content_truncated": False, "exchange_id": "exchange_1",
-                "provider": "codex codex", "request_type": "request", "schema_version": 1,
-                "scope_id": "debate_1", "scope_kind": "debate", "sequence": 1,
-                "session_id": "session_1", "timestamp": "2026-08-30T00:00:00+00:00", "workspace_sequence": 1,
-            }
+            record = {"timestamp": "2026-08-30T00:00:00+00:00", "request_type": "request",
+                      "content": "body", "provider": "codex codex"}
             source = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\\n").encode()
 
             class Host:
@@ -697,7 +691,13 @@ class LazyViewerAdapterTests(unittest.TestCase):
             navigation = Host(("key\\tup", "key\\tdown", "key\\tpage_up", "key\\tpage_down", "close"))
             prepared(source * 2)(navigation)
             assert all(notice in navigation.frames[i] for i, notice in ((2, "Last record."), (3, "First record."), (4, "Last record."), (5, "First record.")))
-            assert navigation.closed == 1 and navigation.frames[2] == navigation.frames[4] and navigation.frames[3] == navigation.frames[5]
+            def focused(frame): return next(previous for previous, line in zip(frame.splitlines(), frame.splitlines()[1:]) if line.strip() == "^")
+            assert navigation.closed == 1 and focused(navigation.frames[2]).endswith("{") and focused(navigation.frames[4]).endswith("}") and navigation.frames[3] == navigation.frames[5]
+            tall_source = (json.dumps({"content": list(range(40))}) + "\\n").encode() * 2
+            tall = Host(("text\\t" + "j" * 30, "text\\t" + "k" * 30, "text\\th", "text\\tl", "key\\tpage_up", "key\\tpage_down", "key\\tpage_down", "close"))
+            prepared(tall_source)(tall)
+            assert focused(tall.frames[2]).rstrip().endswith("28,") and tall.frames[1] == tall.frames[3]
+            assert tall.closed == 1 and tall.frames[4] == tall.frames[6] and focused(tall.frames[7]).endswith("}") and tall.frames[5] == tall.frames[8]
 
             """
         )
