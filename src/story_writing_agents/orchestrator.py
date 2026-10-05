@@ -9762,23 +9762,56 @@ class StoryRuntime:
                         ),
                     )
                     return replace(failed, validation_details=provider.validation_details)
+                except _LeadCallBudgetExceeded:
+                    return self._structured_fallback_lead_result(
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        step_id=step_id,
+                        message=(
+                            "The declared work cannot fit its required preparation and "
+                            "complete specialist review within the remaining two-round, "
+                            "twelve-call budget. Clarify the task or make a fresh proposal."
+                        ),
+                        validation_details=provider.validation_details + (
+                            "declared preparation and full final-review floor exceeds "
+                            "the remaining budget",
+                        ),
+                    )
             intent = outcome.proposal
             assert intent is not None
             refreshed = self.conversation_storage_services.event_store.read_context(
                 session_id,
                 conversation_id,
             )
-            proposal = self._build_lead_proposal(
-                session_id=session_id,
-                step_id=step_id,
-                intent=intent,
-                inputs=self._materialize_lead_evidence_inputs(inputs, evidence),
-                previous_proposal=previous_proposal,
-                projection=refreshed,
-                lead_definition=definition,
-                evidence=evidence,
-                artifact_binding=artifact_binding,
-            )
+            try:
+                proposal = self._build_lead_proposal(
+                    session_id=session_id,
+                    step_id=step_id,
+                    intent=intent,
+                    inputs=self._materialize_lead_evidence_inputs(inputs, evidence),
+                    previous_proposal=previous_proposal,
+                    projection=refreshed,
+                    lead_definition=definition,
+                    evidence=evidence,
+                    artifact_binding=artifact_binding,
+                )
+            except _LeadCallBudgetExceeded:
+                return self._structured_fallback_lead_result(
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    step_id=step_id,
+                    message=(
+                        "The declared work cannot fit its required preparation and "
+                        "complete specialist review within the remaining two-round, "
+                        "twelve-call budget. Clarify the task or make a fresh proposal."
+                    ),
+                    validation_details=provider.validation_details + (
+                        "declared preparation and full final-review floor exceeds "
+                        "the remaining budget",
+                    ),
+                )
             request_id = self._new_id("c")
             message_event = self._draft(
                 session_id=session_id,

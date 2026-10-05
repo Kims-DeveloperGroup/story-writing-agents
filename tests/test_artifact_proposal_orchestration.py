@@ -1022,6 +1022,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                     "evidence_status": "verified",
                     "kind": "proposal",
                     "message": "The read context supports an exact candidate.",
+                    "authoring_scope": _live_scope(call, activity="review", domains=("plot_structure", "character_world", "tone_execution"), paths=("manuscript/part-02/searched.md",)),
                     "proposal": None,
                     "scope": "story_specific",
                 "objective_intent": None,

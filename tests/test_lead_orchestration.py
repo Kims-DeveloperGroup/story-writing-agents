@@ -48,6 +48,7 @@ from story_writing_agents.agents import (
 )
 from story_writing_agents.conversations import (
     COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES,
+    CollaborationAssignmentDispatchPayload,
     CollaborationConfirmationDecision,
     CollaborationExecutionResult,
     CollaborationLeadSynthesisPayload,
@@ -862,6 +863,9 @@ def _decision(
 
 
 class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
+    def _decide(self, turn, kind):
+        return self.runtime.decide_lead_step(_decision(turn, kind))
+
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="lead-orchestration-")
         self.addCleanup(temporary.cleanup)
@@ -1640,9 +1644,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
             path: path.read_bytes() for path in self.workspace.root.rglob("*.md")
         }
 
-        confirmed = await self.runtime.decide_lead_step(
-            _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-        )
+        confirmed = await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
 
         self.assertIs(confirmed.turn.state, CollaborationStepState.COMPLETED)
         self.assertIs(
@@ -1664,9 +1666,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
             }.issubset({event.kind for event in history})
         )
         with self.assertRaises(ValueError):
-            await self.runtime.decide_lead_step(
-                _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-            )
+            await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
 
 
     async def test_mismatch_reject_revise_and_free_text_are_non_authorizing(
@@ -1695,9 +1695,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         reject_id = self.conversation("Reject")
         rejected_proposal = await self.proposal(reject_id)
         calls = len(self.backend.calls)
-        rejected = await self.runtime.decide_lead_step(
-            _decision(rejected_proposal, CollaborationConfirmationDecision.REJECT)
-        )
+        rejected = await self._decide(rejected_proposal, CollaborationConfirmationDecision.REJECT)
         self.assertIs(rejected.turn.state, CollaborationStepState.REJECTED)
         self.assertEqual(len(self.backend.calls), calls)
 
@@ -1715,9 +1713,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
                 relation="revise_pending",
             )
         )
-        revised = await self.runtime.decide_lead_step(
-            _decision(revised_source, CollaborationConfirmationDecision.REVISE)
-        )
+        revised = await self._decide(revised_source, CollaborationConfirmationDecision.REVISE)
         replacement = revised.turn.proposal
         assert replacement is not None
         self.assertEqual(replacement.step_id, revised_source.step_id)
@@ -1781,9 +1777,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         )
 
         with self.assertRaises(BackendProtocolError):
-            await self.runtime.decide_lead_step(
-                _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-            )
+            await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
 
         self.assertEqual(len(self.backend.calls), calls)
         self.assertIs(
@@ -1808,9 +1802,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
                     )
                 )
 
-                revised = await self.runtime.decide_lead_step(
-                    _decision(proposed, CollaborationConfirmationDecision.REVISE)
-                )
+                revised = await self._decide(proposed, CollaborationConfirmationDecision.REVISE)
 
                 self.assertIs(
                     revised.turn.next_action,
@@ -1910,15 +1902,16 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                      ".recommended_action." + field, requirement)
         story = {**base, "kind": "proposal", "authoring_scope": {
             **scope, "activity": "draft", "domains": ["plot_structure"],
+            "contributions": [{"domain": "plot_structure", "role": "draft_owner"}],
             "target_paths": ["core_documents/global_outline.md"]}}
         assignment = {"agent_id": PLOT_ARCHITECT, "mode": "draft", "instruction": "Draft.",
                       "input_ids": ["user_input"]}
         for field, value, requirement in (
             ("instruction", "", "expected nonempty text"),
             ("input_ids", ["user_input", "user_input"], "expected unique array items"),
-            ("mode", "PRIVATE_mode", 'expected one of ["draft", "review"]; got string'),
+            ("mode", "PRIVATE_mode", 'expected one of ["draft", "review", "constraint_assessment"]; got string'),
         ):
-            rejected({**story, "proposal": {"assignments": [{**assignment, field: value}]}},
+            rejected({**story, "proposal": {"shared_premises": [], "assignments": [{**assignment, field: value}]}},
                      ".proposal.assignments[0]." + field, requirement)
         for operation, field, requirement in (
             ({"kind": "create", "suggested_path": "manuscript/part/chapter.md", "new_text": "\ud800"},
@@ -1977,9 +1970,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             side_effect=RuntimeError("test stopped before specialist dispatch"),
         ):
             with self.assertRaisesRegex(RuntimeError, "test stopped before specialist dispatch"):
-                await self.runtime.decide_lead_step(
-                    _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-                )
+                await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
         self.assertIs(
             project_collaboration_history(self.history(proposed.conversation_id)).current_state,
             CollaborationStepState.CONFIRMED,
@@ -2849,9 +2840,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         proposed = await self.proposal(conversation_id)
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
-        await self.runtime.decide_lead_step(
-            _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-        )
+        await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
         restart_backend = _LeadBackend()
         restart_backend.enqueue(_visible_outcome("answer"))
         restarted = StoryRuntime(self.control_workspace, restart_backend)  # type: ignore[arg-type]
@@ -3019,7 +3008,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
     """Budget exhaustion preserves real completed work and closes authority."""
 
     async def _budget_consultation(self, *, message="Completed budget-bound review.",
-                                   pause_before_finalization=False, build_failure=None):
+                                   pause_before_finalization=False, build_failure=None, infeasible=False):
         previous_calls = len(self.backend.calls)
         previous_references = len(self.backend.reference_calls)
         conversation_id = self.conversation("Budget finalization")
@@ -3030,21 +3019,36 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
                 "agent_id": agent,
                 "instruction": "Review every supplied input.",
                 "input_ids": aliases,
-                "mode": "draft",
+                "mode": "draft" if infeasible else "review",
             }
             for agent in agents
         ]
         self.backend.enqueue_for(
             LEAD_ORCHESTRATOR,
             _search_history,
-            _proposal_outcome(assignments, activity="draft"),
+            _proposal_outcome(assignments, activity="draft" if infeasible else "review"),
         )
         proposed = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
-            "Review once. ${core_documents/global_outline.md} "
+            ("Review once. " if infeasible else "Review this complete supplied candidate: A finished story.\n") + "${core_documents/global_outline.md} "
             "${core_documents/character_sheets.md} ${manuscript/part-01/opening.md}",
         )
+        if infeasible:
+            self.assertIs(proposed.kind, LeadOutcomeKind.ANSWER)
+            self.assertIs(proposed.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
+            self.assertIsNone(proposed.proposal)
+            self.assertIsNone(proposed.confirmation_request_id)
+            self.assertIsNone(proposed.artifact_proposal)
+            self.assertIsNone(proposed.artifact_application_request)
+            self.assertIsNone(proposed.story_commit_request)
+            self.assertEqual([actor for actor, _ in self.backend.call_records[previous_calls:]], [LEAD_ORCHESTRATOR] * 2)
+            history = self.history(conversation_id)
+            self.assertEqual(len(_submitted_calls(history)), 2)
+            self.assertEqual(project_collaboration_history(history).physical_calls_spent, 2)
+            self.assertFalse(any(type(event.payload) is CollaborationAssignmentDispatchPayload for event in history))
+            self.assertIn("required preparation and complete specialist review", proposed.message)
+            return conversation_id, proposed
         self.assertIs(proposed.kind, LeadOutcomeKind.PROPOSAL)
         expected = {}
         for agent in agents:
@@ -3064,7 +3068,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
                     "purpose": "Review every unresolved input again.",
                     "assignments": [
                         {"agent_id": agent, "instruction": "Reconsider the original facts and replies.",
-                         "input_ids": [*input_ids, *reply_event_ids], "mode": "draft"}
+                         "input_ids": [*input_ids, *reply_event_ids], "mode": "review"}
                         for agent in agents
                     ],
                 },
@@ -3080,23 +3084,17 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
             with mock.patch.object(self.runtime, "_finalize_known_result_locked",
                                    side_effect=RuntimeError("test result persisted before finalization")):
                 with self.assertRaisesRegex(RuntimeError, "test result persisted"):
-                    await self.runtime.decide_lead_step(
-                        _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-                    )
+                    await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
             decision_result = None
         elif build_failure is not None:
             with mock.patch.object(self.runtime, "_build_continuation_proposal",
                                    side_effect=build_failure):
                 with self.assertRaises(type(build_failure)) as raised:
-                    await self.runtime.decide_lead_step(
-                        _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-                    )
+                    await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
                 self.assertIs(raised.exception, build_failure)
             decision_result = None
         else:
-            decision_result = await self.runtime.decide_lead_step(
-                    _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-                )
+            decision_result = await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
         history = self.history(conversation_id)
         self.assertEqual(len(_submitted_calls(history)), 9)
         self.assertEqual(
@@ -3119,6 +3117,8 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
 
     async def test_unaffordable_continuation_finalizes_exact_result_without_authority(self):
         artifacts = {path: path.read_bytes() for path in self.workspace.root.rglob("*.md")}
+        await self._budget_consultation(infeasible=True)
+        self.assertEqual({path: path.read_bytes() for path in self.workspace.root.rglob("*.md")}, artifacts)
         conversation, proposed, decision_result, history, synthesis, result = await self._budget_consultation()
         turn = decision_result.turn
         self.assertIs(turn.state, CollaborationStepState.COMPLETED)
@@ -3166,16 +3166,12 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
         self.assertEqual(self.history(conversation)[:len(complete)], complete)
 
     async def test_budget_notice_preserves_maximum_utf8_synthesis(self):
-        draft_notice = (
-            "Draft material is available for Lead integration and concrete review. "
-            "Story authoring is not complete; no Apply is authorized."
-        )
         notice = ("The provider round ended. The requested second specialist "
                   "round exceeds its remaining call budget. Start a new request "
                   "with the lead to continue. The completed replies and synthesis "
                   "remain in the conversation history.")
         limit = COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES
-        suffix = f"\n\n{draft_notice}\n\n{notice}"
+        suffix = f"\n\n{notice}"
         boundary = limit - len(suffix.encode())
         for byte_count in (boundary, boundary + 1, limit):
             with self.subTest(synthesis_utf8_bytes=byte_count):
@@ -3186,7 +3182,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
                 if byte_count == boundary:
                     expected = message + suffix
                 elif byte_count == limit:
-                    expected = f"{draft_notice}\n\n{notice}"
+                    expected = notice
                 else:
                     expected = notice
                 self.assertEqual(decision_result.turn.message, expected)

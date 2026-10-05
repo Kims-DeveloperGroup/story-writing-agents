@@ -504,6 +504,8 @@ class CollaborationValueContractTests(unittest.TestCase):
                     "budget_policy_fingerprint",
                     "inputs",
                     "evidence",
+                    "schema_version",
+                    "shared_premises",
                 ),
             ),
             (
@@ -615,7 +617,7 @@ class CollaborationValueContractTests(unittest.TestCase):
             ),
             (
                 lead_intent,
-                ("relation", "purpose", "assignments", "authoring_scope"),
+                ("relation", "purpose", "assignments", "authoring_scope", "shared_premises"),
             ),
             (
                 lead_outcome,

@@ -401,7 +401,7 @@ class LiveHarnessAuditTests(unittest.TestCase):
         from dataclasses import fields, replace
         from types import SimpleNamespace
         from story_writing_agents import conversations as contracts
-        from story_writing_agents.specialist_routing import ArtifactReviewDomain
+        from story_writing_agents.specialist_routing import ArtifactReviewDomain, AuthoringActivity
         from tests.recommendation_fixture import RecommendationCase, action, recommendation
 
         runtime_case = RecommendationCase()
@@ -451,10 +451,10 @@ class LiveHarnessAuditTests(unittest.TestCase):
                          for profile in request.basis.agent_profiles)
         nonplot = replace(request, specialist_ids=('execution_specialist',),
             basis=replace(request.basis, agent_profiles=profiles),
-            authoring_scope=replace(scope, target_paths=(), domains=(ArtifactReviewDomain.TONE_EXECUTION,)))
+            authoring_scope=replace(scope, target_paths=(), domains=(ArtifactReviewDomain.TONE_EXECUTION,), contributions=(replace(scope.contributions[0], domain=ArtifactReviewDomain.TONE_EXECUTION),)))
         invalid = (
             ('absent request', returned(recommendation_request=None), 'typed recommendation'),
-            ('absent scope', returned(recommendation_request=replace(request, authoring_scope=None)), 'REVIEW scope'),
+            ('non-review scope', returned(recommendation_request=replace(request, authoring_scope=replace(scope, activity=AuthoringActivity.DRAFT))), 'REVIEW scope'),
             ('missing Plot', returned(recommendation_request=nonplot), 'required Plot'),
             ('foreign task', returned(recommendation_request=replace(request,
                 authoring_scope=replace(scope, task_id='foreign_task'))), 'durable tail'),
