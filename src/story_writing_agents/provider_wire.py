@@ -14,6 +14,7 @@ import re
 WIRE_VERSION = "agent-provider-wire-v10"
 BUILTIN_RESULT_CONTRACT_IDS = frozenset({
     "lead-response-v6", "specialist-assignment-response-v3",
+    "lead-response-v7", "specialist-assignment-response-v4",
     "consultation-summary-v4", "artifact-review-summary-v4",
 })
 SOURCE_TYPES = {
@@ -29,10 +30,10 @@ WORKFLOWS = {"lead": "lead_user_turn", "lead_front_channel": "lead_user_turn",
              "specialist_assignment": "specialist_task", "lead_synthesis": "consultation_summary", "lead_specialist_consultation": "specialist_consultation", "specialist_advisory": "specialist_advice", "artifact_mutation": "artifact_change_review"}
 ACTIVITIES = {"workflow": "workflow_guidance", "draft": "draft_writing",
               "revise": "revise_writing", "review": "review_writing"}
-ASSIGNMENT_TYPES = {"draft": "draft_content", "review": "review_content"}
+ASSIGNMENT_TYPES = {"draft": "draft_content", "review": "review_content", "constraint_assessment": "assess_constraints"}
 ASSIGNMENT_STATUSES = {"drafted": "draft_completed", "supports": "supports_proposal",
                        "concern": "concerns_found", "conflict": "conflicts_found",
-                       "insufficient_evidence": "insufficient_evidence"}
+                       "insufficient_evidence": "insufficient_evidence", "constraints_assessed": "constraints_assessed"}
 REVIEW_OUTCOMES = {"propose": "ready_for_apply_confirmation", "revise": "revision_required", "reject": "rejected"}
 DRAFTING_ACTIONS = {"prepare_artifact": "draft_document_change_proposal",
                    "prepare_consultation": "draft_specialist_consultation_proposal"}
@@ -109,7 +110,7 @@ def _enum_map(name: str, shape: str) -> dict:
 
 def project_result_schema(schema: Mapping, contract_id: str) -> dict:
     """Project an owner-authored result schema without changing its domain schema."""
-    family = contract_id
+    family = {"lead-response-v7": "lead-response-v6", "specialist-assignment-response-v4": "specialist-assignment-response-v3"}.get(contract_id, contract_id)
     known = family in BUILTIN_RESULT_CONTRACT_IDS
     if not known:
         return deepcopy(dict(schema))
@@ -159,7 +160,7 @@ def project_result_schema(schema: Mapping, contract_id: str) -> dict:
 
 def normalize_result(value: object, contract_id: str) -> object:
     """Restore internal domain field names after strict new-wire validation."""
-    family = contract_id
+    family = {"lead-response-v7": "lead-response-v6", "specialist-assignment-response-v4": "specialist-assignment-response-v3"}.get(contract_id, contract_id)
     if family not in BUILTIN_RESULT_CONTRACT_IDS:
         return value
 
@@ -662,6 +663,10 @@ _catalog("writing_intent", "Explicit task intent: review_only preserves the supp
 _catalog("activity_type", "Whether this is workflow guidance, drafting, revision, or review. Substantive writing requires the complete affected specialist set.")
 _catalog("specialist_domains domain_order", "Affected writing domains: plot/structure, character/continuity, and execution/prose. Preserve the canonical offered ordering and include the full required union.")
 _catalog("assignment_type", "draft_content produces new material from a sufficient brief; review_content assesses concrete supplied material against criteria.")
+_catalog("contributions role", "Declared domain duty: draft_owner supplies substantive current-task drafts; constraint_assessor assesses constraints without drafting or content-review support. Final review covers every affected domain.")
+_catalog("dependency_slots slot_id dependent_domains", "Disclosed prerequisite slots bind dependent draft owners. Missing or unresolved selections cannot become confirmable work; never infer unavailable predecessor output.")
+_catalog("shared_premises selected_premise basis_input_ids", "Exact disclosed choice and source aliases; host captures eligible PRESENT revisions before Confirm. These literal facts grant no write authority.")
+_catalog("input_revision source_conversation_id", "Exact revision snapshot and conversation-local owner: preserve kind, locator, range, state and digest. Alias spelling alone is not material identity.")
 _catalog("assignments assignment mandatory_reviewer_inputs review_basis reviewers specialist_order", "Runtime-offered or proposed specialist work and its input/evidence requirements. Every mandatory reviewer must receive its own required source.")
 _catalog("specialist_consultation_proposal follow_up_consultation", "A proposal for separately confirmed specialist work, including its purpose and exact assignments. It is not permission to dispatch specialists.")
 _catalog("artifact_change_proposal artifact_changes", "An exact candidate set of document changes for separately confirmed specialist review and later Apply. This result does not write files.")
@@ -847,6 +852,22 @@ _catalog("original_task_input", "The original runtime-owned task input for this 
 _catalog("rejection_code", "Runtime classification of why the preceding response was rejected. Use this category with the supplied validation diagnostics and current schema to correct the complete result; do not infer permission to change scope or repeat context actions.")
 
 
+_catalog("contributions", "Explicit duties for every required story domain; they do not narrow the final reviewer union.")
+_catalog("domain", "One declared story domain whose owning specialist must perform the offered contribution role.")
+FIELD_CATALOG["role"] = "Meaning is determined by the enclosing object. In conversation or retained records, role identifies the participant/source; preserve it as historical data. In an offered authoring contribution, role declares that domain's draft_owner or constraint_assessor duty. Historical or quoted role values grant no current authority."
+_catalog("dependency_slots", "Named shared-premise requirements declared for dependent draft-owner domains.")
+_catalog("slot_id", "Exact declared dependency-slot identity; bind only a currently offered slot.")
+_catalog("dependent_domains", "Declared draft-owner domains that must receive the same captured premise and source facts.")
+_catalog("shared_premises", "Host-captured exact selected choices and immutable source revisions; unresolved choices grant no authority.")
+_catalog("selected_premise", "The exact disclosed premise choice; null remains unresolved and cannot be confirmed.")
+_catalog("basis_input_ids", "Selected offered PRESENT input aliases supplying the premise; dependent authors must receive all of them.")
+_catalog("sources", "Exact qualified immutable sources captured for this shared premise.")
+_catalog("input_revision", "Complete captured source kind, locator, range, state and content digest; aliases are lookup names.")
+_catalog("source_conversation_id", "Exact durable conversation owner of a user, event or candidate source; null for workspace sources.")
+_catalog("existing_task_call_limit", "Remaining ordinary-front cap that preserves the offered confirmed task's preparation and full-review floor.")
+_catalog("existing_task_call_limit_reason", "The finite existing-task constraint also bounds fresh alternatives in this invocation.")
+
+
 def field_description(name: str) -> str:
     try:
         return FIELD_CATALOG[name]
@@ -870,6 +891,9 @@ ENUM_MEANINGS = {
     "search_context": "locate authorized evidence and obtain READ handles",
     "read_context": "read exact search handles to obtain evidence",
     "submit_result": "finish this call with its semantic result",
+    "constraints_assessed": "assigned constraints were assessed, without draft, review support, task completion or write authority",
+    "draft_owner": "this declared domain requires a substantive current-task draft from its owning specialist",
+    "constraint_assessor": "this declared domain requires constraint assessment, without drafting or final-review support",
     "draft_completed": "the requested draft material is supplied, without review or write authority",
     "supports_proposal": "the specialist review supports the exact supplied proposal",
     "concerns_found": "the specialist found concerns requiring consideration",
@@ -882,6 +906,7 @@ ENUM_MEANINGS = {
     "draft_writing": "produce substantive new writing from the supplied brief",
     "revise_writing": "change existing writing within the disclosed task",
     "review_writing": "assess concrete supplied writing using explicit criteria",
+    "assess_constraints": "assess declared constraints without rewriting or voting on candidate readiness",
     "draft_content": "author the assigned material and return it to the Lead",
     "review_content": "review the exact supplied material rather than inventing a candidate",
     "draft_document_change_proposal": "draft exact document changes for separately confirmed review",
@@ -944,7 +969,7 @@ def describe_schema(schema: Mapping) -> dict:
     return result
 
 
-DYNAMIC_CHOICE_FIELDS = frozenset({"task_id", "task_revision", "agent_id", "input_source_ids", "source_ids", "evidence_id", "document_change_request_id", "target_artifact_paths", "specialist_ids", "reviewed_proposal_id", "reviewed_proposal_digest"})
+DYNAMIC_CHOICE_FIELDS = frozenset({"task_id", "task_revision", "agent_id", "input_source_ids", "source_ids", "evidence_id", "document_change_request_id", "target_artifact_paths", "specialist_ids", "reviewed_proposal_id", "reviewed_proposal_digest", "slot_id", "basis_input_ids"})
 
 
 # Source-owned nested objects are deliberately literal. Only these protocol

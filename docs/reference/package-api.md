@@ -540,7 +540,7 @@ use v2 provenance; an existing objective retains its immutable v1 or v2 origin.
 A pending recommendation uses `submit_recommendation_decision`, with proposal,
 Apply, and Commit controls absent. The preceding optional `story_commit_request`
 rediscloses an exact pending Commit; `artifact_application_request` carries
-Apply disclosure. The minimal variant-based provider `lead-response-v6` contract is distinct from these richer Python result values;
+Apply disclosure. The minimal variant-based provider `lead-response-v7` contract is distinct from these richer Python result values;
 see [Runtime API](runtime-api.md#contextual-authoring-objectives).
 
 Pure `AuthoringScope`, `AuthoringActivity`, `ReviewBasis`,
@@ -550,6 +550,9 @@ exports. Existing `ArtifactReviewDomain` imports through artifact-proposal and
 relationship-policy modules remain compatible. Durable scope/basis codecs are
 exported by `story_writing_agents.conversations`, which continues to own their
 stored shapes. See [Agent contracts](agent-contracts.md#authoring-scope-and-assignments).
+
+The advisory API accepts historical authoring scope versions1/2; explicit
+scope3 contributions and captured premises use the confirmed Lead flow.
 
 Both runtime advisory facades accept keyword-only `authoring_scope` and
 `review_basis`. Missing/workflow scope raises `ValueError`; a selected single

@@ -39,8 +39,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.backend.enqueue(recommendation(message=brief,
             recommended_action=action(source_ids=(source.event_id,),
                 target_paths=(path,), instruction="Preserve the exact approved draft.", specialist_ids=ROSTER),
-            authoring_scope=lambda call: lead._live_scope(call, activity="review", paths=(path,),
-                domains=tuple(domain.value for domain in scope.domains), task_index=0)))
+            authoring_scope=lambda call: lead._workflow_material(call.payload)["authoring_tasks"][0]["current_scope"]))
         offered = await self.runtime.lead_turn(self.session_id, conversation_id,
             "Approve the previous draft and prepare it as a new document.")
         self.assertIs(offered.kind, c.LeadOutcomeKind.RECOMMENDATION, offered)
@@ -57,7 +56,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual(len(self.backend.calls), calls + 1)
         self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL, prepared)
         self.assertEqual(prepared.proposal.participants, ROSTER)
-        self.assertEqual(prepared.proposal.authoring_scope, request.authoring_scope)
+        self.assertEqual(prepared.proposal.authoring_scope, replace(request.authoring_scope, activity=lead.AuthoringActivity.REVIEW))
         self.assertEqual(request.authoring_scope.interpretation, brief)
         historical = next(item for item in prepared.proposal.basis.inputs if item.input_id == source.event_id)
         self.assertIs(historical.kind, c.CollaborationInputKind.CONVERSATION_EVENT)
@@ -91,7 +90,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
             if "replies" in lead._live_material(call):
                 self.assertIn("residual costs", json.dumps(call.schema, default=dict))
         materials = [lead.scenario_input((lead._expanded_context_payload(call.payload) if "shared_context_objects" in call.payload else call.payload)["task_input"]) for call in self.backend.calls]
-        for is_review, expected_scope in ((False, scope), (True, request.authoring_scope)):
+        for is_review, expected_scope in ((False, scope), (True, replace(request.authoring_scope, activity=lead.AuthoringActivity.REVIEW))):
             phase = [item for item in materials if ("assignment" in item or "replies" in item) and (item.get("assignment", {}).get("mode") == "review" or "artifact_candidate" in item) == is_review]
             self.assertEqual(len(phase), len(ROSTER) + 1)
             self.assertTrue(all(item["authoring_scope"] == c.authoring_scope_to_dict(expected_scope) for item in phase))

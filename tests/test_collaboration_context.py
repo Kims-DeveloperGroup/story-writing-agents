@@ -75,6 +75,18 @@ from tests.collaboration_contract_fixture import (
 )
 
 
+def _state_draft(event_id, proposal, state, **changes):
+    return make_draft(
+        event_id, CollaborationEventKind.STEP_STATE, RUNTIME, USER,
+        proposal_state(proposal, state, **changes),
+    )
+
+def _user_message_draft(event_id, text):
+    return make_draft(
+        event_id, CollaborationEventKind.MESSAGE, USER, LEAD,
+        CollaborationMessagePayload(text),
+    )
+
 def _assert_invalid(
     test: unittest.TestCase,
     history: tuple[CollaborationEvent, ...],
@@ -104,16 +116,11 @@ def _terminal_state_batch(
             USER,
             CollaborationMessagePayload(f"Visible {state.value} notice."),
         ),
-        make_draft(
-            f"state_{state.value}",
-            CollaborationEventKind.STEP_STATE,
-            RUNTIME,
-            USER,
-            proposal_state(  # type: ignore[arg-type]
-                proposal,
-                state,
-                execution_result_event_id=result_event.event_id,
-            ),
+        _state_draft(
+            f'state_{state.value}',
+            proposal,
+            state,
+            execution_result_event_id=result_event.event_id,
         ),
     )
 
@@ -325,16 +332,11 @@ class CollaborationBudgetAndOutcomeTests(unittest.TestCase):
                 USER,
                 drift,
             ),
-            make_draft(
-                "request_spent_drift",
-                CollaborationEventKind.STEP_STATE,
-                RUNTIME,
-                USER,
-                proposal_state(
-                    drift,
-                    CollaborationStepState.AWAITING_CONFIRMATION,
-                    confirmation_request_id="request_spent_drift",
-                ),
+            _state_draft(
+                'request_spent_drift',
+                drift,
+                CollaborationStepState.AWAITING_CONFIRMATION,
+                confirmation_request_id='request_spent_drift',
             ),
         )
         _assert_invalid(self, history, drift_batch)
@@ -382,12 +384,9 @@ class CollaborationBudgetAndOutcomeTests(unittest.TestCase):
             make_batch(
                 (),
                 "batch_user_for_calls",
-                make_draft(
-                    "user_for_calls",
-                    CollaborationEventKind.MESSAGE,
-                    USER,
-                    LEAD,
-                    CollaborationMessagePayload("Start a bounded lead turn."),
+                _user_message_draft(
+                    'user_for_calls',
+                    'Start a bounded lead turn.',
                 ),
             ),
         )
@@ -628,13 +627,10 @@ class CollaborationConfirmationAndRecoveryTests(unittest.TestCase):
     def test_unmatched_read_only_lead_projects_retry_without_write_authority(
         self,
     ) -> None:
-        message = make_draft(
-            "submitted_user_message",
-            CollaborationEventKind.MESSAGE,
-            USER,
-            LEAD,
-            CollaborationMessagePayload("Request sent to the Lead."),
-        )
+        message = _user_message_draft(
+                      'submitted_user_message',
+                      'Request sent to the Lead.',
+                  )
         calls = provider_call_drafts(
             invocation_id="lead_invocation",
             call_id="lead_call",
@@ -670,13 +666,10 @@ class CollaborationConfirmationAndRecoveryTests(unittest.TestCase):
     def test_rejected_submitted_lead_projects_retry_and_readable_closure(
         self,
     ) -> None:
-        message = make_draft(
-            "rejected_user_message",
-            CollaborationEventKind.MESSAGE,
-            USER,
-            LEAD,
-            CollaborationMessagePayload("Reject the returned provider result."),
-        )
+        message = _user_message_draft(
+                      'rejected_user_message',
+                      'Reject the returned provider result.',
+                  )
         calls = provider_call_drafts(
             invocation_id="rejected_invocation",
             call_id="rejected_call",
@@ -759,12 +752,9 @@ class CollaborationConfirmationAndRecoveryTests(unittest.TestCase):
         yes_batch = make_batch(
             awaiting,
             "batch_free_text",
-            make_draft(
-                "free_text_yes",
-                CollaborationEventKind.MESSAGE,
-                USER,
-                LEAD,
-                CollaborationMessagePayload("Yes"),
+            _user_message_draft(
+                'free_text_yes',
+                'Yes',
             ),
         )
         with_yes = store_batch(awaiting, yes_batch)
@@ -793,12 +783,10 @@ class CollaborationConfirmationAndRecoveryTests(unittest.TestCase):
                 RUNTIME,
                 stale_decision,
             ),
-            make_draft(
-                "stale_confirmed",
-                CollaborationEventKind.STEP_STATE,
-                RUNTIME,
-                USER,
-                proposal_state(proposal, CollaborationStepState.CONFIRMED),
+            _state_draft(
+                'stale_confirmed',
+                proposal,
+                CollaborationStepState.CONFIRMED,
             ),
         )
         _assert_invalid(self, with_yes, stale)
@@ -814,12 +802,10 @@ class CollaborationConfirmationAndRecoveryTests(unittest.TestCase):
                 RUNTIME,
                 stale_decision,
             ),
-            make_draft(
-                "second_confirmed",
-                CollaborationEventKind.STEP_STATE,
-                RUNTIME,
-                USER,
-                proposal_state(proposal, CollaborationStepState.CONFIRMED),
+            _state_draft(
+                'second_confirmed',
+                proposal,
+                CollaborationStepState.CONFIRMED,
             ),
         )
         _assert_invalid(self, confirmed, second)
@@ -835,12 +821,10 @@ class CollaborationConfirmationAndRecoveryTests(unittest.TestCase):
                 RUNTIME,
                 wrong,
             ),
-            make_draft(
-                "wrong_confirmed",
-                CollaborationEventKind.STEP_STATE,
-                RUNTIME,
-                USER,
-                proposal_state(proposal, CollaborationStepState.CONFIRMED),
+            _state_draft(
+                'wrong_confirmed',
+                proposal,
+                CollaborationStepState.CONFIRMED,
             ),
         )
         _assert_invalid(self, awaiting, wrong_batch)
@@ -852,16 +836,11 @@ class CollaborationConfirmationAndRecoveryTests(unittest.TestCase):
         batch = make_batch(
             history,
             "batch_reconfirmation",
-            make_draft(
-                "reconfirmation_event",
-                CollaborationEventKind.STEP_STATE,
-                RUNTIME,
-                USER,
-                proposal_state(
-                    proposal,
-                    CollaborationStepState.RECONFIRMATION_REQUIRED,
-                    confirmation_request_id="request_reconfirmation",
-                ),
+            _state_draft(
+                'reconfirmation_event',
+                proposal,
+                CollaborationStepState.RECONFIRMATION_REQUIRED,
+                confirmation_request_id='request_reconfirmation',
             ),
         )
         history = store_batch(history, batch)
@@ -883,16 +862,11 @@ class CollaborationConfirmationAndRecoveryTests(unittest.TestCase):
         reused = make_batch(
             confirmed_history()[0],
             "batch_reused_request",
-            make_draft(
-                "reused_request_event",
-                CollaborationEventKind.STEP_STATE,
-                RUNTIME,
-                USER,
-                proposal_state(
-                    proposal,
-                    CollaborationStepState.RECONFIRMATION_REQUIRED,
-                    confirmation_request_id=REQUEST_ID,
-                ),
+            _state_draft(
+                'reused_request_event',
+                proposal,
+                CollaborationStepState.RECONFIRMATION_REQUIRED,
+                confirmation_request_id=REQUEST_ID,
             ),
         )
         _assert_invalid(self, confirmed_history()[0], reused)
@@ -920,16 +894,11 @@ class CollaborationConfirmationAndRecoveryTests(unittest.TestCase):
                     "No authoritative result exists after restart.",
                 ),
             ),
-            make_draft(
-                "unknown_state",
-                CollaborationEventKind.STEP_STATE,
-                RUNTIME,
-                USER,
-                proposal_state(
-                    proposal,
-                    CollaborationStepState.OUTCOME_UNKNOWN,
-                    execution_attempt_id=ATTEMPT_ID,
-                ),
+            _state_draft(
+                'unknown_state',
+                proposal,
+                CollaborationStepState.OUTCOME_UNKNOWN,
+                execution_attempt_id=ATTEMPT_ID,
             ),
         )
         unknown = store_batch(running, unknown_batch)
@@ -945,12 +914,10 @@ class CollaborationConfirmationAndRecoveryTests(unittest.TestCase):
         recovery = make_batch(
             unknown,
             "batch_recovery",
-            make_draft(
-                "recovery_state",
-                CollaborationEventKind.STEP_STATE,
-                RUNTIME,
-                USER,
-                proposal_state(proposal, CollaborationStepState.RECOVERY_REQUIRED),
+            _state_draft(
+                'recovery_state',
+                proposal,
+                CollaborationStepState.RECOVERY_REQUIRED,
             ),
         )
         recovered = store_batch(unknown, recovery)
@@ -990,12 +957,9 @@ class CollaborationAtomicBatchTests(unittest.TestCase):
         event_conflict = make_batch(
             history,
             "batch_event_conflict",
-            make_draft(
-                "proposal_event",
-                CollaborationEventKind.MESSAGE,
-                USER,
-                LEAD,
-                CollaborationMessagePayload("Different event with a reused ID."),
+            _user_message_draft(
+                'proposal_event',
+                'Different event with a reused ID.',
             ),
         )
         _assert_invalid(
@@ -1008,12 +972,9 @@ class CollaborationAtomicBatchTests(unittest.TestCase):
             "batch_stale",
             0,
             (
-                make_draft(
-                    "fresh_event",
-                    CollaborationEventKind.MESSAGE,
-                    USER,
-                    LEAD,
-                    CollaborationMessagePayload("Fresh but stale."),
+                _user_message_draft(
+                    'fresh_event',
+                    'Fresh but stale.',
                 ),
             ),
         )
@@ -1030,12 +991,9 @@ class CollaborationAtomicBatchTests(unittest.TestCase):
             make_batch(
                 history,
                 "batch_after_corruption",
-                make_draft(
-                    "after_corruption",
-                    CollaborationEventKind.MESSAGE,
-                    USER,
-                    LEAD,
-                    CollaborationMessagePayload("Never appended."),
+                _user_message_draft(
+                    'after_corruption',
+                    'Never appended.',
                 ),
             ),
             CollaborationAppendFailure.CORRUPT_HISTORY,
@@ -1130,16 +1088,11 @@ class CollaborationAtomicBatchTests(unittest.TestCase):
                 USER,
                 CollaborationInterruptionPayload(ATTEMPT_ID, "Unknown."),
             ),
-            make_draft(
-                "unknown_state_contract",
-                CollaborationEventKind.STEP_STATE,
-                RUNTIME,
-                USER,
-                proposal_state(
-                    proposal,
-                    CollaborationStepState.OUTCOME_UNKNOWN,
-                    execution_attempt_id=ATTEMPT_ID,
-                ),
+            _state_draft(
+                'unknown_state_contract',
+                proposal,
+                CollaborationStepState.OUTCOME_UNKNOWN,
+                execution_attempt_id=ATTEMPT_ID,
             ),
         )
         self.assertIsInstance(
@@ -1272,16 +1225,11 @@ class CollaborationReadableProjectionTests(unittest.TestCase):
                         "Visible interruption for inspection.",
                     ),
                 ),
-                make_draft(
-                    "readable_unknown_state",
-                    CollaborationEventKind.STEP_STATE,
-                    RUNTIME,
-                    USER,
-                    proposal_state(
-                        proposal,
-                        CollaborationStepState.OUTCOME_UNKNOWN,
-                        execution_attempt_id=ATTEMPT_ID,
-                    ),
+                _state_draft(
+                    'readable_unknown_state',
+                    proposal,
+                    CollaborationStepState.OUTCOME_UNKNOWN,
+                    execution_attempt_id=ATTEMPT_ID,
                 ),
             ),
         )

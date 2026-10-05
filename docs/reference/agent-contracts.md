@@ -80,8 +80,10 @@ remain content-backed at definition construction.
 
 The runtime appends shared agent JSON guidance to every provider-bound role.
 The current built-in wire is `agent-provider-wire-v10`; the separate result
-contracts are `lead-response-v6`, `specialist-assignment-response-v3`,
-`consultation-summary-v4`, and `artifact-review-summary-v4`. Per-call guidance
+contracts are `lead-response-v7` (fresh scope3), `lead-response-v6` (explicit
+legacy scope1/2), `specialist-assignment-response-v3` (draft/review),
+`specialist-assignment-response-v4` (constraints), `consultation-summary-v4`,
+and `artifact-review-summary-v4`. Per-call guidance
 and schema descriptions explain the actual fields and allowed values. See the
 [field guide](provider-wire.md).
 
@@ -273,11 +275,19 @@ AuthoringScope(
     interpretation: str,
     task_id: str,
     task_revision: int,
-    schema_version: int = 1,
+    schema_version: int = 2,  # fresh Lead proposals explicitly use 3
+    *,
+    intent: AuthoringIntent = AuthoringIntent.AUTHORING,
+    contributions: tuple[AuthoringContribution, ...] = (),
+    dependency_slots: tuple[AuthoringDependencySlot, ...] = (),
 )
+AuthoringContribution(domain: ArtifactReviewDomain,
+                      role: AuthoringContributionRole)  # draft_owner | constraint_assessor
+AuthoringDependencySlot(slot_id: str,
+                        dependent_domains: tuple[ArtifactReviewDomain, ...])
 ReviewBasis(candidate_input_ids: tuple[str, ...], criteria: str,
             schema_version: int = 1)
-SpecialistAssignmentMode         # draft | review
+SpecialistAssignmentMode         # draft | constraint_assessment | review
 ```
 
 Domains have canonical order `plot_structure`, `character_world`,
@@ -292,17 +302,49 @@ nonempty candidate inputs and criteria. The conversations facade owns the exact
 `authoring_scope_to_dict`/`authoring_scope_from_dict` and
 `review_basis_to_dict`/`review_basis_from_dict` durable codecs.
 
-The provider contracts are `lead-response-v6`,
-`specialist-assignment-response-v3`, `consultation-summary-v4`, and
-`artifact-review-summary-v4`. Their JSON names are independent of the Python
-values above. In particular, provider `writing_task_scope` contains
-`activity_type`, `target_artifact_paths`, `specialist_domains`, and an exact
+Fresh scope-v3 Lead invocations use `lead-response-v7`; explicit legacy
+scope1/2 bindings retain `lead-response-v6`. Ordinary draft/review uses
+`specialist-assignment-response-v3`; constraint assessment uses v4. Synthesis
+retains `consultation-summary-v4` and `artifact-review-summary-v4`.
+These names are invocation contracts, with no global wire-version change.
+Provider scopes identify the current shape through required contribution and
+dependency arrays; durable scope codecs explicitly record version 3. JSON names
+are independent of Python values: provider `writing_task_scope` includes
+`activity_type`, `target_artifact_paths`, `specialist_domains`, and the exact
 `task_reference` object. The runtime reconstructs attribution and routing facts
 and never infers missing authority selectors.
 
 Provider schemas are closed. Missing Lead scope receives one bounded repair;
 a second rejection becomes a runtime-owned visible no-action fallback. That
 fallback is not a provider-schema variant.
+
+Scope version 3 requires explicit contribution and dependency arrays. Each
+required domain declares one role; domains mapping to one specialist must agree.
+Draft/revise requires at least one draft owner. Constraint assessment has no
+`ReviewBasis` and cannot supply draft proof or review support. Final review keeps
+the complete affected specialist union and concrete identical candidate.
+
+The proposal intent carries `LeadSharedPremiseIntent(slot_id, selected_premise,
+basis_input_ids)`. The host resolves those offered aliases into immutable
+`CollaborationSharedPremise(slot_id, selected_premise, sources)` values, where
+`CollaborationPremiseSource` contains the exact `input_revision` and
+`source_conversation_id`. Basis version 2 explicitly serializes `schema_version`
+and `shared_premises`, including an empty array. Basis version 1 omits both and
+retains its historical bytes. Scope versions 1/2 reject new duty/slot fields,
+even empty arrays; their intents cannot acquire captures or constraint duties.
+
+A preparation recommendation may bind a destination separately from a
+confirmed targetless source scope. The source capture stays exact, and the
+destination's artifact domains must already belong to its full domain union.
+The exact request and immutable candidate retain destination authority, while
+all required calls inherit the source's round and physical-call counters.
+
+A completed local confirmed scope-v3 task may explicitly offer its next revision.
+That revision requires a fresh proposal, Confirm, and substantive owner drafts;
+previous drafts and same-revision restarts grant no new execution authority.
+When the old continuation floor is exhausted, the bounded ordinary invocation
+excludes the old revision pair and preparation authority. Its successor is
+restricted to DRAFT or REVISE; REVIEW cannot bypass fresh owner drafts.
 
 ## Specialist reply and lead synthesis
 
@@ -341,10 +383,12 @@ provider result uses `consultation-summary-v4`, with explicit
 `response_type: "consultation_summary"`, `response_text`, and schema-permitted
 `proposal_drafting_request` or `follow_up_consultation`. The two requests are
 mutually exclusive. Provider specialist status values are `draft_completed`,
-`supports_proposal`, `concerns_found`, `conflicts_found`, and
-`insufficient_evidence`. The following rules describe the Python domain values
+`supports_proposal`, `constraints_assessed`, `concerns_found`, `conflicts_found`,
+and `insufficient_evidence`. The following rules describe the Python domain values
 normalized from that wire contract.
 
+Constraint-mode assessment is `constraints_assessed`, `concern`, `conflict`,
+or `insufficient_evidence`, with wire mode `assess_constraints`.
 Draft-mode assessment is `drafted` or `insufficient_evidence`; review-mode
 assessment is `supports`, `concern`, `conflict`, or `insufficient_evidence`.
 The runtime binds the reply to its assignment mode, assignment ID, and exact

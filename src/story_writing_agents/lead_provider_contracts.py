@@ -11,9 +11,11 @@ from dataclasses import dataclass
 
 from .agents import SPECIALIST_IDS
 from .conversations import COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES
+from .conversations.events import authoring_scope_from_dict
 from .specialist_routing import (
     ArtifactReviewDomain, AuthoringActivity, AuthoringIntent, AuthoringScope,
-    required_authoring_specialists,
+    required_authoring_specialists, required_authoring_domains, assignment_mode_for_specialist,
+    AuthoringContributionRole,
 )
 from .structured_output_validation import DomainValidationRule, validation_failure
 
@@ -54,6 +56,67 @@ def alternatives(variants: list[dict[str, object]]) -> dict[str, object]:
 def nonempty_text_schema() -> dict[str, object]:
     # The common provider dialect deliberately excludes minLength and pattern.
     return {"type": "string", "description": "Nonempty UTF-8 text."}
+
+
+def _scope_extensions(scope: AuthoringScope | None) -> dict[str, object]:
+    if scope is not None and scope.schema_version < 3:
+        return {}
+    domains = tuple(item.value for item in required_authoring_domains(scope)) if scope else tuple(item.value for item in ArtifactReviewDomain)
+    contributions = [
+        {
+            **closed_object({
+                "domain": {"type": "string", "enum": [item.domain.value]},
+                "role": {"type": "string", "enum": [item.role.value]},
+            }),
+            "description": "The bound contribution role for this declared story domain.",
+        }
+        for item in scope.contributions
+    ] if scope else [{
+        **closed_object({
+            "domain": {"type": "string", "enum": list(domains)},
+            "role": {"type": "string", "enum": [item.value for item in AuthoringContributionRole]},
+        }),
+        "description": "One explicit contribution role for a declared story domain.",
+    }]
+    slots = [
+        {
+            **closed_object({
+                "slot_id": {"type": "string", "enum": [item.slot_id]},
+                "dependent_domains": string_array(
+                    tuple(domain.value for domain in item.dependent_domains),
+                    minimum=len(item.dependent_domains), maximum=len(item.dependent_domains),
+                ),
+            }),
+            "description": "The bound shared-premise dependency for these draft-owner domains.",
+        }
+        for item in scope.dependency_slots
+    ] if scope and scope.dependency_slots else [{
+        **closed_object({
+            "slot_id": nonempty_text_schema(),
+            "dependent_domains": string_array(domains, minimum=1),
+        }),
+        "description": "One explicit shared-premise dependency for declared draft-owner domains.",
+    }]
+    return {
+        "contributions": {
+            "type": "array", "items": alternatives(contributions) if contributions else closed_object({}),
+            "minItems": len(scope.contributions) if scope else 0,
+            "maxItems": len(scope.contributions) if scope else len(domains),
+        },
+        "dependency_slots": {
+            "type": "array", "items": alternatives(slots), "minItems": 0,
+            **({"minItems": len(scope.dependency_slots), "maxItems": len(scope.dependency_slots)} if scope else {}),
+        },
+    }
+
+
+def _scope_for_rules(raw: dict[str, object]) -> AuthoringScope:
+    version = 3 if "contributions" in raw else 2 if "intent" in raw else 1
+    return authoring_scope_from_dict({"schema_version": version, "activity": raw["activity"],
+        "target_paths": raw["target_paths"], "domains": raw["domains"],
+        "interpretation": "Provider constraint projection", "task_id": "constraint", "task_revision": 1,
+        **({"intent": raw.get("intent", "authoring")} if version >= 2 else {}),
+        **({"contributions": raw["contributions"], "dependency_slots": raw["dependency_slots"]} if version == 3 else {})})
 
 
 def canonical_scope(value: object) -> object:
@@ -190,6 +253,7 @@ class LeadProviderConstraints:
         if tokens:
             task["enum"] = list(tokens)
         return {**closed_object({
+            **_scope_extensions(scope),
             **({"intent": {
                 "type": "string",
                 "enum": [scope.intent.value] if scope else [item.value for item in AuthoringIntent],
@@ -199,7 +263,7 @@ class LeadProviderConstraints:
                     "not imply this intent. Preserve bound intent; requested revisions need fresh "
                     "authoring work."
                 ),
-            }} if scope is None or scope.schema_version == 2 else {}),
+            }} if scope is None or scope.schema_version >= 2 else {}),
             "activity": {"type": "string", "enum": ([scope.activity.value] if scope else
                           [item.value for item in AuthoringActivity])},
             "target_paths": string_array(
@@ -260,7 +324,9 @@ class LeadProviderConstraints:
                                maximum=None if self.allow_read_sources else len(self.input_ids) or None),
                 "description": input_rule,
             },
-            "mode": {"type": "string", "enum": [mode] if agent in required or (self.scope and self.scope.intent is AuthoringIntent.REVIEW_ONLY) else ["draft", "review"]},
+            "mode": {"type": "string", "enum": ([assignment_mode_for_specialist(self.scope, agent).value] if self.scope and self.scope.schema_version == 3 and agent in required else
+                [mode] if agent in required or (self.scope and self.scope.intent is AuthoringIntent.REVIEW_ONLY) else
+                ["draft", "review", "constraint_assessment"] if self.scope is None else ["draft", "review"])},
         }), "description": assignment_purposes[agent]} for agent in agents])
 
     def objective_schema(self, step: str | None, *, cancel: bool = False) -> dict[str, object]:
@@ -439,11 +505,7 @@ class LeadProviderConstraints:
                     domains = raw_scope.get("domains", [])
                     paths = raw_scope.get("target_paths", [])
                     try:
-                        scope = AuthoringScope(AuthoringActivity(raw_scope["activity"]), tuple(paths),
-                            tuple(domain for domain in ArtifactReviewDomain if domain.value in domains),
-                            "Provider constraint projection", "constraint", 1,
-                            schema_version=2 if "intent" in raw_scope else 1,
-                            intent=AuthoringIntent(raw_scope.get("intent", "authoring")))
+                        scope = _scope_for_rules(raw_scope)
                     except (KeyError, TypeError, ValueError):
                         scope = None
                 if scope:
@@ -455,7 +517,7 @@ class LeadProviderConstraints:
                         type(item) is dict
                         and (item.get("agent_id") in required_roles
                              or scope.intent is AuthoringIntent.REVIEW_ONLY)
-                        and item.get("mode") != expected_mode
+                        and item.get("mode") != (assignment_mode_for_specialist(scope, item["agent_id"]).value if scope.schema_version == 3 else expected_mode)
                         for item in assignments
                     ):
                         rules.append(R.ASSIGNMENT_MODE)
@@ -464,18 +526,16 @@ class LeadProviderConstraints:
         action = value.get("recommended_action")
         if type(action) is dict:
             roles = action.get("specialist_ids")
-            if type(roles) is list and all(type(role) is str for role in roles):
+            if (
+                action.get("kind") == "prepare_consultation"
+                and type(roles) is list
+                and all(type(role) is str for role in roles)
+            ):
                 if not roles or len(set(roles)) != len(roles) or any(role not in SPECIALIST_IDS for role in roles):
                     rules.append(R.RECOMMENDATION_SPECIALISTS)
                 if type(raw_scope) is dict:
                     try:
-                        selected_scope = AuthoringScope(
-                            AuthoringActivity(raw_scope["activity"]), tuple(raw_scope["target_paths"]),
-                            tuple(domain for domain in ArtifactReviewDomain if domain.value in raw_scope["domains"]),
-                            "Provider constraint projection", "constraint", 1,
-                            schema_version=2 if "intent" in raw_scope else 1,
-                            intent=AuthoringIntent(raw_scope.get("intent", "authoring")),
-                        )
+                        selected_scope = _scope_for_rules(raw_scope)
                         if not set(required_authoring_specialists(selected_scope)).issubset(roles):
                             rules.append(R.RECOMMENDATION_SPECIALISTS)
                     except (KeyError, TypeError, ValueError):

@@ -634,7 +634,7 @@ therefore survives reopen. A runtime fallback always reports `action=none` and
 grants no confirmation, Apply, Commit, or other user authority.
 
 Provider JSON is distinct from the Python result above. The built-in Lead
-contract is `lead-response-v6`; every branch includes explicit `response_type`,
+contract is `lead-response-v7`; every branch includes explicit `response_type`,
 `response_text`, and `writing_task_scope`. See the
 [agent JSON field guide](provider-wire.md) for all result variants, how to build
 the schema property, and complete input/response guidance.
@@ -816,7 +816,7 @@ objective provenance; there is no synthetic user message.
 The public objective values are additive exports of
 `story_writing_agents.conversations`; the package-root facade is unchanged.
 Retained workspace policies receive the current runtime overlay without file rewrites.
-Specialist and synthesis schemas remain separate from `lead-response-v6`.
+Specialist and synthesis schemas remain separate from `lead-response-v7`.
 
 `LeadProviderOutcome` preserves its Python positional order:
 
@@ -943,6 +943,9 @@ advisory = await runtime.propose_specialist_advisory(
 scope or `activity=workflow` raises `ValueError`; the defaults do not preserve
 unscoped calls. The selected specialist must cover all semantic and known path
 domains. Use `lead_turn()` for interpretation or work spanning multiple domains.
+The advisory API accepts historical authoring scope versions1/2; explicit
+scope3 contributions and captured premises use the confirmed Lead flow.
+
 A new API task ID is rebound runtime-side; inspect `advisory.proposal.authoring_scope`
 for the actual identity. To continue an offered active task, pass its exact
 current identity/revision; stale or applied revisions are rejected.

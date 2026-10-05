@@ -428,7 +428,7 @@ every affected canonical path, including empty or missing targets:
 | `core_documents/narrative_rules.md` | `execution_specialist` |
 | Eligible `manuscript/**/*.md` reference paths | `execution_specialist` |
 
-The lead discloses its interpretation of free text in `AuthoringScope` schema 1:
+The lead discloses its interpretation of free text in the current `AuthoringScope` schema 3:
 `activity` (`workflow`, `draft`, `revise`, or `review`), `target_paths`, canonical
 `domains`, `interpretation`, and the exact runtime-offered `task_id`/`task_revision`
 pair. Runtime unions those facts with relevant references, current evidence,
@@ -444,11 +444,14 @@ sibling's artifact-only evidence. The lead synthesis receives all typed replies
 and the directly referenced story-artifact inputs; one agent's previous read
 receipt is never borrowed as another agent's evidence.
 
-Each assignment explicitly uses `draft` or `review`. Drafting can produce
-`drafted` material from an adequate brief even when its target is empty. Review
-requires `ReviewBasis` schema 1 with nonempty `candidate_input_ids` and visible
-`criteria`; a brief or status receipt alone is not a review candidate. When a
-user supplies a complete candidate, the Lead must disclose that interpretation.
+Each assignment explicitly uses `draft`, `constraint_assessment`, or `review`.
+Drafting produces `drafted` material from an adequate brief, including an empty
+target. Constraint assessment returns `constraints_assessed`, `concern`,
+`conflict`, or `insufficient_evidence`; it supplies constraints to the draft owner
+and cannot supply draft proof or review support. Review requires `ReviewBasis`
+schema 1 with nonempty `candidate_input_ids` and visible `criteria`; a brief or
+status receipt alone is not a review candidate. When the user supplies a complete
+candidate, the Lead must disclose that interpretation.
 
 Active same-session tasks come from validated conversation catalog/events. The
 Lead explicitly selects a runtime-offered task/revision to continue it across
@@ -464,6 +467,52 @@ contract does not itself emit an artifact intent. The Lead integrates all requir
 specialist reviews the exact immutable final artifact candidate, and Apply
 requires another structured confirmation. A draft or earlier supporting
 review cannot replace final candidate review.
+
+### Contribution roles and confirmed shared premises
+
+Current Lead proposals explicitly use scope version 3. Fresh invocations use `lead-response-v7`;
+explicit legacy scope1/2 bindings retain `lead-response-v6`. `contributions` declares
+one `draft_owner` or `constraint_assessor` for each affected domain. Domains
+mapping to one specialist must agree on its role; the runtime never drops a
+required specialist to resolve a conflict or fit a budget. Draft/revise work
+requires a draft owner. Final candidate review still assigns every affected
+specialist `review`, with the same immutable integrated candidate.
+
+`dependency_slots` declares a premise needed by named draft-owning domains.
+The Lead selects its exact text and offered basis aliases in `shared_premises`.
+Before Confirm, the host captures every selected source revision and qualifies
+conversation-local material with its source conversation. Each dependent author
+must select all required sources and receives the same captured facts. Missing
+choices, stale sources, undeclared slots, and omitted required inputs prevent
+confirmation. These checks establish provenance; they do not infer dependencies
+from prose or prove that a source is true.
+
+The first confirmed authoring proposal pins the scope, duties, brief, premise
+text, and qualified sources for that task revision. Equivalent source aliases
+can change only with a fresh proposal and Confirm; reusing an alias for another
+owner or material is not equivalent. Changed duties or premises require the
+next explicit task revision, fresh confirmation, and fresh owner drafts.
+Constraint results never satisfy those draft obligations. Historical scope
+versions 1/2 and basis version 1 retain their exact encodings and authority;
+omitted-version Python construction still defaults to scope 2 and basis 1.
+
+A scope-3 draft-derived final review uses the exact separately confirmed Lead
+preparation recommendation. The host inherits the successful source capture,
+spent physical calls, and specialist-round count. A detached new step cannot
+reset that lineage. The runtime reserves preparation calls and required READs,
+all final reviewers, and synthesis before optional initial calls. Round one
+performs drafting/constraint assessment; round two reviews the final candidate.
+Final preparation for these confirmed drafts stays in their source conversation.
+If you select the task elsewhere, focus that conversation to prepare its final
+candidate; sharing source facts does not transfer execution authority.
+An infeasible plan requires clarification or a fresh proposal within the same
+two-round/twelve-call limits. Review, Apply, and Commit remain separate decisions.
+
+While a completed local scope-v3 draft is offered for continuation, ordinary
+Lead calls leave the preparation and full final-review minimum available,
+including required READs and corrections. Fresh alternatives in that invocation
+share this finite allowance. The separate advisory-consultation API accepts
+historical scope1/2 only; scope3 uses the confirmed Lead flow.
 
 ## How a lead judgment is grounded
 
@@ -738,7 +787,9 @@ A review-mode specialist reply has exactly:
 
 In review mode, `assessment` is `supports`, `concern`, `conflict`, or
 `insufficient_evidence`. Draft mode instead permits `drafted` or
-`insufficient_evidence`. Synthesis cites every reply event in order and retains
+`insufficient_evidence`. Constraint mode permits `constraints_assessed`, `concern`,
+`conflict`, or `insufficient_evidence`, never `drafted` or `supports`.
+Synthesis cites every reply event in order and retains
 every input ID from concern/conflict/insufficient-evidence replies in
 `unresolved_input_ids`; drafted material is exempt from that unresolved-input
 requirement. The lead cannot erase disagreement by voting.
@@ -952,7 +1003,7 @@ exact source content. A terminal response embeds the semantic object directly in
 `task_result`. The runtime owns correlation, attribution, and evidence receipts.
 
 Every built-in result has an explicit `response_type`. The Lead contract,
-`lead-response-v6`, distinguishes answers, clarification questions, critiques,
+`lead-response-v7`, distinguishes answers, clarification questions, critiques,
 proposal-drafting recommendations, specialist-consultation proposals, and artifact
 change proposals. Every Lead result includes `response_text` and
 `writing_task_scope`; the scope selects an exact offered `{task_id, task_revision}`
@@ -965,7 +1016,10 @@ tracks the user's requested durable document change. It remains pending through
 questions, drafts, consultation, and review; exact successful Apply completes it.
 These concepts are explained separately in the field guide.
 
-Specialist tasks use `specialist-assignment-response-v3`. Draft assignments return
+Ordinary draft/review tasks use `specialist-assignment-response-v3`. Constraint
+assignments use `specialist-assignment-response-v4`, expose `assess_constraints`, and
+return `constraints_assessed`, `concerns_found`, `conflicts_found`, or
+`insufficient_evidence` in their closed offered schema. Draft assignments return
 `draft_completed` or `insufficient_evidence`; review assignments return
 `supports_proposal`, `concerns_found`, `conflicts_found`, or `insufficient_evidence`.
 Ordinary synthesis uses `consultation-summary-v4`. Artifact review uses

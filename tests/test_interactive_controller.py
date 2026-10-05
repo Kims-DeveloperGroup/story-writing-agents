@@ -1602,6 +1602,10 @@ class ControllerAuthTests(ControllerTestCase):
         )
 
 
+def _cancel_control_outcome():
+    return terminal_module.ControlOutcome(terminal_module.ControlOutcomeKind.CANCEL)
+
+
 class ControllerSettingsTests(ControllerTestCase):
     """Verify isolated settings UI, validation, persistence, and cancellation."""
 
@@ -2092,9 +2096,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 text=value,
             )
 
-        cancel = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.CANCEL
-        )
+        cancel = _cancel_control_outcome()
         with (
             mock.patch.object(
                 terminal_module.InteractivePickerInput,
@@ -2630,9 +2632,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 text=value,
             )
 
-        cancel = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.CANCEL
-        )
+        cancel = _cancel_control_outcome()
 
         provider_pending = settings_module.update_agent_backend(
             state,
@@ -2850,9 +2850,7 @@ class ControllerSettingsTests(ControllerTestCase):
             terminal_module.ControlOutcomeKind.COMMIT,
             text=PLOT_ARCHITECT,
         )
-        cancel = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.CANCEL
-        )
+        cancel = _cancel_control_outcome()
         with (
             mock.patch.object(
                 terminal_module.InteractivePickerInput,
@@ -3096,9 +3094,7 @@ class ControllerSettingsTests(ControllerTestCase):
 
         controller._advisory_progress._run = observe_progress
         controller._runner = asyncio.Runner()
-        cancel = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.CANCEL
-        )
+        cancel = _cancel_control_outcome()
         state = settings_module.load_settings_state(workspace)
         try:
             with mock.patch.object(
@@ -3139,9 +3135,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 text=value,
             )
 
-        cancel = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.CANCEL
-        )
+        cancel = _cancel_control_outcome()
         cases = (
             (
                 "Language",
@@ -3278,9 +3272,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 text=value,
             )
 
-        cancel = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.CANCEL
-        )
+        cancel = _cancel_control_outcome()
         with mock.patch.object(
             terminal_module.InteractivePromptInput,
             "read_prompt",
@@ -3360,9 +3352,7 @@ class ControllerSettingsTests(ControllerTestCase):
             terminal_module.ControlOutcomeKind.COMMIT,
             text="codex",
         )
-        cancel = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.CANCEL
-        )
+        cancel = _cancel_control_outcome()
         with mock.patch.object(
             terminal_module.InteractivePickerInput,
             "read_picker",
@@ -3466,9 +3456,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 text=value,
             )
 
-        cancel = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.CANCEL
-        )
+        cancel = _cancel_control_outcome()
 
         def exercise_picker(
             label,
@@ -3772,9 +3760,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 text=value,
             )
 
-        cancel = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.CANCEL
-        )
+        cancel = _cancel_control_outcome()
         picker_outcomes = (
             commit(PLOT_ARCHITECT),
             commit("provider"),
@@ -3883,9 +3869,7 @@ class ControllerSettingsTests(ControllerTestCase):
             terminal_module.ControlOutcomeKind.COMMIT,
             text="settings:model:0",
         )
-        cancel = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.CANCEL
-        )
+        cancel = _cancel_control_outcome()
         with mock.patch.object(
             terminal_module.InteractivePickerInput,
             "read_picker",
@@ -3951,9 +3935,7 @@ class ControllerSettingsTests(ControllerTestCase):
             PLOT_ARCHITECT,
             "gpt-b",
         )
-        cancel = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.CANCEL
-        )
+        cancel = _cancel_control_outcome()
         with mock.patch.object(
             terminal_module.InteractivePickerInput,
             "read_picker",
@@ -4001,9 +3983,7 @@ class ControllerSettingsTests(ControllerTestCase):
             terminal_module.ControlOutcomeKind.COMMIT,
             text="settings:model:custom",
         )
-        cancel = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.CANCEL
-        )
+        cancel = _cancel_control_outcome()
         with (
             mock.patch.object(
                 terminal_module.InteractivePickerInput,
@@ -4065,9 +4045,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 text=value,
             )
 
-        cancel = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.CANCEL
-        )
+        cancel = _cancel_control_outcome()
         with (
             mock.patch.object(
                 terminal_module.InteractivePickerInput,
@@ -4169,9 +4147,7 @@ class ControllerSettingsTests(ControllerTestCase):
             terminal_module.ControlOutcomeKind.COMMIT,
             text="settings:effort:1",
         )
-        cancel = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.CANCEL
-        )
+        cancel = _cancel_control_outcome()
         with mock.patch.object(
             terminal_module.InteractivePickerInput,
             "read_picker",
@@ -4285,9 +4261,7 @@ class ControllerSettingsTests(ControllerTestCase):
             workspace,
             provider_catalog=catalog,
         )
-        cancel = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.CANCEL
-        )
+        cancel = _cancel_control_outcome()
         state = settings_module.load_settings_state(workspace)
         with mock.patch.object(
             terminal_module.InteractivePickerInput,
@@ -4336,9 +4310,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     provider_catalog=catalog,
                 )
                 state = settings_module.load_settings_state(workspace)
-                cancel = terminal_module.ControlOutcome(
-                    terminal_module.ControlOutcomeKind.CANCEL
-                )
+                cancel = _cancel_control_outcome()
                 with mock.patch.object(
                     terminal_module.InteractivePickerInput,
                     "read_picker",
@@ -4380,9 +4352,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     terminal_module.InteractivePickerInput,
                     "read_picker",
                     autospec=True,
-                    return_value=terminal_module.ControlOutcome(
-                        terminal_module.ControlOutcomeKind.CANCEL
-                    ),
+                    return_value=_cancel_control_outcome(),
                 ) as picker:
                     controller._edit_settings_agent_model(
                         settings_module.load_settings_state(workspace),
@@ -4761,9 +4731,7 @@ class ControllerSettingsTests(ControllerTestCase):
             (
                 "escape",
                 "save",
-                terminal_module.ControlOutcome(
-                    terminal_module.ControlOutcomeKind.CANCEL,
-                ),
+                _cancel_control_outcome(),
                 "return",
             ),
             (
@@ -5092,9 +5060,7 @@ class ControllerSettingsTests(ControllerTestCase):
             terminal_module.ControlOutcomeKind.COMMIT,
             text="save",
         )
-        cancel = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.CANCEL
-        )
+        cancel = _cancel_control_outcome()
 
         def clear_candidate(_controller, candidate, *, action):
             self.assertEqual(action, "save")
@@ -5544,9 +5510,7 @@ class ControllerSettingsTests(ControllerTestCase):
             terminal_module.ControlOutcomeKind.COMMIT,
             text="save",
         )
-        cancel = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.CANCEL
-        )
+        cancel = _cancel_control_outcome()
 
         with (
             mock.patch.object(
@@ -5618,9 +5582,7 @@ class ControllerSettingsTests(ControllerTestCase):
         interrupt = terminal_module.ControlOutcome(
             terminal_module.ControlOutcomeKind.INTERRUPT
         )
-        cancel = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.CANCEL
-        )
+        cancel = _cancel_control_outcome()
         cases = (
             ("auth-return", changed, "return", (commit_save, interrupt)),
             ("auth-cancel", changed, "cancel", (commit_save,)),

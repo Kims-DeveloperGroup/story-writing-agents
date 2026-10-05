@@ -95,6 +95,7 @@ from tests.helpers import materialize_pristine_initialized_workspace
 from tests.test_agent_context_accounting import _expanded_context_payload
 from story_writing_agents.specialist_routing import (
     ArtifactReviewDomain, AuthoringActivity, AuthoringScope, ReviewBasis,
+    artifact_domain,
 )
 
 
@@ -466,9 +467,13 @@ def _live_scope(call, *, activity="workflow", domains=(), paths=(), task_index=-
     if "authoring_tasks" not in material:
         return dict(material["answer_contract"]["authoring_scope"])
     task = material["authoring_tasks"][task_index]
+    affected = set(domains) | {domain.value for path in paths if (domain := artifact_domain(path)) is not None}
     return {"activity": activity, "intent": "authoring", "target_paths": list(paths),
             "domains": list(domains),
-            "task_id": task["task_id"], "task_revision": task["task_revision"]}
+            "task_id": task["task_id"], "task_revision": task["task_revision"],
+        "contributions": [{"domain": domain.value, "role": "draft_owner"} for domain in ArtifactReviewDomain if domain.value in affected],
+        "dependency_slots": [],
+    }
 
 
 def _live_assignments(assignments):
@@ -576,6 +581,8 @@ def _live_result(call, value):
         compact_proposal = {
             "assignments": _live_assignments(proposal["assignments"]),
         }
+        if "shared_premises" in proposal:
+            compact_proposal["shared_premises"] = proposal["shared_premises"]
         if type(objective) is dict:
             compact_proposal["objective_intent"] = _compact_objective(objective)
         compact["proposal"] = compact_proposal
@@ -594,8 +601,8 @@ def _compact_scope(value):
         key: value[key]
         for key in ("activity", "target_paths", "domains")
     }
-    if "intent" in value:
-        compact["intent"] = value["intent"]
+    for key in ("intent", "contributions", "dependency_slots"):
+        if key in value: compact[key] = value[key]
     compact["task"] = f"{value['task_id']}@{value['task_revision']}"
     return compact
 
@@ -674,6 +681,7 @@ def _proposal_outcome(
                     "relation": relation,
                     "purpose": purpose,
                     "assignments": assignments,
+                    **({"shared_premises": []} if "contributions" in _live_scope(call) else {}),
                 },
             }
         if activity is not None:
@@ -989,11 +997,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             3,
         )
         self.assertEqual(
-            sum(
-                type(event.payload) is CollaborationProviderCallPayload
-                and event.payload.state is CollaborationProviderCallState.SUBMITTED
-                for event in self.history(conversation_id)
-            ),
+            len(_submitted_calls(self.history(conversation_id))),
             4,
         )
 
@@ -1198,22 +1202,25 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         encoded = json.dumps(schema, separators=(",", ":"))
         self.assertIn("concrete deliverable and success criteria", encoded)
         self.assertLessEqual(len(encoded.encode("utf-8")), 64 * 1024)
-        for metadata in ("null", "correlation", "schema_version", "evidence_status", "evidence_ids",
+        for metadata in ("correlation", "schema_version", "evidence_status", "evidence_ids",
                          "interpretation", "review_basis",
                          "additional_review_domains", "expected_result"):
             self.assertNotIn(f'"{metadata}"', encoded)
-        def assert_strict(node):
+        def assert_strict(node, allow_null=False):
             if isinstance(node, Mapping):
+                self.assertNotIn("null", node)
                 if node.get("type") == "array":
                     self.assertIs(type(node.get("minItems")), int)
                 if node.get("type") == "object":
                     self.assertEqual(set(node["required"]), set(node["properties"]))
                     self.assertIs(node["additionalProperties"], False)
-                for value in node.values():
-                    assert_strict(value)
+                for key, value in node.items():
+                    assert_strict(value, allow_null if key in ("anyOf", "type") else key == "selected_premise")
             elif type(node) in (list, tuple):
                 for value in node:
-                    assert_strict(value)
+                    assert_strict(value, allow_null)
+            elif node == "null":
+                self.assertTrue(allow_null)
         assert_strict(schema)
         call = self.backend.calls[-1]
         assert_guidance(self, dict(call.payload), dict(call.schema))
@@ -1223,11 +1230,16 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             describe_schema({"type": "object", "description": "Return the runtime-owned response.", "properties": {"unknown_runtime_wire_field": {"type": "string"}}})
         with self.assertRaisesRegex(ValueError, "no enum meaning"):
             describe_schema({"type": "string", "description": "Choose the runtime-owned value.", "enum": ["unknown_static_wire_choice"]})
-        self.assertEqual(call.payload["response_contract"]["result_contract_id"], "lead-response-v6")
+        self.assertEqual(call.payload["response_contract"]["result_contract_id"], "lead-response-v7")
         draft_contract = orchestrator_module._specialist_result_contract(type("Assignment", (), {"mode": orchestrator_module.SpecialistAssignmentMode.DRAFT})())
         description = draft_contract.schema["description"]
         self.assertIn("draft_completed", description); self.assertIn("do not write documents", description)
         self.assertEqual(diagnose_json_text(json.dumps({"response_type": "specialist_assignment_result", "assignment_status": "draft_completed", "response_text": "Synthetic draft."}), draft_contract.schema), ())
+        constraint_contract = orchestrator_module._specialist_result_contract(type("Assignment", (), {"mode": orchestrator_module.SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT})())
+        self.assertEqual(constraint_contract.contract_id, "specialist-assignment-response-v4")
+        self.assertEqual(constraint_contract.schema["properties"]["assignment_status"]["enum"], ["constraints_assessed", "concerns_found", "conflicts_found", "insufficient_evidence"])
+        self.assertFalse(diagnose_json_text(json.dumps({"response_type":"specialist_assignment_result", "response_text":"The declared limit is grounded.", "assignment_status":"constraints_assessed"}), constraint_contract.schema))
+        self.assertTrue(diagnose_json_text(json.dumps({"response_type":"specialist_assignment_result", "response_text":"Draft body.", "assignment_status":"draft_completed"}), constraint_contract.schema))
         facts = LeadProviderConstraints(input_ids=("user_input", "outline"),
             reviewer_inputs=((PLOT_ARCHITECT, "outline"),), task_revisions=(("task", 1),),
             source_ids=("current_response", "historical_synthesis"), objective_ids=("objective",))
@@ -1258,11 +1270,11 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertIn("revision 1", pairs[0]["description"]); self.assertIn("revision 2", pairs[1]["description"])
         collapsed_pair = contract["anyOf"][0]["properties"]["writing_task_scope"]["properties"]["task_reference"]
         self.assertNotIn("anyOf", collapsed_pair); self.assertIn("revision 1", collapsed_pair["description"])
-        value = {"kind": "proposal", "message": "Review.", "authoring_scope": {
+        value = {"kind": "proposal", "message": "Review.", "authoring_scope": {"contributions": [{'domain': 'plot_structure', 'role': 'draft_owner'}], "dependency_slots": [],
             "activity": "review", "intent": "authoring", "domains": ["plot_structure"], "target_paths": [], "task": "task@1"},
-            "proposal": {"assignments": [{"agent_id": PLOT_ARCHITECT, "mode": "review",
+            "proposal": {"shared_premises": [], "assignments": [{"agent_id": PLOT_ARCHITECT, "mode": "review",
                 "instruction": "Review sources.", "input_ids": ["user_input", "outline"]}]}}
-        self.assertEqual(diagnose_json_text(json.dumps(wire_result(value, "lead-response-v6")), contract), ())
+        self.assertEqual(diagnose_json_text(json.dumps(wire_result(value, "lead-response-v7")), contract), ())
         self.assertEqual(facts.diagnose(json.dumps(value)), ())
         from story_writing_agents.provider_wire import project_runtime_object
         from story_writing_agents.writing_artifacts.catalog import canonical_artifact_kind
@@ -1277,15 +1289,15 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         bad["proposal"]["assignments"][0]["input_ids"].append("historical_synthesis")
         self.assertEqual(facts.diagnose(json.dumps(bad)), (Rule.INPUT_NOT_OFFERED,))
         read_facts = replace(facts, allow_read_sources=True, input_ids=("user_input",), reviewer_inputs=())
-        legacy = {"kind": "proposal", "message": "Prepare the approved draft.", "authoring_scope": {
+        legacy = {"kind": "proposal", "message": "Prepare the approved draft.", "authoring_scope": {"contributions": [{'domain': 'plot_structure', 'role': 'draft_owner'}, {'domain': 'character_world', 'role': 'draft_owner'}, {'domain': 'tone_execution', 'role': 'draft_owner'}], "dependency_slots": [],
             "activity": "draft", "intent": "authoring", "domains": ["plot_structure", "character_world", "tone_execution"],
-            "target_paths": [], "task": "task@1"}, "proposal": {"assignments": [
+            "target_paths": [], "task": "task@1"}, "proposal": {"shared_premises": [], "assignments": [
                 {"agent_id": agent, "mode": "draft", "instruction": "Use the approved draft.",
                  "input_ids": ["user_input", "historical_synthesis"]}
                 for agent in (PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST)]}}
         read_contract = orchestrator_module._lead_front_result_contract(
             orchestrator_module.LeadProposalRelation.NEW_STEP, read_facts.input_ids, constraints=read_facts).schema_value()
-        self.assertEqual(diagnose_json_text(json.dumps(wire_result(legacy, "lead-response-v6")), read_contract), ())
+        self.assertEqual(diagnose_json_text(json.dumps(wire_result(legacy, "lead-response-v7")), read_contract), ())
         self.assertEqual(read_facts.diagnose(json.dumps(legacy)), (Rule.INPUT_NOT_OFFERED,))
         recommendation_value = {"kind": "recommendation", "message": "Prepare approved material.",
             "recommended_action": {"kind": "prepare_artifact", "instruction": "Use the approved draft.",
@@ -1307,7 +1319,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             (value["proposal"]["assignments"] * 2, Rule.SPECIALIST_DUPLICATE),
             ([{**value["proposal"]["assignments"][0], "agent_id": CHARACTER_CUSTODIAN}], Rule.REVIEWER_INPUT)):
             self.assertIn(rule, facts.diagnose(json.dumps({**value, "proposal": {"assignments": assignments}})))
-        reversed_scope = {**value["authoring_scope"], "domains": ["character_world", "plot_structure"]}
+        reversed_scope = {**value["authoring_scope"], "domains": ["character_world", "plot_structure"], "contributions": [{"domain": domain, "role": "draft_owner"} for domain in ("character_world", "plot_structure")]}
         self.assertEqual(canonical_scope(reversed_scope)["domains"], ["plot_structure", "character_world"])
         with self.assertRaises(LeadContractError):
             canonical_scope({**reversed_scope, "domains": ["plot_structure"] * 2})
@@ -1325,17 +1337,17 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertIn(Rule.OBJECTIVE_BRANCH, facts.diagnose(json.dumps(body)))
         question = {"kind": "question", "message": "Clarify.", "authoring_scope": value["authoring_scope"],
                     "objective_intent": {"action": "continue", "objective_id": "objective", "next_step": "clarify"}}
-        self.assertEqual(diagnose_json_text(json.dumps(wire_result(question, "lead-response-v6")), contract), ())
+        self.assertEqual(diagnose_json_text(json.dumps(wire_result(question, "lead-response-v7")), contract), ())
         self.assertEqual(facts.diagnose(json.dumps(question)), ())
         for kind in ("answer", "critique"):
             bad = json.dumps({**question, "kind": kind})
-            self.assertTrue(diagnose_json_text(json.dumps(wire_result(json.loads(bad), "lead-response-v6")), contract))
+            self.assertTrue(diagnose_json_text(json.dumps(wire_result(json.loads(bad), "lead-response-v7")), contract))
             self.assertIn(Rule.OBJECTIVE_BRANCH, facts.diagnose(bad))
         cancelled = json.dumps({**question, "kind": "answer", "objective_intent": {"action": "cancel", "objective_id": "objective"}})
-        self.assertEqual(diagnose_json_text(json.dumps(wire_result(json.loads(cancelled), "lead-response-v6")), contract), ())
+        self.assertEqual(diagnose_json_text(json.dumps(wire_result(json.loads(cancelled), "lead-response-v7")), contract), ())
         self.assertEqual(facts.diagnose(cancelled), ())
         cancel_question = json.dumps({**json.loads(cancelled), "kind": "question"})
-        self.assertTrue(diagnose_json_text(json.dumps(wire_result(json.loads(cancel_question), "lead-response-v6")), contract))
+        self.assertTrue(diagnose_json_text(json.dumps(wire_result(json.loads(cancel_question), "lead-response-v7")), contract))
         self.assertIn(Rule.OBJECTIVE_BRANCH, facts.diagnose(cancel_question))
         duplicated = {"message": "Visible.", "kind": "proposal", "artifact_intent": {"objective_intent": {
             "action": "start", "next_step": "prepare", "target_paths": ["core_documents/global_outline.md"] * 2}}}
@@ -2212,11 +2224,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
 
                 history = self.history(conversation_id)
                 call_events = _event_payloads(history, CollaborationProviderCallPayload)
-                submitted = tuple(
-                    event
-                    for event in call_events
-                    if event.state is CollaborationProviderCallState.SUBMITTED
-                )
+                submitted = _submitted_calls(history)
                 self.assertEqual(
                     correction_records,
                     [(rejection_code.value, mock.ANY, ["submit_result"])],
@@ -2924,9 +2932,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                         self.assertIsNone(result.state)
                         self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
                     prefix = self.history(conversation)
-                    submitted = [event.payload for event in prefix
-                                 if type(event.payload) is CollaborationProviderCallPayload
-                                 and event.payload.state is CollaborationProviderCallState.SUBMITTED]
+                    submitted = list(_submitted_calls(prefix))
                     closure = [event.payload for event in prefix
                                if type(event.payload) is CollaborationLeadOutcomeFailurePayload]
                     self.assertEqual(len(backend.calls), 2 if corrective else 1)
@@ -3092,9 +3098,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
                     _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
                 )
         history = self.history(conversation_id)
-        self.assertEqual(sum(type(event.payload) is CollaborationProviderCallPayload
-                             and event.payload.state is CollaborationProviderCallState.SUBMITTED
-                             for event in history), 9)
+        self.assertEqual(len(_submitted_calls(history)), 9)
         self.assertEqual(
             len(self.backend.calls) - previous_calls,
             9,
@@ -3208,6 +3212,14 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
             inputs=(), assignment_input_ids=(("user_input",),), physical_calls_spent=10)
         self.assertEqual((limits, synthesis, minimum), ((1,), 1, 2))
         self.assertEqual(self.backend.calls, [])
+        from story_writing_agents.specialist_routing import AuthoringContribution, AuthoringContributionRole, ArtifactReviewDomain
+        scope = orchestrator_module.AuthoringScope(activity=orchestrator_module.AuthoringActivity.DRAFT, target_paths=(), domains=(ArtifactReviewDomain.PLOT_STRUCTURE,), interpretation="Exact draft.", task_id="task", task_revision=1, schema_version=3, contributions=(AuthoringContribution(ArtifactReviewDomain.PLOT_STRUCTURE, AuthoringContributionRole.DRAFT_OWNER),))
+        reference = orchestrator_module.CollaborationInputRevision("reference", orchestrator_module.CollaborationInputKind.CORE_DOCUMENT, "${core_documents/global_outline.md}", orchestrator_module.CollaborationInputState.PRESENT, "sha256:" + "a" * 64, 1, 2)
+        self.assertEqual(self.runtime._final_review_floor(scope, (), preparation=True), 4)
+        self.assertEqual(self.runtime._final_review_floor(scope, (reference,), preparation=True), 8)
+        self.assertEqual(self.runtime._proposal_call_reservations(inputs=(reference,), assignment_input_ids=(("reference",),), physical_calls_spent=0, authoring_scope=scope), ((2,), 2, 4))
+        with self.assertRaises(orchestrator_module._LeadCallBudgetExceeded):
+            self.runtime._proposal_call_reservations(inputs=(reference,), assignment_input_ids=(("reference",),), physical_calls_spent=1, authoring_scope=scope)
 
 
 class LeadReferenceFailurePrecedenceTests(LeadOrchestrationTestCase):

@@ -32,9 +32,16 @@ from ..specialist_routing import (
     AuthoringActivity,
     AuthoringIntent,
     AuthoringScope,
+    AuthoringContribution,
+    AuthoringContributionRole,
+    AuthoringDependencySlot,
     ReviewBasis,
     SpecialistAssignmentMode,
     required_authoring_specialists,
+    required_authoring_domains,
+    artifact_domain,
+    assignment_mode_for_specialist,
+    specialists_for_domains,
     validate_specialist_assignment,
     validate_specialist_routing,
 )
@@ -1139,6 +1146,21 @@ class LeadRecommendedAction:
 
 
 @dataclass(frozen=True, slots=True)
+class LeadSharedPremiseIntent:
+    """A disclosed choice whose source snapshots only the host may capture."""
+    slot_id: str
+    selected_premise: str | None
+    basis_input_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _validate_identifier(self.slot_id, label="shared premise slot ID")
+        if self.selected_premise is not None:
+            _validate_visible_text(self.selected_premise, label="shared premise choice")
+        _validate_identifier_tuple(self.basis_input_ids, label="shared premise input IDs")
+        _require_unique(self.basis_input_ids, label="shared premise input IDs")
+
+
+@dataclass(frozen=True, slots=True)
 class LeadAssignmentIntent:
     """One visible, non-authoritative specialist assignment requested by the lead."""
 
@@ -1203,6 +1225,7 @@ class LeadProposalIntent:
     purpose: str
     assignments: tuple[LeadAssignmentIntent, ...]
     authoring_scope: AuthoringScope | None = None
+    shared_premises: tuple[LeadSharedPremiseIntent, ...] = field(default=(), kw_only=True)
 
     def __post_init__(self) -> None:
         validation_call(
@@ -1245,6 +1268,13 @@ class LeadProposalIntent:
             tuple((item.agent_id for item in self.assignments)),
             tuple((item.mode for item in self.assignments)),
         )
+        _validate_exact_tuple(self.shared_premises, LeadSharedPremiseIntent, label="shared premise intents")
+        if self.authoring_scope is None or self.authoring_scope.schema_version < 3:
+            if self.shared_premises:
+                raise ValueError("legacy intent cannot acquire shared premise obligations")
+        elif (len({item.slot_id for item in self.shared_premises}) != len(self.shared_premises)
+              or {item.slot_id for item in self.shared_premises} != {item.slot_id for item in self.authoring_scope.dependency_slots}):
+            raise ValueError("shared premise intents must bind every declared slot exactly once")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1423,6 +1453,7 @@ class CollaborationSpecialistAssessment(StrEnum):
     CONFLICT = "conflict"
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
     DRAFTED = "drafted"
+    CONSTRAINTS_ASSESSED = "constraints_assessed"
 
 
 class CollaborationSynthesisOutcomeKind(StrEnum):
@@ -1613,6 +1644,39 @@ class CollaborationInputRevision:
 
 
 @dataclass(frozen=True, slots=True)
+class CollaborationPremiseSource:
+    """A revision snapshot with exact conversation-local ownership."""
+    input_revision: CollaborationInputRevision
+    source_conversation_id: str | None
+
+    def __post_init__(self) -> None:
+        if type(self.input_revision) is not CollaborationInputRevision:
+            raise TypeError("premise source requires an exact input revision")
+        if self.input_revision.state is not CollaborationInputState.PRESENT:
+            raise ValueError("premise source must be present")
+        local = self.input_revision.kind in {CollaborationInputKind.USER_INPUT, CollaborationInputKind.CONVERSATION_EVENT, CollaborationInputKind.ARTIFACT_CANDIDATE}
+        if local:
+            _validate_identifier(self.source_conversation_id, label="premise source conversation ID")
+        elif self.source_conversation_id is not None:
+            raise ValueError("workspace premise source cannot claim conversation ownership")
+
+
+@dataclass(frozen=True, slots=True)
+class CollaborationSharedPremise:
+    slot_id: str
+    selected_premise: str
+    sources: tuple[CollaborationPremiseSource, ...]
+
+    def __post_init__(self) -> None:
+        _validate_identifier(self.slot_id, label="shared premise slot ID")
+        _validate_visible_text(self.selected_premise, label="shared premise choice")
+        if not self.selected_premise.strip():
+            raise ValueError("shared premise choice cannot be blank")
+        _validate_exact_tuple(self.sources, CollaborationPremiseSource, label="shared premise sources", nonempty=True)
+        _require_unique(tuple(premise_source_identity(item) for item in self.sources), label="shared premise source identities")
+
+
+@dataclass(frozen=True, slots=True)
 class CollaborationAgentProfile:
     """Definition and content-free execution fingerprints for one participant."""
 
@@ -1644,8 +1708,16 @@ class CollaborationProposalBasis:
     budget_policy_fingerprint: str
     inputs: tuple[CollaborationInputRevision, ...]
     evidence: CollaborationLeadEvidence | None
+    schema_version: int = field(default=1, kw_only=True)
+    shared_premises: tuple[CollaborationSharedPremise, ...] = field(default=(), kw_only=True)
 
     def __post_init__(self) -> None:
+        if type(self.schema_version) is not int or self.schema_version not in {1, 2}:
+            raise ValueError("proposal basis version is unsupported")
+        _validate_exact_tuple(self.shared_premises, CollaborationSharedPremise, label="shared premises")
+        _require_unique(tuple(item.slot_id for item in self.shared_premises), label="shared premise slot IDs")
+        if self.schema_version == 1 and self.shared_premises:
+            raise ValueError("legacy basis cannot acquire shared premises")
         _validate_visible_text(self.route, label="collaboration route", maximum=256)
         _validate_digest(self.route_fingerprint, label="route fingerprint")
         _validate_exact_tuple(
@@ -1754,10 +1826,28 @@ class LeadRecommendationRequestPayload:
             _validate_authoring_evidence_scope(self.authoring_scope, self.basis.evidence.scope)
             if self.authoring_scope.activity is AuthoringActivity.WORKFLOW:
                 raise ValueError("recommended preparation requires substantive authoring scope")
-            if not set(self.target_paths).issubset(self.authoring_scope.target_paths):
+            if self.authoring_scope.schema_version < 3 and not set(self.target_paths).issubset(self.authoring_scope.target_paths):
                 raise ValueError("recommendation scope omits its artifact targets")
+            if self.authoring_scope.schema_version == 3 and any(
+                artifact_domain(path) not in required_authoring_domains(self.authoring_scope)
+                for path in self.target_paths
+            ):
+                raise ValueError("new destination domains require a fresh task revision")
             if self.kind is LeadRecommendationActionKind.PREPARE_CONSULTATION:
                 validate_specialist_routing(self.authoring_scope, self.specialist_ids)
+        scope = self.authoring_scope
+        if scope is None or scope.schema_version < 3:
+            if self.basis.schema_version != 1:
+                raise ValueError("historical recommendation cannot acquire a version2 capture")
+        else:
+            if self.basis.schema_version != 2 or {item.slot_id for item in self.basis.shared_premises} != {
+                item.slot_id for item in scope.dependency_slots
+            }:
+                raise ValueError("scope3 recommendation requires every captured dependency slot")
+            by_id = {item.input_id: item for item in self.basis.inputs}
+            if any(by_id.get(source.input_revision.input_id) != source.input_revision
+                   for premise in self.basis.shared_premises for source in premise.sources):
+                raise ValueError("recommendation capture must retain exact selected source revisions")
         value = {
             item.name: getattr(self, item.name)
             for item in self.__dataclass_fields__.values()
@@ -1993,6 +2083,7 @@ class CollaborationProposal:
             tuple(item.mode for item in self.assignments),
         )
         expected_round = self.budget.rounds_spent + 1
+        validate_captured_authoring_basis(self)
         if any(item.round != expected_round for item in self.assignments):
             raise ValueError("every assignment must use the next lineage round")
         assigned_inputs = {
@@ -2365,6 +2456,8 @@ class CollaborationSpecialistReplyPayload:
                 SpecialistAssignmentMode,
                 'specialist reply mode',
             )
+        if self.assessment not in specialist_assessments_for_mode(self.mode):
+            raise validation_failure(ValueError('specialist result is not offered for its mode'), '$.assessment', 'assessment must match the exact assignment mode')
         if self.mode is SpecialistAssignmentMode.DRAFT:
             if self.assessment not in {
                 CollaborationSpecialistAssessment.DRAFTED,
@@ -3820,6 +3913,156 @@ class CollaborationAppendError(Exception):
         super().__init__(failure.value)
 
 
+def premise_source_identity(source: CollaborationPremiseSource) -> tuple[object, ...]:
+    """Compare qualified material facts independently of proposal lookup aliases."""
+    item = source.input_revision
+    return (item.kind.value, item.locator, item.state.value, item.revision_digest,
+            item.start_line, item.end_line, source.source_conversation_id)
+
+
+def shared_premises_to_dict(premises: tuple[CollaborationSharedPremise, ...]) -> list[dict[str, object]]:
+    """Project literal captured choices without expanding source authority."""
+    return [{"slot_id": item.slot_id, "selected_premise": item.selected_premise,
+             "sources": [{"input_revision": _input_value(source.input_revision),
+                          "source_conversation_id": source.source_conversation_id}
+                         for source in item.sources]} for item in premises]
+
+
+def authoring_capture_identity(scope: AuthoringScope, basis: CollaborationProposalBasis) -> str:
+    """Canonical immutable task capture; stage and lookup aliases are not identities."""
+    if scope.schema_version != 3 or basis.schema_version != 2:
+        raise ValueError("captured authoring identity requires scope3 and basis2")
+    scoped = authoring_scope_to_dict(scope)
+    scoped.pop("activity")
+    premises = [{"slot_id": item.slot_id, "selected_premise": item.selected_premise,
+                 "sources": sorted((premise_source_identity(source) for source in item.sources),
+                                   key=lambda value: json.dumps(value, ensure_ascii=False))}
+                for item in basis.shared_premises]
+    return json.dumps({"scope": scoped, "premises": sorted(premises, key=lambda item: item["slot_id"])},
+                      ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def validate_captured_authoring_basis(proposal: CollaborationProposal) -> None:
+    """Reject unbound selections and dependent authors missing declared sources."""
+    scope, basis = proposal.authoring_scope, proposal.basis
+    if scope is None or scope.schema_version < 3:
+        if basis.schema_version != 1:
+            raise ValueError("historical scope cannot acquire a version2 capture")
+        return
+    if basis.schema_version != 2:
+        raise ValueError("scope3 proposal requires an explicit version2 basis")
+    slots = {item.slot_id: item for item in scope.dependency_slots}
+    if set(slots) != {item.slot_id for item in basis.shared_premises}:
+        raise ValueError("captured premises must bind every declared dependency slot")
+    by_id = {item.input_id: item for item in basis.inputs}
+    by_specialist = {item.specialist_id: item for item in proposal.assignments}
+    for premise in basis.shared_premises:
+        required_ids = {item.input_revision.input_id for item in premise.sources}
+        if any(by_id.get(item.input_revision.input_id) != item.input_revision for item in premise.sources):
+            raise ValueError("captured premise source is not an exact proposal input")
+        for specialist in specialists_for_domains(slots[premise.slot_id].dependent_domains):
+            assignment = by_specialist.get(specialist)
+            if assignment is None or not required_ids.issubset(assignment.input_ids):
+                raise ValueError("dependent author omits captured premise sources")
+
+
+def specialist_assessments_for_mode(mode: SpecialistAssignmentMode | None) -> tuple[CollaborationSpecialistAssessment, ...]:
+    """Closed semantics per mode; legacy absence never gains new responsibilities."""
+    if mode is SpecialistAssignmentMode.DRAFT:
+        return (CollaborationSpecialistAssessment.DRAFTED, CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE)
+    if mode is SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT:
+        return (CollaborationSpecialistAssessment.CONSTRAINTS_ASSESSED, CollaborationSpecialistAssessment.CONCERN,
+                CollaborationSpecialistAssessment.CONFLICT, CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE)
+    return (CollaborationSpecialistAssessment.SUPPORTS, CollaborationSpecialistAssessment.CONCERN,
+            CollaborationSpecialistAssessment.CONFLICT, CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE)
+
+
+def _decode_contribution(value: object) -> AuthoringContribution:
+    item = _object(value, {"domain", "role"}, label="authoring contribution")
+    return AuthoringContribution(_enum(ArtifactReviewDomain, item["domain"], label="contribution domain"),
+                                _enum(AuthoringContributionRole, item["role"], label="contribution role"))
+
+
+def _decode_dependency_slot(value: object) -> AuthoringDependencySlot:
+    item = _object(value, {"slot_id", "dependent_domains"}, label="dependency slot")
+    return AuthoringDependencySlot(_string(item["slot_id"], label="slot ID"),
+                                  tuple(_enum(ArtifactReviewDomain, domain, label="dependent domain")
+                                        for domain in _array(item["dependent_domains"], label="dependent domains")))
+
+
+def _decode_shared_premise_intent(value: object) -> LeadSharedPremiseIntent:
+    item = _object(value, {"slot_id", "selected_premise", "basis_input_ids"}, label="shared premise intent")
+    return LeadSharedPremiseIntent(_string(item["slot_id"], label="slot ID"),
+                                  None if item["selected_premise"] is None else _string(item["selected_premise"], label="selected premise"),
+                                  tuple(_string(alias, label="premise input ID") for alias in _array(item["basis_input_ids"], label="premise input IDs")))
+
+
+def _decode_shared_premise(value: object) -> CollaborationSharedPremise:
+    item = _object(value, {"slot_id", "selected_premise", "sources"}, label="shared premise")
+    sources = []
+    for value in _array(item["sources"], label="premise sources"):
+        source = _object(value, {"input_revision", "source_conversation_id"}, label="premise source")
+        sources.append(CollaborationPremiseSource(_decode_input(source["input_revision"]),
+                       None if source["source_conversation_id"] is None else _string(source["source_conversation_id"], label="source conversation ID")))
+    return CollaborationSharedPremise(_string(item["slot_id"], label="slot ID"),
+                                      _string(item["selected_premise"], label="selected premise"), tuple(sources))
+
+
+def validate_authoring_capture_pin(
+    proposal: CollaborationProposal,
+    events: tuple[CollaborationEvent, ...],
+) -> None:
+    """Use exact durable confirmations, never an unconfirmed proposed capture."""
+    scope = proposal.authoring_scope
+    if scope is None or scope.schema_version < 3:
+        return
+    current = authoring_capture_identity(scope, proposal.basis)
+    proposals = {
+        (event.conversation_id, event.payload.proposal_id,
+         event.payload.proposal_revision, event.payload.proposal_digest): event.payload
+        for event in events if type(event.payload) is CollaborationProposal
+    }
+    for event in events:
+        decision = event.payload
+        if type(decision) is not CollaborationConfirmationPayload or (
+            decision.decision is not CollaborationConfirmationDecision.CONFIRM
+        ):
+            continue
+        prior = proposals.get((event.conversation_id, decision.proposal_id,
+                               decision.proposal_revision, decision.proposal_digest))
+        if prior is None or prior.authoring_scope is None:
+            continue
+        prior_scope = prior.authoring_scope
+        if (prior_scope.task_id, prior_scope.task_revision) != (scope.task_id, scope.task_revision):
+            continue
+        if prior_scope.schema_version != 3 or authoring_capture_identity(prior_scope, prior.basis) != current:
+            raise ValueError("confirmed task revision cannot change its authoring capture")
+
+
+def confirmed_authoring_proposals(
+    scope: AuthoringScope,
+    events: tuple[CollaborationEvent, ...],
+) -> tuple[CollaborationProposal, ...]:
+    proposals = {
+        (event.conversation_id, event.payload.proposal_id,
+         event.payload.proposal_revision, event.payload.proposal_digest): event.payload
+        for event in events if type(event.payload) is CollaborationProposal
+    }
+    result = []
+    for event in events:
+        decision = event.payload
+        if type(decision) is not CollaborationConfirmationPayload or (
+            decision.decision is not CollaborationConfirmationDecision.CONFIRM
+        ):
+            continue
+        proposal = proposals.get((event.conversation_id, decision.proposal_id,
+                                  decision.proposal_revision, decision.proposal_digest))
+        if proposal is not None and proposal.authoring_scope is not None and (
+            proposal.authoring_scope.task_id, proposal.authoring_scope.task_revision
+        ) == (scope.task_id, scope.task_revision):
+            result.append(proposal)
+    return tuple(result)
+
 def collaboration_proposal_digest(proposal: CollaborationProposal) -> str:
     """Return the digest over every proposal field except the digest itself."""
 
@@ -3942,8 +4185,8 @@ def authoring_scope_to_dict(scope: AuthoringScope) -> dict[str, object]:
 
     if type(scope) is not AuthoringScope:
         raise TypeError("authoring scope must be an AuthoringScope")
-    return {
-        **({"intent": scope.intent.value} if scope.schema_version == 2 else {}),
+    result = {
+        **({"intent": scope.intent.value} if scope.schema_version >= 2 else {}),
         "activity": scope.activity.value,
         "domains": [domain.value for domain in scope.domains],
         "interpretation": scope.interpretation,
@@ -3953,14 +4196,22 @@ def authoring_scope_to_dict(scope: AuthoringScope) -> dict[str, object]:
         "task_revision": scope.task_revision,
     }
 
+    if scope.schema_version == 3:
+        result['contributions'] = [{'domain': item.domain.value, 'role': item.role.value} for item in scope.contributions]
+        result['dependency_slots'] = [{'slot_id': item.slot_id, 'dependent_domains': [domain.value for domain in item.dependent_domains]} for item in scope.dependency_slots]
+    return result
 
 def authoring_scope_from_dict(value: object) -> AuthoringScope:
     """Decode a complete strict scope; absent legacy fields are handled outside."""
     fields = {"activity", "domains", "interpretation", "schema_version", "target_paths", "task_id", "task_revision"}
-    if type(value) is dict and value.get("schema_version") == 2:
+    if type(value) is dict and value.get("schema_version") in {2, 3}:
         fields.add("intent")
+    if type(value) is dict and value.get("schema_version") == 3:
+        fields.update({"contributions", "dependency_slots"})
     item = _object(value, fields, label="authoring scope")
     return AuthoringScope(
+        contributions=tuple(_decode_contribution(entry) for entry in _array(item['contributions'], label='contributions')) if item['schema_version'] == 3 else (),
+        dependency_slots=tuple(_decode_dependency_slot(entry) for entry in _array(item['dependency_slots'], label='dependency slots')) if item['schema_version'] == 3 else (),
         intent=validation_call('$.intent', _enum, AuthoringIntent, item.get("intent", "authoring"), label="authoring intent"),
         activity=validation_call(
             '$.activity',
@@ -4186,6 +4437,7 @@ def _lead_evidence_value(evidence: CollaborationLeadEvidence) -> dict[str, objec
 
 def _basis_value(basis: CollaborationProposalBasis) -> dict[str, object]:
     return {
+        **({'schema_version': 2, 'shared_premises': shared_premises_to_dict(basis.shared_premises)} if basis.schema_version == 2 else {}),
         "agent_profiles": [_profile_value(item) for item in basis.agent_profiles],
         "budget_policy_fingerprint": basis.budget_policy_fingerprint,
         "context_policy_fingerprint": basis.context_policy_fingerprint,
@@ -4230,6 +4482,7 @@ def _authoring_scope_fields(scope: AuthoringScope | None) -> dict[str, object]:
 
 def _lead_proposal_intent_value(intent: LeadProposalIntent) -> dict[str, object]:
     return {
+        **({'shared_premises': [{'slot_id': item.slot_id, 'selected_premise': item.selected_premise, 'basis_input_ids': list(item.basis_input_ids)} for item in intent.shared_premises]} if intent.authoring_scope is not None and intent.authoring_scope.schema_version == 3 else {}),
         "assignments": [
             {
                 "agent_id": assignment.agent_id,
@@ -4903,7 +5156,7 @@ def _decode_lead_evidence(value: object) -> CollaborationLeadEvidence:
 def _decode_lead_proposal_intent(value: object) -> LeadProposalIntent:
     item = _object_with_extension(
         value,
-        {"assignments", "purpose", "relation"},
+        {"assignments", "purpose", "relation"} | ({"shared_premises"} if type(value) is dict and type(value.get("authoring_scope")) is dict and value["authoring_scope"].get("schema_version") == 3 else set()),
         {"authoring_scope"},
         label="lead proposal intent",
     )
@@ -4934,6 +5187,7 @@ def _decode_lead_proposal_intent(value: object) -> LeadProposalIntent:
             )
         )
     return LeadProposalIntent(
+        shared_premises=tuple(_decode_shared_premise_intent(entry) for entry in _array(item['shared_premises'], label='shared premise intents')) if 'shared_premises' in item else (),
         relation=_enum(
             LeadProposalRelation,
             item["relation"],
@@ -4956,10 +5210,12 @@ def _decode_basis(value: object) -> CollaborationProposalBasis:
             "inputs",
             "route",
             "route_fingerprint",
-        },
+        } | ({"schema_version", "shared_premises"} if type(value) is dict and value.get("schema_version") == 2 else set()),
         label="proposal basis",
     )
     return CollaborationProposalBasis(
+        schema_version=item.get('schema_version', 1),
+        shared_premises=tuple(_decode_shared_premise(entry) for entry in _array(item['shared_premises'], label='shared premises')) if item.get('schema_version') == 2 else (),
         route=_string(item["route"], label="proposal route"),
         route_fingerprint=_string(
             item["route_fingerprint"],
@@ -6543,9 +6799,13 @@ def _validate_scoped_assignments(
     )
     if scope.intent is AuthoringIntent.REVIEW_ONLY and any(mode is not SpecialistAssignmentMode.REVIEW for mode in modes):
         raise validation_failure(ValueError('review-only assignments cannot draft'), '$', 'review-only assignments must review the supplied material')
+    if scope.schema_version < 3 and SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT in modes:
+        raise ValueError('legacy assignments cannot acquire constraint duties')
     required = required_authoring_specialists(scope)
+    if scope.schema_version == 3 and set(specialist_ids) != set(required):
+        raise ValueError('scope3 assignments must match the complete declared specialist union')
     if any(
-        mode is not expected_mode
+        mode is not (assignment_mode_for_specialist(scope, specialist_id) if scope.schema_version == 3 else expected_mode)
         for specialist_id, mode in zip(specialist_ids, modes, strict=True)
         if specialist_id in required
     ):

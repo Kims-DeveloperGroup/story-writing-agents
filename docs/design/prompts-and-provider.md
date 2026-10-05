@@ -274,7 +274,7 @@ authority, or a call to another agent.
 
 The Lead wire input uses `workflow_type: "lead_user_turn"`, `user_request_text`,
 `available_input_sources`, `available_writing_tasks`, `document_change_requests`,
-and `core_document_statuses`. `lead-response-v6` requires explicit `response_type`,
+and `core_document_statuses`. `lead-response-v7` requires explicit `response_type`,
 `response_text`, and `writing_task_scope` on every branch. Intent properties appear
 only in the variants that need them. Inventory provides no story body, and the
 runtime derives attribution, evidence, and bookkeeping. Missing scope receives
@@ -317,9 +317,10 @@ keeps its immutable v1 or v2 facts. Execution origin remains independently
 validated, without a synthetic user message. See the
 [objective contract](../reference/runtime-api.md#contextual-authoring-objectives).
 
-Live result contracts are `lead-response-v6`, `specialist-assignment-response-v3`,
-`consultation-summary-v4`, and `artifact-review-summary-v4`. Routing scope and review
-basis use schema 1, independently of agent-provider-wire-v10, runtime policy v1, and durable
+Live result contracts are `lead-response-v7` for fresh scope 3 (explicit legacy
+scopes 1/2 retains v6), `specialist-assignment-response-v3` for draft/review and v4
+for constraints, `consultation-summary-v4`, and `artifact-review-summary-v4`. Routing scope uses schema 3 for fresh Lead work and preserves historical versions 1/2;
+review basis uses schema 1, independently of agent-provider-wire-v10, runtime policy v1, and durable
 collaboration history schema v2. Historical omitted routing fields remain
 readable; they cannot authorize a new unscoped consultation.
 

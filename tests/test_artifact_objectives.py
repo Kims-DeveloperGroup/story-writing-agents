@@ -155,6 +155,9 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
             await self.start(conversation_id, message=text)
         objective = self.objective(conversation_id)
         source = self.projection(conversation_id).offered_draft_sources[-1]
+        from tests.recommendation_fixture import action, recommendation, decision
+        scope = next(event.payload.authoring_scope for event in self.history(conversation_id) if event.event_id == source.event_id)
+        self.assertEqual((scope.schema_version, scope.activity), (3, lead.AuthoringActivity.DRAFT))
         intent = {"action": "continue", "objective_id": objective.facts.objective_id,
                   "next_step": "prepare", "draft_source_event_ids": [source.event_id] if select else []}
         evidence = (lambda call, material: artifact._reference_ids(material)) if attached else (
@@ -165,13 +168,25 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
             objective_intent=intent)
         def prepare_current_task(call, provider):
             value = json.loads(response(call, provider))
-            value["action"]["result"]["authoring_scope"] = lead._compact_scope(self.scope(call, intent=intent))
+            value["action"]["result"]["authoring_scope"] = lead._compact_scope(c.authoring_scope_to_dict(scope))
             return json.dumps(value)
-        self.backend.enqueue(prepare_current_task)
+        def offer_current_task(call, provider):
+            sources = ((source.event_id,) if select else ("user_input",)) + (
+                tuple(evidence(call, lead._workflow_material(call.payload))) if attached else ())
+            return recommendation(message=scope.interpretation, authoring_scope=c.authoring_scope_to_dict(scope),
+                recommended_action=action(source_ids=sources, objective_id=objective.facts.objective_id,
+                    target_paths=objective.facts.target_paths))(call, provider)
+        self.backend.enqueue(offer_current_task)
         prompt = f"Prepare the next revision using ${{{OUTLINE}}}." if attached else "네, 그 초안 그대로 문서로 준비해 줘."
-        result = await self.runtime.lead_turn(self.session_id, conversation_id, prompt)
+        offered = await self.runtime.lead_turn(self.session_id, conversation_id, prompt)
+        self.assertIs(offered.kind, c.LeadOutcomeKind.RECOMMENDATION, offered)
+        self.backend.enqueue(prepare_current_task)
+        result = await self.runtime.decide_lead_recommendation(decision(offered))
         self.assertIs(result.kind, c.LeadOutcomeKind.PROPOSAL, result)
         self.assertIsNotNone(result.artifact_proposal)
+        self.assertEqual(result.proposal.budget.rounds_spent, 1)
+        self.assertLessEqual(offered.recommendation_request.physical_calls_spent + offered.recommendation_request.max_preparation_physical_calls +
+            (len(result.proposal.participants) + 1) * (1 + int(attached)), 12)
         return result
 
     async def review(self, proposed):
