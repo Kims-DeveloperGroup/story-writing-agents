@@ -13,6 +13,7 @@ import sys
 import threading
 import uuid
 from .structured_output_validation import (
+    DomainValidationRule,
     validation_failure,
     validation_call,
     carry_validation,
@@ -27,7 +28,7 @@ from typing import Any, AsyncContextManager, AsyncIterator, Mapping, cast
 
 from .lead_provider_contracts import (
     LeadContractError, LeadProviderConstraints, PREPARATION_INPUT_IDS,
-    alternatives, canonical_assignments, canonical_scope, nonempty_text_schema, visible_text,
+    alternatives, canonical_assignments, canonical_scope, nonempty_text_schema, string_array, visible_text,
 )
 from .agents import (
     CHARACTER_CUSTODIAN,
@@ -149,6 +150,12 @@ from .consensus.runtime_adapter import (
 from .conversation_rag_runtime import ConversationRagRuntimeService
 from .conversation_storage.composition import compose_filesystem_conversation_storage
 from .conversation_storage.contracts import ConversationStorageServices
+from .conversations.events import (
+    LeadSharedPremiseIntent, CollaborationPremiseSource, CollaborationSharedPremise,
+    authoring_capture_identity, premise_source_identity, shared_premises_to_dict,
+    validate_authoring_capture_pin, confirmed_authoring_proposals,
+    specialist_assessments_for_mode,
+)
 from .conversations import (
     ArtifactDraftSource,
     ArtifactObjectiveCandidateBinding,
@@ -309,6 +316,8 @@ from .specialist_routing import (
     artifact_domain,
     required_authoring_domains,
     required_authoring_specialists,
+    required_drafting_specialists,
+    assignment_mode_for_specialist,
     specialists_for_domains,
     validate_specialist_routing,
 )
@@ -415,7 +424,7 @@ _LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES = frozenset(
 )
 _LEAD_RESPONSE_CORRECTION_INSTRUCTION = (
     "Return submit_result now without search_context or read_context. Encode one complete "
-    "lead-response-v6 object in agent_action.task_result using only the selected variant's fields. "
+    "current offered Lead response schema object in agent_action.task_result using only the selected variant's fields. "
     "Every Lead result includes response_type, response_text, and writing_task_scope. Include "
     "specialist_consultation_proposal, artifact_change_proposal, document_change_request_update, "
     "or proposal_drafting_request only when its variant requires it. Preserve the selected "
@@ -494,6 +503,15 @@ def _proposal_result_schema(
         "minItems": len(facts.preparation_specialists) or 1,
         "maxItems": len(facts.preparation_specialists) or len(SPECIALIST_IDS),
     }}
+    if facts.scope is None or facts.scope.schema_version == 3:
+        assignments["shared_premises"] = {"type": "array", "minItems": 0, "items": _closed_result_object({
+            "slot_id": nonempty_text_schema(),
+            "selected_premise": {"anyOf": [
+                {**nonempty_text_schema(), "description": "Exact disclosed shared-premise choice supported by the selected sources."},
+                {"type": "null", "description": "No premise is selected; clarify before a confirmable proposal."},
+            ]},
+            "basis_input_ids": string_array(None if facts.allow_read_sources else facts.input_ids),
+        }), "description": "Bind each declared dependency slot to a disclosed choice and currently available sources; unresolved choices require clarification."}
     if facts.scope and facts.scope.intent is AuthoringIntent.REVIEW_ONLY:
         return _closed_result_object(assignments, description="Confirm only this exact supplied-material review; no drafting or artifact objective.")
     objective = facts.objective_schema("consult")
@@ -629,9 +647,14 @@ def _lead_front_result_contract(
     input_ids: tuple[str, ...],
     task_revisions: tuple[tuple[str, int], ...] = (),
     constraints: LeadProviderConstraints | None = None,
+    *, fresh_revision_only: bool = False,
 ) -> ContextJsonObjectResultContract:
     facts = constraints or LeadProviderConstraints(input_ids=input_ids, task_revisions=task_revisions)
     scoped = {"message": nonempty_text_schema(), "authoring_scope": facts.scope_schema()}
+    if fresh_revision_only:
+        scope_properties = scoped["authoring_scope"]["properties"]
+        scope_properties["activity"]["enum"] = [AuthoringActivity.DRAFT.value, AuthoringActivity.REVISE.value]
+        scope_properties["intent"]["enum"] = [AuthoringIntent.AUTHORING.value]
     proposal_meanings = {
         "proposal": (
             "Propose specialist consultation when the affected domains need drafting or "
@@ -720,6 +743,9 @@ def _lead_front_result_contract(
                 "kind": {"enum": ["proposal"], "type": "string"}, field: intent},
                 description=proposal_meanings[field],
             ))
+    if fresh_revision_only:
+        variants = [variant for variant in variants
+                    if not {"artifact_intent", "recommended_action"}.intersection(variant.get("properties", {}))]
     if facts.scope and facts.scope.intent is AuthoringIntent.REVIEW_ONLY:
         variants = [
             variant for variant in variants
@@ -735,7 +761,7 @@ def _lead_front_result_contract(
         )
         + schema.get("description", "")
     ).rstrip()
-    return _provider_result_contract("lead-response-v6", schema)
+    return _provider_result_contract("lead-response-v6" if facts.scope is not None and facts.scope.schema_version < 3 else "lead-response-v7", schema)
 
 
 def _specialist_result_contract(
@@ -744,15 +770,11 @@ def _specialist_result_contract(
     if assignment.mode is None:
         raise BackendProtocolError("live specialist contract requires an explicit mode")
     return _provider_result_contract(
-        "specialist-assignment-response-v3",
+        "specialist-assignment-response-v4" if assignment.mode is SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT else "specialist-assignment-response-v3",
         _closed_result_object(
             {
                 "assessment": {
-                    "enum": [item.value for item in CollaborationSpecialistAssessment
-                             if (item in {CollaborationSpecialistAssessment.DRAFTED,
-                                          CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE}
-                                 if assignment.mode is SpecialistAssignmentMode.DRAFT
-                                 else item is not CollaborationSpecialistAssessment.DRAFTED)],
+                    "enum": [item.value for item in specialist_assessments_for_mode(assignment.mode)],
                     "type": "string",
                 },
                 "message": nonempty_text_schema(),
@@ -761,6 +783,11 @@ def _specialist_result_contract(
             "Return the assigned draft in response_text with draft_completed, or report "
             "insufficient_evidence when the task cannot be grounded; do not write documents."
         ) if assignment.mode is SpecialistAssignmentMode.DRAFT else (
+            "Assess only declared constraints: use constraints_assessed for a grounded assessment, "
+            "concerns_found/conflicts_found for reservations or contradictions, and insufficient_evidence "
+            "for unknowns. Separate facts, interpretations, provisional ideas and uncertainty; this "
+            "does not draft, approve a final candidate, or complete the authoring task."
+        ) if assignment.mode is SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT else (
             "Review the assigned sources: use supports_proposal for support, concerns_found "
             "for reservations, conflicts_found for contradictions, or insufficient_evidence "
             "when a grounded judgment is impossible. Explain the assessment without writing "
@@ -781,6 +808,7 @@ def _lead_synthesis_result_contract(
     constraints: LeadProviderConstraints | None = None,
 ) -> ContextJsonObjectResultContract:
     del evidence
+    allow_next_intent = allow_next_intent and not (authoring_scope.schema_version == 3 and authoring_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE})
     facts = constraints or LeadProviderConstraints(
         input_ids=(*input_ids, *reply_event_ids), scope=authoring_scope, continuation=True,
     )
@@ -3015,6 +3043,8 @@ class StoryRuntime:
         evidence: CollaborationLeadEvidence,
         *,
         artifact_binding: SessionArtifactBinding,
+        authoring_scope: AuthoringScope | None = None,
+        shared_premises: tuple[CollaborationSharedPremise, ...] = (),
     ) -> CollaborationProposalBasis:
         if type(artifact_binding) is not SessionArtifactBinding:
             raise TypeError("recommendation basis requires an exact artifact binding")
@@ -3032,8 +3062,10 @@ class StoryRuntime:
             route_fingerprint=self._canonical_digest([route, specialist_ids, [asdict(p) for p in profiles]]),
             agent_profiles=profiles,
             context_policy_fingerprint=self._agent_context_service.policy_fingerprint,
-            budget_policy_fingerprint=_BUDGET_POLICY_FINGERPRINT,
+            budget_policy_fingerprint=self._basis_budget_fingerprint(authoring_scope),
             inputs=inputs, evidence=evidence,
+            schema_version=2 if authoring_scope is not None and authoring_scope.schema_version == 3 else 1,
+            shared_premises=shared_premises,
         )
 
     def _recommendation_request_draft(
@@ -3043,6 +3075,7 @@ class StoryRuntime:
         artifact_binding: SessionArtifactBinding,
         tail_sequence: int, step_id: str | None = None,
         previous: LeadRecommendationRequestPayload | None = None,
+        preview_replies: tuple[CollaborationSpecialistReplyPayload, ...] = (),
     ) -> CollaborationEventDraft:
         if type(artifact_binding) is not SessionArtifactBinding:
             raise TypeError(
@@ -3121,7 +3154,12 @@ class StoryRuntime:
                 '$.authoring_scope',
                 'legacy recommendation requires fresh scoped planning',
             )
-        scope = replace(scope, target_paths=tuple(dict.fromkeys((*scope.target_paths, *action.target_paths))))
+        if scope.schema_version == 3:
+            if any(artifact_domain(path) not in required_authoring_domains(scope)
+                   for path in action.target_paths):
+                raise _LeadOutcomeValidationError("new destination domains require a fresh task revision")
+        else:
+            scope = replace(scope, target_paths=tuple(dict.fromkeys((*scope.target_paths, *action.target_paths))))
         scope = self._resolve_authoring_scope(
             scope, selected_inputs, evidence,
             None if previous is None else previous.authoring_scope,
@@ -3137,7 +3175,8 @@ class StoryRuntime:
             selected_event = source if draft.event_id == source.event_id else by_id.get(draft.event_id)
             selected_scope = None if selected_event is None else getattr(selected_event.payload, "authoring_scope", None)
             if (selected_scope is not None and selected_scope.activity is not AuthoringActivity.WORKFLOW
-                and selected_scope.task_id != scope.task_id):
+                and (selected_scope.task_id != scope.task_id
+                     or (scope.schema_version == 3 and selected_scope.task_revision != scope.task_revision))):
                 raise validation_failure(
                     _LeadOutcomeValidationError(
                         'recommendation draft sources require their existing authoring task',
@@ -3185,6 +3224,65 @@ class StoryRuntime:
             for event in events
         ):
             source_proposal = projection.current_proposal
+        lineage_spent = projection.physical_calls_spent
+        source_rounds = projection.rounds_spent
+        if scope.schema_version == 3 and scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}:
+            preview = type(source.payload) is CollaborationLeadSynthesisPayload and projection.current_state is CollaborationStepState.RUNNING
+            if preview:
+                if projection.current_proposal is None or (
+                    projection.current_proposal.proposal_id, projection.current_proposal.proposal_revision,
+                    projection.current_proposal.proposal_digest, projection.execution_attempt_id
+                ) != (source.payload.proposal_id, source.payload.proposal_revision,
+                      source.payload.proposal_digest, source.payload.execution_attempt_id):
+                    raise _LeadOutcomeValidationError("synthesis preview must bind the current confirmed execution")
+                bound_source = projection.current_proposal
+                completed_synthesis = source
+                source_projection = projection
+            else:
+                bound_source, completed_synthesis, source_projection = self._completed_authoring_source(scope, events)
+            if source_proposal is not None and source_proposal != bound_source:
+                raise _LeadOutcomeValidationError("recommendation source is not the current confirmed draft")
+            source_proposal = bound_source
+            source_attempt = completed_synthesis.payload.execution_attempt_id
+            source_rounds = source_projection.rounds_spent
+            related_steps = {source.step_id, *(event.step_id for event in events
+                             if type(event.payload) is LeadRecommendationRequestPayload
+                             and event.payload.source_proposal_id == bound_source.proposal_id
+                             and event.payload.source_proposal_revision == bound_source.proposal_revision
+                             and event.payload.source_proposal_digest == bound_source.proposal_digest)}
+            related_steps.discard(bound_source.step_id)
+            source_rounds += sum(
+                1 for event in events if event.step_id in related_steps
+                and type(event.payload) is CollaborationStepStatePayload
+                and event.payload.state is CollaborationStepState.RUNNING
+            )
+            lineage_spent = source_projection.physical_calls_spent + sum(
+                1 for event in events if event.step_id in related_steps
+                and type(event.payload) is CollaborationProviderCallPayload
+                and event.payload.state is CollaborationProviderCallState.SUBMITTED
+            )
+        remaining = COLLABORATION_PHYSICAL_CALL_LIMIT - lineage_spent
+        inherited_capture = ()
+        preparation_cap = min(_CONTEXT_INVOCATION_CALL_LIMIT, remaining)
+        if scope.schema_version == 3:
+            if scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}:
+                if action.kind is not LeadRecommendationActionKind.PREPARE_ARTIFACT or source_proposal is None or source_attempt is None:
+                    raise _LeadOutcomeValidationError("v3 authoring requires completed draft synthesis and artifact preparation; clarify or freshly propose")
+                if source_rounds != 1 or source_proposal.authoring_scope is None:
+                    raise _LeadOutcomeValidationError("final review cannot reset rounds or add round three; clarify or freshly propose")
+                self._validate_draft_provenance(scope, self._session_authoring_events(source.session_id),
+                    pending_attempt_id=source_attempt if preview else None,
+                    pending_replies=preview_replies if preview else ())
+                inherited_capture = self._remap_shared_premises(source_proposal.basis, selected_inputs)
+                if authoring_capture_identity(scope, source_proposal.basis) != authoring_capture_identity(source_proposal.authoring_scope, source_proposal.basis):
+                    raise _LeadOutcomeValidationError("preparation cannot change the confirmed authoring task")
+                floor = self._final_review_floor(scope, selected_inputs, preparation=False)
+                minimum_preparation = 1 + int(self._has_present_references(selected_inputs))
+                if remaining < floor + minimum_preparation:
+                    raise _LeadOutcomeValidationError("declared preparation and full final review are infeasible; clarify or freshly propose")
+                preparation_cap = min(preparation_cap, remaining - floor)
+            elif source_proposal is not None and source_proposal.basis.schema_version == 2:
+                inherited_capture = self._remap_shared_premises(source_proposal.basis, selected_inputs)
         request = LeadRecommendationRequestPayload(
             request_event_id=request_event_id, request_id=self._new_id("rc"),
             action_id=self._new_id("ra") if previous is None else previous.action_id,
@@ -3201,6 +3299,8 @@ class StoryRuntime:
                 selected_inputs,
                 evidence,
                 artifact_binding=artifact_binding,
+                authoring_scope=scope,
+                shared_premises=inherited_capture,
             ),
             source_fingerprint=self._recommendation_source_fingerprint(
                 source.session_id,
@@ -3209,8 +3309,8 @@ class StoryRuntime:
                 action.target_paths,
                 artifact_binding=artifact_binding,
             ),
-            physical_calls_spent=projection.physical_calls_spent,
-            max_preparation_physical_calls=min(_CONTEXT_INVOCATION_CALL_LIMIT, remaining),
+            physical_calls_spent=lineage_spent,
+            max_preparation_physical_calls=preparation_cap,
             tail_sequence=tail_sequence,
             user_impact="One bounded Lead preparation. Review, Apply, and Commit each require their own decision.",
             source_proposal_id=None if source_proposal is None else source_proposal.proposal_id,
@@ -3356,6 +3456,8 @@ class StoryRuntime:
                             current_inputs,
                             request.basis.evidence,
                             artifact_binding=artifact_binding,
+                            authoring_scope=request.authoring_scope,
+                            shared_premises=self._remap_shared_premises(request.basis, current_inputs),
                         ) != request.basis
                         or self._recommendation_source_fingerprint(
                             session_id,
@@ -3753,6 +3855,8 @@ class StoryRuntime:
         review_basis: ReviewBasis | None = None,
     ) -> LeadTurnResult:
         """Disclose explicitly scoped provider-free work for one specialist."""
+        if authoring_scope is not None and authoring_scope.schema_version == 3:
+            raise ValueError("scope3 contributions require the separately confirmed Lead workflow; advisory supports historical scope1/2")
 
         self._validate_lead_identity(session_id, conversation_id)
         if specialist_id not in SPECIALIST_IDS:
@@ -5624,6 +5728,13 @@ class StoryRuntime:
                 self._collaboration_input_value(item, events, evidence=proposal.basis.evidence) for item in selected
             ],
             "authoring_scope": authoring_scope_to_dict(proposal.authoring_scope),
+            **({"shared_premises": shared_premises_to_dict(tuple(
+                premise for premise in proposal.basis.shared_premises
+                if proposal.authoring_scope.activity is AuthoringActivity.REVIEW or any(
+                    slot.slot_id == premise.slot_id and assignment.specialist_id in specialists_for_domains(slot.dependent_domains)
+                    for slot in proposal.authoring_scope.dependency_slots
+                )
+            ))} if proposal.authoring_scope.schema_version == 3 else {}),
             "workflow": proposal.step_kind.value,
         }
 
@@ -5710,6 +5821,8 @@ class StoryRuntime:
         value = {
             "provider_constraints": constraints.prompt_facts(),
             "authoring_scope": authoring_scope_to_dict(proposal.authoring_scope),
+            **({"shared_premises": shared_premises_to_dict(proposal.basis.shared_premises)}
+               if proposal.authoring_scope.schema_version == 3 else {}),
             "conversation_id": conversation_id,
             "artifact_objectives": artifact_objective_context(project_collaboration_history(events)),
             "inputs": [
@@ -5771,6 +5884,7 @@ class StoryRuntime:
                 self._recommendation_request_draft(
                     source=source, action=decoded.recommended_action,
                     inputs=(*proposal.basis.inputs, *reply_inputs), evidence=proposal.basis.evidence,
+                    preview_replies=replies,
                     events=current_events, projection=current_projection,
                     artifact_binding=artifact_binding,
                     tail_sequence=current_projection.last_sequence + 2,
@@ -6875,7 +6989,10 @@ class StoryRuntime:
             *((artifact_synthesis_draft,) if artifact_synthesis_draft is not None else ()),
             *terminals, result,
         )
-        if recommended_action is not None:
+        if recommended_action is not None and not (
+            proposal.authoring_scope is not None and proposal.authoring_scope.schema_version == 3
+            and result.payload.overall_outcome is not CollaborationExecutionOutcomeKind.SUCCEEDED
+        ):
             assert synthesis_draft is not None
             if (
                 synthesis_result is None
@@ -6894,6 +7011,7 @@ class StoryRuntime:
             recommendation = self._recommendation_request_draft(
                 source=synthesis_draft, action=recommended_action,
                 inputs=(*proposal.basis.inputs, *reply_inputs), evidence=proposal.basis.evidence,
+                preview_replies=tuple(item.payload for item in replies),
                 events=current_events, projection=projection,
                 artifact_binding=synthesis_result.artifact_binding,
                 tail_sequence=projection.last_sequence + len(result_drafts) + 2,
@@ -7659,6 +7777,8 @@ class StoryRuntime:
         events: tuple[CollaborationEvent, ...],
         projection: CollaborationHistoryProjection,
     ) -> CollaborationProposal:
+        if proposal.authoring_scope is not None and proposal.authoring_scope.schema_version == 3 and proposal.authoring_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}:
+            raise _LeadCallBudgetExceeded("round two is reserved for exact final review; clarify or freshly propose")
         if proposal.budget.rounds_spent != 0 or next_intent.relation is not (
             LeadProposalRelation.CONTINUE_LINEAGE
         ):
@@ -7746,6 +7866,7 @@ class StoryRuntime:
                 assignment.input_ids for assignment in next_intent.assignments
             ),
             physical_calls_spent=projection.physical_calls_spent,
+            authoring_scope=next_intent.authoring_scope,
         )
         proposal_id = self._deterministic_id(
             "p", result.execution_attempt_id, "continuation"
@@ -7821,9 +7942,11 @@ class StoryRuntime:
                 context_policy_fingerprint=(
                     self._agent_context_service.policy_fingerprint
                 ),
-                budget_policy_fingerprint=_BUDGET_POLICY_FINGERPRINT,
+                budget_policy_fingerprint=self._basis_budget_fingerprint(next_intent.authoring_scope),
                 inputs=tuple(inputs),
                 evidence=proposal.basis.evidence,
+                schema_version=proposal.basis.schema_version,
+                shared_premises=proposal.basis.shared_premises,
             ),
         )
 
@@ -7936,6 +8059,7 @@ class StoryRuntime:
                     cls._decode_continuation_intent,
                     raw_intent,
                     authoring_scope=proposal.authoring_scope,
+                    shared_premises=cls._captured_premise_intents(proposal.basis),
                     review_candidate_ids=frozenset(
                                              {
                                                  *known_input_order,
@@ -8015,6 +8139,7 @@ class StoryRuntime:
         for reply in replies:
             if reply.assessment in {
                 CollaborationSpecialistAssessment.SUPPORTS, CollaborationSpecialistAssessment.DRAFTED,
+                CollaborationSpecialistAssessment.CONSTRAINTS_ASSESSED,
             }:
                 continue
             for input_id in reply.input_ids:
@@ -8030,6 +8155,7 @@ class StoryRuntime:
         *,
         authoring_scope: AuthoringScope,
         review_candidate_ids: frozenset[str],
+        shared_premises: tuple[LeadSharedPremiseIntent, ...] = (),
     ) -> LeadProposalIntent:
         if type(value) is not dict or set(value) != {"assignments", "purpose"}:
             raise validation_failure(
@@ -8099,6 +8225,7 @@ class StoryRuntime:
             purpose=value["purpose"],
             assignments=tuple(assignments),
             authoring_scope=authoring_scope,
+            shared_premises=shared_premises,
         )
 
     @staticmethod
@@ -8631,6 +8758,23 @@ class StoryRuntime:
     ) -> LeadTurnResult:
         if self.backend is None:
             raise BackendProtocolError("lead collaboration requires an AgentBackend")
+        ordinary_front_cap = None if preparation is not None else self._ordinary_front_call_cap(session_id, conversation_id)
+        successor_only = (
+            ordinary_front_cap is not None and ordinary_front_cap < 1
+            and preparation is None and previous_proposal is None
+            and expected_relation is LeadProposalRelation.NEW_STEP
+        )
+        if successor_only:
+            # A fresh revision owns new finite accounting, never the exhausted source's calls.
+            # Reserve full three-role draft/synthesis plus two preparation and four final calls.
+            ordinary_front_cap = min(_CONTEXT_INVOCATION_CALL_LIMIT,
+                                     COLLABORATION_PHYSICAL_CALL_LIMIT - (2 * len(SPECIALIST_IDS) + 4))
+        elif ordinary_front_cap is not None and ordinary_front_cap < 1:
+            return self._structured_fallback_lead_result(
+                session_id=session_id, conversation_id=conversation_id, turn_id=turn_id, step_id=step_id,
+                message="The offered current authoring task cannot fit preparation and full final review within its twelve-call lineage. Clarify or freshly propose a task revision.",
+                validation_details=("existing scope3 task retains preparation and full-review physical floor",),
+            )
         repository_access = partial(
             _open_session_artifact_repository,
             artifact_binding,
@@ -8666,8 +8810,24 @@ class StoryRuntime:
             previous_scope = current_scope
             offered_tasks = {(previous_scope.task_id, previous_scope.task_revision + 1): previous_scope}
         else:
-            offered_tasks = {(item.task_id, item.task_revision): item for item in available_tasks.values()}
-            offered_tasks[(step_id, 1)] = None
+            offered_tasks = {} if successor_only else {(item.task_id, item.task_revision): item for item in available_tasks.values()}
+            local_task_events = tuple(event for event in task_events if event.conversation_id == conversation_id)
+            for item in available_tasks.values():
+                if item.schema_version != 3 or item.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}:
+                    continue
+                try:
+                    self._completed_authoring_source(item, local_task_events)
+                except (_LeadOutcomeValidationError, BackendProtocolError):
+                    continue
+                offered_tasks[(item.task_id, item.task_revision + 1)] = item
+            if not successor_only:
+                offered_tasks[(step_id, 1)] = None
+            elif not offered_tasks:
+                return self._structured_fallback_lead_result(
+                    session_id=session_id, conversation_id=conversation_id, turn_id=turn_id, step_id=step_id,
+                    message="No exact completed local source can offer a fresh revision. Focus its source conversation or clarify before proposing new work.",
+                    validation_details=("fresh successor requires an exact completed local scope3 source",),
+                )
         if preparation is not None:
             request = cast(LeadRecommendationRequestPayload, preparation.request_event.payload)
             request_scope = request.authoring_scope
@@ -8708,7 +8868,7 @@ class StoryRuntime:
                 for reviewer in (self._core_reviewer(item.locator),) if reviewer is not None
             ),
             task_revisions=tuple(offered_tasks),
-            source_ids=tuple(dict.fromkeys(("current_response",
+            source_ids=() if successor_only else tuple(dict.fromkeys(("current_response",
                 *(item.event_id for item in objective_projection.offered_draft_sources),
                 *(item.input_id for item in inputs)))),
             objective_ids=tuple(item.facts.objective_id for item in objective_projection.artifact_objectives
@@ -8805,14 +8965,21 @@ class StoryRuntime:
                 "artifact_objectives": artifact_objective_context(objective_projection),
                 "command": reference_operation.provider_text,
                 "input_aliases": input_aliases,
-                "authoring_tasks": [
+"authoring_tasks": [
                     {"task_id": key[0], "task_revision": key[1],
                      **({"current_scope": authoring_scope_to_dict(item)}
-                        if item is not None else {})}
+                        if item is not None else {}),
+                     **({"purpose": "Fresh task revision: propose and confirm new current-revision work; earlier drafts do not prove this revision."}
+                        if item is not None and key[1] == item.task_revision + 1 else {})}
                     for key, item in offered_tasks.items()
                 ],
                 "workflow": "lead_front_channel",
-                "recommended_action_source_aliases": [
+                **({"existing_task_call_limit": ordinary_front_cap,
+                    "existing_task_call_limit_reason": (
+                        "The exhausted source revision cannot continue. Only fresh local successor revisions are offered; these Lead/READ/correction calls belong to the new finite revision budget, while old scope, calls and rounds remain unchanged."
+                        if successor_only else "Preserve the offered confirmed task's preparation and full final-review budget. This bound also limits fresh alternatives in this invocation; clarify or freshly propose when infeasible."
+                    )} if ordinary_front_cap is not None else {}),
+                "recommended_action_source_aliases": [] if successor_only else [
                     "current_response", *(item.event_id for item in objective_projection.offered_draft_sources),
                     *(item.input_id for item in inputs),
                 ],
@@ -8858,6 +9025,8 @@ class StoryRuntime:
                     "lead invocation cannot fit its answer inside the physical-call lineage"
                 )
             physical_call_limit = min(_CONTEXT_INVOCATION_CALL_LIMIT, remaining)
+            if ordinary_front_cap is not None:
+                physical_call_limit = min(physical_call_limit, ordinary_front_cap)
             contextual_request = ContextInvocationRequest(
                 session_id=session_id,
                 subject_kind=ContextSubjectKind.CONVERSATION,
@@ -8876,6 +9045,7 @@ class StoryRuntime:
                     tuple(item.input_id for item in inputs),
                     tuple(offered_tasks),
                     constraints=constraints,
+                    fresh_revision_only=successor_only,
                 ),
                 physical_call_limit=physical_call_limit,
                 include_core_statuses=True,
@@ -8964,6 +9134,9 @@ class StoryRuntime:
                         'authoring scope uses an unoffered task revision',
                     )
                 selected_prior = offered_tasks[(authoring_scope.task_id, authoring_scope.task_revision)]
+                if selected_prior is not None and selected_prior.schema_version == 3 and selected_prior.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE} and authoring_scope.task_revision == selected_prior.task_revision + 1:
+                    if authoring_scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE} or authoring_scope.intent is not AuthoringIntent.AUTHORING:
+                        raise _LeadOutcomeValidationError("a fresh successor requires AUTHORING DRAFT/REVISE and new owner drafts before candidate review")
                 current_task_events = self._session_authoring_events(session_id)
                 if selected_prior is not None and self._authoring_tasks(current_task_events).get(
                     selected_prior.task_id
@@ -8975,7 +9148,10 @@ class StoryRuntime:
                         '$.authoring_scope',
                         'selected authoring task changed while the Lead was interpreting the request',
                     )
-                if selected_prior is not None:
+                if selected_prior is not None and (
+                    authoring_scope.schema_version < 3
+                    or authoring_scope.task_revision == selected_prior.task_revision
+                ):
                     authoring_scope = replace(
                         authoring_scope,
                         interpretation=selected_prior.interpretation,
@@ -8986,9 +9162,14 @@ class StoryRuntime:
                                       if item.facts.objective_id == objective_intent.objective_id), None)
                     objective_paths = (objective_intent.target_paths if objective is None
                                        else objective.facts.target_paths)
-                    authoring_scope = replace(authoring_scope, target_paths=tuple(dict.fromkeys(
-                        (*authoring_scope.target_paths, *objective_paths),
-                    )))
+                    if authoring_scope.schema_version == 3:
+                        if any(artifact_domain(path) not in required_authoring_domains(authoring_scope)
+                               for path in objective_paths):
+                            raise _LeadOutcomeValidationError("new objective destination domains require a fresh task revision")
+                    else:
+                        authoring_scope = replace(authoring_scope, target_paths=tuple(dict.fromkeys(
+                            (*authoring_scope.target_paths, *objective_paths),
+                        )))
                 resolved_scope = self._resolve_authoring_scope(authoring_scope, inputs, decoded_evidence, selected_prior)
                 if resolved_scope.activity is not AuthoringActivity.WORKFLOW and decoded.kind not in {
                     LeadOutcomeKind.PROPOSAL, LeadOutcomeKind.QUESTION, LeadOutcomeKind.RECOMMENDATION,
@@ -9110,6 +9291,12 @@ class StoryRuntime:
                     decoded, objective_projection, decoded_artifact_candidate,
                 )
                 if decoded.recommended_action is not None:
+                    recommendation_events = services.event_store.read(
+                        session_id, conversation_id,
+                    )
+                    recommendation_projection = project_collaboration_history(
+                        recommendation_events,
+                    )
                     source = self._draft(
                         session_id=session_id, conversation_id=conversation_id, turn_id=turn_id,
                         step_id=step_id, kind=CollaborationEventKind.MESSAGE,
@@ -9120,10 +9307,10 @@ class StoryRuntime:
                     )
                     self._recommendation_request_draft(
                         source=source, action=decoded.recommended_action, inputs=inputs,
-                        evidence=decoded_evidence, events=objective_events,
-                        projection=services.event_store.read_context(session_id, conversation_id),
+                        evidence=decoded_evidence, events=recommendation_events,
+                        projection=recommendation_projection,
                         artifact_binding=artifact_binding,
-                        tail_sequence=services.event_store.read_context(session_id, conversation_id).last_sequence + 2,
+                        tail_sequence=recommendation_projection.last_sequence + 2,
                     )
 
             result = None
@@ -9575,23 +9762,56 @@ class StoryRuntime:
                         ),
                     )
                     return replace(failed, validation_details=provider.validation_details)
+                except _LeadCallBudgetExceeded:
+                    return self._structured_fallback_lead_result(
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        step_id=step_id,
+                        message=(
+                            "The declared work cannot fit its required preparation and "
+                            "complete specialist review within the remaining two-round, "
+                            "twelve-call budget. Clarify the task or make a fresh proposal."
+                        ),
+                        validation_details=provider.validation_details + (
+                            "declared preparation and full final-review floor exceeds "
+                            "the remaining budget",
+                        ),
+                    )
             intent = outcome.proposal
             assert intent is not None
             refreshed = self.conversation_storage_services.event_store.read_context(
                 session_id,
                 conversation_id,
             )
-            proposal = self._build_lead_proposal(
-                session_id=session_id,
-                step_id=step_id,
-                intent=intent,
-                inputs=self._materialize_lead_evidence_inputs(inputs, evidence),
-                previous_proposal=previous_proposal,
-                projection=refreshed,
-                lead_definition=definition,
-                evidence=evidence,
-                artifact_binding=artifact_binding,
-            )
+            try:
+                proposal = self._build_lead_proposal(
+                    session_id=session_id,
+                    step_id=step_id,
+                    intent=intent,
+                    inputs=self._materialize_lead_evidence_inputs(inputs, evidence),
+                    previous_proposal=previous_proposal,
+                    projection=refreshed,
+                    lead_definition=definition,
+                    evidence=evidence,
+                    artifact_binding=artifact_binding,
+                )
+            except _LeadCallBudgetExceeded:
+                return self._structured_fallback_lead_result(
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    step_id=step_id,
+                    message=(
+                        "The declared work cannot fit its required preparation and "
+                        "complete specialist review within the remaining two-round, "
+                        "twelve-call budget. Clarify the task or make a fresh proposal."
+                    ),
+                    validation_details=provider.validation_details + (
+                        "declared preparation and full final-review floor exceeds "
+                        "the remaining budget",
+                    ),
+                )
             request_id = self._new_id("c")
             message_event = self._draft(
                 session_id=session_id,
@@ -9603,7 +9823,7 @@ class StoryRuntime:
                 recipient=_USER_ACTOR,
                 payload=CollaborationLeadJudgmentPayload(
                     outcome.kind,
-                    outcome.message,
+                    self._proposal_disclosure(proposal, outcome.message),
                     evidence,
                     outcome.authoring_scope,
                     outcome.trace,
@@ -9690,9 +9910,13 @@ class StoryRuntime:
               if preparation is not None else ()),
         )
         if outcome.recommended_action is not None:
+            recommendation_events = services.event_store.read(
+                session_id, conversation_id,
+            )
+            refreshed = project_collaboration_history(recommendation_events)
             request_draft = self._recommendation_request_draft(
                 source=judgment, action=outcome.recommended_action, inputs=inputs,
-                evidence=evidence, events=objective_events, projection=refreshed,
+                evidence=evidence, events=recommendation_events, projection=refreshed,
                 artifact_binding=artifact_binding,
                 tail_sequence=refreshed.last_sequence + len(final_drafts) + 1,
                 step_id=self._new_id("s") if refreshed.current_proposal is not None else None,
@@ -9792,9 +10016,36 @@ class StoryRuntime:
         assert outcome.authoring_scope is not None
         review_scope = replace(outcome.authoring_scope, activity=AuthoringActivity.REVIEW,
                                domains=candidate.disclosed_review_domains)
+        inherited_premises = ()
+        if review_scope.schema_version == 3:
+            authoring_events = self._session_authoring_events(session_id)
+            draft_sources = [item for item in confirmed_authoring_proposals(review_scope, authoring_events)
+                            if item.authoring_scope is not None and item.authoring_scope.activity in {
+                                AuthoringActivity.DRAFT, AuthoringActivity.REVISE,
+                            }]
+            if draft_sources:
+                if preparation is None or type(preparation.request_event.payload) is not LeadRecommendationRequestPayload:
+                    raise _LeadOutcomeValidationError("draft-derived final review requires separately confirmed preparation")
+                request = preparation.request_event.payload
+                if request.authoring_scope is None or request.authoring_scope.schema_version != 3:
+                    raise _LeadOutcomeValidationError("final review preparation must retain scope-v3 source")
+                source = next((item for item in draft_sources if (
+                    item.proposal_id, item.proposal_revision, item.proposal_digest
+                ) == (request.source_proposal_id, request.source_proposal_revision, request.source_proposal_digest)), None)
+                if source is None or request.source_execution_attempt_id is None:
+                    raise _LeadOutcomeValidationError("final review preparation source is detached")
+                review_scope = replace(request.authoring_scope, activity=AuthoringActivity.REVIEW)
+                if set(candidate.disclosed_review_domains) != set(required_authoring_domains(review_scope)):
+                    raise _LeadOutcomeValidationError("changed final candidate domains require a fresh task revision")
+                inherited_premises = self._captured_premise_intents(
+                    replace(request.basis, inputs=tuple(materialized),
+                            shared_premises=self._remap_shared_premises(request.basis, tuple(materialized)))
+                )
+                self._validate_draft_provenance(review_scope, authoring_events)
         proposal_intent = LeadProposalIntent(
             relation=LeadProposalRelation.NEW_STEP,
             authoring_scope=review_scope,
+            shared_premises=inherited_premises,
             purpose="Review the exact proposed writing-artifact change candidate.",
             assignments=tuple(
                 LeadAssignmentIntent(
@@ -9833,9 +10084,9 @@ class StoryRuntime:
             recipient=_USER_ACTOR,
             payload=CollaborationLeadJudgmentPayload(
                 outcome.kind,
-                outcome.message,
+                self._proposal_disclosure(proposal, outcome.message),
                 evidence,
-                review_scope,
+                proposal.authoring_scope,
                 outcome.trace,
             ),
         )
@@ -10902,6 +11153,7 @@ class StoryRuntime:
         persist_message: bool = True,
         state: CollaborationStepState | None = None,
         validation_details: tuple[str, ...] = (),
+        message: str = _SAFE_STRUCTURED_FALLBACK_MESSAGE,
     ) -> LeadTurnResult:
         """Persist one visible no-action answer after exhausted schema repair."""
 
@@ -10929,7 +11181,7 @@ class StoryRuntime:
                         sender=_LEAD_ACTOR,
                         recipient=_USER_ACTOR,
                         payload=CollaborationMessagePayload(
-                            _SAFE_STRUCTURED_FALLBACK_MESSAGE,
+                            message,
                             trace,
                         ),
                     ),
@@ -10946,7 +11198,7 @@ class StoryRuntime:
             turn_id,
             step_id,
             LeadOutcomeKind.ANSWER,
-            _SAFE_STRUCTURED_FALLBACK_MESSAGE,
+            message,
             None,
             state,
             None,
@@ -11094,7 +11346,7 @@ class StoryRuntime:
                 '$.authoring_scope',
                 authoring_scope_from_dict,
                 {
-                    'schema_version': 2 if 'intent' in raw_scope else 1,
+                'schema_version': 3 if 'contributions' in raw_scope else 2 if 'intent' in raw_scope else 1,
                     **{key: item for key, item in raw_scope.items() if key != 'task'},
                     'task_id': task_id,
                     'task_revision': validation_call('$.authoring_scope.task', int, raw_revision),
@@ -11192,8 +11444,8 @@ class StoryRuntime:
                     authoring_scope=authoring_scope,
                 )
             if type(proposal_value) is not dict or frozenset(proposal_value) not in {
-                frozenset({"assignments"}),
-                frozenset({"assignments", "objective_intent"}),
+                frozenset({"assignments", *({"shared_premises"} if authoring_scope.schema_version == 3 else set())}),
+                frozenset({"assignments", "objective_intent", *({"shared_premises"} if authoring_scope.schema_version == 3 else set())}),
             }:
                 raise validation_failure(
                     ValueError(),
@@ -11251,8 +11503,9 @@ class StoryRuntime:
                 LeadProposalIntent,
                 relation=expected_relation,
                 purpose=cast(str, message),
-                assignments=tuple(assignments),
-                authoring_scope=authoring_scope,
+            assignments=tuple(assignments),
+            authoring_scope=authoring_scope,
+                shared_premises=StoryRuntime._decode_shared_premise_intents(proposal_value.get("shared_premises", [])),
             )
             return LeadProviderOutcome(
                 kind,
@@ -11506,6 +11759,153 @@ class StoryRuntime:
         return tuple(dict.fromkeys(path for locator in locators
                                    if (path := cls._routing_path(locator)) is not None))
 
+    @staticmethod
+    def _decode_shared_premise_intents(value: object) -> tuple[LeadSharedPremiseIntent, ...]:
+        if type(value) is not list:
+            raise BackendProtocolError("shared premises must be an array")
+        result = []
+        for item in value:
+            if type(item) is not dict or set(item) != {"slot_id", "selected_premise", "basis_input_ids"}:
+                raise BackendProtocolError("shared premise intent fields are invalid")
+            if type(item["basis_input_ids"]) is not list:
+                raise BackendProtocolError("shared premise source aliases must be an array")
+            result.append(LeadSharedPremiseIntent(item["slot_id"], item["selected_premise"],
+                                                  tuple(item["basis_input_ids"])))
+        return tuple(result)
+
+    @staticmethod
+    def _captured_premise_intents(basis: CollaborationProposalBasis) -> tuple[LeadSharedPremiseIntent, ...]:
+        return tuple(LeadSharedPremiseIntent(item.slot_id, item.selected_premise,
+                                            tuple(source.input_revision.input_id for source in item.sources))
+                     for item in basis.shared_premises)
+
+    def _capture_shared_premises(
+        self, session_id: str, intent: LeadProposalIntent,
+        inputs: tuple[CollaborationInputRevision, ...],
+    ) -> tuple[CollaborationSharedPremise, ...]:
+        if intent.authoring_scope is None or intent.authoring_scope.schema_version < 3:
+            return ()
+        available = {item.input_id: item for item in inputs}
+        events = self._session_authoring_events(session_id)
+        captured = []
+        for premise in intent.shared_premises:
+            if premise.selected_premise is None or not premise.selected_premise.strip():
+                raise BackendProtocolError("unresolved premise requires clarification or a fresh proposal")
+            if not premise.basis_input_ids:
+                raise BackendProtocolError("selected premise requires an immutable PRESENT source")
+            sources = []
+            for alias in premise.basis_input_ids:
+                item = available.get(alias)
+                if item is None or item.state is not CollaborationInputState.PRESENT:
+                    raise BackendProtocolError("premise source is missing or unavailable")
+                owner = None
+                if item.kind in {CollaborationInputKind.USER_INPUT, CollaborationInputKind.CONVERSATION_EVENT,
+                                 CollaborationInputKind.ARTIFACT_CANDIDATE}:
+                    if item.kind is CollaborationInputKind.USER_INPUT:
+                        turn_id = item.locator.removeprefix("conversation/").removesuffix("/user_input")
+                        matches = [event for event in events if event.turn_id == turn_id
+                                   and event.sender.kind.value == "user"]
+                    elif item.kind is CollaborationInputKind.CONVERSATION_EVENT:
+                        event_id = item.locator.removeprefix("conversation/")
+                        matches = [event for event in events if event.event_id == event_id]
+                    else:
+                        candidate_id = item.locator.removeprefix("artifact-candidate/")
+                        matches = [event for event in events
+                                   if getattr(event.payload, "candidate_id", None) == candidate_id]
+                    owners = {event.conversation_id for event in matches}
+                    if len(owners) != 1:
+                        raise BackendProtocolError("premise source has no unique durable owner")
+                    if any(type(event.payload) is CollaborationSpecialistReplyPayload
+                           and event.payload.assessment is not CollaborationSpecialistAssessment.DRAFTED
+                           for event in matches):
+                        raise BackendProtocolError("unresolved predecessor cannot supply a shared premise")
+                    for event in matches:
+                        if type(event.payload) is not CollaborationSpecialistReplyPayload:
+                            continue
+                        reply = event.payload
+                        completed = any(item.conversation_id == event.conversation_id
+                                        and type(item.payload) is CollaborationExecutionResult
+                                        and item.payload.execution_attempt_id == reply.execution_attempt_id
+                                        and item.payload.proposal_digest == reply.proposal_digest
+                                        and item.payload.overall_outcome.value == "succeeded"
+                                        for item in events)
+                        confirmed = any(item.conversation_id == event.conversation_id
+                                        and type(item.payload) is CollaborationConfirmationPayload
+                                        and item.payload.decision is CollaborationConfirmationDecision.CONFIRM
+                                        and (item.payload.proposal_id, item.payload.proposal_revision, item.payload.proposal_digest)
+                                        == (reply.proposal_id, reply.proposal_revision, reply.proposal_digest)
+                                        for item in events)
+                        if not completed or not confirmed:
+                            raise BackendProtocolError("unfinished predecessor requires clarification or a fresh proposal")
+                    owner = owners.pop()
+                sources.append(CollaborationPremiseSource(item, owner))
+            captured.append(CollaborationSharedPremise(premise.slot_id, premise.selected_premise, tuple(sources)))
+        return tuple(captured)
+
+    @staticmethod
+    def _proposal_disclosure(proposal: CollaborationProposal, message: str) -> str:
+        scope = proposal.authoring_scope
+        if scope is None or scope.schema_version < 3:
+            return message
+        disclosure = {
+            "writing_task_scope": authoring_scope_to_dict(scope),
+            "final_reviewers": list(required_authoring_specialists(scope)),
+            "shared_premises": shared_premises_to_dict(proposal.basis.shared_premises),
+            "rounds_spent": proposal.budget.rounds_spent,
+            "physical_calls_spent": proposal.budget.physical_calls_spent,
+            "max_additional_physical_calls": proposal.budget.max_additional_physical_calls,
+            "reserved_preparation_and_final_review_calls": StoryRuntime._future_authoring_floor(scope, proposal.basis.inputs),
+        }
+        return message + "\n\nProposed responsibilities, immutable premises and bounded cost: " + json.dumps(
+            disclosure, ensure_ascii=False, sort_keys=True,
+        )
+
+    @staticmethod
+    def _remap_shared_premises(
+        basis: CollaborationProposalBasis,
+        inputs: tuple[CollaborationInputRevision, ...],
+    ) -> tuple[CollaborationSharedPremise, ...]:
+        result = []
+        for premise in basis.shared_premises:
+            sources = []
+            for source in premise.sources:
+                matching = [item for item in inputs if replace(item, input_id=source.input_revision.input_id) == source.input_revision]
+                if not matching:
+                    raise BackendProtocolError("selected inputs omit or change an immutable shared premise source")
+                selected = next((item for item in matching if item.input_id == source.input_revision.input_id), matching[0])
+                sources.append(CollaborationPremiseSource(selected, source.source_conversation_id))
+            result.append(CollaborationSharedPremise(premise.slot_id, premise.selected_premise, tuple(sources)))
+        return tuple(result)
+
+    @staticmethod
+    def _has_present_references(inputs: tuple[CollaborationInputRevision, ...]) -> bool:
+        return any(item.state is CollaborationInputState.PRESENT and item.kind in {
+            CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.MANUSCRIPT,
+            CollaborationInputKind.WRITING_ARTIFACT,
+        } for item in inputs)
+
+    @classmethod
+    def _final_review_floor(cls, scope: AuthoringScope,
+                            inputs: tuple[CollaborationInputRevision, ...],
+                            *, preparation: bool) -> int:
+        read = int(cls._has_present_references(inputs))
+        return (len(required_authoring_specialists(scope)) + 1 + 2 * int(preparation)) * (1 + read)
+
+    @classmethod
+    def _future_authoring_floor(cls, scope: AuthoringScope | None,
+                                inputs: tuple[CollaborationInputRevision, ...]) -> int:
+        if scope is None or scope.schema_version < 3 or scope.intent is not AuthoringIntent.AUTHORING or (
+            scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
+        ):
+            return 0
+        return cls._final_review_floor(scope, inputs, preparation=True)
+
+    @staticmethod
+    def _basis_budget_fingerprint(scope: AuthoringScope | None) -> str:
+        if scope is not None and scope.schema_version == 3:
+            return "sha256:" + hashlib.sha256(b"scope-v3:read-aware-full-union-final-review:two-rounds:twelve-calls").hexdigest()
+        return _BUDGET_POLICY_FINGERPRINT
+
     @classmethod
     def _resolve_authoring_scope(
         cls,
@@ -11514,12 +11914,20 @@ class StoryRuntime:
         evidence: CollaborationLeadEvidence | None,
         previous: AuthoringScope | None = None,
     ) -> AuthoringScope:
+        if scope.schema_version == 3:
+            scope = replace(scope, domains=required_authoring_domains(scope))
         if previous is not None and scope.intent is not previous.intent:
             raise validation_failure(
                 _LeadOutcomeValidationError('existing task intent cannot change'),
                 '$.authoring_scope.intent',
                 'preserve intent; requested authoring needs a fresh task',
             )
+        if previous is not None and previous.schema_version == 3 and scope.task_id == previous.task_id:
+            if scope.task_revision not in {previous.task_revision, previous.task_revision + 1}:
+                raise BackendProtocolError("authoring task revision must remain current or advance exactly once")
+            if scope.task_revision == previous.task_revision:
+                if scope != previous:
+                    raise BackendProtocolError("changed brief, roles or sources require a fresh task revision")
         if scope.activity is AuthoringActivity.WORKFLOW:
             if previous is not None and previous.activity is not AuthoringActivity.WORKFLOW:
                 raise validation_failure(
@@ -11535,6 +11943,8 @@ class StoryRuntime:
                         'status/clarification task'
                     ),
                 )
+            return scope
+        if scope.schema_version == 3:
             return scope
         paths = tuple(dict.fromkeys((
             *scope.target_paths,
@@ -11600,6 +12010,13 @@ class StoryRuntime:
                     tasks[scope.task_id] = scope
                     continue
                 selected = scope if scope.task_revision >= prior.task_revision else prior
+                if selected.schema_version == 3:
+                    if scope.task_revision == prior.task_revision and selected.activity is AuthoringActivity.REVIEW and prior.activity in {
+                        AuthoringActivity.DRAFT, AuthoringActivity.REVISE,
+                    }:
+                        selected = replace(selected, activity=prior.activity)
+                    tasks[scope.task_id] = selected
+                    continue
                 authoring_activity = next((activity for activity in (prior.activity, scope.activity)
                     if activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}), selected.activity)
                 # Same-task facts are monotonic across revisions and conversations:
@@ -11633,14 +12050,169 @@ class StoryRuntime:
                 tasks.pop(scope.task_id)
         return tasks
 
+    def _ordinary_front_call_cap(self, session_id: str, conversation_id: str) -> int | None:
+        """Keep every offered completed v3 task's preparation/review floor intact."""
+        events = self.conversation_storage_services.event_store.read(session_id, conversation_id)
+        tasks = self._authoring_tasks(self._session_authoring_events(session_id))
+        caps = []
+        for scope in tasks.values():
+            if scope.schema_version != 3 or scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}:
+                continue
+            try:
+                source, _synthesis, projected = self._completed_authoring_source(scope, events)
+            except BackendProtocolError:
+                continue  # Foreign/uncompleted execution authority is never imported.
+            related_steps = {event.step_id for event in events
+                             if type(event.payload) is LeadRecommendationRequestPayload
+                             and event.payload.source_proposal_id == source.proposal_id
+                             and event.payload.source_proposal_revision == source.proposal_revision
+                             and event.payload.source_proposal_digest == source.proposal_digest}
+            related_steps.discard(source.step_id)
+            rounds = projected.rounds_spent + sum(
+                1 for event in events if event.step_id in related_steps
+                and type(event.payload) is CollaborationStepStatePayload
+                and event.payload.state is CollaborationStepState.RUNNING
+            )
+            if rounds >= COLLABORATION_ROUND_LIMIT:
+                caps.append(0)
+                continue
+            spent = projected.physical_calls_spent + sum(
+                1 for event in events if event.step_id in related_steps
+                and type(event.payload) is CollaborationProviderCallPayload
+                and event.payload.state is CollaborationProviderCallState.SUBMITTED
+            )
+            read = int(self._has_present_references(source.basis.inputs))
+            available = COLLABORATION_PHYSICAL_CALL_LIMIT - spent - (
+                self._final_review_floor(scope, source.basis.inputs, preparation=False) + 1 + read
+            )
+            caps.append(min(1 + read, available))
+        return min(caps) if caps else None
+
+    @staticmethod
+    def _completed_authoring_source(
+        scope: AuthoringScope, events: tuple[CollaborationEvent, ...],
+    ) -> tuple[CollaborationProposal, CollaborationEvent, CollaborationHistoryProjection]:
+        confirmed = confirmed_authoring_proposals(scope, events)
+        for event in reversed(events):
+            if type(event.payload) is not CollaborationLeadSynthesisPayload:
+                continue
+            source = next((item for item in confirmed if (
+                item.proposal_id, item.proposal_revision, item.proposal_digest
+            ) == (event.payload.proposal_id, event.payload.proposal_revision, event.payload.proposal_digest)), None)
+            if (
+                source is None or source.authoring_scope is None
+                or source.authoring_scope.schema_version != 3
+                or source.authoring_scope.intent is not AuthoringIntent.AUTHORING
+                or source.authoring_scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
+            ):
+                continue
+            result_event = next((
+                item for item in events
+                if item.batch_id == event.batch_id
+                and type(item.payload) is CollaborationExecutionResult
+                and (
+                    item.payload.proposal_id,
+                    item.payload.proposal_revision,
+                    item.payload.proposal_digest,
+                    item.payload.execution_attempt_id,
+                    item.payload.synthesis_result_event_id,
+                ) == (
+                    source.proposal_id,
+                    source.proposal_revision,
+                    source.proposal_digest,
+                    event.payload.execution_attempt_id,
+                    event.event_id,
+                )
+                and item.payload.overall_outcome.value == "succeeded"
+            ), None)
+            if result_event is None:
+                continue
+            terminal_event = next((
+                item for item in events
+                if item.sequence >= result_event.sequence
+                and item.conversation_id == event.conversation_id
+                and type(item.payload) is CollaborationStepStatePayload
+                and item.payload.state is CollaborationStepState.COMPLETED
+                and item.payload.execution_result_event_id == result_event.event_id
+                and (
+                    item.payload.proposal_id,
+                    item.payload.proposal_revision,
+                    item.payload.proposal_digest,
+                ) == (
+                    source.proposal_id,
+                    source.proposal_revision,
+                    source.proposal_digest,
+                )
+            ), None)
+            if terminal_event is None:
+                continue
+            # An ordinary synthesis result is finalized in a later batch;
+            # direct synthesis recommendations publish their terminal atomically.
+            prefix = tuple(item for item in events if item.sequence <= max(
+                prior.sequence for prior in events
+                if prior.batch_id == terminal_event.batch_id
+            ))
+            projected = project_collaboration_history(prefix)
+            rounds = sum(1 for item in prefix if item.step_id == source.step_id
+                         and type(item.payload) is CollaborationStepStatePayload
+                         and item.payload.state is CollaborationStepState.RUNNING)
+            spent = sum(1 for item in prefix if item.step_id == source.step_id
+                        and type(item.payload) is CollaborationProviderCallPayload
+                        and item.payload.state is CollaborationProviderCallState.SUBMITTED)
+            if rounds != 1 or authoring_capture_identity(scope, source.basis) != authoring_capture_identity(source.authoring_scope, source.basis):
+                raise BackendProtocolError("completed authoring source capture or round is not current")
+            projected = replace(projected, current_step_id=source.step_id, current_proposal=source,
+                                current_state=CollaborationStepState.COMPLETED,
+                                rounds_spent=rounds, physical_calls_spent=spent)
+            return source, event, projected
+        raise _LeadOutcomeValidationError("completed draft source is unavailable here; focus its source conversation to prepare final review, or clarify and freshly propose")
+
+    @staticmethod
+    def _validate_final_review_handoff(
+        proposal: CollaborationProposal, events: tuple[CollaborationEvent, ...],
+        projection: CollaborationHistoryProjection,
+    ) -> None:
+        scope = proposal.authoring_scope
+        if scope is None or scope.schema_version < 3 or scope.activity is not AuthoringActivity.REVIEW:
+            return
+        sources = tuple(item for item in confirmed_authoring_proposals(scope, events)
+                        if item.authoring_scope is not None and item.authoring_scope.activity in {
+                            AuthoringActivity.DRAFT, AuthoringActivity.REVISE,
+                        })
+        if not sources:
+            return  # Fresh user-supplied candidate review has no draft lineage to inherit.
+        requests = [event.payload for event in events if event.step_id == proposal.step_id
+                    and type(event.payload) is LeadRecommendationRequestPayload
+                    and event.payload.authoring_scope is not None
+                    and event.payload.authoring_scope.schema_version == 3]
+        if not requests:
+            raise BackendProtocolError("draft-derived final review requires its confirmed recommendation handoff")
+        request = requests[-1]
+        source = next((item for item in sources if (
+            item.proposal_id, item.proposal_revision, item.proposal_digest
+        ) == (request.source_proposal_id, request.source_proposal_revision, request.source_proposal_digest)), None)
+        if source is None or request.source_execution_attempt_id is None:
+            raise BackendProtocolError("final review is detached from its confirmed draft source")
+        if authoring_capture_identity(scope, proposal.basis) != authoring_capture_identity(
+            source.authoring_scope, source.basis
+        ) or authoring_capture_identity(request.authoring_scope, request.basis) != authoring_capture_identity(
+            source.authoring_scope, source.basis
+        ):
+            raise BackendProtocolError("final review must inherit the exact source capture")
+        if projection.rounds_spent != 1 or projection.physical_calls_spent < request.physical_calls_spent:
+            raise BackendProtocolError("final review must inherit physical calls and the single completed round")
+
     @staticmethod
     def _validate_draft_provenance(
         scope: AuthoringScope,
         events: tuple[CollaborationEvent, ...],
+        *, pending_attempt_id: str | None = None,
+        pending_replies: tuple[CollaborationSpecialistReplyPayload, ...] = (),
     ) -> None:
         proposals = {(event.conversation_id, event.payload.proposal_id): event.payload for event in events
                      if type(event.payload) is CollaborationProposal}
         drafted: set[str] = set()
+        confirmed = confirmed_authoring_proposals(scope, events) if scope.schema_version == 3 else ()
         for event in events:
             reply = event.payload
             if type(reply) is not CollaborationSpecialistReplyPayload or (
@@ -11657,11 +12229,47 @@ class StoryRuntime:
                 continue
             prior = proposal.authoring_scope
             if (prior.task_id, prior.task_revision) == (scope.task_id, scope.task_revision):
+
+                if scope.schema_version == 3:
+                    if proposal not in confirmed or authoring_capture_identity(scope, proposal.basis) != authoring_capture_identity(prior, proposal.basis):
+                        continue
+                    dispatch = next((item for item in events if item.conversation_id == event.conversation_id
+                                     and item.event_id == reply.dispatch_event_id
+                                     and type(item.payload) is CollaborationAssignmentDispatchPayload), None)
+                    result = next((item.payload for item in events if item.conversation_id == event.conversation_id
+                                   and type(item.payload) is CollaborationExecutionResult
+                                   and item.payload.execution_attempt_id == reply.execution_attempt_id
+                                   and item.payload.proposal_digest == proposal.proposal_digest
+                                   and item.payload.overall_outcome.value == "succeeded"), None)
+                    if dispatch is None or (result is None and reply.execution_attempt_id != pending_attempt_id) or dispatch.payload.execution_attempt_id != reply.execution_attempt_id or (
+                        dispatch.payload.assignment.assignment_id != reply.assignment_id
+                        or dispatch.payload.assignment.mode is not SpecialistAssignmentMode.DRAFT
+                    ):
+                        continue
+                    validate_authoring_capture_pin(proposal, events)
                 drafted.add(cast(str, event.sender.agent_id))
-        if not set(required_authoring_specialists(scope)).issubset(drafted):
+        if pending_attempt_id is not None:
+            for reply in pending_replies:
+                if reply.execution_attempt_id != pending_attempt_id or reply.mode is not SpecialistAssignmentMode.DRAFT or reply.assessment is not CollaborationSpecialistAssessment.DRAFTED:
+                    continue
+                proposal = next((item for item in confirmed if (
+                    item.proposal_id, item.proposal_revision, item.proposal_digest
+                ) == (reply.proposal_id, reply.proposal_revision, reply.proposal_digest)), None)
+                dispatch = next((event.payload for event in events
+                                 if event.event_id == reply.dispatch_event_id
+                                 and type(event.payload) is CollaborationAssignmentDispatchPayload), None)
+                if proposal is None or dispatch is None or dispatch.execution_attempt_id != pending_attempt_id or (
+                    dispatch.assignment.assignment_id != reply.assignment_id
+                    or dispatch.assignment.mode is not SpecialistAssignmentMode.DRAFT
+                    or proposal.authoring_scope is None
+                    or authoring_capture_identity(scope, proposal.basis) != authoring_capture_identity(proposal.authoring_scope, proposal.basis)
+                ):
+                    continue
+                drafted.add(dispatch.assignment.specialist_id)
+        if not set(required_drafting_specialists(scope)).issubset(drafted):
             raise validation_failure(
                 _LeadOutcomeValidationError(
-                    'artifact authoring requires current-task drafts from every affected specialist',
+                    'artifact authoring requires current-task drafts from every declared draft owner',
                 ),
                 '$.artifact_intent.operations',
                 'artifact authoring requires current-task drafts from every affected specialist',
@@ -11682,6 +12290,8 @@ class StoryRuntime:
         if scope is None or scope.activity is not AuthoringActivity.REVIEW:
             raise ValueError("legacy or unscoped candidate requires fresh specialist review")
         task_events = self._session_authoring_events(session_id)
+        if scope.schema_version == 3:
+            validate_authoring_capture_pin(proposal, task_events)
         current_task = self._authoring_tasks(task_events).get(scope.task_id)
         if current_task is None or current_task.task_revision != scope.task_revision:
             raise ValueError("reviewed authoring task revision is no longer current")
@@ -11758,7 +12368,7 @@ class StoryRuntime:
                     '$.proposal.assignments',
                     'live assignment requires an explicit mode',
                 )
-            if assignment.mode is SpecialistAssignmentMode.DRAFT:
+            if assignment.mode in {SpecialistAssignmentMode.DRAFT, SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT}:
                 continue
             basis = assignment.review_basis
             if basis is None:
@@ -11898,11 +12508,17 @@ class StoryRuntime:
             )
         if projection.rounds_spent >= COLLABORATION_ROUND_LIMIT:
             raise BackendProtocolError("specialist round three is unreachable")
+        if intent.authoring_scope.schema_version == 3 and intent.authoring_scope.activity in {
+            AuthoringActivity.DRAFT, AuthoringActivity.REVISE,
+        } and projection.rounds_spent:
+            raise _LeadCallBudgetExceeded("v3 authoring reserves round two for final review; clarify or freshly propose")
+        captured = self._capture_shared_premises(session_id, intent, inputs)
         allocated_limits, synthesis_calls, required_calls = (
             self._proposal_call_reservations(
                 inputs=inputs,
                 assignment_input_ids=tuple(item.input_ids for item in assignments),
                 physical_calls_spent=projection.physical_calls_spent,
+                authoring_scope=intent.authoring_scope,
             )
         )
         proposal_revision = (
@@ -11963,9 +12579,11 @@ class StoryRuntime:
             route_fingerprint=self._canonical_digest(route_value),
             agent_profiles=profiles,
             context_policy_fingerprint=(self._agent_context_service.policy_fingerprint),
-            budget_policy_fingerprint=_BUDGET_POLICY_FINGERPRINT,
+            budget_policy_fingerprint=self._basis_budget_fingerprint(intent.authoring_scope),
             inputs=inputs,
             evidence=evidence,
+            schema_version=2 if intent.authoring_scope.schema_version == 3 else 1,
+            shared_premises=captured,
         )
         budget = CollaborationBudget(
             round_limit=COLLABORATION_ROUND_LIMIT,
@@ -11976,7 +12594,7 @@ class StoryRuntime:
             max_additional_physical_calls=required_calls,
             synthesis_max_physical_calls=synthesis_calls,
         )
-        return CollaborationProposal.create(
+        proposal = CollaborationProposal.create(
             step_id=step_id,
             proposal_id=proposal_id,
             proposal_revision=proposal_revision,
@@ -11989,6 +12607,14 @@ class StoryRuntime:
             basis=basis,
             authoring_scope=intent.authoring_scope,
         )
+        events = self._session_authoring_events(session_id)
+        validate_authoring_capture_pin(proposal, events)
+        if intent.authoring_scope.schema_version == 3 and intent.authoring_scope.activity in {
+            AuthoringActivity.DRAFT, AuthoringActivity.REVISE,
+        } and any(item.step_id != step_id for item in confirmed_authoring_proposals(intent.authoring_scope, events)):
+            raise _LeadCallBudgetExceeded("confirmed authoring revision cannot restart its lineage; advance the task revision and freshly confirm")
+        self._validate_final_review_handoff(proposal, events, projection)
+        return proposal
 
     def _validate_current_proposal_authority(
         self,
@@ -12061,6 +12687,7 @@ class StoryRuntime:
                         assignment.input_ids for assignment in proposal.assignments
                     ),
                     physical_calls_spent=projection.physical_calls_spent,
+                    authoring_scope=proposal.authoring_scope,
                     synthesis_required=(
                         proposal.step_kind
                         is CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION
@@ -12124,9 +12751,11 @@ class StoryRuntime:
                 context_policy_fingerprint=(
                     self._agent_context_service.policy_fingerprint
                 ),
-                budget_policy_fingerprint=_BUDGET_POLICY_FINGERPRINT,
+                budget_policy_fingerprint=self._basis_budget_fingerprint(proposal.authoring_scope),
                 inputs=inputs,
                 evidence=proposal.basis.evidence,
+                schema_version=proposal.basis.schema_version,
+                shared_premises=proposal.basis.shared_premises,
             )
             budget = CollaborationBudget(
                 round_limit=COLLABORATION_ROUND_LIMIT,
@@ -12155,6 +12784,22 @@ class StoryRuntime:
                 basis=basis,
                 authoring_scope=proposal.authoring_scope,
             )
+            all_events = self._session_authoring_events(session_id)
+            validate_authoring_capture_pin(current, all_events)
+            self._validate_final_review_handoff(current, all_events, projection)
+            if proposal.authoring_scope is not None and proposal.authoring_scope.schema_version == 3:
+                captured = self._capture_shared_premises(session_id, LeadProposalIntent(
+                    relation=LeadProposalRelation.NEW_STEP, purpose=proposal.purpose,
+                    authoring_scope=proposal.authoring_scope,
+                    assignments=tuple(LeadAssignmentIntent(
+                        agent_id=item.specialist_id, instruction=item.instruction,
+                        input_ids=item.input_ids, mode=item.mode, review_basis=item.review_basis,
+                    ) for item in proposal.assignments),
+                    shared_premises=self._captured_premise_intents(proposal.basis),
+                ), inputs)
+                if captured != proposal.basis.shared_premises:
+                    raise BackendProtocolError("captured premise source ownership or revision changed")
+
         except (
             SessionArtifactBindingError,
             WorkspaceFormatError,
@@ -12779,11 +13424,13 @@ class StoryRuntime:
         assignment_input_ids: tuple[tuple[str, ...], ...],
         physical_calls_spent: int,
         synthesis_required: bool = True,
+        authoring_scope: AuthoringScope | None = None,
     ) -> tuple[tuple[int, ...], int, int]:
         reference_input_ids = {
             item.input_id
             for item in inputs
-            if item.kind
+            if (authoring_scope is None or authoring_scope.schema_version < 3 or item.state is CollaborationInputState.PRESENT)
+            and item.kind
             in {
                 CollaborationInputKind.CORE_DOCUMENT,
                 CollaborationInputKind.MANUSCRIPT,
@@ -12794,14 +13441,15 @@ class StoryRuntime:
             1 + int(any(input_id in reference_input_ids for input_id in input_ids))
             for input_ids in assignment_input_ids
         )
-        remaining = COLLABORATION_PHYSICAL_CALL_LIMIT - physical_calls_spent
+        future_floor = StoryRuntime._future_authoring_floor(authoring_scope, inputs)
+        remaining = COLLABORATION_PHYSICAL_CALL_LIMIT - physical_calls_spent - future_floor
         synthesis_minimum = (
             1 + int(bool(reference_input_ids)) if synthesis_required else 0
         )
         minimum_required_calls = sum(assignment_call_limits) + synthesis_minimum
         if minimum_required_calls > remaining:
             raise _LeadCallBudgetExceeded(
-                "lead proposal cannot fit the remaining physical-call budget"
+                "declared preparation and full final review cannot fit the remaining physical-call budget; clarify or freshly propose"
             )
         allocated_limits = list(assignment_call_limits)
         unallocated = remaining - minimum_required_calls

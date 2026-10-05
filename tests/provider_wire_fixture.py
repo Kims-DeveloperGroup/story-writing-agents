@@ -22,8 +22,8 @@ _FIELDS = {
 }
 _VALUES = {
     "activity": {"workflow": "workflow_guidance", "draft": "draft_writing", "revise": "revise_writing", "review": "review_writing"},
-    "mode": {"draft": "draft_content", "review": "review_content"},
-    "assessment": {"drafted": "draft_completed", "supports": "supports_proposal", "concern": "concerns_found", "conflict": "conflicts_found"},
+    "mode": {"draft": "draft_content", "review": "review_content", "constraint_assessment": "assess_constraints"},
+    "assessment": {"drafted": "draft_completed", "supports": "supports_proposal", "concern": "concerns_found", "conflict": "conflicts_found", "constraints_assessed": "constraints_assessed"},
     "decision": {"propose": "ready_for_apply_confirmation", "revise": "revision_required", "reject": "rejected"},
     "next_step": {"clarify": "ask_clarification", "consult": "consult_specialists", "prepare": "draft_document_change_proposal"},
 }
@@ -32,7 +32,9 @@ _DRAFTING = {"prepare_artifact": "draft_document_change_proposal", "prepare_cons
 _UPDATES = {"start": "start_request", "continue": "continue_request", "cancel": "cancel_request"}
 _LEAD_TYPES = {"answer": "answer", "question": "clarification_question", "critique": "critique", "recommendation": "proposal_drafting_recommendation"}
 _FAMILIES = {
+    "lead-response-v7": "lead",
     "lead-response-v6": "lead",
+    "specialist-assignment-response-v4": "specialist_assignment_result",
     "specialist-assignment-response-v3": "specialist_assignment_result",
     "consultation-summary-v4": "consultation_summary",
     "artifact-review-summary-v4": "artifact_review_summary",
@@ -235,7 +237,7 @@ def capture_sample(call, name=None):
     payload = call["payload"] if isinstance(call, Mapping) else call.payload
     schema = call["schema"] if isinstance(call, Mapping) else call.schema
     name = name or payload.get("response_contract", {}).get("result_contract_id")
-    if name not in {"lead-response-v6", "specialist-assignment-response-v3", "consultation-summary-v4", "artifact-review-summary-v4", "direct-conversation"}:
+    if name not in {"lead-response-v6", "specialist-assignment-response-v3", "consultation-summary-v4", "artifact-review-summary-v4", "direct-conversation", "lead-response-v7", "specialist-assignment-response-v4"}:
         return
     destination = Path(directory) / (name + ".json")
     try:

@@ -17,7 +17,7 @@ from enum import StrEnum
 from pathlib import PurePosixPath
 
 
-AUTHORING_SCOPE_SCHEMA_VERSION = 2
+AUTHORING_SCOPE_SCHEMA_VERSION = 3
 REVIEW_BASIS_SCHEMA_VERSION = 1
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 
@@ -51,6 +51,35 @@ class SpecialistAssignmentMode(StrEnum):
 
     DRAFT = "draft"
     REVIEW = "review"
+    CONSTRAINT_ASSESSMENT = "constraint_assessment"
+
+
+class AuthoringContributionRole(StrEnum):
+    """Authoring responsibility, independently of exact-candidate review."""
+    DRAFT_OWNER = "draft_owner"
+    CONSTRAINT_ASSESSOR = "constraint_assessor"
+
+
+@dataclass(frozen=True, slots=True)
+class AuthoringContribution:
+    domain: ArtifactReviewDomain
+    role: AuthoringContributionRole
+
+    def __post_init__(self) -> None:
+        if type(self.domain) is not ArtifactReviewDomain or type(self.role) is not AuthoringContributionRole:
+            raise ValueError("authoring contribution requires an exact domain and role")
+
+
+@dataclass(frozen=True, slots=True)
+class AuthoringDependencySlot:
+    slot_id: str
+    dependent_domains: tuple[ArtifactReviewDomain, ...]
+
+    def __post_init__(self) -> None:
+        _identifier(self.slot_id)
+        _domain_tuple(self.dependent_domains)
+        if not self.dependent_domains:
+            raise ValueError("dependency slot requires dependent authoring domains")
 
 
 _SPECIALIST_BY_DOMAIN = {
@@ -131,17 +160,19 @@ class AuthoringScope:
     interpretation: str = field(repr=False)
     task_id: str
     task_revision: int
-    schema_version: int = AUTHORING_SCOPE_SCHEMA_VERSION
+    schema_version: int = 2
     intent: AuthoringIntent = field(default=AuthoringIntent.AUTHORING, kw_only=True)
+    contributions: tuple[AuthoringContribution, ...] = field(default=(), kw_only=True)
+    dependency_slots: tuple[AuthoringDependencySlot, ...] = field(default=(), kw_only=True)
 
     def __post_init__(self) -> None:
         if (
             type(self.schema_version) is not int
-            or self.schema_version not in {1, AUTHORING_SCOPE_SCHEMA_VERSION}
+            or self.schema_version not in {1, 2, AUTHORING_SCOPE_SCHEMA_VERSION}
         ):
             raise validation_failure(
                 ValueError('authoring scope version is unsupported'),
-                '$.schema_version', 'expected authoring scope version 1 or 2',
+                '$.schema_version', 'expected authoring scope version 1, 2 or 3',
             )
         if type(self.intent) is not AuthoringIntent:
             raise validation_failure(
@@ -180,6 +211,28 @@ class AuthoringScope:
                 'expected a positive integer task revision',
             )
         required = set(self.domains) | validation_call('$.target_paths', _path_domains, self.target_paths)
+        if type(self.contributions) is not tuple or any(type(item) is not AuthoringContribution for item in self.contributions):
+            raise ValueError("authoring contributions must be an exact tuple")
+        if type(self.dependency_slots) is not tuple or any(type(item) is not AuthoringDependencySlot for item in self.dependency_slots):
+            raise ValueError("authoring dependency slots must be an exact tuple")
+        if self.schema_version < 3 and (self.contributions or self.dependency_slots):
+            raise ValueError("legacy authoring scopes cannot acquire contribution duties")
+        if self.schema_version == 3:
+            roles = {item.domain: item.role for item in self.contributions}
+            if len(roles) != len(self.contributions) or set(roles) != required:
+                raise ValueError("contributions must cover every affected domain exactly once")
+            specialist_roles: dict[str, AuthoringContributionRole] = {}
+            for item in self.contributions:
+                specialist = _SPECIALIST_BY_DOMAIN[item.domain]
+                if specialist in specialist_roles and specialist_roles[specialist] is not item.role:
+                    raise ValueError("same-specialist domains require the same contribution role")
+                specialist_roles[specialist] = item.role
+            if self.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE} and AuthoringContributionRole.DRAFT_OWNER not in roles.values():
+                raise ValueError("authoring requires at least one substantive draft owner")
+            if len({item.slot_id for item in self.dependency_slots}) != len(self.dependency_slots):
+                raise ValueError("dependency slots must be unique")
+            if any(roles.get(domain) is not AuthoringContributionRole.DRAFT_OWNER for item in self.dependency_slots for domain in item.dependent_domains):
+                raise ValueError("dependencies must bind declared draft owners")
         if self.activity is AuthoringActivity.WORKFLOW:
             if required:
                 raise validation_failure(
@@ -324,7 +377,7 @@ def validate_specialist_assignment(
             'assignment mode must be a SpecialistAssignmentMode',
         )
     validation_call("$.input_ids", _input_ids, input_ids)
-    if mode is SpecialistAssignmentMode.DRAFT:
+    if mode in {SpecialistAssignmentMode.DRAFT, SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT}:
         if review_basis is not None:
             raise validation_failure(
                 ValueError('draft assignment cannot carry a review basis'),
@@ -344,6 +397,27 @@ def validate_specialist_assignment(
                 '$.input_ids',
                 'every review candidate must be included in input_ids',
             )
+
+
+def assignment_mode_for_specialist(scope: AuthoringScope, specialist_id: str) -> SpecialistAssignmentMode:
+    """Return the declared current-phase obligation without shrinking participation."""
+    if scope.activity is AuthoringActivity.REVIEW or scope.intent is AuthoringIntent.REVIEW_ONLY:
+        return SpecialistAssignmentMode.REVIEW
+    if scope.schema_version < 3:
+        return SpecialistAssignmentMode.DRAFT
+    roles = {item.role for item in scope.contributions if _SPECIALIST_BY_DOMAIN[item.domain] == specialist_id}
+    if len(roles) != 1:
+        raise ValueError("specialist has no single declared contribution role")
+    return (SpecialistAssignmentMode.DRAFT if roles == {AuthoringContributionRole.DRAFT_OWNER}
+            else SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT)
+
+
+def required_drafting_specialists(scope: AuthoringScope) -> tuple[str, ...]:
+    """Only declared authors can supply current-task draft proof."""
+    if scope.schema_version < 3:
+        return required_authoring_specialists(scope)
+    authors = {item.domain for item in scope.contributions if item.role is AuthoringContributionRole.DRAFT_OWNER}
+    return specialists_for_domains(tuple(domain for domain in ArtifactReviewDomain if domain in authors))
 
 
 def _version(value: object, expected: int) -> None:
@@ -453,9 +527,14 @@ __all__ = [
     "AuthoringActivity",
     "AuthoringIntent",
     "AuthoringScope",
+    "AuthoringContributionRole",
+    "AuthoringContribution",
+    "AuthoringDependencySlot",
     "ReviewBasis",
     "SpecialistAssignmentMode",
     "artifact_domain",
+    "assignment_mode_for_specialist",
+    "required_drafting_specialists",
     "required_authoring_domains",
     "required_authoring_specialists",
     "specialists_for_domains",

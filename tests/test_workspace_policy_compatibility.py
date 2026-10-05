@@ -27,9 +27,10 @@ from tests.git_contract_fixture import DisposableGitTestCase
 
 _FIXTURES = Path(__file__).parent / "fixtures/workspace_policy_baselines"
 _PUBLISHED_COMMIT = "68a07827924598571ff8e3f6e4a602ad1a52b771"
-_CURRENT_MANIFEST = "fcb51c852f55ec87a530c20499b49e8f2f1155e00d90bb9679bc33142ec41555"
+_CURRENT_MANIFEST = "85c8eb0c74dc4ce38416bff8bcc0b396f007261eb1140ec1bb22d45cef4ae030"
 _PRE_GUIDANCE = _FIXTURES / "pre_guidance_97879d4"
 _PRE_EDITORIAL = _FIXTURES / "integrated_794_09db65c"
+_PRE_MIXED = _FIXTURES / "integrated_796_76a80f7"
 _LEGACY_MANIFEST = "c42681a04c910fd3632dc4987148c0664e1e30b77c0bc1e564b40da52745642f"
 
 
@@ -85,6 +86,7 @@ class PublishedWorkspacePolicyFixtureTests(unittest.TestCase):
         self.assertEqual(_manifest(_legacy_scaffold(_PRE_GUIDANCE)).manifest_digest,
                          "eb7f56021f514b6db7d266ba416e994e2eceb0d6ba977ece97423c1eda1efd85")
         self._published(_PRE_EDITORIAL, "09db65c28ac38130a4e299aeb75a162413cfff46")
+        self._published(_PRE_MIXED, "76a80f72be711d927fff7eee4ee455d3b37802c4")
         self.assertEqual(_manifest(_legacy_scaffold(_PRE_EDITORIAL)).manifest_digest,
                          "11a75b3724d164ce94f4df0cde90909516d256ffbfbb007cf0c47ee975fcde2e")
         current = canonical_initializer_scaffold()
@@ -165,7 +167,7 @@ class WorkspacePolicyCompatibilityTests(DisposableGitTestCase):
 
 
     def test_fresh_legacy_and_current_main_admission_are_isolated_and_read_only(self) -> None:
-        fixtures = (_FIXTURES, _FIXTURES / "published_2e9", _FIXTURES / "published_main_1e482fe", _PRE_GUIDANCE, _PRE_EDITORIAL, None)
+        fixtures = (_FIXTURES, _FIXTURES / "published_2e9", _FIXTURES / "published_main_1e482fe", _PRE_GUIDANCE, _PRE_EDITORIAL, _PRE_MIXED, None)
         roots = tuple(self._initialize(str(index), fixture) for index, fixture in enumerate(fixtures))
         before = self._snapshot(*roots)
         fingerprints = {}

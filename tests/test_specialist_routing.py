@@ -1,6 +1,7 @@
 """Pure routing, versioned wire compatibility, and draft/review acceptance."""
 from dataclasses import FrozenInstanceError, fields, replace
 import json
+from pathlib import Path
 import unittest
 
 from story_writing_agents import conversations as c
@@ -9,6 +10,8 @@ from story_writing_agents.specialist_routing import (
     ReviewBasis, SpecialistAssignmentMode as Mode, artifact_domain,
     required_authoring_domains, required_authoring_specialists,
     validate_specialist_assignment, validate_specialist_routing,
+    AuthoringContribution as Contribution, AuthoringContributionRole as Role,
+    AuthoringDependencySlot as Slot, assignment_mode_for_specialist, required_drafting_specialists,
 )
 from tests import collaboration_contract_fixture as fixture
 
@@ -19,9 +22,17 @@ class SpecialistRoutingTests(unittest.TestCase):
                       interpretation="Draft a synthetic causally ordered outline.", task_id="task_a", task_revision=1)
         values.update(changes)
         return AuthoringScope(**values)
+    def mixed_scope(self):
+        return self.scope(schema_version=3, domains=tuple(Domain),
+                          contributions=tuple(Contribution(domain, Role.DRAFT_OWNER if domain is Domain.TONE_EXECUTION else Role.CONSTRAINT_ASSESSOR) for domain in Domain),
+                          dependency_slots=(Slot("setting", (Domain.TONE_EXECUTION,)),))
 
     def test_published_recommended_action_position_and_keyword_only_scope_are_preserved(self):
         import inspect
+        scope_parameters = inspect.signature(AuthoringScope).parameters
+        self.assertEqual(scope_parameters["schema_version"].default, 2)
+        for name in ("intent", "contributions", "dependency_slots"):
+            self.assertIs(scope_parameters[name].kind, inspect.Parameter.KEYWORD_ONLY)
         action = c.LeadRecommendedAction(c.LeadRecommendationActionKind.PREPARE_ARTIFACT,
             "Review a supplied candidate", "Prepare its separate review", "One candidate review",
             ("current_response",), ("core_documents/global_outline.md",))
@@ -41,6 +52,8 @@ class SpecialistRoutingTests(unittest.TestCase):
             c.LeadProviderOutcome(c.LeadOutcomeKind.RECOMMENDATION, "Finished candidate",
                 c.LeadOutcomeScope.STORY_SPECIFIC, c.LeadEvidenceStatus.INCOMPLETE, (),
                 None, None, None, action, scope)
+        basis_parameters = inspect.signature(c.CollaborationProposalBasis).parameters
+        self.assertEqual(tuple((basis_parameters[key].default, basis_parameters[key].kind) for key in ("schema_version", "shared_premises")), ((1, inspect.Parameter.KEYWORD_ONLY), ((), inspect.Parameter.KEYWORD_ONLY)))
 
     def test_canonical_artifact_and_semantic_domain_ownership(self):
         cases = (("core_documents/global_outline.md", Domain.PLOT_STRUCTURE, "plot_architect"),
@@ -58,6 +71,13 @@ class SpecialistRoutingTests(unittest.TestCase):
                          ("plot_architect", "character_custodian", "execution_specialist"))
 
     def test_mixed_paths_and_semantics_union_without_inventory_inference(self):
+        mixed = self.mixed_scope()
+        self.assertEqual(required_authoring_domains(mixed), tuple(Domain))
+        self.assertEqual(required_drafting_specialists(mixed), ("execution_specialist",))
+        self.assertEqual(tuple(assignment_mode_for_specialist(mixed, agent) for agent in required_authoring_specialists(mixed)), (Mode.CONSTRAINT_ASSESSMENT, Mode.CONSTRAINT_ASSESSMENT, Mode.DRAFT))
+        self.assertEqual(tuple(assignment_mode_for_specialist(replace(mixed, activity=Activity.REVIEW), agent) for agent in required_authoring_specialists(mixed)), (Mode.REVIEW,) * 3)
+        for changes in ({"contributions": mixed.contributions[1:]}, {"contributions": tuple(Contribution(domain, Role.CONSTRAINT_ASSESSOR) for domain in Domain)}, {"dependency_slots": (Slot("setting", (Domain.PLOT_STRUCTURE,)),)}):
+            with self.assertRaises(ValueError): replace(mixed, **changes)
         scope = self.scope(target_paths=("manuscript/part-01/opening.md",))
         self.assertEqual(required_authoring_domains(scope), (Domain.PLOT_STRUCTURE, Domain.TONE_EXECUTION))
         self.assertEqual(required_authoring_domains(scope, affected_paths=("core_documents/character_sheets.md",)), tuple(Domain))
@@ -87,6 +107,8 @@ class SpecialistRoutingTests(unittest.TestCase):
 
     def test_review_requires_disclosed_concrete_basis_while_draft_forbids_it(self):
         basis = ReviewBasis(("candidate",), "Compare motivation and chronology.")
+        validate_specialist_assignment(Mode.CONSTRAINT_ASSESSMENT, ("brief",), None)
+        with self.assertRaises(ValueError): validate_specialist_assignment(Mode.CONSTRAINT_ASSESSMENT, ("candidate",), basis)
         validate_specialist_assignment(Mode.REVIEW, ("candidate", "brief"), basis)
         validate_specialist_assignment(Mode.DRAFT, ("brief",), None)
         for mode, ids, candidate in ((Mode.REVIEW, ("brief",), basis),
@@ -107,6 +129,17 @@ class SpecialistRoutingTests(unittest.TestCase):
             with self.assertRaises((TypeError, ValueError)): decode(dict(wire, authority=True))
 
     def test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest(self):
+        frozen = json.loads((Path(__file__).parent / "fixtures/authoring_scope_compatibility/scope_v2_basis_v1_76a80f7.json").read_bytes())
+        self.assertEqual(frozen["source_commit"], "76a80f72be711d927fff7eee4ee455d3b37802c4")
+        for case in frozen["cases"].values():
+            historical = c.decode_collaboration_proposal(case["proposal_utf8"].encode())
+            self.assertEqual(c.encode_collaboration_proposal(historical), case["proposal_utf8"].encode())
+            self.assertEqual(historical.proposal_digest, case["proposal_digest"])
+            for key in ("contributions", "dependency_slots"):
+                with self.assertRaises(ValueError): c.authoring_scope_from_dict(dict(c.authoring_scope_to_dict(historical.authoring_scope), **{key: []}))
+            poisoned = json.loads(case["proposal_utf8"])
+            poisoned["proposal"]["basis"]["shared_premises"] = []
+            with self.assertRaises(ValueError): c.decode_collaboration_proposal(json.dumps(poisoned, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode())
         legacy = fixture.make_proposal()
         before = c.encode_collaboration_proposal(legacy)
         self.assertNotIn(b'authoring_scope', before)
@@ -125,10 +158,42 @@ class SpecialistRoutingTests(unittest.TestCase):
             changed = c.CollaborationProposal.create(**dict(values, authoring_scope=replace(scope, **change)))
             self.assertNotEqual(changed.proposal_digest, scoped.proposal_digest)
         self.assertEqual(c.encode_collaboration_proposal(legacy), before)
+        from story_writing_agents.conversations import events as owner
+        scope3 = replace(scope, schema_version=3, contributions=tuple(Contribution(domain, Role.DRAFT_OWNER) for domain in scope.domains), dependency_slots=(Slot("setting", (Domain.PLOT_STRUCTURE,)),))
+        source = owner.CollaborationPremiseSource(scoped.basis.inputs[0], None)
+        premise = owner.CollaborationSharedPremise("setting", "Exact café 한글\r\n  ", (source,))
+        basis2 = replace(scoped.basis, schema_version=2, shared_premises=(premise,))
+        current = c.CollaborationProposal.create(**dict(values, authoring_scope=scope3, basis=basis2))
+        self.assertEqual(c.decode_collaboration_proposal(c.encode_collaboration_proposal(current)), current)
+        self.assertNotEqual(current.proposal_digest, scoped.proposal_digest)
+        alias = replace(source.input_revision, input_id="renamed_alias")
+        aliased_basis = replace(basis2, inputs=(alias, *basis2.inputs[1:]), shared_premises=(replace(premise, sources=(replace(source, input_revision=alias),)),))
+        self.assertEqual(owner.authoring_capture_identity(scope3, basis2), owner.authoring_capture_identity(scope3, aliased_basis))
+        local = owner.CollaborationPremiseSource(replace(source.input_revision, kind=c.CollaborationInputKind.USER_INPUT, locator="message:shared", start_line=None, end_line=None), "conversation_a")
+        self.assertNotEqual(owner.premise_source_identity(local), owner.premise_source_identity(replace(local, source_conversation_id="conversation_b")))
+        self.assertNotEqual(owner.premise_source_identity(source), owner.premise_source_identity(replace(source, input_revision=replace(source.input_revision, revision_digest="sha256:" + "b" * 64))))
+        self.assertNotEqual(owner.authoring_capture_identity(scope3, basis2), owner.authoring_capture_identity(scope3, replace(basis2, shared_premises=(replace(premise, selected_premise="Changed choice"),))))
+        with self.assertRaises(ValueError): owner.CollaborationPremiseSource(source.input_revision, "foreign_owner")
+        with self.assertRaises(ValueError): owner.CollaborationPremiseSource(replace(source.input_revision, state=c.CollaborationInputState.ABSENT), None)
+        for field in ("shared_premises", "schema_version"):
+            poisoned = json.loads(c.encode_collaboration_proposal(current)); del poisoned["proposal"]["basis"][field]
+            with self.assertRaises(ValueError): c.decode_collaboration_proposal(json.dumps(poisoned, ensure_ascii=False, separators=(",", ":")).encode())
+        for field in ("contributions", "dependency_slots"):
+            poisoned = c.authoring_scope_to_dict(scope3); del poisoned[field]
+            with self.assertRaises(ValueError): c.authoring_scope_from_dict(poisoned)
+        poisoned = json.loads(c.encode_collaboration_proposal(current)); del poisoned["proposal"]["basis"]["shared_premises"][0]["sources"][0]["source_conversation_id"]
+        with self.assertRaises(ValueError): c.decode_collaboration_proposal(json.dumps(poisoned, ensure_ascii=False, separators=(",", ":")).encode())
+        with self.assertRaises(ValueError): replace(premise, selected_premise="")
+        self.assertNotEqual(owner.authoring_capture_identity(scope3, basis2), owner.authoring_capture_identity(replace(scope3, interpretation="Changed literal brief."), basis2))
+        self.assertNotEqual(owner.authoring_capture_identity(scope3, basis2), owner.authoring_capture_identity(replace(scope3, contributions=(Contribution(Domain.PLOT_STRUCTURE, Role.DRAFT_OWNER), Contribution(Domain.CHARACTER_WORLD, Role.CONSTRAINT_ASSESSOR))), basis2))
 
     def test_drafted_is_neither_supports_nor_legacy_review_assessment(self):
         events, _, _ = fixture.executed_history()
         reply = next(e.payload for e in events if type(e.payload) is c.CollaborationSpecialistReplyPayload)
+        constraint = replace(reply, mode=Mode.CONSTRAINT_ASSESSMENT, assessment=c.CollaborationSpecialistAssessment.CONSTRAINTS_ASSESSED)
+        self.assertIsNot(constraint.assessment, c.CollaborationSpecialistAssessment.SUPPORTS)
+        for status in (c.CollaborationSpecialistAssessment.DRAFTED, c.CollaborationSpecialistAssessment.SUPPORTS):
+            with self.assertRaises(ValueError): replace(constraint, assessment=status)
         drafted = replace(reply, mode=Mode.DRAFT, assessment=c.CollaborationSpecialistAssessment.DRAFTED)
         self.assertIsNot(drafted.assessment, c.CollaborationSpecialistAssessment.SUPPORTS)
         for mode, assessment in ((Mode.DRAFT, c.CollaborationSpecialistAssessment.SUPPORTS),

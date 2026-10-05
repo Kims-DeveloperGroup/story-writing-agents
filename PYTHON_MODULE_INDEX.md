@@ -73,7 +73,7 @@ depend on terminal presentation or concrete persistence.
 - `agents`, `models`, `errors`, `config`, `prompts`, `directives`, `artifact_proposals`
 - `specialist_routing`, `reply_trace`, `run_inputs`
 
-Primary access is the root facade. `specialist_routing` owns pure shared `AuthoringIntent`, independent of activity; conversation codecs preserve its immutable task lineage. `config` owns configuration loading.
+Primary access is the root facade. `specialist_routing` owns pure shared `AuthoringIntent`, independent of activity; conversation codecs preserve its immutable task lineage. `config` owns configuration loading. Scope-v3 contribution/dependency declarations and consistent per-specialist roles remain pure routing contracts; historical scope constructors retain default version 2.
 `prompts` owns captured policy bytes, stable fingerprints and runtime authority invariants; stages remain invocation data without provider execution.
 `models` carries optional diagnostics and keyword-only `AgentRequest.expected_reviewed_proposal` and `review_only` hints, without next-action authority.
 
@@ -139,7 +139,7 @@ search/storage contracts without owning persistence.
 - `conversations.events`, `conversations.session_context`
 - `conversation_search`, `conversation_literal_search`, `conversation_retrieval`
 
-`catalog` owns catalog behavior, `events` owns schema-v2 event contracts, and `context` projects exact Commit authority or typed reprepare from durable Apply history; `session_context` projects exact session history without storage bookkeeping or native-thread ownership;
+`catalog` owns catalog behavior, `events` owns schema-v2 event contracts, and `context` projects exact Commit authority or typed reprepare from durable Apply history; `session_context` projects exact session history without storage bookkeeping or native-thread ownership; `events` also owns immutable qualified premise captures and strict basis-v2 codecs; `context` validates first-confirm task pins and inherits both physical-call and round counters through the existing confirmed recommendation handoff.
 fresh delivery is complete, while compatible continuation carries unseen facts. Search implementations must return public
 search/retrieval contracts rather than expose storage internals. Conversation events and
 retrieval may carry bounded validation details associated with the physical provider call;
@@ -276,8 +276,8 @@ live composition, reference activation, collaboration presentation, and the term
 - `interactive_terminal._viewer_controls`, `interactive_terminal._viewer_render`
 
 Presentation modules may consume public runtime/domain contracts but never own runtime state.
-Collaboration notices render ordered, bounded validation details on readable lines without provider values or
-control authority.
+Collaboration notices render bounded validation details and scope-v3 duties, dependency choices and qualified
+captured sources before confirmation without owning runtime authority.
 The external viewer integration is lazy. `transient_only` refuses line fallback before content is rendered; `ExternalViewUnavailableError` identifies that refusal. Borrowed plain-line hosts remain for views that allow fallback. The driver owns timed viewer input polling; the persistent input reader owns partial decoding across idle intervals. Private model/render/control modules are not APIs.
 
 ### Interactive support

@@ -82,6 +82,7 @@ from ._policy_baselines import (
     MAIN_V2_POLICY_FILES,
     PRE_GUIDANCE_V2_POLICY_FILES,
     PRE_EDITORIAL_V2_POLICY_FILES,
+    PRE_MIXED_ROLE_V2_POLICY_FILES,
 )
 from .schema import (
     WORKSPACE_DIRECTORIES,
@@ -1812,6 +1813,7 @@ def _known_initializer_scaffold(
         dict(MAIN_V2_POLICY_FILES),
         dict(PRE_GUIDANCE_V2_POLICY_FILES),
         dict(PRE_EDITORIAL_V2_POLICY_FILES),
+        dict(PRE_MIXED_ROLE_V2_POLICY_FILES),
     ):
         if observed == published:
             return tuple(

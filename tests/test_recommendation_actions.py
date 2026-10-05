@@ -71,14 +71,14 @@ class RecommendationActionContractTests(RecommendationCase):
         changed = replace(request, authoring_scope=replace(request.authoring_scope,
             interpretation="Another concrete candidate review interpretation."))
         self.assertNotEqual(changed.action_digest, request.action_digest)
-        legacy = replace(request, authoring_scope=None)
-        self.assertNotEqual(legacy.action_digest, request.action_digest)
-        legacy_draft = replace(event.to_draft(), payload=legacy)
-        legacy_wire = c.encode_collaboration_event_draft(legacy_draft)
-        self.assertNotIn("authoring_scope", json.loads(legacy_wire)["payload"])
-        self.assertEqual(c.encode_collaboration_event_draft(c.decode_collaboration_event_draft(legacy_wire)), legacy_wire)
-        self.assertIsNone(legacy.authoring_scope)
-        self.assertEqual(replace(legacy).action_digest, legacy.action_digest)
+        with self.assertRaises(ValueError):
+            replace(request, authoring_scope=None)
+        current_draft = event.to_draft()
+        current_wire = c.encode_collaboration_event_draft(current_draft)
+        self.assertIn("authoring_scope", json.loads(current_wire)["payload"])
+        self.assertEqual(c.encode_collaboration_event_draft(c.decode_collaboration_event_draft(current_wire)), current_wire)
+        self.assertEqual((request.authoring_scope.schema_version, request.basis.schema_version), (3, 2))
+        self.assertEqual(replace(request).action_digest, request.action_digest)
         self.assertEqual(self.history(conversation_id)[-1], event)
 
     async def test_current_response_alias_binds_exact_whole_message_before_action(self):

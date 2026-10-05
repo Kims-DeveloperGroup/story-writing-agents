@@ -48,6 +48,7 @@ from story_writing_agents.agents import (
 )
 from story_writing_agents.conversations import (
     COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES,
+    CollaborationAssignmentDispatchPayload,
     CollaborationConfirmationDecision,
     CollaborationExecutionResult,
     CollaborationLeadSynthesisPayload,
@@ -95,6 +96,7 @@ from tests.helpers import materialize_pristine_initialized_workspace
 from tests.test_agent_context_accounting import _expanded_context_payload
 from story_writing_agents.specialist_routing import (
     ArtifactReviewDomain, AuthoringActivity, AuthoringScope, ReviewBasis,
+    artifact_domain,
 )
 
 
@@ -466,9 +468,13 @@ def _live_scope(call, *, activity="workflow", domains=(), paths=(), task_index=-
     if "authoring_tasks" not in material:
         return dict(material["answer_contract"]["authoring_scope"])
     task = material["authoring_tasks"][task_index]
+    affected = set(domains) | {domain.value for path in paths if (domain := artifact_domain(path)) is not None}
     return {"activity": activity, "intent": "authoring", "target_paths": list(paths),
             "domains": list(domains),
-            "task_id": task["task_id"], "task_revision": task["task_revision"]}
+            "task_id": task["task_id"], "task_revision": task["task_revision"],
+        "contributions": [{"domain": domain.value, "role": "draft_owner"} for domain in ArtifactReviewDomain if domain.value in affected],
+        "dependency_slots": [],
+    }
 
 
 def _live_assignments(assignments):
@@ -576,6 +582,8 @@ def _live_result(call, value):
         compact_proposal = {
             "assignments": _live_assignments(proposal["assignments"]),
         }
+        if "shared_premises" in proposal:
+            compact_proposal["shared_premises"] = proposal["shared_premises"]
         if type(objective) is dict:
             compact_proposal["objective_intent"] = _compact_objective(objective)
         compact["proposal"] = compact_proposal
@@ -594,8 +602,8 @@ def _compact_scope(value):
         key: value[key]
         for key in ("activity", "target_paths", "domains")
     }
-    if "intent" in value:
-        compact["intent"] = value["intent"]
+    for key in ("intent", "contributions", "dependency_slots"):
+        if key in value: compact[key] = value[key]
     compact["task"] = f"{value['task_id']}@{value['task_revision']}"
     return compact
 
@@ -674,6 +682,7 @@ def _proposal_outcome(
                     "relation": relation,
                     "purpose": purpose,
                     "assignments": assignments,
+                    **({"shared_premises": []} if "contributions" in _live_scope(call) else {}),
                 },
             }
         if activity is not None:
@@ -854,6 +863,9 @@ def _decision(
 
 
 class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
+    def _decide(self, turn, kind):
+        return self.runtime.decide_lead_step(_decision(turn, kind))
+
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="lead-orchestration-")
         self.addCleanup(temporary.cleanup)
@@ -989,11 +1001,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             3,
         )
         self.assertEqual(
-            sum(
-                type(event.payload) is CollaborationProviderCallPayload
-                and event.payload.state is CollaborationProviderCallState.SUBMITTED
-                for event in self.history(conversation_id)
-            ),
+            len(_submitted_calls(self.history(conversation_id))),
             4,
         )
 
@@ -1198,22 +1206,25 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         encoded = json.dumps(schema, separators=(",", ":"))
         self.assertIn("concrete deliverable and success criteria", encoded)
         self.assertLessEqual(len(encoded.encode("utf-8")), 64 * 1024)
-        for metadata in ("null", "correlation", "schema_version", "evidence_status", "evidence_ids",
+        for metadata in ("correlation", "schema_version", "evidence_status", "evidence_ids",
                          "interpretation", "review_basis",
                          "additional_review_domains", "expected_result"):
             self.assertNotIn(f'"{metadata}"', encoded)
-        def assert_strict(node):
+        def assert_strict(node, allow_null=False):
             if isinstance(node, Mapping):
+                self.assertNotIn("null", node)
                 if node.get("type") == "array":
                     self.assertIs(type(node.get("minItems")), int)
                 if node.get("type") == "object":
                     self.assertEqual(set(node["required"]), set(node["properties"]))
                     self.assertIs(node["additionalProperties"], False)
-                for value in node.values():
-                    assert_strict(value)
+                for key, value in node.items():
+                    assert_strict(value, allow_null if key in ("anyOf", "type") else key == "selected_premise")
             elif type(node) in (list, tuple):
                 for value in node:
-                    assert_strict(value)
+                    assert_strict(value, allow_null)
+            elif node == "null":
+                self.assertTrue(allow_null)
         assert_strict(schema)
         call = self.backend.calls[-1]
         assert_guidance(self, dict(call.payload), dict(call.schema))
@@ -1223,11 +1234,16 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             describe_schema({"type": "object", "description": "Return the runtime-owned response.", "properties": {"unknown_runtime_wire_field": {"type": "string"}}})
         with self.assertRaisesRegex(ValueError, "no enum meaning"):
             describe_schema({"type": "string", "description": "Choose the runtime-owned value.", "enum": ["unknown_static_wire_choice"]})
-        self.assertEqual(call.payload["response_contract"]["result_contract_id"], "lead-response-v6")
+        self.assertEqual(call.payload["response_contract"]["result_contract_id"], "lead-response-v7")
         draft_contract = orchestrator_module._specialist_result_contract(type("Assignment", (), {"mode": orchestrator_module.SpecialistAssignmentMode.DRAFT})())
         description = draft_contract.schema["description"]
         self.assertIn("draft_completed", description); self.assertIn("do not write documents", description)
         self.assertEqual(diagnose_json_text(json.dumps({"response_type": "specialist_assignment_result", "assignment_status": "draft_completed", "response_text": "Synthetic draft."}), draft_contract.schema), ())
+        constraint_contract = orchestrator_module._specialist_result_contract(type("Assignment", (), {"mode": orchestrator_module.SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT})())
+        self.assertEqual(constraint_contract.contract_id, "specialist-assignment-response-v4")
+        self.assertEqual(constraint_contract.schema["properties"]["assignment_status"]["enum"], ["constraints_assessed", "concerns_found", "conflicts_found", "insufficient_evidence"])
+        self.assertFalse(diagnose_json_text(json.dumps({"response_type":"specialist_assignment_result", "response_text":"The declared limit is grounded.", "assignment_status":"constraints_assessed"}), constraint_contract.schema))
+        self.assertTrue(diagnose_json_text(json.dumps({"response_type":"specialist_assignment_result", "response_text":"Draft body.", "assignment_status":"draft_completed"}), constraint_contract.schema))
         facts = LeadProviderConstraints(input_ids=("user_input", "outline"),
             reviewer_inputs=((PLOT_ARCHITECT, "outline"),), task_revisions=(("task", 1),),
             source_ids=("current_response", "historical_synthesis"), objective_ids=("objective",))
@@ -1258,11 +1274,11 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertIn("revision 1", pairs[0]["description"]); self.assertIn("revision 2", pairs[1]["description"])
         collapsed_pair = contract["anyOf"][0]["properties"]["writing_task_scope"]["properties"]["task_reference"]
         self.assertNotIn("anyOf", collapsed_pair); self.assertIn("revision 1", collapsed_pair["description"])
-        value = {"kind": "proposal", "message": "Review.", "authoring_scope": {
+        value = {"kind": "proposal", "message": "Review.", "authoring_scope": {"contributions": [{'domain': 'plot_structure', 'role': 'draft_owner'}], "dependency_slots": [],
             "activity": "review", "intent": "authoring", "domains": ["plot_structure"], "target_paths": [], "task": "task@1"},
-            "proposal": {"assignments": [{"agent_id": PLOT_ARCHITECT, "mode": "review",
+            "proposal": {"shared_premises": [], "assignments": [{"agent_id": PLOT_ARCHITECT, "mode": "review",
                 "instruction": "Review sources.", "input_ids": ["user_input", "outline"]}]}}
-        self.assertEqual(diagnose_json_text(json.dumps(wire_result(value, "lead-response-v6")), contract), ())
+        self.assertEqual(diagnose_json_text(json.dumps(wire_result(value, "lead-response-v7")), contract), ())
         self.assertEqual(facts.diagnose(json.dumps(value)), ())
         from story_writing_agents.provider_wire import project_runtime_object
         from story_writing_agents.writing_artifacts.catalog import canonical_artifact_kind
@@ -1277,15 +1293,15 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         bad["proposal"]["assignments"][0]["input_ids"].append("historical_synthesis")
         self.assertEqual(facts.diagnose(json.dumps(bad)), (Rule.INPUT_NOT_OFFERED,))
         read_facts = replace(facts, allow_read_sources=True, input_ids=("user_input",), reviewer_inputs=())
-        legacy = {"kind": "proposal", "message": "Prepare the approved draft.", "authoring_scope": {
+        legacy = {"kind": "proposal", "message": "Prepare the approved draft.", "authoring_scope": {"contributions": [{'domain': 'plot_structure', 'role': 'draft_owner'}, {'domain': 'character_world', 'role': 'draft_owner'}, {'domain': 'tone_execution', 'role': 'draft_owner'}], "dependency_slots": [],
             "activity": "draft", "intent": "authoring", "domains": ["plot_structure", "character_world", "tone_execution"],
-            "target_paths": [], "task": "task@1"}, "proposal": {"assignments": [
+            "target_paths": [], "task": "task@1"}, "proposal": {"shared_premises": [], "assignments": [
                 {"agent_id": agent, "mode": "draft", "instruction": "Use the approved draft.",
                  "input_ids": ["user_input", "historical_synthesis"]}
                 for agent in (PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST)]}}
         read_contract = orchestrator_module._lead_front_result_contract(
             orchestrator_module.LeadProposalRelation.NEW_STEP, read_facts.input_ids, constraints=read_facts).schema_value()
-        self.assertEqual(diagnose_json_text(json.dumps(wire_result(legacy, "lead-response-v6")), read_contract), ())
+        self.assertEqual(diagnose_json_text(json.dumps(wire_result(legacy, "lead-response-v7")), read_contract), ())
         self.assertEqual(read_facts.diagnose(json.dumps(legacy)), (Rule.INPUT_NOT_OFFERED,))
         recommendation_value = {"kind": "recommendation", "message": "Prepare approved material.",
             "recommended_action": {"kind": "prepare_artifact", "instruction": "Use the approved draft.",
@@ -1307,7 +1323,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             (value["proposal"]["assignments"] * 2, Rule.SPECIALIST_DUPLICATE),
             ([{**value["proposal"]["assignments"][0], "agent_id": CHARACTER_CUSTODIAN}], Rule.REVIEWER_INPUT)):
             self.assertIn(rule, facts.diagnose(json.dumps({**value, "proposal": {"assignments": assignments}})))
-        reversed_scope = {**value["authoring_scope"], "domains": ["character_world", "plot_structure"]}
+        reversed_scope = {**value["authoring_scope"], "domains": ["character_world", "plot_structure"], "contributions": [{"domain": domain, "role": "draft_owner"} for domain in ("character_world", "plot_structure")]}
         self.assertEqual(canonical_scope(reversed_scope)["domains"], ["plot_structure", "character_world"])
         with self.assertRaises(LeadContractError):
             canonical_scope({**reversed_scope, "domains": ["plot_structure"] * 2})
@@ -1325,17 +1341,17 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertIn(Rule.OBJECTIVE_BRANCH, facts.diagnose(json.dumps(body)))
         question = {"kind": "question", "message": "Clarify.", "authoring_scope": value["authoring_scope"],
                     "objective_intent": {"action": "continue", "objective_id": "objective", "next_step": "clarify"}}
-        self.assertEqual(diagnose_json_text(json.dumps(wire_result(question, "lead-response-v6")), contract), ())
+        self.assertEqual(diagnose_json_text(json.dumps(wire_result(question, "lead-response-v7")), contract), ())
         self.assertEqual(facts.diagnose(json.dumps(question)), ())
         for kind in ("answer", "critique"):
             bad = json.dumps({**question, "kind": kind})
-            self.assertTrue(diagnose_json_text(json.dumps(wire_result(json.loads(bad), "lead-response-v6")), contract))
+            self.assertTrue(diagnose_json_text(json.dumps(wire_result(json.loads(bad), "lead-response-v7")), contract))
             self.assertIn(Rule.OBJECTIVE_BRANCH, facts.diagnose(bad))
         cancelled = json.dumps({**question, "kind": "answer", "objective_intent": {"action": "cancel", "objective_id": "objective"}})
-        self.assertEqual(diagnose_json_text(json.dumps(wire_result(json.loads(cancelled), "lead-response-v6")), contract), ())
+        self.assertEqual(diagnose_json_text(json.dumps(wire_result(json.loads(cancelled), "lead-response-v7")), contract), ())
         self.assertEqual(facts.diagnose(cancelled), ())
         cancel_question = json.dumps({**json.loads(cancelled), "kind": "question"})
-        self.assertTrue(diagnose_json_text(json.dumps(wire_result(json.loads(cancel_question), "lead-response-v6")), contract))
+        self.assertTrue(diagnose_json_text(json.dumps(wire_result(json.loads(cancel_question), "lead-response-v7")), contract))
         self.assertIn(Rule.OBJECTIVE_BRANCH, facts.diagnose(cancel_question))
         duplicated = {"message": "Visible.", "kind": "proposal", "artifact_intent": {"objective_intent": {
             "action": "start", "next_step": "prepare", "target_paths": ["core_documents/global_outline.md"] * 2}}}
@@ -1628,9 +1644,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
             path: path.read_bytes() for path in self.workspace.root.rglob("*.md")
         }
 
-        confirmed = await self.runtime.decide_lead_step(
-            _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-        )
+        confirmed = await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
 
         self.assertIs(confirmed.turn.state, CollaborationStepState.COMPLETED)
         self.assertIs(
@@ -1652,9 +1666,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
             }.issubset({event.kind for event in history})
         )
         with self.assertRaises(ValueError):
-            await self.runtime.decide_lead_step(
-                _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-            )
+            await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
 
 
     async def test_mismatch_reject_revise_and_free_text_are_non_authorizing(
@@ -1683,9 +1695,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         reject_id = self.conversation("Reject")
         rejected_proposal = await self.proposal(reject_id)
         calls = len(self.backend.calls)
-        rejected = await self.runtime.decide_lead_step(
-            _decision(rejected_proposal, CollaborationConfirmationDecision.REJECT)
-        )
+        rejected = await self._decide(rejected_proposal, CollaborationConfirmationDecision.REJECT)
         self.assertIs(rejected.turn.state, CollaborationStepState.REJECTED)
         self.assertEqual(len(self.backend.calls), calls)
 
@@ -1703,9 +1713,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
                 relation="revise_pending",
             )
         )
-        revised = await self.runtime.decide_lead_step(
-            _decision(revised_source, CollaborationConfirmationDecision.REVISE)
-        )
+        revised = await self._decide(revised_source, CollaborationConfirmationDecision.REVISE)
         replacement = revised.turn.proposal
         assert replacement is not None
         self.assertEqual(replacement.step_id, revised_source.step_id)
@@ -1769,9 +1777,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         )
 
         with self.assertRaises(BackendProtocolError):
-            await self.runtime.decide_lead_step(
-                _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-            )
+            await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
 
         self.assertEqual(len(self.backend.calls), calls)
         self.assertIs(
@@ -1796,9 +1802,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
                     )
                 )
 
-                revised = await self.runtime.decide_lead_step(
-                    _decision(proposed, CollaborationConfirmationDecision.REVISE)
-                )
+                revised = await self._decide(proposed, CollaborationConfirmationDecision.REVISE)
 
                 self.assertIs(
                     revised.turn.next_action,
@@ -1898,15 +1902,16 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                      ".recommended_action." + field, requirement)
         story = {**base, "kind": "proposal", "authoring_scope": {
             **scope, "activity": "draft", "domains": ["plot_structure"],
+            "contributions": [{"domain": "plot_structure", "role": "draft_owner"}],
             "target_paths": ["core_documents/global_outline.md"]}}
         assignment = {"agent_id": PLOT_ARCHITECT, "mode": "draft", "instruction": "Draft.",
                       "input_ids": ["user_input"]}
         for field, value, requirement in (
             ("instruction", "", "expected nonempty text"),
             ("input_ids", ["user_input", "user_input"], "expected unique array items"),
-            ("mode", "PRIVATE_mode", 'expected one of ["draft", "review"]; got string'),
+            ("mode", "PRIVATE_mode", 'expected one of ["draft", "review", "constraint_assessment"]; got string'),
         ):
-            rejected({**story, "proposal": {"assignments": [{**assignment, field: value}]}},
+            rejected({**story, "proposal": {"shared_premises": [], "assignments": [{**assignment, field: value}]}},
                      ".proposal.assignments[0]." + field, requirement)
         for operation, field, requirement in (
             ({"kind": "create", "suggested_path": "manuscript/part/chapter.md", "new_text": "\ud800"},
@@ -1965,9 +1970,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             side_effect=RuntimeError("test stopped before specialist dispatch"),
         ):
             with self.assertRaisesRegex(RuntimeError, "test stopped before specialist dispatch"):
-                await self.runtime.decide_lead_step(
-                    _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-                )
+                await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
         self.assertIs(
             project_collaboration_history(self.history(proposed.conversation_id)).current_state,
             CollaborationStepState.CONFIRMED,
@@ -2212,11 +2215,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
 
                 history = self.history(conversation_id)
                 call_events = _event_payloads(history, CollaborationProviderCallPayload)
-                submitted = tuple(
-                    event
-                    for event in call_events
-                    if event.state is CollaborationProviderCallState.SUBMITTED
-                )
+                submitted = _submitted_calls(history)
                 self.assertEqual(
                     correction_records,
                     [(rejection_code.value, mock.ANY, ["submit_result"])],
@@ -2841,9 +2840,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         proposed = await self.proposal(conversation_id)
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
-        await self.runtime.decide_lead_step(
-            _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-        )
+        await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
         restart_backend = _LeadBackend()
         restart_backend.enqueue(_visible_outcome("answer"))
         restarted = StoryRuntime(self.control_workspace, restart_backend)  # type: ignore[arg-type]
@@ -2924,9 +2921,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                         self.assertIsNone(result.state)
                         self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
                     prefix = self.history(conversation)
-                    submitted = [event.payload for event in prefix
-                                 if type(event.payload) is CollaborationProviderCallPayload
-                                 and event.payload.state is CollaborationProviderCallState.SUBMITTED]
+                    submitted = list(_submitted_calls(prefix))
                     closure = [event.payload for event in prefix
                                if type(event.payload) is CollaborationLeadOutcomeFailurePayload]
                     self.assertEqual(len(backend.calls), 2 if corrective else 1)
@@ -3013,7 +3008,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
     """Budget exhaustion preserves real completed work and closes authority."""
 
     async def _budget_consultation(self, *, message="Completed budget-bound review.",
-                                   pause_before_finalization=False, build_failure=None):
+                                   pause_before_finalization=False, build_failure=None, infeasible=False):
         previous_calls = len(self.backend.calls)
         previous_references = len(self.backend.reference_calls)
         conversation_id = self.conversation("Budget finalization")
@@ -3024,21 +3019,36 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
                 "agent_id": agent,
                 "instruction": "Review every supplied input.",
                 "input_ids": aliases,
-                "mode": "draft",
+                "mode": "draft" if infeasible else "review",
             }
             for agent in agents
         ]
         self.backend.enqueue_for(
             LEAD_ORCHESTRATOR,
             _search_history,
-            _proposal_outcome(assignments, activity="draft"),
+            _proposal_outcome(assignments, activity="draft" if infeasible else "review"),
         )
         proposed = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
-            "Review once. ${core_documents/global_outline.md} "
+            ("Review once. " if infeasible else "Review this complete supplied candidate: A finished story.\n") + "${core_documents/global_outline.md} "
             "${core_documents/character_sheets.md} ${manuscript/part-01/opening.md}",
         )
+        if infeasible:
+            self.assertIs(proposed.kind, LeadOutcomeKind.ANSWER)
+            self.assertIs(proposed.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
+            self.assertIsNone(proposed.proposal)
+            self.assertIsNone(proposed.confirmation_request_id)
+            self.assertIsNone(proposed.artifact_proposal)
+            self.assertIsNone(proposed.artifact_application_request)
+            self.assertIsNone(proposed.story_commit_request)
+            self.assertEqual([actor for actor, _ in self.backend.call_records[previous_calls:]], [LEAD_ORCHESTRATOR] * 2)
+            history = self.history(conversation_id)
+            self.assertEqual(len(_submitted_calls(history)), 2)
+            self.assertEqual(project_collaboration_history(history).physical_calls_spent, 2)
+            self.assertFalse(any(type(event.payload) is CollaborationAssignmentDispatchPayload for event in history))
+            self.assertIn("required preparation and complete specialist review", proposed.message)
+            return conversation_id, proposed
         self.assertIs(proposed.kind, LeadOutcomeKind.PROPOSAL)
         expected = {}
         for agent in agents:
@@ -3058,7 +3068,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
                     "purpose": "Review every unresolved input again.",
                     "assignments": [
                         {"agent_id": agent, "instruction": "Reconsider the original facts and replies.",
-                         "input_ids": [*input_ids, *reply_event_ids], "mode": "draft"}
+                         "input_ids": [*input_ids, *reply_event_ids], "mode": "review"}
                         for agent in agents
                     ],
                 },
@@ -3074,27 +3084,19 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
             with mock.patch.object(self.runtime, "_finalize_known_result_locked",
                                    side_effect=RuntimeError("test result persisted before finalization")):
                 with self.assertRaisesRegex(RuntimeError, "test result persisted"):
-                    await self.runtime.decide_lead_step(
-                        _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-                    )
+                    await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
             decision_result = None
         elif build_failure is not None:
             with mock.patch.object(self.runtime, "_build_continuation_proposal",
                                    side_effect=build_failure):
                 with self.assertRaises(type(build_failure)) as raised:
-                    await self.runtime.decide_lead_step(
-                        _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-                    )
+                    await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
                 self.assertIs(raised.exception, build_failure)
             decision_result = None
         else:
-            decision_result = await self.runtime.decide_lead_step(
-                    _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-                )
+            decision_result = await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
         history = self.history(conversation_id)
-        self.assertEqual(sum(type(event.payload) is CollaborationProviderCallPayload
-                             and event.payload.state is CollaborationProviderCallState.SUBMITTED
-                             for event in history), 9)
+        self.assertEqual(len(_submitted_calls(history)), 9)
         self.assertEqual(
             len(self.backend.calls) - previous_calls,
             9,
@@ -3115,6 +3117,8 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
 
     async def test_unaffordable_continuation_finalizes_exact_result_without_authority(self):
         artifacts = {path: path.read_bytes() for path in self.workspace.root.rglob("*.md")}
+        await self._budget_consultation(infeasible=True)
+        self.assertEqual({path: path.read_bytes() for path in self.workspace.root.rglob("*.md")}, artifacts)
         conversation, proposed, decision_result, history, synthesis, result = await self._budget_consultation()
         turn = decision_result.turn
         self.assertIs(turn.state, CollaborationStepState.COMPLETED)
@@ -3162,16 +3166,12 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
         self.assertEqual(self.history(conversation)[:len(complete)], complete)
 
     async def test_budget_notice_preserves_maximum_utf8_synthesis(self):
-        draft_notice = (
-            "Draft material is available for Lead integration and concrete review. "
-            "Story authoring is not complete; no Apply is authorized."
-        )
         notice = ("The provider round ended. The requested second specialist "
                   "round exceeds its remaining call budget. Start a new request "
                   "with the lead to continue. The completed replies and synthesis "
                   "remain in the conversation history.")
         limit = COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES
-        suffix = f"\n\n{draft_notice}\n\n{notice}"
+        suffix = f"\n\n{notice}"
         boundary = limit - len(suffix.encode())
         for byte_count in (boundary, boundary + 1, limit):
             with self.subTest(synthesis_utf8_bytes=byte_count):
@@ -3182,7 +3182,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
                 if byte_count == boundary:
                     expected = message + suffix
                 elif byte_count == limit:
-                    expected = f"{draft_notice}\n\n{notice}"
+                    expected = notice
                 else:
                     expected = notice
                 self.assertEqual(decision_result.turn.message, expected)
@@ -3208,6 +3208,14 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
             inputs=(), assignment_input_ids=(("user_input",),), physical_calls_spent=10)
         self.assertEqual((limits, synthesis, minimum), ((1,), 1, 2))
         self.assertEqual(self.backend.calls, [])
+        from story_writing_agents.specialist_routing import AuthoringContribution, AuthoringContributionRole, ArtifactReviewDomain
+        scope = orchestrator_module.AuthoringScope(activity=orchestrator_module.AuthoringActivity.DRAFT, target_paths=(), domains=(ArtifactReviewDomain.PLOT_STRUCTURE,), interpretation="Exact draft.", task_id="task", task_revision=1, schema_version=3, contributions=(AuthoringContribution(ArtifactReviewDomain.PLOT_STRUCTURE, AuthoringContributionRole.DRAFT_OWNER),))
+        reference = orchestrator_module.CollaborationInputRevision("reference", orchestrator_module.CollaborationInputKind.CORE_DOCUMENT, "${core_documents/global_outline.md}", orchestrator_module.CollaborationInputState.PRESENT, "sha256:" + "a" * 64, 1, 2)
+        self.assertEqual(self.runtime._final_review_floor(scope, (), preparation=True), 4)
+        self.assertEqual(self.runtime._final_review_floor(scope, (reference,), preparation=True), 8)
+        self.assertEqual(self.runtime._proposal_call_reservations(inputs=(reference,), assignment_input_ids=(("reference",),), physical_calls_spent=0, authoring_scope=scope), ((2,), 2, 4))
+        with self.assertRaises(orchestrator_module._LeadCallBudgetExceeded):
+            self.runtime._proposal_call_reservations(inputs=(reference,), assignment_input_ids=(("reference",),), physical_calls_spent=1, authoring_scope=scope)
 
 
 class LeadReferenceFailurePrecedenceTests(LeadOrchestrationTestCase):

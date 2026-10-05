@@ -337,8 +337,9 @@ as a string.
 
 | Contract | Response types and content |
 | --- | --- |
-| `lead-response-v6` | `answer`, `clarification_question`, `critique`, `proposal_drafting_recommendation`, `specialist_consultation_proposal`, or `artifact_change_proposal`; always includes `response_text` and `writing_task_scope`. |
+| `lead-response-v7` (fresh scope3; legacy scope1/2 uses v6) | `answer`, `clarification_question`, `critique`, `proposal_drafting_recommendation`, `specialist_consultation_proposal`, or `artifact_change_proposal`; always includes `response_text` and `writing_task_scope`. |
 | `specialist-assignment-response-v3` | `specialist_assignment_result`, `assignment_status`, and `response_text`. |
+| `specialist-assignment-response-v4` | Constraint assignment result with `constraints_assessed`, `concerns_found`, `conflicts_found`, or `insufficient_evidence`; no draft or final-review support. |
 | `consultation-summary-v4` | `consultation_summary` and `response_text`; permitted variants can add `follow_up_consultation` or `proposal_drafting_request`. |
 | `artifact-review-summary-v4` | `artifact_review_summary`, `review_outcome`, and `response_text`. |
 
@@ -364,9 +365,22 @@ not mean a document was written, reviewed, or applied. Draft assignments allow
 `insufficient_evidence`. The last value must identify the information needed
 to perform the assignment, rather than inventing evidence.
 
+Constraint assignments allow `constraints_assessed`, `concerns_found`,
+`conflicts_found`, or `insufficient_evidence`. Their success completes only the
+constraint assignment; it supplies neither draft proof nor review support.
+
 Artifact review uses `ready_for_apply_confirmation`, `revision_required`, or
 `rejected`. The first supports presenting the reviewed candidate for a separate
 Apply decision. It grants no write or commit authority.
+
+Fresh scope-v3 Lead contracts require `contributions` and `dependency_slots`
+arrays. Each contribution declares a domain and `draft_owner` or
+`constraint_assessor` role. Each dependency slot names its `slot_id` and
+`dependent_domains`. A proposal's `shared_premises` selects each declared slot's
+exact `selected_premise` and offered `basis_input_ids`. The host captures source
+revisions and owners before Confirm; dependent authors receive that same capture.
+Every affected specialist still reviews the same final candidate. Explicit legacy
+scope1/2 bindings retain their older closed shapes and cannot acquire these duties.
 
 `writing_task_scope` names `activity_type`, `specialist_domains`,
 `target_artifact_paths`, and `task_reference: {task_id, task_revision}`. Activities are `workflow_guidance`,
@@ -379,7 +393,7 @@ candidate, but cannot acquire drafting, replacement, artifact-objective or Apply
 authority. Requested revision needs fresh authoring work and confirmation.
 Select an exact offered task/revision pair. Specialist assignments have
 `agent_id`, `task_instructions`, `input_source_ids`, and `assignment_type`
-(`draft_content` or `review_content`).
+(`draft_content`, `assess_constraints`, or `review_content`).
 
 `task_input.provider_constraints.available_assignment_input_source_ids` lists
 the input aliases available to specialist assignments. Copy exact aliases from

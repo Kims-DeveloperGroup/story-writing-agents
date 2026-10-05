@@ -60,6 +60,11 @@ confirmation, sends every reviewer the same immutable candidate. A successful
 lead `propose` synthesis records a reviewed proposal whose Apply/write/Git
 flags are all false.
 
+The Lead can assign drafting to one required specialist and constraint assessment
+to others. Shared premises and sources are disclosed before Confirm and remain
+fixed for that task revision. Every affected specialist still reviews the same
+final candidate, and preparation plus review inherits the drafting call budget.
+
 A fresh recommendation discloses one preparation action: its purpose, targets
 or specialists, sources, expected result, impact, and provider-call budget.
 Confirm authorizes one Lead preparation. The resulting artifact-review or

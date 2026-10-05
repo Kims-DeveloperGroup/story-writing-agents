@@ -319,8 +319,8 @@ schema variants, and examples. Both providers use `agent-provider-wire-v10`.
 
 Context actions use `agent_action.action_type`: `search_context`, `read_context`,
 or `submit_result`. Results live in `task_result` and every built-in result has
-`response_type`. Lead uses `lead-response-v6`; specialist assignments use
-`specialist-assignment-response-v3`; synthesis uses `consultation-summary-v4` or
+`response_type`. Lead uses `lead-response-v7`; specialist assignments use
+`specialist-assignment-response-v3` for draft/review or v4 for constraints; synthesis uses `consultation-summary-v4` or
 `artifact-review-summary-v4`.
 
 The request names `task_input`, `session_history`, `response_contract`, and
@@ -468,6 +468,50 @@ domains, and proposes a synchronized candidate only when the evidence supports
 one. It may reject your requested change when it would make the core documents
 less consistent.
 
+## Shared premises and contribution roles
+
+For dialogue polishing, the Lead can assign Execution to draft the prose and
+Character to assess characterization constraints. Character need not rewrite
+the dialogue. Both still review the same final candidate before any Apply.
+
+If a motive must be chosen first, the proposal shows the exact selected motive,
+its source revision and conversation, the dependent draft owner, and each
+specialist's duty before Confirm. A missing choice needs clarification. After
+confirmation, the host supplies that same capture to the dependent author and
+synthesis. Changing the motive or its source requires a new task revision and
+fresh owner drafts. Capturing a premise records the choice and provenance; it
+does not certify the choice as a source fact.
+
+A completed constraint assessment supplies evidence and concerns. It does not
+count as a draft, support for a final review, completed authoring request, or
+permission to write. All affected specialists remain required final reviewers.
+The preparation recommendation and final specialist review have separate Confirm
+decisions, and inherit the drafting lineage's round count and physical spend.
+Final preparation for these confirmed drafts stays in their source conversation.
+If you select the task elsewhere, focus that conversation to prepare its final
+candidate; sharing source facts does not transfer execution authority.
+Required preparation, READ, review, and synthesis calls must fit the existing
+limits; the Lead must clarify an infeasible plan.
+
+When a confirmed draft has no target path, the preparation recommendation can
+select an exact destination without changing that draft's captured scope. Its
+artifact domains must already belong to the captured specialist union. Confirm
+binds the destination separately, and its READ, preparation, and review calls
+must fit the inherited budget.
+
+For a completed local draft, Lead can explicitly propose the same task's next
+revision. That proposal needs fresh Confirm and new substantive owner drafts;
+the completed revision's drafts cannot authorize its candidate.
+If the old continuation cannot fit its remaining budget, Lead offers only the
+fresh revision for drafting or revision work. The old revision and its spent
+calls remain intact. Pending Apply or Commit decisions must still be resolved
+through their existing controls before another authoring cycle.
+
+When a completed draft is offered for continuation, the next Lead turn reserves
+enough calls for preparation and every final reviewer. New alternatives in that
+same turn share the remaining allowance. Continue with a fresh proposal when
+those calls cannot fit.
+
 ## Scenario 5: editing a manuscript, then Apply and Commit
 
 ```text
@@ -584,7 +628,7 @@ runtime appends its routing policy to the captured prompt; customized workspace
 files are preserved. Routing policy v1 is separate from Lead result v3 and
 specialist/synthesis result v2.
 
-Fresh Lead policies use `lead-response-v6`. The runtime overlay also applies
+Fresh Lead policies use `lead-response-v7`. The runtime overlay also applies
 during Lead synthesis while preserving that invocation's separate minimal
 result schema.
 

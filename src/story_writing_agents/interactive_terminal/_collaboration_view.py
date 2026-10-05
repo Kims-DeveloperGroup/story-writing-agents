@@ -122,7 +122,7 @@ def project_collaboration_event(
         Field("To", _actor(event.recipient.kind.value, event.recipient.agent_id)),
         Field("Step", event.step_id),
     ]
-    items.extend(_payload_items(event.payload, references, paths, proposal_index))
+    items.extend(_payload_items(event.payload, references, paths, proposal_index, session_id=event.session_id))
     if show_details:
         items.append(
             Section(
@@ -165,7 +165,7 @@ def project_lead_turn_result(result: LeadTurnResult) -> Panel:
         for line in detail.split("\n")
     )
     if result.proposal is not None:
-        items.extend(_proposal_items(result.proposal))
+        items.extend(_proposal_items(result.proposal, session_id=result.session_id))
     if result.evidence is not None:
         items.extend(_evidence_items(result.evidence))
     items.append(Field("Next action", result.next_action.value))
@@ -199,7 +199,7 @@ def project_lead_turn_result(result: LeadTurnResult) -> Panel:
     if result.story_commit_request is not None:
         items.extend(_payload_items(result.story_commit_request, {}, {}, {}))
     if result.recommendation_request is not None:
-        items.extend(_payload_items(result.recommendation_request, {}, {}, {}))
+        items.extend(_payload_items(result.recommendation_request, {}, {}, {}, session_id=result.session_id))
     return Panel("Lead", tuple(items), state=_event_state(result))
 
 
@@ -466,6 +466,8 @@ def _payload_items(
     input_references: Mapping[str, str],
     candidate_paths: Mapping[str, tuple[str, ...]],
     proposals: Mapping[str, CollaborationProposal],
+    *,
+    session_id: str | None = None,
 ) -> tuple[Section | Field | Notice | Message | Record | ListView, ...]:
     if type(payload) in {ArtifactObjectivePayload, ArtifactObjectivePayloadV2}:
         return (
@@ -485,6 +487,7 @@ def _payload_items(
     if type(payload) is LeadRecommendationRequestPayload:
         return (
             *_authoring_scope_items(payload.authoring_scope),
+            *_shared_premise_items(payload, session_id=session_id),
             Field("Preparation", payload.kind.value),
             _message("Purpose", payload.purpose), _message("Instruction", payload.instruction),
             _message("Expected result", payload.expected_result),
@@ -529,7 +532,7 @@ def _payload_items(
             *_reply_trace_items(payload.trace),
         )
     if type(payload) is CollaborationProposal:
-        return _proposal_items(payload)
+        return _proposal_items(payload, session_id=session_id)
     if type(payload) is CollaborationAssignmentDispatchPayload:
         return (
             *_proposal_identity(payload),
@@ -594,7 +597,7 @@ def _payload_items(
             CollaborationStepState.AWAITING_CONFIRMATION,
             CollaborationStepState.RECONFIRMATION_REQUIRED,
         } and proposal is not None:
-            fields.append(_confirmation_summary(proposal))
+            fields.append(_confirmation_summary(proposal, session_id=session_id))
         fields.append(Notice(_STATE_GUIDANCE[payload.state], label="next action"))
         return tuple(fields)
     if type(payload) is CollaborationConfirmationPayload:
@@ -807,11 +810,78 @@ def _authoring_scope_items(scope: AuthoringScope | None) -> tuple[Field | Notice
         Field("Task", f"{scope.task_id} revision {scope.task_revision}"),
         Field("Targets", _joined(scope.target_paths)),
         Field("Domains", _joined(tuple(item.value for item in scope.domains))),
+        *(
+            (
+                Field("Contributions", _joined(tuple(
+                    f"{item.domain.value}: {item.role.value}"
+                    for item in scope.contributions
+                ))),
+                Field("Dependency slots", _joined(tuple(
+                    f"{item.slot_id}: {_joined(tuple(domain.value for domain in item.dependent_domains))}"
+                    for item in scope.dependency_slots
+                ))),
+            )
+            if scope.schema_version == 3 else ()
+        ),
         Notice(scope.interpretation, label="interpretation"),
     )
 
 
-def _proposal_items(payload: CollaborationProposal) -> tuple[Section | Field | Notice | ListView, ...]:
+def _shared_premise_items(
+    payload: CollaborationProposal | LeadRecommendationRequestPayload,
+    *,
+    session_id: str | None = None,
+) -> tuple[ListView, ...]:
+    """Disclose captured choices and source facts without acquiring material."""
+    scope = payload.authoring_scope
+    if scope is None or scope.schema_version != 3 or payload.basis.schema_version != 2:
+        return ()
+    slots = {item.slot_id: item for item in scope.dependency_slots}
+    return tuple(
+        ListView(
+            f"Shared premise · {premise.slot_id}",
+            (
+                Record(
+                    premise.slot_id,
+                    title="Selected premise",
+                    fields=(
+                        Field("Slot ID", premise.slot_id),
+                        Field("Dependent domains", _joined(tuple(
+                            item.value for item in slots[premise.slot_id].dependent_domains
+                        ))),
+                        *((Field("Presentation session", session_id),) if session_id is not None else ()),
+                    ),
+                    content=premise.selected_premise,
+                ),
+                *(
+                    Record(
+                        source.input_revision.input_id,
+                        title="Captured source",
+                        fields=(
+                            Field("Input ID", source.input_revision.input_id),
+                            Field("Kind", source.input_revision.kind.value),
+                            Field("Source conversation", source.source_conversation_id or "not applicable"),
+                            Field("Locator", source.input_revision.locator),
+                            Field(
+                                "Input range",
+                                "whole input" if source.input_revision.start_line is None
+                                else f"lines {source.input_revision.start_line}–{source.input_revision.end_line}",
+                            ),
+                            Field("State", source.input_revision.state.value),
+                            Field("Revision digest", source.input_revision.revision_digest),
+                        ),
+                    )
+                    for source in premise.sources
+                ),
+            ),
+        )
+        for premise in payload.basis.shared_premises
+    )
+
+
+def _proposal_items(
+    payload: CollaborationProposal, *, session_id: str | None = None,
+) -> tuple[Section | Field | Notice | ListView, ...]:
     assignments = tuple(
         Record(
             item.assignment_id,
@@ -845,6 +915,7 @@ def _proposal_items(payload: CollaborationProposal) -> tuple[Section | Field | N
     budget = payload.budget
     return (
         *_authoring_scope_items(payload.authoring_scope),
+        *_shared_premise_items(payload, session_id=session_id),
         Field("Proposal", payload.proposal_id),
         Field("Revision", str(payload.proposal_revision)),
         Field("Digest", payload.proposal_digest),
@@ -882,11 +953,19 @@ def _assignment_items(assignment: CollaborationAssignment) -> tuple[Field | Noti
     )
 
 
-def _confirmation_summary(proposal: CollaborationProposal) -> Section:
+def _confirmation_summary(
+    proposal: CollaborationProposal, *, session_id: str | None = None,
+) -> Section:
     budget = proposal.budget
     return Section(
         "Confirmation summary",
         (
+            *(
+                _authoring_scope_items(proposal.authoring_scope)
+                if proposal.authoring_scope is not None
+                and proposal.authoring_scope.schema_version == 3 else ()
+            ),
+            *_shared_premise_items(proposal, session_id=session_id),
             Field(
                 "Affected agents",
                 _joined(tuple(item.specialist_id for item in proposal.assignments)),

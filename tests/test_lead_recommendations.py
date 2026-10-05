@@ -106,9 +106,9 @@ class LeadRecommendationTests(RecommendationCase):
                                      (("recommendation_decision",), False),
                                      (("recommendation_request", "recommendation_decision"), True)):
             cid = self.conversation("Raw confirmed drafting consultation")
-            self.backend.enqueue(recommendation(recommended_action=action(kind="prepare_consultation"),
-                authoring_scope=lambda call: lead._live_scope(call, activity="draft", domains=("plot_structure",))))
-            offered = await self.runtime.lead_turn(self.session_id, cid, "Recommend Plot drafting from this brief.")
+            self.backend.enqueue(recommendation(recommended_action=action(kind="prepare_consultation", source_ids=("user_input",)),
+                authoring_scope=lambda call: lead._live_scope(call, activity="review", domains=("plot_structure",))))
+            offered = await self.runtime.lead_turn(self.session_id, cid, "Recommend Plot review of this complete supplied candidate: " + DRAFT)
             self.assertIs(offered.kind, c.LeadOutcomeKind.RECOMMENDATION, offered)
             request = offered.recommendation_request
             source_ids = [item.input_id for item in request.basis.inputs]
@@ -119,7 +119,7 @@ class LeadRecommendationTests(RecommendationCase):
                 selected = ([] if omit_source else source_ids) + list(aliases)
                 body = {"kind": "proposal", "message": request.purpose,
                     "authoring_scope": lead._compact_scope(c.authoring_scope_to_dict(request.authoring_scope)),
-                    "proposal": {"assignments": [{"agent_id": agent, "mode": mode,
+                    "proposal": {"shared_premises": [], "assignments": [{"agent_id": agent, "mode": mode,
                         "instruction": request.instruction, "input_ids": selected} for agent in request.specialist_ids]}}
                 encoded = lead.wire_answer(body, lead.wire_contract_id(call.payload))
                 raw_observations.append((json.loads(encoded)["agent_action"]["task_result"]["specialist_consultation_proposal"]["assignments"][0]["input_source_ids"],

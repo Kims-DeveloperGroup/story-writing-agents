@@ -341,6 +341,7 @@ def _missing_outcome(*, proposal: bool = False):
                 {
                     "relation": "new_step",
                     "purpose": "Confirm the missing artifact before proceeding.",
+                    "shared_premises": [],
                     "assignments": [
                         {
                             "agent_id": PLOT_ARCHITECT,
@@ -379,6 +380,7 @@ def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False):
             ),
             "proposal": None if factual else {
                 "relation": "new_step", "purpose": "Review the exact attached candidates.",
+                "shared_premises": [],
                 "assignments": [{"agent_id": agent, "instruction": "Review the supplied candidates for the assigned domain.",
                                  "input_ids": [item["input_source_id"] for item in aliases], "mode":"review",
                                  "review_basis":{"schema_version":1,"candidate_input_ids":evidence_ids,"criteria":"Assess the exact candidate references."}}

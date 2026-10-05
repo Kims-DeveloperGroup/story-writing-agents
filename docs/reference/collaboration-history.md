@@ -296,6 +296,34 @@ Readable history adds `lead_recommendation.purpose`, `.instruction`, `.result`,
 request, decision, start, and closure, including source and objective origins;
 remembering those records grants no execution authority.
 
+### Scope-v3 premise and contribution capture
+
+Scope version 3 stores explicit `contributions` and `dependency_slots`; its
+proposal intent includes `shared_premises`. Basis version 2 captures exact
+selected premise text and ordered sources with each input revision and its
+source conversation. Conversation-local user/event/candidate sources require
+that owner identity; session/workspace sources explicitly use null. The proposal
+digest covers this capture. Legacy scope/basis encodings remain unchanged and
+cannot acquire new duties, captures, or current confirmation authority.
+
+Replay pins task/revision facts at the first exact confirmed authoring proposal,
+validates correlated running/dispatch/reply records, and rejects same-revision
+capture or role drift. Alias equivalence compares complete qualified facts.
+Draft-derived final review inherits the successful source capture and both
+physical-call and round counters through the exact confirmed recommendation
+handoff. Constraint results satisfy only their assignment; required owner drafts
+and all final reviewers remain separate provenance obligations.
+
+An exact preparation request can separately bind a destination for a targetless
+source without altering its captured scope. The destination's artifact domains
+must already be in that scope's complete domain union. The immutable candidate
+and confirmed request retain the destination's exact identity, and its required
+calls remain within the inherited counters.
+
+A completed local confirmed scope-v3 task can offer its next explicit revision
+to Lead. Fresh proposal, Confirm, and owner drafts are required; neither a
+same-revision restart nor old draft records supply new execution authority.
+
 ## Proposal closure and limits
 
 `CollaborationProposal` discloses every one of these fields:
@@ -304,11 +332,11 @@ remembering those records grants no execution authority.
 | --- | --- |
 | `step_id`, `proposal_id`, `proposal_revision` | Lineage, proposal identity, and increasing revision |
 | `step_kind`, `purpose` | Exact typed step and visible reason |
-| `authoring_scope` | Versioned activity, targets, domains, interpretation, and task/revision; omitted in historical unscoped records |
+| `authoring_scope` | Versioned activity, targets, domains, interpretation, task/revision, and scope-v3 contribution/dependency declarations; omitted in historical unscoped records |
 | `assignments` | Ordered, unique specialist assignments with explicit live mode and review basis |
 | `user_impact`, `side_effects` | Visible consequence and closed side-effect set |
 | `budget` | Whole-lineage and whole-next-step physical-call reservation |
-| `basis` | Route and policy fingerprints, participant profiles, closed input revisions, and exact lead evidence when applicable |
+| `basis` | Route and policy fingerprints, participant profiles, closed input revisions, exact lead evidence, and explicit basis-v2 premise captures when applicable |
 | `proposal_digest` | SHA-256 digest over every other proposal field, including order |
 
 The supported step kinds are `lead_specialist_consultation`,
@@ -972,7 +1000,8 @@ continue to block new work.
 
 ## Routing history compatibility
 
-AuthoringScope and ReviewBasis each use schema 1. Collaboration event schema 2
+Fresh Lead AuthoringScope uses schema 3; historical scopes 1/2 retain their exact
+encodings and omitted-version construction defaults to 2. ReviewBasis remains schema 1. Collaboration event schema 2
 and existing historical bytes/digests remain compatible: absent optional scope,
 mode, and review-basis fields are omitted when re-encoded. Strict current
 provider contracts require the routing fields; old pending unscoped proposals

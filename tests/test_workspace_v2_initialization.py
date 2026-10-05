@@ -86,7 +86,7 @@ _EXPECTED_DIGESTS = {
     "config/agents/execution_specialist/AGENTS.md": "4a3ead3e2389bda9662989d02bb8817ad1ec2d7b4d4f322b246b892545d3979b",
     "config/agents/lead_orchestrator/AGENTS.md": "93181819635ddd9b1a5c636cae4ff3e1a8b78bf3bf1442a8b4fb790c131c3a18",
     "config/agents/plot_architect/AGENTS.md": "e59aba2b2e750c7b9ef00b2c3f1ea4e7e9b2889f7abf25a840d7db781d5d93e7",
-    "config/agents/specialist_collaboration/AGENTS.md": "9fd629d51572990c79efffcf66fd857de1bce7912f3e304af785248a676ccb4b",
+    "config/agents/specialist_collaboration/AGENTS.md": "e29eaf96f385062907304d95b83b1c466f5e9a1226d2ef9cd4e3d4f1704292e4",
     "config/persona_templates/alternative_templates/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "config/persona_templates/default_kim_eun_hee.md": "fd1c91425394d07b308b3869c56579a760dc868568b6c6cfc637148a5f3336d1",
     "config/system_defaults.json": "539426a048ec074569c11e206e07fa145a69da393fc9af711f610642bad0e6df",

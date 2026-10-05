@@ -13,8 +13,11 @@ from typing import Mapping, Protocol
 from ..errors import SessionIdError
 from ..reply_trace import ReplyTrace
 from ..structured_output_validation import validate_details
-from ..specialist_routing import AuthoringIntent, SpecialistAssignmentMode
+from ..specialist_routing import AuthoringActivity, AuthoringIntent, SpecialistAssignmentMode
 from .events import (
+    confirmed_authoring_proposals,
+    validate_authoring_capture_pin,
+    authoring_capture_identity,
     ArtifactDraftSource,
     ArtifactObjectiveCandidateBinding,
     ArtifactObjectiveFacts,
@@ -2568,9 +2571,36 @@ def _project_lead_recommendation_history(
                 expected_source = (None, None, None) if not revisions else (
                     revisions[0].payload.proposal_id, revisions[0].payload.proposal_revision,
                     revisions[0].payload.proposal_digest)
-                if (len(revisions) > 1 or source_proposal != expected_source
-                    or payload.source_execution_attempt_id is not None
-                    or (revisions and event.step_id == source.step_id)):
+                if payload.authoring_scope is not None and payload.authoring_scope.schema_version == 3 and payload.authoring_scope.activity in {
+                    AuthoringActivity.DRAFT, AuthoringActivity.REVISE,
+                } and not revisions:
+                    prior_proposal = next((prior.payload for prior in by_id.values()
+                                           if type(prior.payload) is CollaborationProposal and (
+                                               prior.payload.proposal_id, prior.payload.proposal_revision, prior.payload.proposal_digest
+                                           ) == source_proposal), None)
+                    prior_synthesis = next((prior for prior in by_id.values()
+                                            if type(prior.payload) is CollaborationLeadSynthesisPayload
+                                            and prior.payload.execution_attempt_id == payload.source_execution_attempt_id
+                                            and (prior.payload.proposal_id, prior.payload.proposal_revision, prior.payload.proposal_digest) == source_proposal), None)
+                    confirmed = any(type(prior.payload) is CollaborationConfirmationPayload
+                                    and prior.payload.decision is CollaborationConfirmationDecision.CONFIRM
+                                    and (prior.payload.proposal_id, prior.payload.proposal_revision, prior.payload.proposal_digest) == source_proposal
+                                    for prior in by_id.values())
+                    completed = any(type(prior.payload) is CollaborationExecutionResult
+                                    and prior.payload.execution_attempt_id == payload.source_execution_attempt_id
+                                    and prior.payload.overall_outcome is CollaborationExecutionOutcomeKind.SUCCEEDED
+                                    and (prior.payload.proposal_id, prior.payload.proposal_revision, prior.payload.proposal_digest) == source_proposal
+                                    for prior in by_id.values())
+                    if prior_proposal is None or prior_proposal.authoring_scope is None or prior_proposal.authoring_scope.schema_version != 3 or (
+                        prior_synthesis is None or not confirmed or not completed
+                        or authoring_capture_identity(payload.authoring_scope, payload.basis) != authoring_capture_identity(
+                            prior_proposal.authoring_scope, prior_proposal.basis
+                        )
+                    ):
+                        raise ValueError("v3 front recommendation requires exact completed confirmed authoring source")
+                elif (len(revisions) > 1 or source_proposal != expected_source
+                      or payload.source_execution_attempt_id is not None
+                      or (revisions and event.step_id == source.step_id)):
                     raise ValueError("front recommendation source proposal correlation is not exact")
             if payload.action_id in action_revisions and (
                 request is None or payload.action_id != request.action_id
@@ -2606,6 +2636,15 @@ def _project_lead_recommendation_history(
                     or draft.content_digest != "sha256:" + hashlib.sha256(offered.payload.message.encode("utf-8")).hexdigest()
                 ):
                     raise ValueError("recommendation draft source was not exactly offered")
+                selected_scope = getattr(offered.payload, "authoring_scope", None)
+                scope = payload.authoring_scope
+                if (
+                    scope is not None and scope.schema_version == 3
+                    and selected_scope is not None
+                    and selected_scope.activity is not AuthoringActivity.WORKFLOW
+                    and (selected_scope.task_id, selected_scope.task_revision) != (scope.task_id, scope.task_revision)
+                ):
+                    raise ValueError("recommendation draft source belongs to another task or revision")
             if type(source.payload) is CollaborationLeadSynthesisPayload and not any(
                 prior.sequence > source.sequence and prior.sequence < event.sequence
                 and prior.batch_id == event.batch_id and prior.step_id == source.step_id
@@ -2907,6 +2946,7 @@ def _project_validated_collaboration_history(
         batch = events[offset : offset + size]
         prior_tail = events[offset - 1] if offset else None
         batch_proposals: list[CollaborationProposal] = []
+        batch_inherited_reviews: list[CollaborationProposal] = []
         batch_states: list[
             tuple[CollaborationEventV2, CollaborationStepStatePayload]
         ] = []
@@ -2937,6 +2977,39 @@ def _project_validated_collaboration_history(
             proposal = proposals.get(event.step_id)
 
             if type(payload) is CollaborationProposal:
+                validate_authoring_capture_pin(payload, tuple(prior for prior in events if prior.sequence < event.sequence))
+
+                scope = payload.authoring_scope
+                if scope is not None and scope.schema_version == 3 and scope.activity in {
+                    AuthoringActivity.DRAFT, AuthoringActivity.REVISE,
+                } and running_attempts.get(event.step_id, 0):
+                    raise ValueError("scope3 round two is reserved for final review")
+                if scope is not None and scope.schema_version == 3 and scope.activity in {
+                    AuthoringActivity.DRAFT, AuthoringActivity.REVISE,
+                } and any(item.step_id != event.step_id for item in confirmed_authoring_proposals(
+                    scope, tuple(prior for prior in events if prior.sequence < event.sequence)
+                )):
+                    raise ValueError("scope3 authoring revision cannot restart its confirmed lineage")
+                if scope is not None and scope.schema_version == 3 and scope.activity is AuthoringActivity.REVIEW:
+                    past = tuple(prior for prior in events if prior.sequence < event.sequence)
+                    drafts = tuple(item for item in confirmed_authoring_proposals(scope, past)
+                                   if item.authoring_scope is not None and item.authoring_scope.schema_version == 3
+                                   and item.authoring_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE})
+                    if drafts:
+                        request = next((prior.payload for prior in reversed(past)
+                                        if prior.step_id == event.step_id and type(prior.payload) is LeadRecommendationRequestPayload), None)
+                        source = None if request is None else next((item for item in drafts if (
+                            item.proposal_id, item.proposal_revision, item.proposal_digest
+                        ) == (request.source_proposal_id, request.source_proposal_revision, request.source_proposal_digest)), None)
+                        if source is None or request is None or request.authoring_scope is None or (
+                            running_attempts.get(event.step_id, 0) != 1
+                            or spent_calls.get(event.step_id, 0) < request.physical_calls_spent
+                            or authoring_capture_identity(scope, payload.basis) != authoring_capture_identity(
+                                source.authoring_scope, source.basis
+                            )
+                        ):
+                            raise ValueError("draft-derived scope3 final review requires exact inherited recommendation handoff")
+                        batch_inherited_reviews.append(payload)
                 if event.step_id in blocked_lineages:
                     raise ValueError(
                         "call-bearing work cannot follow a blocked lineage"
@@ -2978,12 +3051,64 @@ def _project_validated_collaboration_history(
             if type(payload) is LeadRecommendationRequestPayload:
                 source = event_by_id[payload.source_recommendation_event_id]
                 source_spent = spent_calls.get(source.step_id, 0)
+                inherited_rounds = None
+                scope = payload.authoring_scope
+                if scope is not None and scope.schema_version == 3 and scope.activity in {
+                    AuthoringActivity.DRAFT, AuthoringActivity.REVISE,
+                }:
+                    source_proposal = next((item for item in proposals.values() if (
+                        item.proposal_id, item.proposal_revision, item.proposal_digest
+                    ) == (payload.source_proposal_id, payload.source_proposal_revision, payload.source_proposal_digest)), None)
+                    if (
+                        source_proposal is None or source_proposal.authoring_scope is None
+                        or source_proposal.authoring_scope.schema_version != 3
+                        or source_proposal.authoring_scope.intent is not AuthoringIntent.AUTHORING
+                        or source_proposal.authoring_scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
+                    ):
+                        raise ValueError("v3 preparation requires the exact confirmed source proposal")
+                    synthesis = next((item for item in event_by_id.values()
+                                      if type(item.payload) is CollaborationLeadSynthesisPayload
+                                      and item.step_id == source_proposal.step_id
+                                      and item.payload.execution_attempt_id == payload.source_execution_attempt_id
+                                      and item.payload.proposal_digest == source_proposal.proposal_digest), None)
+                    successful = any(type(prior.payload) is CollaborationExecutionResult
+                                     and prior.payload.execution_attempt_id == payload.source_execution_attempt_id
+                                     and prior.payload.proposal_digest == source_proposal.proposal_digest
+                                     and prior.payload.overall_outcome is CollaborationExecutionOutcomeKind.SUCCEEDED
+                                     for prior in event_by_id.values())
+                    if synthesis is None or not successful or states.get(source_proposal.step_id) is not CollaborationStepState.COMPLETED:
+                        raise ValueError("v3 preparation requires completed source synthesis")
+                    if authoring_capture_identity(scope, payload.basis) != authoring_capture_identity(
+                        source_proposal.authoring_scope, source_proposal.basis
+                    ):
+                        raise ValueError("v3 preparation must inherit the exact confirmed source capture")
+                    related_steps = {source.step_id, *(prior.step_id for prior in event_by_id.values()
+                                     if type(prior.payload) is LeadRecommendationRequestPayload
+                                     and prior.payload.source_proposal_id == source_proposal.proposal_id
+                                     and prior.payload.source_proposal_revision == source_proposal.proposal_revision
+                                     and prior.payload.source_proposal_digest == source_proposal.proposal_digest)}
+                    related_steps.discard(source_proposal.step_id)
+                    inherited_rounds = running_attempts.get(source_proposal.step_id, 0) + sum(
+                        1 for prior in event_by_id.values() if prior.step_id in related_steps
+                        and type(prior.payload) is CollaborationStepStatePayload
+                        and prior.payload.state is CollaborationStepState.RUNNING
+                    )
+                    if inherited_rounds != 1:
+                        raise ValueError("v3 preparation cannot reset or add a third round")
+                    source_spent = spent_calls.get(source_proposal.step_id, 0) + sum(
+                        1 for call_event, call in provider_call_events
+                        if call_event.step_id in related_steps and call.state is CollaborationProviderCallState.SUBMITTED
+                    )
                 if payload.physical_calls_spent != source_spent:
                     raise ValueError("recommendation cannot reset source-lineage call accounting")
                 if event.step_id != source.step_id:
                     if event.step_id in spent_calls or event.step_id in proposals:
                         raise ValueError("recommendation preparation step must be fresh")
-                    spent_calls[event.step_id] = source_spent
+                spent_calls[event.step_id] = source_spent
+                if inherited_rounds is not None:
+                    if running_attempts.get(event.step_id, 0) not in {0, inherited_rounds} or event.step_id in proposals:
+                        raise ValueError("preparation cannot replace an already running round")
+                    running_attempts[event.step_id] = inherited_rounds
                 continue
 
             if type(payload) is CollaborationLeadJudgmentPayload:
@@ -3259,6 +3384,10 @@ def _project_validated_collaboration_history(
                     raise ValueError(
                         "confirmation decision must begin its atomic batch"
                     )
+                if payload.decision is CollaborationConfirmationDecision.CONFIRM:
+                    if proposal is None:
+                        raise ValueError("confirmation must bind an existing proposal")
+                    validate_authoring_capture_pin(proposal, tuple(prior for prior in events if prior.sequence < event.sequence))
                 decisions[payload.confirmation_request_id] = payload.decision
                 batch_confirmations.append((event, payload))
                 continue
@@ -3361,6 +3490,7 @@ def _project_validated_collaboration_history(
                     assert isinstance(reply, CollaborationSpecialistReplyPayload)
                     if reply.assessment in {
                         CollaborationSpecialistAssessment.SUPPORTS, CollaborationSpecialistAssessment.DRAFTED,
+                        CollaborationSpecialistAssessment.CONSTRAINTS_ASSESSED,
                     }:
                         continue
                     for input_id in reply.input_ids:
@@ -3554,7 +3684,10 @@ def _project_validated_collaboration_history(
             item
             for item in batch_proposals
             if item.step_kind is CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION
-            and item.budget.rounds_spent == 0
+            and (
+                item.budget.rounds_spent == 0
+                or item in batch_inherited_reviews
+            )
         )
         if lead_proposals:
             if (
