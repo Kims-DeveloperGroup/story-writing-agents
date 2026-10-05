@@ -496,6 +496,13 @@ new reply fields or kinds. INPUT_ADOPTION and REVIEW_COMPLETION are runtime
 operations and never become provider requests. Default AUTHORING choices retain
 their existing meanings.
 
+Review-only synthesis receives ordered, source-correlated audit frames containing
+`report_available` and actual `report_text`, including approving observations,
+while preserving verdict, candidate/audit digests and conflict text. Older audits
+without stored report material disclose `report_available=false` and
+`report_text=null`. These are runtime-built invocation facts; no AgentReply field
+or global wire version changes.
+
 Direct provider calls use descriptive `user_input_text`, `task_instructions`,
 `candidate_text`, `conversation_history`, `debate_history`, and
 `prior_agent_outcomes`. Consensus controls name `consensus_phase`,

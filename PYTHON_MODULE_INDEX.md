@@ -185,7 +185,7 @@ facade; contracts and projections remain infrastructure-neutral.
 - `consensus.event_store`, `consensus.material_store`
 
 Execution and serialization depend on contracts/projection; stores own durable workspace records. Contracts must not import execution or stores.
-Consensus contracts bind shared pure intent and INPUT_ADOPTION/REVIEW_COMPLETION phases; execution uses existing material ports and confirmation capabilities without providers. The supported facade re-exports the owned intent enum.
+Consensus contracts bind shared pure intent and INPUT_ADOPTION/REVIEW_COMPLETION phases; execution uses existing material ports and confirmation capabilities without providers. The supported facade re-exports the owned intent enum. Review-only audit report handles retain approving observations for ordered synthesis through existing immutable material storage; older missing reports remain explicitly unavailable.
 Serialization writes v4 and strictly admits historical v3 AUTHORING shapes/digests. Existing result/projection owners retain review-only synthesis reports for inspection without granting authority.
 Results may carry ordered provider validation details; historical serialized results without the optional field remain valid.
 

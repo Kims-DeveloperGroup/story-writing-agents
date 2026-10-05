@@ -343,6 +343,16 @@ For REVIEW_ONLY, `projection.review_findings` exposes the actual terminal
 synthesis report after completion and restart. It remains untrusted report text
 and cannot authorize candidate replacement, repair, Apply or Git Commit.
 
+`ConsensusAudit.report_material` and `ConsensusProviderResult.report_material`
+are optional keyword-only immutable handles for actual REVIEW_ONLY AUDIT reports.
+The mapper verifies their digest against the original reply bytes and excludes
+runtime fallback text. Conflicts reuse their critique handle; approval reports
+retain their own material. Synthesis reads available reports in auditor order,
+including approval observations. Earlier version-4 audits may lack the handle;
+absence is disclosed without inferred findings. AUTHORING and non-AUDIT phases
+reject report metadata. These handles grant no candidate, repair or publication
+authority, and terminal `review_findings` remains synthesis text only.
+
 The normal AUTHORING phase graph is DRAFT → AUDIT → SYNTHESIS. Lead synthesis selects
 REPAIR → REAUDIT → SYNTHESIS, FINALIZATION, or deadlock. Every phase is a new
 request and confirmation. Audits invoke all three specialists against the same

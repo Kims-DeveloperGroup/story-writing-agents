@@ -436,7 +436,7 @@ def _result_from_json(value: object, *, schema_version: int) -> ConsensusPhaseRe
         request_digest=raw["request_digest"],
         state=ConsensusPhaseState(raw["state"]),
         candidate_digest=raw["candidate_digest"],
-        audits=tuple(_audit_from_json(item) for item in raw_audits),
+        audits=tuple(_audit_from_json(item, schema_version=schema_version) for item in raw_audits),
         next_phase=None if next_phase is None else ConsensusPhase(next_phase),
         prior_result_event_id=raw["prior_result_event_id"],
         publication_allowed=raw["publication_allowed"],
@@ -445,7 +445,7 @@ def _result_from_json(value: object, *, schema_version: int) -> ConsensusPhaseRe
 
 
 def _audit_to_json(value: ConsensusAudit) -> dict[str, Any]:
-    return {
+    raw = {
         "specialist_id": value.specialist_id,
         "revision_id": value.revision_id,
         "candidate_digest": value.candidate_digest,
@@ -453,9 +453,12 @@ def _audit_to_json(value: ConsensusAudit) -> dict[str, Any]:
         "audit_digest": value.audit_digest,
         "conflict_material": _optional_material_to_json(value.conflict_material),
     }
+    if value.report_material is not None:
+        raw["report_material"] = _material_to_json(value.report_material)
+    return raw
 
 
-def _audit_from_json(value: object) -> ConsensusAudit:
+def _audit_from_json(value: object, *, schema_version: int) -> ConsensusAudit:
     raw = _object(
         value,
         {
@@ -465,7 +468,8 @@ def _audit_from_json(value: object) -> ConsensusAudit:
             "verdict",
             "audit_digest",
             "conflict_material",
-        },
+        } | ({"report_material"} if schema_version == 4 and type(value) is dict
+             and "report_material" in value else set()),
         "audit",
     )
     return ConsensusAudit(
@@ -475,6 +479,9 @@ def _audit_from_json(value: object) -> ConsensusAudit:
         verdict=ConsensusAuditVerdict(raw["verdict"]),
         audit_digest=raw["audit_digest"],
         conflict_material=_optional_material_from_json(raw["conflict_material"]),
+        report_material=(
+            _material_from_json(raw["report_material"]) if "report_material" in raw else None
+        ),
     )
 
 

@@ -126,6 +126,14 @@ REVIEW_ONLY terminal synthesis additionally retains the actual untrusted review
 report as `review_findings`; inspection keeps it through completion and restart.
 The report grants no candidate, repair, artifact or Git authority.
 
+Review-only AUDIT results additionally bind each available actual auditor report
+through optional keyword-only `ConsensusAudit.report_material`. The existing
+immutable material store owns these bytes; conflicts reuse their critique handle.
+Ordered synthesis frames retain approval observations, conflict facts and report
+availability. AUTHORING and other phases reject this metadata. The version-4
+codec omits absent handles and strictly validates present ones; version 3 rejects
+the field. Older version-4 audits without report material remain readable.
+
 ## Provider and material boundary
 
 Runtime converts a `ConsensusPhaseInvocation` into an `AgentRequest` whose

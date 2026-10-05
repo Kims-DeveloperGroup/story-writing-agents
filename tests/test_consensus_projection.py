@@ -573,14 +573,20 @@ class ConsensusProjectionTests(unittest.TestCase):
         golden = (Path(__file__).parent / "fixtures/consensus_compatibility/authoring_v3_c20dc40.json").read_bytes()
         self.assertEqual(hashlib.sha256(golden).hexdigest(), "173023d5484c9e85c3ddf2fb2a08bcf3294c85e9a39c0ded51dc4bb96d554d2c")
         historical = deserialize_consensus_workflow(golden)
+        self.assertEqual(tuple(a.report_material for e in historical.events if type(e.payload) is ConsensusPhaseResult for a in e.payload.audits), (None,) * 3)
+        for material in (object(), _INPUT_MATERIAL):
+            with self.assertRaises((TypeError, ValueError)): replace(self.audits()[0], report_material=material)
         expected = json.loads(golden)
         expected["schema_version"] = 4
         self.assertEqual(json.loads(serialize_consensus_workflow(historical)), expected)
         self.assertEqual(str(historical.submission.intent), "authoring")
         self.assertTrue(all(str(event.payload.intent) == "authoring" for event in historical.events if type(event.payload) is ConsensusPhaseRequest))
+        report_key = b'"report_material":' + json.dumps({"digest": _CANDIDATE, "locator": f"candidate:{_CANDIDATE}"}, separators=(",", ":")).encode() + b',"audit_digest":'
         for wrong in (golden.replace(b'"input_kind":', b'"intent":"review_only","input_kind":', 1),
                       golden.replace(b'"phase":"draft"', b'"phase":"input_adoption"', 1),
-                      golden.replace(b'"audits":', b'"review_findings":"report","audits":', 1)):
+                      golden.replace(b'"audits":', b'"review_findings":"report","audits":', 1),
+                     golden.replace(b'"audit_digest":', report_key, 1),
+                     golden.replace(b'"audit_digest":', report_key, 1).replace(b'"schema_version":3', b'"schema_version":4', 1)):
             with self.assertRaises(ValueError):
                 deserialize_consensus_workflow(wrong)
 

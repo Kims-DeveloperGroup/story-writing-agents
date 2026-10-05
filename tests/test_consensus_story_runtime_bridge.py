@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import replace
 import hashlib
 import json
+import re
 import unittest
 from unittest import mock
 
@@ -51,6 +52,11 @@ from tests.helpers import initialized_workspace, pristine_initialized_workspace
 
 
 REVIEW_FINDINGS = "검토 결과.\r\nPreserve the ambiguity.  \r\n"
+AUDIT_REPORTS = {
+    PLOT_ARCHITECT: "Plot approval: chronology is clear 한글\r\n  ",
+    CHARACTER_CUSTODIAN: "Setting concern 한글\r\n",
+    EXECUTION_SPECIALIST: "Execution approval: cadence works café\r\n\t",
+}
 
 
 class _BoundAgent:
@@ -83,7 +89,7 @@ class _BoundAgent:
         if request.phase is Phase.AUDIT:
             if request.review_only and request.agent_id == CHARACTER_CUSTODIAN:
                 return AgentReply.conflict(request.revision_id, "Setting concern 한글\r\n")
-            return AgentReply.approval(request.revision_id)
+            return AgentReply.approval(request.revision_id, AUDIT_REPORTS[request.agent_id] if request.review_only else "")
         if request.phase is Phase.SYNTHESIZE:
             return AgentReply.synthesis(
                 request.revision_id,
@@ -136,6 +142,9 @@ def _decision(
 
 
 class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
+    def assert_material(self, handle, expected):
+        self.assertEqual((handle.digest, self.materials.read_text(handle).encode()), (hashlib.sha256(expected).hexdigest(), expected))
+
     def setUp(self) -> None:
         self.workspace = pristine_initialized_workspace(self)
         provision_session_resources(self.workspace.root, "story_session")
@@ -164,10 +173,7 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertIs(result.execution.state, ConsensusPhaseState.COMPLETED)
                 output = result.execution.provider_results[0]
-                self.assertEqual(
-                    self.materials.read_text(output.candidate_material),
-                    f"authored::{source}",
-                )
+                self.assert_material(output.candidate_material, f'authored::{source}'.encode())
                 self.assertNotEqual(
                     output.candidate_material.digest,
                     inspection.submission.input_digest,
@@ -270,10 +276,7 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
         request = self.backend.requests[-1]
         self.assertEqual(request.user_payload, f"${{{path}}}")
         self.assertNotIn(original.decode(), request.user_payload)
-        self.assertEqual(
-            self.materials.read_text(result.candidate_material),
-            f"authored::${{{path}}}",
-        )
+        self.assert_material(result.candidate_material, f'authored::${{{path}}}'.encode())
 
         artifact.write_text("drifted outline\n", encoding="utf-8")
         calls_before = len(self.backend.requests)
@@ -294,10 +297,14 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
             inspection = self.session.request_next_consensus_phase("review", review.submission.workflow_id)
             self.assertEqual((inspection.projection.phase, inspection.projection.candidate_digest), (phase, review.submission.input_digest))
             result = await self.session.confirm_consensus(_decision(self.runtime, inspection))
-            self.assertEqual(self.materials.read_text(candidate_material_handle(result.inspection.projection.candidate_digest)).encode(), original)
+            self.assert_material(candidate_material_handle(result.inspection.projection.candidate_digest), original)
             self.assertEqual((result.execution.state, result.inspection.projection.publication_allowed, result.inspection.projection.review_findings), (ConsensusPhaseState.COMPLETED, False, None if phase is ConsensusPhase.AUDIT else REVIEW_FINDINGS))
             if phase is ConsensusPhase.AUDIT:
                 audit_event = result.execution.terminal_event
+                for audit in audit_event.payload.audits:
+                    self.assert_material(audit.report_material, AUDIT_REPORTS[audit.specialist_id].encode())
+                self.runtime = StoryRuntime(self.workspace, self.backend)
+                self.session = self.runtime.session("story_session")
             if phase is ConsensusPhase.REVIEW_COMPLETION:
                 self.assertEqual(result.execution.provider_results, ())
         calls = self.backend.requests[before:]
@@ -305,7 +312,8 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(r.review_only and r.candidate_payload.encode() == original for r in calls))
         facts = [json.loads(m.content) for m in calls[-1].messages]
         expected = [dict(source_event_id=audit_event.event_id, verdict=a.verdict.value, candidate_digest=a.candidate_digest,
-                         audit_digest=a.audit_digest, conflict_text="Setting concern 한글\r\n" if a.specialist_id == CHARACTER_CUSTODIAN else None)
+                         audit_digest=a.audit_digest, conflict_text="Setting concern 한글\r\n" if a.specialist_id == CHARACTER_CUSTODIAN else None,
+                         report_available=True, report_text=AUDIT_REPORTS[a.specialist_id])
                     for a in audit_event.payload.audits]
         self.assertEqual(facts, expected)
         self.assertEqual(tuple(m.sender for m in calls[-1].messages), CONSENSUS_AUDITORS)
@@ -314,7 +322,8 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(fresh.submission.workflow_id, review.submission.workflow_id)
         encoded = serialize_consensus_workflow(self.runtime.load_workflow("story_session", "review", review.submission.workflow_id))
         for wrong in (encoded.replace(b'"intent":"review_only",', b'', 1),
-                      encoded.replace(b'"intent":"review_only"', b'"intent":"unknown"', 1)):
+                      encoded.replace(b'"intent":"review_only"', b'"intent":"unknown"', 1),
+                     re.sub(br'"report_material":\{[^}]+\}', b'"report_material":null', encoded, count=1)):
             with self.assertRaises(ValueError):
                 deserialize_consensus_workflow(wrong)
         for inspection in (self.session.inspect_consensus("review", review.submission.workflow_id),

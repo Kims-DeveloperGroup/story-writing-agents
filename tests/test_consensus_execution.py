@@ -30,7 +30,7 @@ from story_writing_agents.consensus.contracts import (
     artifact_material_handle,
     candidate_material_handle,
 )
-from story_writing_agents.consensus.execution import ConsensusPhaseOutputKind
+from story_writing_agents.consensus.execution import ConsensusPhaseOutputKind, _validate_provider_result
 
 
 from tests.test_consensus_projection import _phase_decision
@@ -403,10 +403,14 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
                 ),
             )
 
-        _, _, _, _, receipt = await self.execute(
+        request, _, _, _, receipt = await self.execute(
             ConsensusPhase.AUDIT, appended.append, invoke
         )
         audits = receipt.terminal_event.payload.audits
+        with self.assertRaises(ValueError):
+            _validate_provider_result(request, replace(receipt.provider_results[0], report_material=_CONFLICT_MATERIAL))
+        with self.assertRaises(ValueError):
+            replace(receipt.provider_results[0], kind=ConsensusPhaseOutputKind.CANDIDATE, audit_verdict=None, conflict_material=None, report_material=_CONFLICT_MATERIAL)
         self.assertEqual(
             tuple(item.specialist_id for item in audits),
             (PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST),

@@ -187,6 +187,12 @@ Read the synthesized report from
 The report remains available after review completion and restart; it is findings
 and suggestions only and grants no write authority.
 
+For new review-only audits, synthesis receives each auditor's actual report,
+including observations attached to approval, as well as conflict critiques. The
+runtime retains immutable report material before synthesis, so a restart between
+these phases preserves it. Older version-4 records without report material
+explicitly disclose unavailable reports rather than inventing observations.
+
 ## Provider-call input
 
 After Confirm is durable, runtime selects the agent and builds data equivalent

@@ -9,7 +9,7 @@ from typing import Protocol
 
 from ..agents import EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR
 from ..specialist_routing import AuthoringIntent
-from ..reply_trace import ReplyTrace
+from ..reply_trace import ReplyTrace, ReplyTraceOrigin
 from ..structured_output_validation import validate_details
 from .contracts import (
     CONSENSUS_AUDITORS,
@@ -111,6 +111,7 @@ class ConsensusProviderResult:
     trace: ReplyTrace | None = None
     validation_details: tuple[str, ...] = ()
     review_findings: str | None = field(default=None, kw_only=True)
+    report_material: ConsensusMaterialHandle | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         if type(self.kind) is not ConsensusPhaseOutputKind:
@@ -135,6 +136,17 @@ class ConsensusProviderResult:
             raise TypeError("consensus provider conflict material is invalid")
         if self.trace is not None and type(self.trace) is not ReplyTrace:
             raise TypeError("consensus provider trace must be ReplyTrace or None")
+        if self.report_material is not None and (
+            type(self.report_material) is not ConsensusMaterialHandle
+            or not self.report_material.locator.startswith("candidate:")
+            or self.kind not in {ConsensusPhaseOutputKind.AUDIT, ConsensusPhaseOutputKind.CONFLICT}
+            or (self.trace is not None and self.trace.origin is ReplyTraceOrigin.RUNTIME_FALLBACK)
+        ):
+            raise ValueError("only actual audit output may carry immutable report material")
+        if self.report_material is not None and self.kind is ConsensusPhaseOutputKind.CONFLICT and (
+            self.report_material != self.conflict_material
+        ):
+            raise ValueError("consensus conflict report must reuse critique material")
         validate_details(self.validation_details)
         if self.kind in {
             ConsensusPhaseOutputKind.AUDIT,
@@ -453,6 +465,7 @@ class ConsensusExecutionCoordinator:
                     verdict=output.audit_verdict,
                     audit_digest=output.result_digest,
                     conflict_material=output.conflict_material,
+                    report_material=output.report_material,
                 )
                 for invocation, output in zip(invocations, outputs, strict=True)
             )
@@ -539,6 +552,11 @@ def _validate_provider_result(
 ) -> None:
     if request.phase in {ConsensusPhase.INPUT_ADOPTION, ConsensusPhase.REVIEW_COMPLETION}:
         raise ValueError("provider-free consensus phase cannot accept a provider result")
+    if result.report_material is not None and (
+        request.intent is not AuthoringIntent.REVIEW_ONLY
+        or request.phase is not ConsensusPhase.AUDIT
+    ):
+        raise ValueError("audit report material requires review-only audit")
     if result.review_findings is not None and (
         request.intent is not AuthoringIntent.REVIEW_ONLY
         or request.phase is not ConsensusPhase.SYNTHESIS

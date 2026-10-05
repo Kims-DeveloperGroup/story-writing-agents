@@ -1673,6 +1673,7 @@ class StoryRuntime:
         reply: AgentReply,
         *,
         authored_material: ConsensusMaterialHandle | None = None,
+        report_material: ConsensusMaterialHandle | None = None,
     ) -> ConsensusProviderResult:
         """Map one strict backend reply without deriving authority from prose."""
 
@@ -1682,6 +1683,18 @@ class StoryRuntime:
             raise ValueError("agent reply does not match consensus invocation")
         if invocation.phase in {ConsensusPhase.INPUT_ADOPTION, ConsensusPhase.REVIEW_COMPLETION}:
             raise ValueError("provider-free consensus phase cannot invoke or map a provider")
+        if report_material is not None and (
+            invocation.intent is not AuthoringIntent.REVIEW_ONLY
+            or invocation.phase is not ConsensusPhase.AUDIT
+            or reply.kind is not AgentReplyKind.AUDIT
+            or (reply.trace is not None and reply.trace.origin is ReplyTraceOrigin.RUNTIME_FALLBACK)
+            or type(report_material) is not ConsensusMaterialHandle
+            or not report_material.locator.startswith("candidate:")
+            or report_material.digest != hashlib.sha256(
+                reply.content.encode("utf-8", errors="strict")
+            ).hexdigest()
+        ):
+            raise ValueError("consensus report material must match an actual review-only audit")
         expected_agents = {
             ConsensusPhase.DRAFT: (EXECUTION_SPECIALIST,),
             ConsensusPhase.AUDIT: CONSENSUS_AUDITORS,
@@ -1790,6 +1803,7 @@ class StoryRuntime:
                 candidate,
                 ConsensusAuditVerdict(reply.verdict.value),
                 conflict_material=authored_material,
+                report_material=report_material,
                 trace=reply.trace,
                 validation_details=reply.validation_details,
             )
@@ -1987,6 +2001,11 @@ class StoryRuntime:
                             "verdict": audit.verdict.value,
                             "candidate_digest": audit.candidate_digest,
                             "audit_digest": audit.audit_digest,
+                            "report_available": audit.report_material is not None,
+                            "report_text": (
+                                None if audit.report_material is None
+                                else self._consensus_material_store.read_text(audit.report_material)
+                            ),
                             "conflict_text": (
                                 None if audit.conflict_material is None
                                 else self._consensus_material_store.read_text(audit.conflict_material)
@@ -2105,10 +2124,19 @@ class StoryRuntime:
                 authored_material = self._consensus_material_store.put_text(
                     reply.content
                 )
+            report_material = None
+            if (
+                invocation.intent is AuthoringIntent.REVIEW_ONLY
+                and invocation.phase is ConsensusPhase.AUDIT
+                and reply.kind is AgentReplyKind.AUDIT
+                and (reply.trace is None or reply.trace.origin is not ReplyTraceOrigin.RUNTIME_FALLBACK)
+            ):
+                report_material = authored_material or self._consensus_material_store.put_text(reply.content)
             return self.map_consensus_provider_reply(
                 invocation,
                 reply,
                 authored_material=authored_material,
+                report_material=report_material,
             )
         except BaseException as exc:
             if reference_operation is not None:

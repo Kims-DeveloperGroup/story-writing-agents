@@ -135,6 +135,7 @@ class ConsensusAudit:
     verdict: ConsensusAuditVerdict
     audit_digest: str
     conflict_material: ConsensusMaterialHandle | None = None
+    report_material: ConsensusMaterialHandle | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         if self.specialist_id not in CONSENSUS_AUDITORS:
@@ -144,6 +145,11 @@ class ConsensusAudit:
         if type(self.verdict) is not ConsensusAuditVerdict:
             raise TypeError("consensus audit verdict is invalid")
         _digest(self.audit_digest)
+        if self.report_material is not None and (
+            type(self.report_material) is not ConsensusMaterialHandle
+            or not self.report_material.locator.startswith("candidate:")
+        ):
+            raise ValueError("consensus audit report requires immutable material")
         if self.verdict is ConsensusAuditVerdict.CONFLICT:
             if (
                 type(self.conflict_material) is not ConsensusMaterialHandle
@@ -154,6 +160,10 @@ class ConsensusAudit:
                 )
         elif self.conflict_material is not None:
             raise ValueError("consensus approval cannot carry critique material")
+        if self.report_material is not None and self.verdict is ConsensusAuditVerdict.CONFLICT and (
+            self.report_material != self.conflict_material
+        ):
+            raise ValueError("consensus conflict report must reuse critique material")
 
 
 @dataclass(frozen=True, slots=True)
@@ -423,6 +433,11 @@ class ConsensusPhaseResult:
         if type(self.audits) is not tuple or any(type(item) is not ConsensusAudit for item in self.audits):
             raise TypeError("consensus audits are invalid")
         if self.audits:
+            if any(item.report_material is not None for item in self.audits) and (
+                self.intent is not AuthoringIntent.REVIEW_ONLY
+                or self.phase is not ConsensusPhase.AUDIT
+            ):
+                raise ValueError("audit reports require review-only audit results")
             if self.phase not in {ConsensusPhase.AUDIT, ConsensusPhase.REAUDIT}:
                 raise ValueError("only audit phases may carry audits")
             if tuple(item.specialist_id for item in self.audits) != CONSENSUS_AUDITORS:
