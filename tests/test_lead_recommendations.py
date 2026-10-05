@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from tests.test_collaboration_events import editorial, editorial_request
 import asyncio
 import json
 import os
@@ -198,6 +199,17 @@ class LeadRecommendationTests(RecommendationCase):
         self.assertEqual(len(self.backend.calls), calls + 1)
         self.assert_no_downstream(conversation_id)
         self.assertEqual(self.snapshots(), snapshots)
+
+        source = self.conversation("Editorial source")
+        selected = await self.runtime.record_editorial_decision(self.session_id, source, editorial_request("recommendation_selected_memory"))
+        current, stale = await self.recommend()
+        self.assertEqual(stale.recommendation_request.basis.editorial_refs, (selected.record_ref,))
+        await self.runtime.record_editorial_decision(self.session_id, source, editorial.EditorialRecordRequest("reject_recommendation_memory", editorial.EditorialAction.REJECT, "Changed explicitly.", expected_ref=selected.record_ref))
+        before, calls = self.history(current), len(self.backend.calls)
+        closed = await self.runtime.decide_lead_recommendation(decision(stale))
+        self.assertEqual((closed.kind, self.history(current)[-1].payload.state), (c.LeadOutcomeKind.ANSWER, c.LeadRecommendationState.STALE))
+        self.assertEqual(tuple(event.kind for event in self.history(current)[-2:]), (c.CollaborationEventKind.LEAD_RECOMMENDATION_DECISION, c.CollaborationEventKind.LEAD_RECOMMENDATION_RESULT))
+        self.assertEqual((self.history(current)[:-2], len(self.backend.calls)), (before, calls))
 
 
 

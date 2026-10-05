@@ -775,6 +775,38 @@ failed closure, and uncertain reference cleanup remain recovery-gated. See
 [recommendation history](collaboration-history.md#recommendation-preparation-events)
 and [recovery](../operations/recovery-and-limitations.md#recommendation-preparation-recovery).
 
+### Editorial memory methods
+
+`await StoryRuntime.record_editorial_decision(session_id, conversation_id, request)`
+accepts an `EditorialRecordRequest` and returns `EditorialRecordResult`.
+`StoryRuntime.inspect_editorial_state(session_id)` returns the deterministic
+`EditorialStateProjection`. The session-bound forms omit `session_id`. Value contracts
+are imported from `story_writing_agents.editorial_state`.
+
+DIRECTIVE creates a SELECTED record; PROPOSE creates a PROPOSED record. SELECT,
+REJECT and SUPERSEDE name the exact current `EditorialRecordRef`. REVISE also provides
+replacement content and an explicit PROPOSED or SELECTED approval. The receipt contains
+`session_id`, `record_id`, `revision`, `conversation_id`, `event_id` and `record_digest`.
+Successful transitions create another retained revision with immutable origin.
+The record kind and origin-task identity stay fixed across revisions. SELECT accepts
+only a current proposed record; restoring discarded intent requires explicit REVISE.
+
+Request IDs bind exact retry arguments. An unchanged retry does not append another
+decision. Stale or foreign references and invalid provenance cannot overwrite current
+records; pending workflow controls retain priority. Recording and inspection do not
+invoke providers or apply artifacts. Provider assertions and raw conversational approval
+cannot perform the typed decision controls.
+
+Inspection separates current approval, all retained revisions, provenance gaps and
+historical matching application facts. Lead context cites exact selected revisions and
+pins them in host-owned proposal basis references. Confirm revalidates those references;
+final review inherits them without substituting newly sampled memory. Application facts
+identify historical task/candidate use and do not supply current artifact contents or
+prove ambiguity or setup has been resolved.
+
+See [editorial decisions](../guides/lead-agent.md#editorial-decisions) and the
+[history contract](collaboration-history.md#editorial-memory).
+
 ### Contextual authoring objectives
 
 The public Python API calls the tracked document change an objective. Provider
@@ -1312,6 +1344,11 @@ queries and relative locators.
 RuntimeSession.apply_directive(text: str) -> dict[str, object]
 RuntimeSession.set_overrides(overrides: Mapping[str, Any]) -> dict[str, Any]
 RuntimeSession.inspect() -> dict[str, Any]
+await RuntimeSession.record_editorial_decision(
+    conversation_id: str,
+    request: EditorialRecordRequest,
+) -> EditorialRecordResult
+RuntimeSession.inspect_editorial_state() -> EditorialStateProjection
 RuntimeSession.inspect_debate(debate_id: str) -> dict[str, Any]
 RuntimeSession.inspect_debate_context(debate_id: str) -> dict[str, Any] | None
 RuntimeSession.inspect_reference_operation(

@@ -1,6 +1,9 @@
 """Exact session memory, recovery, and publication safety using synthetic providers."""
 
 from __future__ import annotations
+import hashlib
+from story_writing_agents.conversations import encode_collaboration_event
+from tests.test_collaboration_events import editorial, editorial_request
 from tests.test_lead_orchestration import _exploration_outcome, _visible_outcome
 from story_writing_agents import lead_exploration as exploration
 
@@ -89,8 +92,14 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
     async def test_confirmed_plan_survives_three_followups_and_conversation_switch(self):
         first = self.conversation("Synthetic planning")
         second = self.conversation("Synthetic follow-up")
+        retained = []
+        for kind in (editorial.EditorialRecordKind.DIRECTION, editorial.EditorialRecordKind.PROTECTED_AMBIGUITY, editorial.EditorialRecordKind.SETUP_OBLIGATION):
+            retained.append(await self.runtime.record_editorial_decision(self.session_id, first, editorial_request("retain_" + kind.value, kind=kind)))
         proposed = await self.proposal(first)
         prior = self.snapshot()
+        refusal = await self.runtime.record_editorial_decision(self.session_id, first, editorial_request("pending_memory"))
+        self.assertIs(refusal.status, editorial.EditorialRecordStatus.PENDING_CONTROL_REQUIRED)
+        self.assertEqual(self.snapshot(), prior)
         plan = "First inspect the outline.\nSecond review the character motive.\nThird draft the opening."
         self.backend.enqueue_for(PLOT_ARCHITECT, lead._specialist_outcome())
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, lead._synthesis_outcome(message=plan))
@@ -234,3 +243,24 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         normal = await restarted.lead_turn(self.session_id, provisional, "Explain the ordinary workflow.")
         self.assertIs(normal.interaction_mode, exploration.LeadInteractionMode.ORCHESTRATION)
         self.assertIsNone(normal.exploration)
+
+        state = restarted.inspect_editorial_state(self.session_id)
+        self.assertEqual({r.ref for r in state.selected_records}, {r.record_ref for r in retained})
+        self.assertTrue(all(r.draft.alternatives[0].disposition is editorial.EditorialApprovalState.REJECTED for r in state.current_records))
+        views = [call.payload["session_history"]["editorial_state"] for call in self.backend.calls if "session_history" in call.payload]
+        self.assertTrue(all({r["record_id"] for r in v["selected_refs"]} == {r.record_ref.record_id for r in retained} for v in views))
+        self.assertTrue(all(len(json.dumps(call.payload["session_history"], ensure_ascii=False, separators=(",", ":"), default=dict).encode()) <= MAX_SESSION_CONTEXT_UTF8_BYTES for call in self.backend.calls if "session_history" in call.payload))
+
+        source = next(event for event in self.history(provisional) if event.kind is CollaborationEventKind.LEAD_EXPLORATION_RESULT)
+        provenance = editorial.EditorialProvenanceRef(self.session_id, provisional, source.event_id, hashlib.sha256(encode_collaboration_event(source)).hexdigest(), explored.exploration.ideas[0].idea_id)
+        proposal = await restarted.record_editorial_decision(self.session_id, provisional, editorial_request("quoted_alternative", action=editorial.EditorialAction.PROPOSE, provenance_refs=(provenance,)))
+        self.assertIs(proposal.record.approval_state, editorial.EditorialApprovalState.PROPOSED)
+        history_before_retry = self.history(provisional)
+        retry = await restarted.record_editorial_decision(self.session_id, provisional, proposal.record.request)
+        self.assertEqual((retry.status, retry.record_ref, self.history(provisional)), (editorial.EditorialRecordStatus.UNCHANGED, proposal.record_ref, history_before_retry))
+        choice = await restarted.record_editorial_decision(self.session_id, provisional, editorial.EditorialRecordRequest("choose_quote", editorial.EditorialAction.SELECT, "Explicit USER selection.", expected_ref=proposal.record_ref))
+        self.assertEqual(choice.record.draft.provenance_refs, (provenance,))
+        self.assertIs(choice.record.approval_state, editorial.EditorialApprovalState.SELECTED)
+        invalid = await restarted.record_editorial_decision(self.session_id, provisional, editorial_request("missing_citation", provenance_refs=(replace(provenance, event_id="unavailable"),)))
+        self.assertIs(invalid.status, editorial.EditorialRecordStatus.INVALID_PROVENANCE)
+        self.assertIsNone(invalid.record)

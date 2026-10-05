@@ -414,6 +414,12 @@ Selecting an idea for adoption starts a fresh ordinary authoring workflow with
 required specialist drafting, complete candidate review and separate confirmation,
 Apply and Commit decisions. See [exploration and adoption](docs/guides/lead-agent.md#exploration-and-adoption).
 
+The Python API can record editorial directions, rejected alternatives, protected ambiguity
+and setup obligations through explicit user controls. Exact revisions and reasons remain
+in conversation history, with a cited current view for the Lead across conversations and
+restart. See [editorial decisions](docs/guides/lead-agent.md#editorial-decisions) and the
+[recording and inspection API](docs/reference/runtime-api.md#editorial-memory-methods).
+
 ## Canonical writing artifacts
 
 The canonical reference-source paths are the four exact core-document paths and

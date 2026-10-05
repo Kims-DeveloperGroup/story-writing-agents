@@ -35,6 +35,8 @@ from .context import (
     ConversationContextPolicy,
     ConversationContextWindow,
     project_collaboration_history,
+    project_editorial_state,
+    editorial_provenance_available,
     project_collaboration_readable_history,
     select_bounded_collaboration_context,
     select_bounded_conversation_context,
@@ -103,6 +105,7 @@ from .events import (
     CollaborationLeadExplorationRequestPayload,
     CollaborationLeadExplorationResultPayload,
     CollaborationExplorationAdoptionPayload,
+    CollaborationEditorialRecordPayload,
     CollaborationMessagePayload,
     CollaborationPayload,
     CollaborationProposal,
@@ -243,6 +246,7 @@ _PUBLIC_TYPES = (
     CollaborationLeadExplorationRequestPayload,
     CollaborationLeadExplorationResultPayload,
     CollaborationExplorationAdoptionPayload,
+    CollaborationEditorialRecordPayload,
     CollaborationLeadOutcomeFailureCode,
     CollaborationLeadOutcomeFailurePayload,
     CollaborationMessagePayload,
@@ -307,6 +311,8 @@ encode_collaboration_event.__module__ = __name__
 encode_collaboration_event_draft.__module__ = __name__
 encode_collaboration_proposal.__module__ = __name__
 project_collaboration_history.__module__ = __name__
+project_editorial_state.__module__ = __name__
+editorial_provenance_available.__module__ = __name__
 artifact_objective_context.__module__ = __name__
 project_collaboration_readable_history.__module__ = __name__
 select_bounded_collaboration_context.__module__ = __name__
@@ -418,6 +424,7 @@ __all__ = [
     "CollaborationLeadExplorationRequestPayload",
     "CollaborationLeadExplorationResultPayload",
     "CollaborationExplorationAdoptionPayload",
+    "CollaborationEditorialRecordPayload",
     "CollaborationMessagePayload",
     "CollaborationNextAction",
     "CollaborationPayload",
@@ -472,6 +479,8 @@ __all__ = [
     "encode_collaboration_proposal",
     "normalize_conversation_subject",
     "project_collaboration_history",
+    "project_editorial_state",
+    "editorial_provenance_available",
     "project_collaboration_readable_history",
     "select_bounded_collaboration_context",
     "select_bounded_conversation_context",

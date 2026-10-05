@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+from .editorial_state import (
+    EditorialRecordRequest, EditorialRecordResult, EditorialRecordStatus,
+    EditorialRecordRef, EditorialStateProjection, EditorialApprovalState,
+    EditorialStateIntegrityError, build_editorial_revision, editorial_ref_to_dict,
+)
+from .conversations import CollaborationEditorialRecordPayload, editorial_provenance_available
+
 from .lead_exploration import (LeadInteractionMode, ExplorationIdeaKind, ExplorationReportStatus,
     ExplorationIdea, ExplorationObservation, ExplorationArtifactRead, LeadExplorationReport,
     ExplorationAdoptionSelection, ExplorationAdoptionCapture, material_sha256,
@@ -67,7 +74,7 @@ from .structured_output_validation import (
     bounded_chunks,
     diagnose_json_text,
 )
-from .conversations.session_context import SessionContextCapacityError
+from .conversations.session_context import SessionContextCapacityError, SessionHistorySnapshot
 from .agent_context.service import (
     AgentContextService,
     ContextAnswerAuthorization,
@@ -3054,6 +3061,7 @@ class StoryRuntime:
         artifact_binding: SessionArtifactBinding,
         authoring_scope: AuthoringScope | None = None,
         shared_premises: tuple[CollaborationSharedPremise, ...] = (),
+        editorial_refs: tuple[EditorialRecordRef, ...] = (),
     ) -> CollaborationProposalBasis:
         if type(artifact_binding) is not SessionArtifactBinding:
             raise TypeError("recommendation basis requires an exact artifact binding")
@@ -3075,6 +3083,7 @@ class StoryRuntime:
             inputs=inputs, evidence=evidence,
             schema_version=2 if authoring_scope is not None and authoring_scope.schema_version == 3 else 1,
             shared_premises=shared_premises,
+            editorial_refs=editorial_refs,
         )
 
     def _recommendation_request_draft(
@@ -3085,6 +3094,7 @@ class StoryRuntime:
         tail_sequence: int, step_id: str | None = None,
         previous: LeadRecommendationRequestPayload | None = None,
         preview_replies: tuple[CollaborationSpecialistReplyPayload, ...] = (),
+        session_history: SessionHistorySnapshot | None = None,
     ) -> CollaborationEventDraft:
         if type(artifact_binding) is not SessionArtifactBinding:
             raise TypeError(
@@ -3310,6 +3320,7 @@ class StoryRuntime:
                 artifact_binding=artifact_binding,
                 authoring_scope=scope,
                 shared_premises=inherited_capture,
+                editorial_refs=self._editorial_refs_for_scope(source.session_id, scope, session_history),
             ),
             source_fingerprint=self._recommendation_source_fingerprint(
                 source.session_id,
@@ -3433,6 +3444,7 @@ class StoryRuntime:
             stale = False
             if decision.kind is not CollaborationConfirmationDecision.REJECT:
                 try:
+                    self._validate_editorial_refs(session_id, request.basis.editorial_refs)
                     artifact_binding = self._session_artifact_binding(session_id)
                     scope = request.authoring_scope
                     current = None if scope is None else self._authoring_tasks(
@@ -3467,6 +3479,7 @@ class StoryRuntime:
                             artifact_binding=artifact_binding,
                             authoring_scope=request.authoring_scope,
                             shared_premises=self._remap_shared_premises(request.basis, current_inputs),
+                            editorial_refs=request.basis.editorial_refs,
                         ) != request.basis
                         or self._recommendation_source_fingerprint(
                             session_id,
@@ -3708,6 +3721,108 @@ class StoryRuntime:
             CollaborationNextAction.CONTINUE_WITH_LEAD,
             CollaborationLeadEvidence(LeadOutcomeScope.WORKFLOW_META, LeadEvidenceStatus.NOT_APPLICABLE, ()),
             validation_details=validation_details)
+
+    def _editorial_snapshot(self, session_id: str) -> SessionHistorySnapshot:
+        services = self.conversation_storage_services
+        return SessionHistorySourceAdapter(services.catalog, services.event_store, session_id).capture()
+
+    def inspect_editorial_state(self, session_id: str) -> EditorialStateProjection:
+        """Inspect exact retained USER decisions, never artifact or workflow authority."""
+        return self._editorial_snapshot(session_id).editorial_state()
+
+    async def record_editorial_decision(self, session_id: str, conversation_id: str,
+                                       request: EditorialRecordRequest) -> EditorialRecordResult:
+        """Record an explicit USER operation with exact, single-parent revision control."""
+        if type(request) is not EditorialRecordRequest:
+            raise TypeError("request must be EditorialRecordRequest")
+        self._validate_lead_identity(session_id, conversation_id)
+        if request.expected_ref is not None and request.expected_ref.session_id != session_id:
+            raise ValueError("editorial receipt belongs to a different session")
+        async with self._lead_session_lifecycle(session_id), self._conversation_lock(session_id, conversation_id):
+            snapshot = self._editorial_snapshot(session_id)
+            state = snapshot.editorial_state()
+            repeated = tuple(item for item in state.revisions if item.request.request_id == request.request_id)
+            if repeated:
+                if len(repeated) != 1 or repeated[0].request != request or repeated[0].conversation_id != conversation_id:
+                    raise ValueError("editorial retry identity has different arguments")
+                return EditorialRecordResult(EditorialRecordStatus.UNCHANGED, "This exact USER editorial operation is already recorded.", repeated[0])
+            local = tuple(event for event in snapshot.events() if event.conversation_id == conversation_id)
+            projection = project_collaboration_history(local)
+            if (projection.current_state in {CollaborationStepState.AWAITING_CONFIRMATION,
+                    CollaborationStepState.RECONFIRMATION_REQUIRED, CollaborationStepState.RUNNING,
+                    CollaborationStepState.OUTCOME_UNKNOWN, CollaborationStepState.RECOVERY_REQUIRED}
+                or projection.current_recommendation_state in {LeadRecommendationState.PENDING, LeadRecommendationState.RUNNING}
+                or (projection.current_reviewed_artifact_proposal is not None and projection.current_artifact_application_result is None)
+                or (projection.current_story_commit_request is not None and projection.current_story_commit_result is None)):
+                return EditorialRecordResult(EditorialRecordStatus.PENDING_CONTROL_REQUIRED,
+                    "Resolve the current exact confirmation, Apply, Commit or uncertain outcome before editing editorial decisions.")
+            previous = None
+            if request.expected_ref is not None:
+                previous = next((item for item in state.current_records if item.ref == request.expected_ref), None)
+                if previous is None:
+                    return EditorialRecordResult(EditorialRecordStatus.STALE_REFERENCE,
+                        "The editorial revision receipt is stale or unavailable; inspect current records before deciding.")
+            if request.draft is not None:
+                if any(not editorial_provenance_available(ref, snapshot.events()) for ref in request.draft.provenance_refs):
+                    return EditorialRecordResult(EditorialRecordStatus.INVALID_PROVENANCE,
+                        "A cited source is missing, foreign or changed; choose its exact retained receipt or record USER intent without that citation.")
+                if request.draft.origin_task_id is not None:
+                    pair = (request.draft.origin_task_id, request.draft.origin_task_revision)
+                    proposals = tuple(event.payload for event in snapshot.events() if type(event.payload) is CollaborationProposal
+                        and event.payload.authoring_scope is not None and
+                        (event.payload.authoring_scope.task_id, event.payload.authoring_scope.task_revision) == pair)
+                    if not proposals:
+                        return EditorialRecordResult(EditorialRecordStatus.INVALID_PROVENANCE,
+                            "The editorial origin task and revision are not present in this session history.")
+            event_id = self._new_id("e")
+            record = build_editorial_revision(request, session_id=session_id, conversation_id=conversation_id,
+                event_id=event_id, record_id=self._new_id("ed") if previous is None else previous.record_id, previous=previous)
+            draft = self._draft_with_id(event_id=event_id, session_id=session_id, conversation_id=conversation_id,
+                turn_id=self._new_id("t"), step_id=self._new_id("s"), kind=CollaborationEventKind.EDITORIAL_RECORD,
+                sender=_USER_ACTOR, recipient=_LEAD_ACTOR, payload=CollaborationEditorialRecordPayload(record))
+            self._append_drafts(projection.last_sequence, (draft,))
+            return EditorialRecordResult(EditorialRecordStatus.RECORDED, "Exact USER editorial decision recorded.", record)
+
+    def _editorial_refs_for_scope(self, session_id: str, scope: AuthoringScope | None,
+                                 snapshot: SessionHistorySnapshot | None = None) -> tuple[EditorialRecordRef, ...]:
+        if scope is None or scope.schema_version != 3:
+            return ()
+        snapshot = self._editorial_snapshot(session_id) if snapshot is None else snapshot
+        events = snapshot.events()
+        confirmed = {(event.payload.proposal_id, event.payload.proposal_revision, event.payload.proposal_digest)
+            for event in events if type(event.payload) is CollaborationConfirmationPayload
+            and event.payload.decision is CollaborationConfirmationDecision.CONFIRM}
+        sources = tuple(event.payload for event in events if type(event.payload) is CollaborationProposal
+            and event.payload.authoring_scope is not None
+            and (event.payload.authoring_scope.task_id, event.payload.authoring_scope.task_revision) == (scope.task_id, scope.task_revision)
+            and (event.payload.proposal_id, event.payload.proposal_revision, event.payload.proposal_digest) in confirmed)
+        if sources:
+            refs = sources[0].basis.editorial_refs
+            if any(item.basis.editorial_refs != refs for item in sources):
+                raise EditorialStateIntegrityError("confirmed task revision changed its editorial capture")
+            return refs
+        return snapshot.editorial_refs()
+
+    @staticmethod
+    def _editorial_pinned_view(snapshot: SessionHistorySnapshot, refs: tuple[EditorialRecordRef, ...]) -> dict:
+        view = snapshot.editorial_view()
+        if view is None:
+            raise SessionContextCapacityError()
+        desired = {ref.record_id: ref for ref in refs}
+        records = [item for item in view["records"] if item["record_ref"]["record_id"] in desired
+                   and item["record_ref"] == editorial_ref_to_dict(desired[item["record_ref"]["record_id"]])]
+        if len(records) != len(refs):
+            raise SessionContextCapacityError()
+        return {**view, "records": records, "selected_refs": [editorial_ref_to_dict(ref) for ref in refs],
+                "applied_facts": [], "provenance_gaps": [item for item in view["provenance_gaps"]
+                    if item["record_ref"]["record_id"] in desired]}
+
+    def _validate_editorial_refs(self, session_id: str, refs: tuple[EditorialRecordRef, ...]) -> None:
+        if not refs:
+            return
+        selected = {record.ref for record in self.inspect_editorial_state(session_id).selected_records}
+        if any(ref not in selected for ref in refs):
+            raise ValueError("editorial selection changed; inspect current records and freshly propose before Confirm")
 
     async def lead_turn(
         self,
@@ -5861,6 +5976,7 @@ class StoryRuntime:
                 separators=(",", ":"),
             ),
             action_progress_sink=action_progress_sink,
+            editorial_refs=proposal.basis.editorial_refs,
         )
 
     async def _run_lead_synthesis(
@@ -6016,6 +6132,7 @@ class StoryRuntime:
                 separators=(",", ":"),
             ),
             action_progress_sink=action_progress_sink,
+            editorial_refs=proposal.basis.editorial_refs,
         )
 
     @staticmethod
@@ -6194,7 +6311,9 @@ class StoryRuntime:
         fallback_answer: str,
         action_progress_sink: ContextActionProgressSink | None,
         constraints: LeadProviderConstraints | None = None,
+        editorial_refs: tuple[EditorialRecordRef, ...] = (),
     ) -> _CollaborationInvocationResult:
+        session_history: SessionHistorySnapshot | None = None
         artifact_inputs = tuple(
             item
             for item in inputs
@@ -6214,6 +6333,9 @@ class StoryRuntime:
         ] | None = None
         execution_workspace: ProviderExecutionWorkspace | None = None
         try:
+            session_history = self._editorial_snapshot(session_id) if agent_id == LEAD_ORCHESTRATOR or editorial_refs else None
+            if editorial_refs:
+                material_value = {**material_value, "editorial_state": self._editorial_pinned_view(session_history, editorial_refs)}
             if agent_id == LEAD_ORCHESTRATOR:
                 generation_pin = artifact_binding.acquire_generation_pin()
             repository_access = partial(
@@ -6336,6 +6458,7 @@ class StoryRuntime:
                     self._session_context_state(
                         session_id,
                         artifact_binding=artifact_binding,
+                        session_history=session_history,
                     )
                     if agent_id == LEAD_ORCHESTRATOR else None
                 ),
@@ -6411,6 +6534,7 @@ class StoryRuntime:
                 **self._lead_continuation_arguments(
                     session_id, conversation_id, turn_id, step_id,
                     agent_id=agent_id, synthesis=True,
+                    session_history=session_history,
                 ),
             }
             submitted_before = provider.submitted_physical_calls
@@ -8024,6 +8148,7 @@ class StoryRuntime:
                 evidence=proposal.basis.evidence,
                 schema_version=proposal.basis.schema_version,
                 shared_premises=proposal.basis.shared_premises,
+                editorial_refs=proposal.basis.editorial_refs,
             ),
         )
 
@@ -8837,6 +8962,7 @@ class StoryRuntime:
         adoption_capture: ExplorationAdoptionCapture | None = None,
         adoption_event_id: str | None = None,
     ) -> LeadTurnResult:
+        session_history = self._editorial_snapshot(session_id)
         if self.backend is None:
             raise BackendProtocolError("lead collaboration requires an AgentBackend")
         ordinary_front_cap = None if preparation is not None or interaction_mode is LeadInteractionMode.EXPLORATION or adoption_capture is not None else self._ordinary_front_call_cap(session_id, conversation_id)
@@ -9155,6 +9281,7 @@ class StoryRuntime:
                 session_state_json=self._session_context_state(
                     session_id,
                     artifact_binding=artifact_binding,
+                    session_history=session_history,
                 ),
                 execution_workspace=execution_workspace,
             )
@@ -9451,6 +9578,7 @@ class StoryRuntime:
                         projection=recommendation_projection,
                         artifact_binding=artifact_binding,
                         tail_sequence=recommendation_projection.last_sequence + 2,
+                        session_history=session_history,
                     )
 
             result = None
@@ -9476,6 +9604,7 @@ class StoryRuntime:
                     progress_sink=action_progress_sink,
                     **self._lead_continuation_arguments(
                         session_id, conversation_id, turn_id, step_id,
+                        session_history=session_history,
                     ),
                 )
             except BaseException as first_failure:
@@ -9593,6 +9722,7 @@ class StoryRuntime:
                         progress_sink=action_progress_sink,
                         **self._lead_continuation_arguments(
                             session_id, conversation_id, turn_id, step_id,
+                            session_history=session_history,
                         ),
                     )
                 except BaseException as correction_failure:
@@ -9905,6 +10035,7 @@ class StoryRuntime:
                         objective_projection=objective_projection,
                         preparation=preparation,
                         artifact_binding=artifact_binding,
+                        session_history=session_history,
                     ), validation_details=provider.validation_details)
                 except _LeadOutcomeValidationError:
                     assert provider is not None
@@ -9954,6 +10085,7 @@ class StoryRuntime:
                     lead_definition=definition,
                     evidence=evidence,
                     artifact_binding=artifact_binding,
+                    session_history=session_history,
                 )
             except _LeadCallBudgetExceeded:
                 return self._structured_fallback_lead_result(
@@ -10080,6 +10212,7 @@ class StoryRuntime:
                 tail_sequence=refreshed.last_sequence + len(final_drafts) + 1,
                 step_id=self._new_id("s") if refreshed.current_proposal is not None else None,
                 previous=None if preparation is None else preparation.request_event.payload,
+                session_history=session_history,
             )
             self._append_drafts(refreshed.last_sequence, (*final_drafts, request_draft))
             return replace(
@@ -10129,6 +10262,7 @@ class StoryRuntime:
         objective_projection: CollaborationHistoryProjection,
         artifact_binding: SessionArtifactBinding,
         preparation: _RecommendationCapability | None = None,
+        session_history: SessionHistorySnapshot | None = None,
     ) -> LeadTurnResult:
         """Construct and disclose one exact candidate without mutating artifacts."""
 
@@ -10231,6 +10365,7 @@ class StoryRuntime:
             lead_definition=lead_definition,
             evidence=evidence,
             artifact_binding=artifact_binding,
+            session_history=session_history,
         )
         request_id = self._new_id("c")
         judgment = self._draft(
@@ -12617,6 +12752,7 @@ class StoryRuntime:
         lead_definition: object,
         evidence: CollaborationLeadEvidence,
         artifact_binding: SessionArtifactBinding,
+        session_history: SessionHistorySnapshot | None = None,
     ) -> CollaborationProposal:
         if intent.authoring_scope is None:
             raise BackendProtocolError("live proposal requires authoring scope")
@@ -12744,6 +12880,7 @@ class StoryRuntime:
             evidence=evidence,
             schema_version=2 if intent.authoring_scope.schema_version == 3 else 1,
             shared_premises=captured,
+            editorial_refs=self._editorial_refs_for_scope(session_id, intent.authoring_scope, session_history),
         )
         budget = CollaborationBudget(
             round_limit=COLLABORATION_ROUND_LIMIT,
@@ -12786,6 +12923,7 @@ class StoryRuntime:
         artifact_binding: SessionArtifactBinding | None = None,
     ) -> None:
         """Re-derive every mutable runtime fact before minting start authority."""
+        self._validate_editorial_refs(session_id, proposal.basis.editorial_refs)
 
         if artifact_binding is None:
             artifact_binding = self._session_artifact_binding(session_id)
@@ -12916,6 +13054,7 @@ class StoryRuntime:
                 evidence=proposal.basis.evidence,
                 schema_version=proposal.basis.schema_version,
                 shared_premises=proposal.basis.shared_premises,
+                editorial_refs=proposal.basis.editorial_refs,
             )
             budget = CollaborationBudget(
                 round_limit=COLLABORATION_ROUND_LIMIT,
@@ -14475,6 +14614,7 @@ class StoryRuntime:
                     "rounds": proposal.budget.rounds_spent,
                 },
                 "context": proposal.basis.context_policy_fingerprint,
+                **({"editorial_refs": [editorial_ref_to_dict(ref) for ref in proposal.basis.editorial_refs]} if proposal.basis.editorial_refs else {}),
                 "inputs": [
                     [
                         item.input_id,
@@ -14691,9 +14831,12 @@ class StoryRuntime:
                 raise BackendProtocolError("context provider factory must be synchronous")
             provider.renew_delegate(delegate)
             services = self.conversation_storage_services
-            arguments["session_history"] = SessionHistorySourceAdapter(
+            refreshed_history = SessionHistorySourceAdapter(
                 services.catalog, services.event_store, request.session_id,
             ).capture()
+            prior_history = arguments.get("session_history")
+            arguments["session_history"] = (refreshed_history.with_editorial_capture(prior_history)
+                if type(prior_history) is SessionHistorySnapshot else refreshed_history)
             return await self._agent_context_service.invoke(
                 replace(request, physical_call_limit=limit - spent),
                 provider, **arguments,
@@ -14722,6 +14865,7 @@ class StoryRuntime:
         session_id: str,
         *,
         artifact_binding: SessionArtifactBinding | None = None,
+        session_history: SessionHistorySnapshot | None = None,
     ) -> str:
         """Capture current instructions; artifact content requires SEARCH/READ."""
         value = {
@@ -14732,6 +14876,7 @@ class StoryRuntime:
     def _lead_continuation_arguments(
         self, session_id: str, conversation_id: str, turn_id: str, step_id: str,
         *, agent_id: str = LEAD_ORCHESTRATOR, synthesis: bool = False,
+        session_history: SessionHistorySnapshot | None = None,
     ) -> dict[str, Any]:
         if agent_id != LEAD_ORCHESTRATOR:
             return {}
@@ -14757,9 +14902,7 @@ class StoryRuntime:
                 if type(event.payload) is CollaborationLeadOutcomeFailurePayload
             )),
             "continuation": self._lead_continuations[session_id],
-            "session_history": SessionHistorySourceAdapter(
-                services.catalog, services.event_store, session_id,
-            ).capture(),
+            "session_history": self._editorial_snapshot(session_id) if session_history is None else session_history,
             "publication_validator": published,
         }
 
@@ -15229,6 +15372,13 @@ class RuntimeSession:
             ruling=ruling,
             added_revision_rounds=added_revision_rounds,
         )
+
+    def inspect_editorial_state(self) -> EditorialStateProjection:
+        return self.runtime.inspect_editorial_state(self.session_id)
+
+    async def record_editorial_decision(self, conversation_id: str,
+                                       request: EditorialRecordRequest) -> EditorialRecordResult:
+        return await self.runtime.record_editorial_decision(self.session_id, conversation_id, request)
 
     async def lead_turn(
         self,

@@ -1,6 +1,7 @@
 """End-to-end acceptance tests for the lead-front-channel runtime."""
 
 from __future__ import annotations
+from tests.test_collaboration_events import editorial, editorial_request
 from story_writing_agents.provider_wire import project_result_schema
 from story_writing_agents.lead_provider_contracts import LeadExplorationConstraints
 from story_writing_agents.agent_context.service import ContextJsonObjectResultContract
@@ -1805,6 +1806,17 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         self.assertEqual(superseded.batch_id, yes_event.batch_id)
         self.assertLess(superseded.sequence, next_prepared.sequence)
         self.assertEqual(pending.step_id, superseded.step_id)
+
+        memory_id = self.conversation("Editorial pending proposal")
+        selected = await self.runtime.record_editorial_decision(self.session_id, memory_id, editorial_request("proposal_selected_memory"))
+        stale = await self.proposal(memory_id)
+        self.assertEqual(stale.proposal.basis.editorial_refs, (selected.record_ref,))
+        other = self.conversation("Changed editorial choice")
+        await self.runtime.record_editorial_decision(self.session_id, other, editorial.EditorialRecordRequest("reject_proposal_memory", editorial.EditorialAction.REJECT, "Changed explicitly.", expected_ref=selected.record_ref))
+        before, calls = self.history(memory_id), len(self.backend.calls)
+        with self.assertRaises(ValueError):
+            await self.runtime.decide_lead_step(_decision(stale, CollaborationConfirmationDecision.CONFIRM))
+        self.assertEqual((self.history(memory_id), len(self.backend.calls)), (before, calls))
 
     async def test_reference_drift_blocks_confirmation_without_calls(self) -> None:
         conversation_id = self.conversation("Drift")

@@ -8,6 +8,11 @@ from ..lead_exploration import (
     adoption_capture_to_dict, adoption_capture_from_dict,
 )
 
+from ..editorial_state import (
+    EditorialRecordRevision, EditorialRecordRef, editorial_revision_to_dict,
+    editorial_revision_from_dict, editorial_ref_to_dict, editorial_ref_from_dict,
+)
+
 import hashlib
 import json
 import re
@@ -91,6 +96,7 @@ class CollaborationEventKind(StrEnum):
     LEAD_EXPLORATION_REQUEST = "lead_exploration_request"
     LEAD_EXPLORATION_RESULT = "lead_exploration_result"
     EXPLORATION_ADOPTION = "exploration_adoption"
+    EDITORIAL_RECORD = "editorial_record"
 
     MESSAGE = "message"
     ASSIGNMENT_DISPATCH = "assignment_dispatch"
@@ -1724,10 +1730,15 @@ class CollaborationProposalBasis:
     evidence: CollaborationLeadEvidence | None
     schema_version: int = field(default=1, kw_only=True)
     shared_premises: tuple[CollaborationSharedPremise, ...] = field(default=(), kw_only=True)
+    editorial_refs: tuple[EditorialRecordRef, ...] = field(default=(), kw_only=True)
 
     def __post_init__(self) -> None:
         if type(self.schema_version) is not int or self.schema_version not in {1, 2}:
             raise ValueError("proposal basis version is unsupported")
+        _validate_exact_tuple(self.editorial_refs, EditorialRecordRef, label="editorial references")
+        _require_unique(tuple(item.record_id for item in self.editorial_refs), label="editorial record IDs")
+        if self.editorial_refs and self.schema_version != 2:
+            raise ValueError("editorial references require the current proposal basis")
         _validate_exact_tuple(self.shared_premises, CollaborationSharedPremise, label="shared premises")
         _require_unique(tuple(item.slot_id for item in self.shared_premises), label="shared premise slot IDs")
         if self.schema_version == 1 and self.shared_premises:
@@ -3722,8 +3733,20 @@ class CollaborationExplorationAdoptionPayload:
             raise TypeError("adoption requires an exact captured selection")
 
 
+@dataclass(frozen=True, slots=True)
+class CollaborationEditorialRecordPayload:
+    """Exact structured USER intake and the resulting immutable revision."""
+
+    record: EditorialRecordRevision
+
+    def __post_init__(self) -> None:
+        if type(self.record) is not EditorialRecordRevision:
+            raise TypeError("editorial record payload is invalid")
+
+
 CollaborationPayload = (
-    CollaborationLeadExplorationRequestPayload
+    CollaborationEditorialRecordPayload
+    |     CollaborationLeadExplorationRequestPayload
     | CollaborationLeadExplorationResultPayload
     | CollaborationExplorationAdoptionPayload
     |     CollaborationProposal
@@ -3985,7 +4008,7 @@ def authoring_capture_identity(scope: AuthoringScope, basis: CollaborationPropos
                  "sources": sorted((premise_source_identity(source) for source in item.sources),
                                    key=lambda value: json.dumps(value, ensure_ascii=False))}
                 for item in basis.shared_premises]
-    return json.dumps({"scope": scoped, "premises": sorted(premises, key=lambda item: item["slot_id"])},
+    return json.dumps({"scope": scoped, "premises": sorted(premises, key=lambda item: item["slot_id"]), **({"editorial_refs": [editorial_ref_to_dict(ref) for ref in basis.editorial_refs]} if basis.editorial_refs else {})},
                       ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
@@ -4484,6 +4507,7 @@ def _lead_evidence_value(evidence: CollaborationLeadEvidence) -> dict[str, objec
 
 def _basis_value(basis: CollaborationProposalBasis) -> dict[str, object]:
     return {
+        **({"editorial_refs": [editorial_ref_to_dict(item) for item in basis.editorial_refs]} if basis.editorial_refs else {}),
         **({'schema_version': 2, 'shared_premises': shared_premises_to_dict(basis.shared_premises)} if basis.schema_version == 2 else {}),
         "agent_profiles": [_profile_value(item) for item in basis.agent_profiles],
         "budget_policy_fingerprint": basis.budget_policy_fingerprint,
@@ -4685,6 +4709,8 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
         return {"payload_type": "lead_exploration_result", "report": exploration_report_to_dict(payload.report)}
     if type(payload) is CollaborationExplorationAdoptionPayload:
         return {"payload_type": "exploration_adoption", "capture": adoption_capture_to_dict(payload.capture)}
+    if type(payload) is CollaborationEditorialRecordPayload:
+        return {"payload_type": "editorial_record", "record": editorial_revision_to_dict(payload.record)}
     if type(payload) is CollaborationMessagePayload:
         value = {
             "content": payload.content,
@@ -5264,10 +5290,12 @@ def _decode_basis(value: object) -> CollaborationProposalBasis:
             "inputs",
             "route",
             "route_fingerprint",
-        } | ({"schema_version", "shared_premises"} if type(value) is dict and value.get("schema_version") == 2 else set()),
+        } | ({"schema_version", "shared_premises"} if type(value) is dict and value.get("schema_version") == 2 else set())
+          | ({"editorial_refs"} if type(value) is dict and "editorial_refs" in value else set()),
         label="proposal basis",
     )
     return CollaborationProposalBasis(
+        editorial_refs=tuple(editorial_ref_from_dict(entry) for entry in _array(item.get("editorial_refs", []), label="editorial references")),
         schema_version=item.get('schema_version', 1),
         shared_premises=tuple(_decode_shared_premise(entry) for entry in _array(item['shared_premises'], label='shared premises')) if item.get('schema_version') == 2 else (),
         route=_string(item["route"], label="proposal route"),
@@ -5727,6 +5755,9 @@ def _decode_payload(value: object) -> CollaborationPayload:
             **{key: value for key, value in item.items() if key not in {"payload_type", "state"}},
             state=_enum(LeadRecommendationState, item["state"], label="recommendation result state"),
         )
+    if payload_type == "editorial_record":
+        item = _object(value, {"payload_type", "record"}, label="editorial record payload")
+        return CollaborationEditorialRecordPayload(editorial_revision_from_dict(item["record"]))
     if payload_type == "proposal":
         item = _object(value, {"payload_type", "proposal"}, label="proposal payload")
         return _decode_proposal(item["proposal"])
@@ -6546,6 +6577,7 @@ def _validate_collaboration_payload(
         CollaborationEventKind.LEAD_EXPLORATION_REQUEST: (CollaborationLeadExplorationRequestPayload,),
         CollaborationEventKind.LEAD_EXPLORATION_RESULT: (CollaborationLeadExplorationResultPayload,),
         CollaborationEventKind.EXPLORATION_ADOPTION: (CollaborationExplorationAdoptionPayload,),
+        CollaborationEventKind.EDITORIAL_RECORD: (CollaborationEditorialRecordPayload,),
         CollaborationEventKind.ARTIFACT_OBJECTIVE: (ArtifactObjectivePayload, ArtifactObjectivePayloadV2),
         CollaborationEventKind.LEAD_RECOMMENDATION_REQUEST: (LeadRecommendationRequestPayload,),
         CollaborationEventKind.LEAD_RECOMMENDATION_DECISION: (LeadRecommendationDecisionPayload,),
@@ -6698,6 +6730,7 @@ def _validate_collaboration_direction(
         CollaborationEventKind.LEAD_EXPLORATION_REQUEST: {(CollaborationActorKind.USER, CollaborationActorKind.LEAD)},
         CollaborationEventKind.LEAD_EXPLORATION_RESULT: {(CollaborationActorKind.LEAD, CollaborationActorKind.USER)},
         CollaborationEventKind.EXPLORATION_ADOPTION: {(CollaborationActorKind.USER, CollaborationActorKind.LEAD)},
+        CollaborationEventKind.EDITORIAL_RECORD: {(CollaborationActorKind.USER, CollaborationActorKind.LEAD)},
         CollaborationEventKind.MESSAGE: {
             (CollaborationActorKind.USER, CollaborationActorKind.LEAD),
             (CollaborationActorKind.LEAD, CollaborationActorKind.USER),
@@ -7271,6 +7304,7 @@ __all__ = [
     "CollaborationLeadExplorationResultPayload",
     "CollaborationExplorationAdoptionPayload",
     "CollaborationMessagePayload",
+    "CollaborationEditorialRecordPayload",
     "CollaborationPayload",
     "CollaborationProposal",
     "CollaborationProposalBasis",

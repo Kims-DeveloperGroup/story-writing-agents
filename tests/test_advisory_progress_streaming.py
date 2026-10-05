@@ -53,6 +53,18 @@ from story_writing_agents.interactive_terminal._viewer_render import render_nest
 from story_writing_agents.provider_adapter import ProviderInvocation
 
 
+def _ansi_terminal_capabilities():
+    return TerminalCapabilities(
+        CapabilityProfile.ANSI,
+        80,
+        input_tty=True,
+        output_tty=True,
+        raw_mode=True,
+        cursor_controls=True,
+        decorative_sgr=True,
+    )
+
+
 class AdvisoryProgressStreamingTests(unittest.TestCase):
     def test_observe_stream_status_and_deltas(self) -> None:
         state = AdvisoryProgressState()
@@ -618,15 +630,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                 RawTerminalDriver,
                 "capabilities",
                 autospec=True,
-                return_value=TerminalCapabilities(
-                    CapabilityProfile.ANSI,
-                    80,
-                    input_tty=True,
-                    output_tty=True,
-                    raw_mode=True,
-                    cursor_controls=True,
-                    decorative_sgr=True,
-                ),
+                return_value=_ansi_terminal_capabilities(),
             ),
             mock.patch.object(
                 _driver.asyncio,
@@ -763,15 +767,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             auto_scroll=False,
         )
         state = MultiAgentScrollState((view,), focused_index=0)
-        capabilities = TerminalCapabilities(
-            CapabilityProfile.ANSI,
-            80,
-            input_tty=True,
-            output_tty=True,
-            raw_mode=True,
-            cursor_controls=True,
-            decorative_sgr=True,
-        )
+        capabilities = _ansi_terminal_capabilities()
         rendered = render_nested_scroll_view(state, capabilities)
         rows = rendered.text.split("\n")
         # 1 header line + 6 body lines + 1 footer line = 8 rows (strictly <= 10)
@@ -816,15 +812,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         self.assertEqual(v.state, ViewState.ERROR)
 
     def test_failure_turn_retains_scroll_box_and_success_clears_it(self) -> None:
-        capabilities = TerminalCapabilities(
-            CapabilityProfile.ANSI,
-            80,
-            input_tty=True,
-            output_tty=True,
-            raw_mode=True,
-            cursor_controls=True,
-            decorative_sgr=True,
-        )
+        capabilities = _ansi_terminal_capabilities()
         real_sleep = asyncio.sleep
 
         async def fast_sleep(_delay: float) -> None:
@@ -939,15 +927,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         self.assertTrue(any("Model capacity exceeded." in line for line in lead_view.visible_lines))
 
     def test_run_advisory_progress_retains_frame_on_exception(self) -> None:
-        capabilities = TerminalCapabilities(
-            CapabilityProfile.ANSI,
-            80,
-            input_tty=True,
-            output_tty=True,
-            raw_mode=True,
-            cursor_controls=True,
-            decorative_sgr=True,
-        )
+        capabilities = _ansi_terminal_capabilities()
         real_sleep = asyncio.sleep
 
         async def fast_sleep(_delay: float) -> None:
@@ -1031,15 +1011,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         self.assertTrue(scrolled.collapsed)
 
     def test_render_nested_scroll_view_collapsed_mode(self) -> None:
-        capabilities = TerminalCapabilities(
-            CapabilityProfile.ANSI,
-            80,
-            input_tty=True,
-            output_tty=True,
-            raw_mode=True,
-            cursor_controls=True,
-            decorative_sgr=True,
-        )
+        capabilities = _ansi_terminal_capabilities()
         v = NestedScrollViewport(
             view_id="lead:1",
             title="Lead",
@@ -1812,15 +1784,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
 
     def test_render_nested_scroll_view_empty_state_returns_valid_frame(self) -> None:
         """Verify empty view state produces a RenderedFrame with line_count=1 without ValueError."""
-        caps = TerminalCapabilities(
-            CapabilityProfile.ANSI,
-            80,
-            input_tty=True,
-            output_tty=True,
-            raw_mode=True,
-            cursor_controls=True,
-            decorative_sgr=True,
-        )
+        caps = _ansi_terminal_capabilities()
         scroll_state = MultiAgentScrollState((), 0)
         frame = render_nested_scroll_view(scroll_state, caps)
         self.assertEqual(frame.line_count, 1)
@@ -1853,15 +1817,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         async def dummy_op():
             return "done"
 
-        caps = TerminalCapabilities(
-            CapabilityProfile.ANSI,
-            80,
-            input_tty=True,
-            output_tty=True,
-            raw_mode=True,
-            cursor_controls=True,
-            decorative_sgr=True,
-        )
+        caps = _ansi_terminal_capabilities()
         with mock.patch.object(RawTerminalDriver, "capabilities", return_value=caps), \
              mock.patch.object(RawTerminalDriver, "_prepare_input", return_value=(caps, mock.MagicMock())), \
              mock.patch("story_writing_agents.interactive_terminal._driver._activate_terminal"), \
@@ -2059,15 +2015,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             transition_main_input,
             append_main_input_history,
         )
-        fake_caps = TerminalCapabilities(
-            CapabilityProfile.ANSI,
-            80,
-            input_tty=True,
-            output_tty=True,
-            raw_mode=True,
-            cursor_controls=True,
-            decorative_sgr=True,
-        )
+        fake_caps = _ansi_terminal_capabilities()
         configuration = _driver._TerminalConfiguration(
             0,
             1,
@@ -2112,15 +2060,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             transition_main_input,
             append_main_input_history,
         )
-        fake_caps = TerminalCapabilities(
-            CapabilityProfile.ANSI,
-            80,
-            input_tty=True,
-            output_tty=True,
-            raw_mode=True,
-            cursor_controls=True,
-            decorative_sgr=True,
-        )
+        fake_caps = _ansi_terminal_capabilities()
         configuration = _driver._TerminalConfiguration(
             0,
             1,
@@ -2230,15 +2170,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             transition_main_input,
             append_main_input_history,
         )
-        caps = TerminalCapabilities(
-            CapabilityProfile.ANSI,
-            80,
-            input_tty=True,
-            output_tty=True,
-            raw_mode=True,
-            cursor_controls=True,
-            decorative_sgr=True,
-        )
+        caps = _ansi_terminal_capabilities()
         configuration = _driver._TerminalConfiguration(
             0, 1, [0]*7, [0]*7, 80, None, None, 0, mock.MagicMock(),
         )
@@ -2271,15 +2203,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             transition_main_input,
             append_main_input_history,
         )
-        fake_caps = TerminalCapabilities(
-            CapabilityProfile.ANSI,
-            80,
-            input_tty=True,
-            output_tty=True,
-            raw_mode=True,
-            cursor_controls=True,
-            decorative_sgr=True,
-        )
+        fake_caps = _ansi_terminal_capabilities()
         configuration = _driver._TerminalConfiguration(
             0, 1, [0]*7, [0]*7, 80, None, None, 0, mock.MagicMock(),
         )
@@ -2528,15 +2452,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         self.assertIn("←/→: pan", footer_row)
 
     def test_run_advisory_progress_frame_persists_when_keep_frame_true(self) -> None:
-        capabilities = TerminalCapabilities(
-            CapabilityProfile.ANSI,
-            80,
-            input_tty=True,
-            output_tty=True,
-            raw_mode=True,
-            cursor_controls=True,
-            decorative_sgr=True,
-        )
+        capabilities = _ansi_terminal_capabilities()
         real_sleep = asyncio.sleep
 
         async def fast_sleep(_delay: float) -> None:
@@ -2574,15 +2490,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             self.assertTrue(val.endswith("\r\n"))
 
     def test_run_advisory_progress_frame_clears_when_keep_frame_false(self) -> None:
-        capabilities = TerminalCapabilities(
-            CapabilityProfile.ANSI,
-            80,
-            input_tty=True,
-            output_tty=True,
-            raw_mode=True,
-            cursor_controls=True,
-            decorative_sgr=True,
-        )
+        capabilities = _ansi_terminal_capabilities()
         real_sleep = asyncio.sleep
 
         async def fast_sleep(_delay: float) -> None:
@@ -2620,15 +2528,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
     def test_terminal_progress_mode_persists_frame_when_on_and_clears_when_off(self) -> None:
         from story_writing_agents.interactive_terminal._core import build_stream_terminal
 
-        capabilities = TerminalCapabilities(
-            CapabilityProfile.ANSI,
-            80,
-            input_tty=True,
-            output_tty=True,
-            raw_mode=True,
-            cursor_controls=True,
-            decorative_sgr=True,
-        )
+        capabilities = _ansi_terminal_capabilities()
         real_sleep = asyncio.sleep
 
         async def fast_sleep(_delay: float) -> None:
@@ -2675,15 +2575,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
     def test_progress_run_without_begin_clears_by_default_even_when_progress_on(self) -> None:
         from story_writing_agents.interactive_terminal._core import build_stream_terminal
 
-        capabilities = TerminalCapabilities(
-            CapabilityProfile.ANSI,
-            80,
-            input_tty=True,
-            output_tty=True,
-            raw_mode=True,
-            cursor_controls=True,
-            decorative_sgr=True,
-        )
+        capabilities = _ansi_terminal_capabilities()
         real_sleep = asyncio.sleep
 
         async def fast_sleep(_delay: float) -> None:
@@ -2710,15 +2602,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
     def test_progress_run_explicit_keep_frame_overrides(self) -> None:
         from story_writing_agents.interactive_terminal._core import build_stream_terminal
 
-        capabilities = TerminalCapabilities(
-            CapabilityProfile.ANSI,
-            80,
-            input_tty=True,
-            output_tty=True,
-            raw_mode=True,
-            cursor_controls=True,
-            decorative_sgr=True,
-        )
+        capabilities = _ansi_terminal_capabilities()
         real_sleep = asyncio.sleep
 
         async def fast_sleep(_delay: float) -> None:
@@ -2763,15 +2647,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
 
     def test_success_response_invokes_nested_scroll_inspector_with_keep_frame_true(self) -> None:
         """Verify successful operation with keep_frame=True invokes run_nested_scroll_inspector with keep_frame=True."""
-        capabilities = TerminalCapabilities(
-            CapabilityProfile.ANSI,
-            80,
-            input_tty=True,
-            output_tty=True,
-            raw_mode=True,
-            cursor_controls=True,
-            decorative_sgr=True,
-        )
+        capabilities = _ansi_terminal_capabilities()
         out = io.StringIO()
         driver = RawTerminalDriver(
             lambda _p: "",
@@ -2855,15 +2731,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         initial_state = MultiAgentScrollState((v1, v2), 0)
 
         fake_config = mock.MagicMock()
-        fake_caps = TerminalCapabilities(
-            CapabilityProfile.ANSI,
-            80,
-            input_tty=True,
-            output_tty=True,
-            raw_mode=True,
-            cursor_controls=True,
-            decorative_sgr=True,
-        )
+        fake_caps = _ansi_terminal_capabilities()
 
         # User presses Tab (cycle focus to Agent 2) then q (exit inspector)
         with (
@@ -3040,15 +2908,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
 
     def test_cancellation_clears_frame_and_does_not_open_nested_scroll_inspector_under_keep_frame(self) -> None:
         """Verify CancelledError and KeyboardInterrupt clear frame and bypass inspector even with keep_frame=True."""
-        capabilities = TerminalCapabilities(
-            CapabilityProfile.ANSI,
-            80,
-            input_tty=True,
-            output_tty=True,
-            raw_mode=True,
-            cursor_controls=True,
-            decorative_sgr=True,
-        )
+        capabilities = _ansi_terminal_capabilities()
         out = io.StringIO()
         driver = RawTerminalDriver(
             lambda _p: "",
@@ -3091,15 +2951,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
 
     def test_none_result_handoff_clears_frame_and_bypasses_inspector_under_keep_frame(self) -> None:
         """Verify None result (e.g. auth recovery handoff) clears frame and does not open inspector even if keep_frame=True."""
-        capabilities = TerminalCapabilities(
-            CapabilityProfile.ANSI,
-            80,
-            input_tty=True,
-            output_tty=True,
-            raw_mode=True,
-            cursor_controls=True,
-            decorative_sgr=True,
-        )
+        capabilities = _ansi_terminal_capabilities()
         out = io.StringIO()
         driver = RawTerminalDriver(
             lambda _p: "",
@@ -3140,15 +2992,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
 
     def test_failure_clears_frame_and_bypasses_inspector_when_keep_frame_is_false(self) -> None:
         """Verify failure path bypasses the nested inspector and clears the frame when keep_frame=False."""
-        capabilities = TerminalCapabilities(
-            CapabilityProfile.ANSI,
-            80,
-            input_tty=True,
-            output_tty=True,
-            raw_mode=True,
-            cursor_controls=True,
-            decorative_sgr=True,
-        )
+        capabilities = _ansi_terminal_capabilities()
         out = io.StringIO()
         driver = RawTerminalDriver(
             lambda _p: "",
@@ -3330,15 +3174,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         # 2. Nested scroll view collapsed rendering
         v1 = NestedScrollViewport("a1", "Agent Alpha", 5, 1, ("line 1",), 1, True)
         v2 = NestedScrollViewport("a2", "Agent Beta", 5, 1, ("line 2",), 1, False)
-        caps = TerminalCapabilities(
-            CapabilityProfile.ANSI,
-            80,
-            input_tty=True,
-            output_tty=True,
-            raw_mode=True,
-            cursor_controls=True,
-            decorative_sgr=True,
-        )
+        caps = _ansi_terminal_capabilities()
         scroll_state_0 = MultiAgentScrollState((v1, v2), 0, collapsed=True)
         frame_0 = render_nested_scroll_view(scroll_state_0, caps)
         self.assertIn("[► Agent Alpha] (1/2)", frame_0.text)

@@ -127,6 +127,31 @@ def _readiness(
     )
 
 
+def _filesystem_sqlite_readiness():
+    return _readiness(
+        ConversationStorageBackend.FILESYSTEM,
+        ConversationStorageBackend.SQLITE,
+    )
+
+
+def _filesystem_sqlite_generation_one_readiness():
+    return _readiness(
+        ConversationStorageBackend.FILESYSTEM,
+        ConversationStorageBackend.SQLITE,
+        generation=1,
+    )
+
+
+def _sqlite_filesystem_generation_one_readiness():
+    return _readiness(
+        ConversationStorageBackend.SQLITE,
+        ConversationStorageBackend.FILESYSTEM,
+        generation=1,
+    )
+
+
+
+
 class ConversationStorageContractTests(unittest.TestCase):
     def test_backend_capability_parity_and_outcome_vocabularies_are_exact(
         self,
@@ -293,10 +318,7 @@ class ConversationStorageContractTests(unittest.TestCase):
                 ConversationStorageBackend.FILESYSTEM,
                 source_is_empty=False,
             ),
-            _readiness(
-                ConversationStorageBackend.FILESYSTEM,
-                ConversationStorageBackend.SQLITE,
-            ),
+            _filesystem_sqlite_readiness(),
             _readiness(
                 ConversationStorageBackend.FILESYSTEM,
                 ConversationStorageBackend.SQLITE,
@@ -895,10 +917,7 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
                         other,
                         lease=lease,
                         expected_generation=0,
-                        readiness=_readiness(
-                            ConversationStorageBackend.FILESYSTEM,
-                            ConversationStorageBackend.SQLITE,
-                        ),
+                        readiness=_filesystem_sqlite_readiness(),
                     )
 
             materialize.assert_not_called()
@@ -943,10 +962,7 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
                 workspace,
                 lease=lease,
                 expected_generation=0,
-                readiness=_readiness(
-                    ConversationStorageBackend.FILESYSTEM,
-                    ConversationStorageBackend.SQLITE,
-                ),
+                readiness=_filesystem_sqlite_readiness(),
             )
 
         expected = ConversationStorageActivationState(
@@ -1020,11 +1036,7 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
                     workspace,
                     lease=lease,
                     expected_generation=1,
-                    readiness=_readiness(
-                        ConversationStorageBackend.FILESYSTEM,
-                        ConversationStorageBackend.SQLITE,
-                        generation=1,
-                    ),
+                    readiness=_filesystem_sqlite_generation_one_readiness(),
                 )
             lease.validate(workspace_key=os.fspath(pinned_root))
             with self.assertRaises(ConversationStorageCoordinationError):
@@ -1050,19 +1062,11 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
         cases = (
             (
                 1,
-                _readiness(
-                    ConversationStorageBackend.FILESYSTEM,
-                    ConversationStorageBackend.SQLITE,
-                    generation=1,
-                ),
+                _filesystem_sqlite_generation_one_readiness(),
             ),
             (
                 0,
-                _readiness(
-                    ConversationStorageBackend.FILESYSTEM,
-                    ConversationStorageBackend.SQLITE,
-                    generation=1,
-                ),
+                _filesystem_sqlite_generation_one_readiness(),
             ),
             (
                 0,
@@ -1204,17 +1208,10 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
                 workspace,
                 lease=lease,
                 expected_generation=0,
-                readiness=_readiness(
-                    ConversationStorageBackend.FILESYSTEM,
-                    ConversationStorageBackend.SQLITE,
-                ),
+                readiness=_filesystem_sqlite_readiness(),
             )
         before = _marker_path(workspace).read_bytes()
-        readiness = _readiness(
-            ConversationStorageBackend.SQLITE,
-            ConversationStorageBackend.FILESYSTEM,
-            generation=1,
-        )
+        readiness = _sqlite_filesystem_generation_one_readiness()
 
         with coordinator.borrow(timeout_seconds=2.0) as lease:
             with mock.patch.object(
@@ -1255,10 +1252,7 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
                 workspace,
                 lease=lease,
                 expected_generation=0,
-                readiness=_readiness(
-                    ConversationStorageBackend.FILESYSTEM,
-                    ConversationStorageBackend.SQLITE,
-                ),
+                readiness=_filesystem_sqlite_readiness(),
             )
         original_write_json = Workspace.write_json
 
@@ -1282,11 +1276,7 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
                         workspace,
                         lease=lease,
                         expected_generation=1,
-                        readiness=_readiness(
-                            ConversationStorageBackend.SQLITE,
-                            ConversationStorageBackend.FILESYSTEM,
-                            generation=1,
-                        ),
+                        readiness=_sqlite_filesystem_generation_one_readiness(),
                     )
 
         write_json.assert_called_once()

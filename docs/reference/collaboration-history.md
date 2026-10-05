@@ -673,6 +673,33 @@ across active and archived conversations even when the bounded selector sends
 zero records. It supplies context without current artifact receipts or
 confirmation authority; see [Lead session memory](../guides/agent-context.md#lead-session-memory).
 
+### Editorial memory
+
+Explicit editorial intake appends a typed USER event containing the structured request
+and host-created revision receipt. The record retains its original conversation, user
+event and optional verified task revision. Each later revision names the exact previous
+session, record, revision, conversation, event and digest; changing the recording
+conversation within the same session does not change origin ownership.
+
+Approval has four states: PROPOSED, SELECTED, REJECTED and SUPERSEDED. Direction,
+alternative, protected ambiguity, setup obligation and unresolved concern are record
+kinds. Revisions retain text, reason, alternatives and provenance. The deterministic
+projection follows valid explicit chains; malformed or forked chains cannot produce an
+inferred current selection. Missing or changed optional provenance is exposed as a gap while valid
+USER intent remains identifiable. All original revisions stay in raw history.
+
+Archive, transfer, search and restart preserve these facts without selecting discarded
+ideas. A bounded cited view uses the remaining session-history allocation after exact
+chronological delivery. It identifies included revision receipts and omissions. The
+proposal basis pins only host-selected references actually delivered; confirmation
+revalidates current selection, and draft-derived final review inherits the same references.
+
+Historical application association requires the exact reviewed proposal, consultation
+basis, task revision and matching APPLIED or UNCHANGED result. The projection reports
+that association separately from approval. It supplies neither current artifact READ
+evidence nor semantic fulfillment or further execution permission. See the
+[editorial memory methods](runtime-api.md#editorial-memory-methods).
+
 ## Atomic batch flow
 
 The storage-neutral history is an ordered sequence of nonempty batches. One

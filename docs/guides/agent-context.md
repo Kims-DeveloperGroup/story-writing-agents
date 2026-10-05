@@ -59,6 +59,20 @@ must identify the handles it used.
 
 ## Lead session memory
 
+Explicit editorial records retain user-selected directions, reasons, rejected alternatives,
+protected ambiguity and setup obligations. The runtime projects their exact revision chains
+from the same session history used for Lead continuation, including archived conversations.
+A bounded cited view accompanies full and native-delta delivery; each included record names
+its original user event and current revision. Record approval distinguishes proposed,
+selected, rejected and superseded intent. Historical application facts identify the exact
+task and candidate used in a matching Apply result.
+
+The view uses the remaining existing UTF-8 allocation after exact chronological delivery.
+Whole records, omission counts and provenance gaps remain explicit. Required history and
+the existing capacity error are preserved. User intent and historical application facts
+do not supply current artifact READ receipts, semantic fulfillment or execution permissions.
+See [editorial decisions](lead-agent.md#editorial-decisions) for explicit user intake.
+
 Ordinary Lead turns and consultation/artifact-review synthesis share one compatible
 provider thread across conversations in the same workspace and story session.
 Compatibility includes the agent, provider, definition, and context policy. Pause/reopen
