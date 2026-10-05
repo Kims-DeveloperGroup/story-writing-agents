@@ -187,6 +187,16 @@ class FakeTermios:
         self.set_calls.append((descriptor, when, copied))
 
 
+def _ready_select_patch():
+    return mock.patch.object(_driver._select, 'select', side_effect=lambda r, w, x, _t: (r, w, x))
+
+
+def _ready_reference_select_patch():
+    return mock.patch.object(_driver._select, 'select', side_effect=lambda readable, writable, exceptional, _timeout: (readable, writable, exceptional))
+
+
+
+
 def make_driver(
     text: str,
     *,
@@ -1444,15 +1454,7 @@ class CompletionDriverTests(unittest.TestCase):
         driver, _input, output, fallback, termios, os_module = make_driver(
             "/s\x1b[A\t\n"
         )
-        with mock.patch.object(
-            _driver._select,
-            "select",
-            side_effect=lambda readable, writable, exceptional, _timeout: (
-                readable,
-                writable,
-                exceptional,
-            ),
-        ) as readiness:
+        with _ready_reference_select_patch() as readiness:
             self.assertEqual(self.read(driver), "/settings ")
 
         fallback.assert_not_called()
@@ -1540,15 +1542,7 @@ class CompletionDriverTests(unittest.TestCase):
                 )
                 text_reader = mock.Mock(return_value="one\ntwo\nthree")
                 failure_writer = mock.Mock()
-                with mock.patch.object(
-                    _driver._select,
-                    "select",
-                    side_effect=lambda readable, writable, exceptional, _timeout: (
-                        readable,
-                        writable,
-                        exceptional,
-                    ),
-                ):
+                with _ready_reference_select_patch():
                     line = _core.read_main_command_line(
                         driver,
                         "main> ",
@@ -1631,15 +1625,7 @@ class CompletionDriverTests(unittest.TestCase):
                     side_effect=AssertionError("completion must not read text")
                 )
                 failure_writer = mock.Mock()
-                with mock.patch.object(
-                    _driver._select,
-                    "select",
-                    side_effect=lambda readable, writable, exceptional, _timeout: (
-                        readable,
-                        writable,
-                        exceptional,
-                    ),
-                ):
+                with _ready_reference_select_patch():
                     with self.assertRaises(KeyboardInterrupt):
                         _core.read_main_command_line(
                             driver,
@@ -1698,15 +1684,7 @@ class CompletionDriverTests(unittest.TestCase):
         )
         history_append = mock.Mock(wraps=append_main_input_history)
         driver._history_append = history_append
-        with mock.patch.object(
-            _driver._select,
-            "select",
-            side_effect=lambda readable, writable, exceptional, _timeout: (
-                readable,
-                writable,
-                exceptional,
-            ),
-        ):
+        with _ready_reference_select_patch():
             with self.assertRaises(KeyboardInterrupt):
                 _core.read_main_command_line(
                     driver,
@@ -1753,15 +1731,7 @@ class CompletionDriverTests(unittest.TestCase):
                     lines=24,
                 )
                 paths_provider = mock.Mock(return_value=(path, other))
-                with mock.patch.object(
-                    _driver._select,
-                    "select",
-                    side_effect=lambda readable, writable, exceptional, _timeout: (
-                        readable,
-                        writable,
-                        exceptional,
-                    ),
-                ):
+                with _ready_reference_select_patch():
                     with self.assertRaises(KeyboardInterrupt):
                         _core.read_main_command_line(
                             driver,
@@ -2597,20 +2567,12 @@ class CompletionDriverTests(unittest.TestCase):
                 driver, _input, _output, fallback, _termios, _os = make_driver(
                     "/s" + sequence + "\t\n"
                 )
-                with mock.patch.object(
-                    _driver._select,
-                    "select",
-                    side_effect=lambda r, w, x, _t: (r, w, x),
-                ):
+                with _ready_select_patch():
                     self.assertEqual(self.read(driver), "/settings ")
                 fallback.assert_not_called()
 
         driver, _input, _output, fallback, _termios, _os = make_driver("/\x1bx\n")
-        with mock.patch.object(
-            _driver._select,
-            "select",
-            side_effect=lambda r, w, x, _t: (r, w, x),
-        ):
+        with _ready_select_patch():
             self.assertEqual(self.read(driver), "/x")
         fallback.assert_not_called()
 
@@ -3048,13 +3010,9 @@ class CompletionDriverTests(unittest.TestCase):
         )
 
     def test_completion_provider_is_call_local_across_reads_on_one_driver(self) -> None:
-        driver, _input, _output, fallback, _termios, _os = make_driver("x\n/\t\n")
+        driver, _input, _output, fallback, _termios, _os = make_driver("x\n/ag\t\n")
         first = mock.Mock(return_value=None)
-        with mock.patch.object(
-            _driver._select,
-            "select",
-            side_effect=lambda r, w, x, _t: (r, w, x),
-        ):
+        with _ready_select_patch():
             self.assertEqual(
                 driver.read_main_command_line(
                     "first> ",

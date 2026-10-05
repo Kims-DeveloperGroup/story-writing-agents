@@ -453,8 +453,8 @@ _PERSONA_AGENT_ALIASES: dict[str, str] = {
 }
 
 _COMMAND_ALIASES: dict[str, str] = {
-    "explore": "explore",
-    "adopt": "adopt",
+    "explore": "/explore",
+    "adopt": "/adopt",
     "agents": "/agents",
     "auth": "/auth",
     "override": "/override",

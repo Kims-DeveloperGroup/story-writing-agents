@@ -311,6 +311,12 @@ class InteractiveParserRetirementTests(unittest.TestCase):
         self.assertIs(parse_interactive_line("/explore").kind, ActionKind.PARSE_ERROR)
         self.assertIs(parse_interactive_line("/adopt unexpected").kind, ActionKind.PARSE_ERROR)
         self.assertEqual(parse_interactive_line("Explore possible directions."), InteractiveAction(ActionKind.LEAD_INPUT, text='Explore possible directions.'))
+        explore_correction = parse_interactive_line("/explroe").suggestion
+        adopt_correction = parse_interactive_line("/adotp").suggestion
+        self.assertEqual(explore_correction, "/explore")
+        self.assertEqual(adopt_correction, "/adopt")
+        self.assertEqual(parse_interactive_line(explore_correction + " idea"), InteractiveAction(ActionKind.LEAD_EXPLORE, text="idea"))
+        self.assertEqual(parse_interactive_line(adopt_correction), InteractiveAction(ActionKind.LEAD_ADOPT))
 
     def test_run_is_an_ordinary_unknown_command(self) -> None:
         self.assertEqual(

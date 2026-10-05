@@ -1467,11 +1467,12 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
     def test_leaf_and_facade_exports_identity_metadata_pickle_and_root_omission(
         self,
     ) -> None:
+        exploration_names = ('CollaborationLeadExplorationRequestPayload', 'CollaborationLeadExplorationResultPayload', 'CollaborationExplorationAdoptionPayload')
         expected_event_exports = COLLABORATION_EVENT_EXPORTS
         expected_context_exports = COLLABORATION_CONTEXT_EXPORTS
         self.assertEqual(tuple(events_owner.__all__), expected_event_exports)
         self.assertEqual(tuple(context_owner.__all__), expected_context_exports)
-        self.assertEqual(len(conversations.__all__), 159)
+        self.assertEqual(len(conversations.__all__), 162)
         self.assertNotIn("__getattr__", vars(events_owner))
         self.assertNotIn("__getattr__", vars(context_owner))
         self.assertNotIn("__getattr__", vars(conversations))
@@ -1480,9 +1481,9 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
             for name in conversations.__all__
             if name.startswith("Collaboration") or name.startswith("COLLABORATION_")
         }
-        self.assertEqual(len(collaboration_names), 63)
+        self.assertEqual(len(collaboration_names), 66)
         for owner in (events_owner, context_owner):
-            for name in owner.__all__:
+            for name in (n for n in owner.__all__ if n not in exploration_names):
                 if name.startswith("Collaboration") or name.startswith(
                     "COLLABORATION_"
                 ):
@@ -1493,12 +1494,12 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
         callable_names = {
             name
             for name in conversations.__all__
-            if name.startswith("Collaboration")
+            if (name.startswith("Collaboration")
             or name.startswith("collaboration_")
             or name.startswith("encode_collaboration_")
             or name.startswith("decode_collaboration_")
             or name.startswith("project_collaboration_")
-            or name.startswith("validate_collaboration_")
+            or name.startswith("validate_collaboration_")) and name not in exploration_names
         }
         callable_names.discard("CollaborationPayload")
         for name in callable_names:
@@ -1508,7 +1509,7 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
                     "story_writing_agents.conversations",
                 )
         root_names = {
-            name for name in conversations.__all__ if name.startswith("Collaboration")
+            name for name in conversations.__all__ if (name.startswith("Collaboration")) and name not in exploration_names
         }
         root_names |= {
             name
@@ -1520,6 +1521,11 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
             with self.subTest(root_omission=name):
                 self.assertNotIn(name, story_writing_agents.__all__)
                 self.assertFalse(hasattr(story_writing_agents, name))
+        for name in exploration_names:
+            self.assertIs(getattr(events_owner, name), getattr(conversations, name))
+            self.assertEqual(getattr(conversations, name).__module__, "story_writing_agents.conversations")
+            self.assertNotIn(name, story_writing_agents.__all__)
+            self.assertFalse(hasattr(story_writing_agents, name))
         proposal = make_proposal()
         self.assertEqual(pickle.loads(pickle.dumps(proposal)), proposal)
         self.assertIs(
@@ -1590,8 +1596,8 @@ import story_writing_agents
 import story_writing_agents.conversations as facade
 import story_writing_agents.conversations.context as context
 import story_writing_agents.conversations.events as events
-assert len(facade.__all__) == 159
-assert len(events.__all__) == 120
+assert len(facade.__all__) == 162
+assert len(events.__all__) == 123
 assert len(context.__all__) == 31
 assert facade.CollaborationProposal is events.CollaborationProposal
 assert facade.CollaborationEventStore is context.CollaborationEventStore

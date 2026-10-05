@@ -1422,6 +1422,20 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             assert_guidance(self, dict(call.payload), dict(call.schema))
         repair = _workflow_material(self.backend.calls[-1].payload)
         self.assertIn("response_correction", repair)
+        exploration_conversation = self.conversation("Repair provisional exploration")
+        invalid = json.loads(_exploration_outcome())
+        invalid["agent_action"]["task_result"]["ideas"] = "not an array"
+        self.backend.enqueue(json.dumps(invalid))
+        self.backend.enqueue(_exploration_outcome("Repaired provisional idea."))
+        explored = await self.runtime.lead_turn(self.session_id, exploration_conversation, "Explore possibilities.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
+        self.assertIs(explored.kind, LeadOutcomeKind.EXPLORATION)
+        self.assertIsNone(explored.trace)
+        self.assertEqual(explored.exploration.ideas[0].material_text, "Repaired provisional idea.")
+        calls = _submitted_calls(self.history(exploration_conversation))
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(explored.validation_details)
+        diagnostics = tuple(part for event in self.history(exploration_conversation) if type(event.payload) is CollaborationMessagePayload and (event.payload.validation_invocation_id, event.payload.validation_call_id) == (calls[0].invocation_id, calls[0].call_id) for part in event.payload.validation_details)
+        self.assertEqual(explored.validation_details, diagnostics)
 
     async def test_direct_scope_is_required_and_substantive_outcomes_cannot_bypass_routing(
         self,

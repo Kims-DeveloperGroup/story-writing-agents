@@ -9880,6 +9880,7 @@ class StoryRuntime:
                 proposal=None, state=None, confirmation_request_id=None,
                 next_action=CollaborationNextAction.CONTINUE_WITH_LEAD,
                 interaction_mode=interaction_mode, exploration=decoded_exploration,
+                validation_details=provider.validation_details,
             )
         if outcome.kind is LeadOutcomeKind.PROPOSAL:
             if outcome.artifact_intent is not None:

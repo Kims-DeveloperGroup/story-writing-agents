@@ -1185,6 +1185,7 @@ class ControllerContractTests(ControllerTestCase):
                 "interactive_controller._runtime_policy",
                 "interactive_controller._session_policy",
                 "interactive_terminal",
+                "lead_exploration",
                 "orchestrator",
                 "provider_adapter",
                 "provider_auth",

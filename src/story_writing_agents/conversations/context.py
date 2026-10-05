@@ -2895,7 +2895,7 @@ def _lead_abandonment_is_safe(
             return False
         if event.turn_id == turn_id and event.event_id not in origin_event_ids and type(payload) not in {
             CollaborationMessagePayload,
-CollaborationLeadExplorationRequestPayload, CollaborationProviderCallPayload,
+CollaborationLeadExplorationRequestPayload, CollaborationExplorationAdoptionPayload, CollaborationProviderCallPayload,
             CollaborationLeadOutcomeFailurePayload,
         } and not (
             (type(payload) is CollaborationStepStatePayload

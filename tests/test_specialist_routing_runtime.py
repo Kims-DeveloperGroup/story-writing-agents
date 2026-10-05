@@ -1,4 +1,5 @@
 """Runtime routing accepts typed task facts and keeps draft/review authority separate."""
+import asyncio
 import json
 import subprocess
 from dataclasses import asdict, replace
@@ -10,6 +11,7 @@ from story_writing_agents.agents import PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXE
 from story_writing_agents.specialist_routing import AuthoringActivity, AuthoringIntent, AuthoringScope, ArtifactReviewDomain, SpecialistAssignmentMode, ReviewBasis
 from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
 from story_writing_agents.interactive_terminal import _collaboration_view as view
+from tests.test_lead_orchestration import _SubmittedFailure
 from tests.test_lead_orchestration import (
     LeadOrchestrationTestCase, _LeadBackend, _submitted_calls, _compact_scope, _decision, _provider_envelope,
     _workflow_material, _live_scope, _specialist_outcome, _synthesis_outcome, _visible_outcome, _exploration_outcome, _adoption_selection,
@@ -338,6 +340,26 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertTrue(self.workspace.path(path).read_text().startswith("Summons leads"))
         self.assertIsNotNone(applied.commit_request)
         await self.runtime.decide_story_commit(_commit_decision(applied, StoryCommitDecision.REJECT))
+        for failure, code in ((ConnectionError("Known adoption failure"), c.CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED), (asyncio.CancelledError(), c.CollaborationLeadOutcomeFailureCode.CANCELLED)):
+            self.backend.enqueue(_SubmittedFailure(failure))
+            if code is c.CollaborationLeadOutcomeFailureCode.CANCELLED:
+                with self.assertRaises(asyncio.CancelledError):
+                    await self.runtime.lead_turn(self.session_id, conversation, "Draft adopted idea.", adoption=selection)
+            else:
+                failed = await self.runtime.lead_turn(self.session_id, conversation, "Draft adopted idea.", adoption=selection)
+                self.assertIs(failed.next_action, c.CollaborationNextAction.RETRY_LEAD_TURN)
+            failed_history = self.history(conversation)
+            submitted = _submitted_calls(failed_history)
+            closure = next(e.payload for e in reversed(failed_history) if type(e.payload) is c.CollaborationLeadOutcomeFailurePayload)
+            self.assertEqual((closure.code, closure.call_id, closure.invocation_id), (code, submitted[-1].call_id, submitted[-1].invocation_id))
+            self.assertIs(c.project_collaboration_history(failed_history).next_safe_action, c.CollaborationNextAction.RETRY_LEAD_TURN)
+            self.backend.enqueue(_visible_outcome("answer", "Known failure safely closed."))
+            resumed = await self.runtime.lead_turn(self.session_id, conversation, "Report status.")
+            self.assertIs(resumed.kind, c.LeadOutcomeKind.ANSWER)
+            self.assertEqual(resumed.message, "Known failure safely closed.")
+            self.assertEqual(self.history(conversation)[:len(failed_history)], failed_history)
+            self.assertEqual(len(_submitted_calls(self.history(conversation))), len(submitted) + 1)
+            self.assertEqual((resumed.proposal, resumed.artifact_proposal, resumed.artifact_application_request, resumed.story_commit_request), (None,) * 4)
         history = self.history(conversation)
         self.assertTrue(any(type(e.payload) is c.ArtifactApplicationResultPayload and e.payload.outcome is c.ArtifactApplicationOutcomeKind.APPLIED for e in history))
         self.assertEqual(applied.commit_request.application_result_event_id, next(e.event_id for e in history if type(e.payload) is c.ArtifactApplicationResultPayload and e.payload.outcome is c.ArtifactApplicationOutcomeKind.APPLIED))
