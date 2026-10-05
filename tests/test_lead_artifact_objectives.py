@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import asdict, replace
+from dataclasses import replace
 from unittest import mock
 
 from story_writing_agents import StoryRuntime
@@ -94,7 +94,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         for is_review, expected_scope in ((False, scope), (True, request.authoring_scope)):
             phase = [item for item in materials if ("assignment" in item or "replies" in item) and (item.get("assignment", {}).get("mode") == "review" or "artifact_candidate" in item) == is_review]
             self.assertEqual(len(phase), len(ROSTER) + 1)
-            self.assertTrue(all(item["authoring_scope"] == json.loads(json.dumps(asdict(expected_scope))) for item in phase))
+            self.assertTrue(all(item["authoring_scope"] == c.authoring_scope_to_dict(expected_scope) for item in phase))
             self.assertTrue(all(item["inputs"] == phase[0]["inputs"] for item in phase))
         self.assertEqual(next(item for item in phase[0]["inputs"] if item["input_id"] == source.event_id)["revision_digest"], source.content_digest)
         dispatches = self.payload_events(conversation_id, c.CollaborationAssignmentDispatchPayload)

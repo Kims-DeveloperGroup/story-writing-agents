@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Protocol
 
 from ..agents import EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR
-from ..reply_trace import ReplyTrace
+from ..specialist_routing import AuthoringIntent
+from ..reply_trace import ReplyTrace, ReplyTraceOrigin
 from ..structured_output_validation import validate_details
 from .contracts import (
     CONSENSUS_AUDITORS,
@@ -66,8 +67,20 @@ class ConsensusPhaseInvocation:
     agent_id: str
     ordinal: int
     continuation: ConsensusContinuation | None = None
+    intent: AuthoringIntent = field(default=AuthoringIntent.AUTHORING, kw_only=True)
 
     def __post_init__(self) -> None:
+        if type(self.intent) is not AuthoringIntent:
+            raise TypeError("consensus invocation intent is invalid")
+        if self.phase in {ConsensusPhase.INPUT_ADOPTION, ConsensusPhase.REVIEW_COMPLETION}:
+            raise ValueError("provider-free consensus phase cannot invoke a provider")
+        if self.intent is AuthoringIntent.REVIEW_ONLY and (
+            self.phase not in {ConsensusPhase.AUDIT, ConsensusPhase.SYNTHESIS}
+            or self.input_material != self.candidate_material
+            or self.revision_id != "r0"
+            or self.continuation is not None
+        ):
+            raise ValueError("review-only provider invocation must retain supplied candidate")
         if type(self.execution_identity) is not ConsensusExecutionIdentity:
             raise TypeError("consensus invocation execution identity is invalid")
         if (
@@ -87,7 +100,7 @@ class ConsensusPhaseInvocation:
 
 @dataclass(frozen=True, slots=True)
 class ConsensusProviderResult:
-    """Validated digest-only result returned by a provider adapter."""
+    """Validated provider facts with optional review report text."""
 
     kind: ConsensusPhaseOutputKind
     result_digest: str
@@ -97,10 +110,18 @@ class ConsensusProviderResult:
     conflict_material: ConsensusMaterialHandle | None = None
     trace: ReplyTrace | None = None
     validation_details: tuple[str, ...] = ()
+    review_findings: str | None = field(default=None, kw_only=True)
+    report_material: ConsensusMaterialHandle | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         if type(self.kind) is not ConsensusPhaseOutputKind:
             raise TypeError("consensus provider output kind is invalid")
+        if self.review_findings is not None:
+            if type(self.review_findings) is not str or not self.review_findings:
+                raise ValueError("consensus review findings must be nonempty text")
+            self.review_findings.encode("utf-8", errors="strict")
+            if self.kind not in {ConsensusPhaseOutputKind.SYNTHESIS, ConsensusPhaseOutputKind.DEADLOCK}:
+                raise ValueError("only synthesis output may carry review findings")
         _digest(self.result_digest)
         if self.candidate_material is not None and type(self.candidate_material) is not ConsensusMaterialHandle:
             raise TypeError("consensus provider candidate handle is invalid")
@@ -115,6 +136,17 @@ class ConsensusProviderResult:
             raise TypeError("consensus provider conflict material is invalid")
         if self.trace is not None and type(self.trace) is not ReplyTrace:
             raise TypeError("consensus provider trace must be ReplyTrace or None")
+        if self.report_material is not None and (
+            type(self.report_material) is not ConsensusMaterialHandle
+            or not self.report_material.locator.startswith("candidate:")
+            or self.kind not in {ConsensusPhaseOutputKind.AUDIT, ConsensusPhaseOutputKind.CONFLICT}
+            or (self.trace is not None and self.trace.origin is ReplyTraceOrigin.RUNTIME_FALLBACK)
+        ):
+            raise ValueError("only actual audit output may carry immutable report material")
+        if self.report_material is not None and self.kind is ConsensusPhaseOutputKind.CONFLICT and (
+            self.report_material != self.conflict_material
+        ):
+            raise ValueError("consensus conflict report must reuse critique material")
         validate_details(self.validation_details)
         if self.kind in {
             ConsensusPhaseOutputKind.AUDIT,
@@ -140,7 +172,7 @@ class ConsensusProviderResult:
                 self.candidate_material is None
                 or self.audit_verdict is not None
                 or self.next_phase
-                not in {ConsensusPhase.REPAIR, ConsensusPhase.FINALIZATION}
+                not in {ConsensusPhase.REPAIR, ConsensusPhase.FINALIZATION, ConsensusPhase.REVIEW_COMPLETION}
                 or self.conflict_material is not None
             ):
                 raise ValueError("consensus synthesis output is incomplete")
@@ -384,6 +416,16 @@ class ConsensusExecutionCoordinator:
         outputs: list[ConsensusProviderResult],
         reports: list[tuple[str, ...]],
     ) -> ConsensusPhaseResult:
+        if request.phase in {ConsensusPhase.INPUT_ADOPTION, ConsensusPhase.REVIEW_COMPLETION}:
+            return self._result(
+                request=request,
+                decision_event=decision_event,
+                result_id=terminal_event_id,
+                state=ConsensusPhaseState.COMPLETED,
+                candidate_digest=request.candidate_digest,
+                prior_result_event_id=running_event_id,
+                next_phase=ConsensusPhase.AUDIT if request.phase is ConsensusPhase.INPUT_ADOPTION else None,
+            )
         agents = (
             CONSENSUS_AUDITORS
             if request.phase in {ConsensusPhase.AUDIT, ConsensusPhase.REAUDIT}
@@ -402,6 +444,7 @@ class ConsensusExecutionCoordinator:
                 agent_id=agent_id,
                 ordinal=ordinal,
                 continuation=request.continuation,
+                intent=request.intent,
             )
             invocations.append(invocation)
             output = await self._invoke(invocation)
@@ -422,10 +465,12 @@ class ConsensusExecutionCoordinator:
                     verdict=output.audit_verdict,
                     audit_digest=output.result_digest,
                     conflict_material=output.conflict_material,
+                    report_material=output.report_material,
                 )
                 for invocation, output in zip(invocations, outputs, strict=True)
             )
             return ConsensusPhaseResult(
+                intent=request.intent,
                 result_id=terminal_event_id,
                 phase_request_id=request.phase_request_id,
                 decision_event_id=decision_event.event_id,
@@ -449,6 +494,8 @@ class ConsensusExecutionCoordinator:
             else ConsensusPhaseState.COMPLETED
         )
         return ConsensusPhaseResult(
+            intent=request.intent,
+            review_findings=output.review_findings,
             result_id=terminal_event_id,
             phase_request_id=request.phase_request_id,
             decision_event_id=decision_event.event_id,
@@ -473,8 +520,10 @@ class ConsensusExecutionCoordinator:
         state: ConsensusPhaseState,
         candidate_digest: str | None,
         prior_result_event_id: str | None = None,
+        next_phase: ConsensusPhase | None = None,
     ) -> ConsensusPhaseResult:
         return ConsensusPhaseResult(
+            intent=request.intent,
             result_id=result_id,
             phase_request_id=request.phase_request_id,
             decision_event_id=decision_event.event_id,
@@ -487,6 +536,7 @@ class ConsensusExecutionCoordinator:
             state=state,
             candidate_digest=candidate_digest,
             prior_result_event_id=prior_result_event_id,
+            next_phase=next_phase,
         )
 
     def _new_event_id(self, kind: str, sequence: int) -> str:
@@ -500,8 +550,24 @@ def _validate_provider_result(
     request: ConsensusPhaseRequest,
     result: ConsensusProviderResult,
 ) -> None:
+    if request.phase in {ConsensusPhase.INPUT_ADOPTION, ConsensusPhase.REVIEW_COMPLETION}:
+        raise ValueError("provider-free consensus phase cannot accept a provider result")
+    if result.report_material is not None and (
+        request.intent is not AuthoringIntent.REVIEW_ONLY
+        or request.phase is not ConsensusPhase.AUDIT
+    ):
+        raise ValueError("audit report material requires review-only audit")
+    if result.review_findings is not None and (
+        request.intent is not AuthoringIntent.REVIEW_ONLY
+        or request.phase is not ConsensusPhase.SYNTHESIS
+    ):
+        raise ValueError("review findings require review-only synthesis")
     if result.kind is ConsensusPhaseOutputKind.FAILURE:
         return
+    if request.phase is ConsensusPhase.SYNTHESIS and result.kind is ConsensusPhaseOutputKind.SYNTHESIS:
+        allowed_next = {ConsensusPhase.REVIEW_COMPLETION} if request.intent is AuthoringIntent.REVIEW_ONLY else {ConsensusPhase.REPAIR, ConsensusPhase.FINALIZATION}
+        if result.next_phase not in allowed_next:
+            raise ValueError("consensus synthesis next phase does not match its intent")
     if request.phase in {ConsensusPhase.AUDIT, ConsensusPhase.REAUDIT}:
         if (
             result.kind

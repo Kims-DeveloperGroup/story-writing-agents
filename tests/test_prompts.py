@@ -244,8 +244,8 @@ class PromptAssemblerTests(unittest.TestCase):
             ("conversation_context", "story_session_context"),
         )
         self.assertEqual(tuple(field.name for field in request_fields if field.kw_only),
-                         ("expected_reviewed_proposal",))
-        self.assertTrue(all(field.default is None for field in request_fields[-3:]))
+                         ("expected_reviewed_proposal", "review_only"))
+        self.assertTrue(all(field.default is (False if field.name == "review_only" else None) for field in request_fields[-4:]))
         context = ConversationContextWindow(
             events=(),
             total_complete_turns=0,

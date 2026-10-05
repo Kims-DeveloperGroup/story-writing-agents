@@ -57,6 +57,7 @@ from tests.test_lead_orchestration import (
     _read_history_hit,
     _specialist_outcome,
     _synthesis_outcome,
+    _submitted_calls,
     _workflow_material,
 )
 
@@ -89,6 +90,10 @@ def _payloads(history, payload_type):
     return tuple(
         event.payload for event in history if type(event.payload) is payload_type
     )
+
+
+def _submitted_specialist_calls(history):
+    return tuple(call for call in _submitted_calls(history) if call.invocation_kind is CollaborationInvocationKind.SPECIALIST_ASSIGNMENT)
 
 
 def _events(history, kind: CollaborationEventKind):
@@ -439,12 +444,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             project_collaboration_history(history).current_state,
             CollaborationStepState.RUNNING,
         )
-        submitted = tuple(
-            item
-            for item in _payloads(history, CollaborationProviderCallPayload)
-            if item.invocation_kind is CollaborationInvocationKind.SPECIALIST_ASSIGNMENT
-            and item.state is CollaborationProviderCallState.SUBMITTED
-        )
+        submitted = _submitted_specialist_calls(history)
         self.assertEqual(len(submitted), 2)
         result = _payloads(history, CollaborationExecutionResult)[0]
         self.assertIs(
@@ -684,9 +684,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 )
                 self.assertEqual(reply.trace.action, "none")
                 reports = tuple(
-                    chunk for payload in _payloads(
-                        self.history(conversation_id), CollaborationProviderCallPayload,
-                    ) if payload.state is CollaborationProviderCallState.SUBMITTED
+                    chunk for payload in _submitted_calls(self.history(conversation_id)) if payload.state is CollaborationProviderCallState.SUBMITTED
                     for chunk in payload.validation_details
                 )
                 self.assertTrue(all(issue in chunk for chunk in reports))
@@ -709,9 +707,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
         )
         history = self.history(conversation_id)
-        submitted = tuple(payload for payload in _payloads(
-            history, CollaborationProviderCallPayload,
-        ) if payload.state is CollaborationProviderCallState.SUBMITTED)
+        submitted = _submitted_calls(history)
         synthesis = tuple(payload for payload in submitted
                           if payload.role == LEAD_ORCHESTRATOR and payload.validation_details)
         self.assertEqual(len(synthesis), 1)
@@ -753,8 +749,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertEqual(len(_payloads(known, CollaborationExecutionResult)), 1)
         expected = tuple(
             chunk
-            for payload in _payloads(known, CollaborationProviderCallPayload)
-            if payload.state is CollaborationProviderCallState.SUBMITTED
+            for payload in _submitted_calls(known)
             for chunk in payload.validation_details
         )
         self.assertTrue(expected)
@@ -812,9 +807,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 projection = project_collaboration_history(known)
                 self.assertIs(projection.current_state, CollaborationStepState.RUNNING)
                 self.assertEqual(len(_payloads(known, CollaborationExecutionResult)), 1)
-                submitted = tuple(payload for payload in _payloads(
-                    known, CollaborationProviderCallPayload,
-                ) if payload.state is CollaborationProviderCallState.SUBMITTED)
+                submitted = _submitted_calls(known)
                 self.assertFalse(any(payload.validation_details for payload in submitted))
                 expected = tuple(
                     detail
@@ -879,9 +872,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 and payload.validation_call_id is not None):
                 key = (payload.validation_invocation_id, payload.validation_call_id)
                 messages_by_call.setdefault(key, []).extend(payload.validation_details)
-        submitted = tuple(payload for payload in _payloads(
-            known, CollaborationProviderCallPayload,
-        ) if payload.state is CollaborationProviderCallState.SUBMITTED)
+        submitted = _submitted_calls(known)
         expected = tuple(
             detail
             for payload in submitted
@@ -959,10 +950,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertEqual(result.assignment_outcomes[0].submitted_physical_calls, 2)
         self.assertIs(result.synthesis_outcome,
                       CollaborationSynthesisOutcomeKind.NOT_ATTEMPTED)
-        submitted = tuple(payload for payload in _payloads(
-            known, CollaborationProviderCallPayload,
-        ) if payload.state is CollaborationProviderCallState.SUBMITTED
-           and payload.invocation_kind is CollaborationInvocationKind.SPECIALIST_ASSIGNMENT)
+        submitted = _submitted_specialist_calls(known)
         self.assertEqual(len(submitted), 2)
         self.assertTrue(all(not payload.validation_details for payload in submitted))
         notices = tuple(payload for payload in _payloads(
@@ -1048,10 +1036,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 self.assertTrue(notices[0].validation_details[0].startswith(
                     "Original response"
                 ))
-                submitted = tuple(payload for payload in _payloads(
-                    history, CollaborationProviderCallPayload,
-                ) if payload.state is CollaborationProviderCallState.SUBMITTED
-                   and payload.invocation_kind in {
+                submitted = tuple(payload for payload in _submitted_calls(history) if payload.invocation_kind in {
                        CollaborationInvocationKind.SPECIALIST_ASSIGNMENT,
                        CollaborationInvocationKind.LEAD_SYNTHESIS,
                    })
@@ -1086,10 +1071,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                       CollaborationStepState.RUNNING)
         self.assertEqual(_payloads(known, CollaborationExecutionResult), ())
         self.assertEqual(_payloads(known, CollaborationTerminalOutcomePayload), ())
-        submitted = tuple(payload for payload in _payloads(
-            known, CollaborationProviderCallPayload,
-        ) if payload.state is CollaborationProviderCallState.SUBMITTED
-           and payload.invocation_kind is CollaborationInvocationKind.SPECIALIST_ASSIGNMENT)
+        submitted = _submitted_specialist_calls(known)
         self.assertEqual(len(submitted), 2)
         self.assertEqual(self.runtime._live_execution_markers, set())
 
@@ -1292,8 +1274,8 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertEqual((second.proposal.budget.rounds_spent, second.proposal.budget.rounds_added,
                           second.proposal.budget.physical_calls_spent), (1, 1, 4))
         first_history = self.history(conversation_id)
-        expected_details = tuple(chunk for payload in _payloads(first_history, CollaborationProviderCallPayload)
-            if payload.state is CollaborationProviderCallState.SUBMITTED for chunk in payload.validation_details)
+        expected_details = tuple(chunk for payload in _submitted_calls(first_history)
+            for chunk in payload.validation_details)
         self.assertTrue(expected_details)
         self.assertEqual(second.validation_details, expected_details)
         self.assertNotIn(private, repr(first_history))

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
+
+from ..specialist_routing import AuthoringIntent
 
 from .contracts import (
     ConsensusAudit,
@@ -54,6 +56,7 @@ class ConsensusWorkflowSubmission:
     input_kind: ConsensusInputKind
     input_material: ConsensusMaterialHandle
     continuation: ConsensusContinuation | None = None
+    intent: AuthoringIntent = field(default=AuthoringIntent.AUTHORING, kw_only=True)
 
     def __post_init__(self) -> None:
         if any(
@@ -67,6 +70,14 @@ class ConsensusWorkflowSubmission:
             raise TypeError("consensus input kind is invalid")
         if type(self.input_material) is not ConsensusMaterialHandle:
             raise TypeError("consensus submission material handle is invalid")
+        if type(self.intent) is not AuthoringIntent:
+            raise TypeError("consensus submission intent is invalid")
+        if self.intent is AuthoringIntent.REVIEW_ONLY and (
+            self.input_kind is not ConsensusInputKind.SUPPLIED_DRAFT
+            or not self.input_material.locator.startswith("candidate:")
+            or self.continuation is not None
+        ):
+            raise ValueError("review-only submission requires an exact supplied draft")
         if self.input_kind is ConsensusInputKind.CONTINUATION:
             if (
                 type(self.continuation) is not ConsensusContinuation
@@ -112,6 +123,11 @@ class ConsensusStoredWorkflow:
             projection.workflow_id != self.submission.workflow_id
             or projection.proposal_id != self.submission.proposal_id
             or request.input_material != self.submission.input_material
+            or any(
+                event.payload.intent is not self.submission.intent
+                for event in self.events
+                if type(event.payload) in {ConsensusPhaseRequest, ConsensusPhaseResult}
+            )
             or (
                 request.continuation != self.submission.continuation
                 and self.submission.input_kind is ConsensusInputKind.CONTINUATION
@@ -125,7 +141,7 @@ class ConsensusStoredWorkflow:
             raise ValueError("consensus stored workflow identity is inconsistent")
 
 
-CONSENSUS_SERIALIZATION_SCHEMA_VERSION = 3
+CONSENSUS_SERIALIZATION_SCHEMA_VERSION = 4
 _MAX_SERIALIZED_BYTES = 16 * 1024 * 1024
 
 
@@ -166,20 +182,21 @@ def deserialize_consensus_workflow(value: bytes) -> ConsensusStoredWorkflow:
     root = _object(raw, {"schema_version", "submission", "events"}, "workflow")
     if (
         type(root["schema_version"]) is not int
-        or root["schema_version"] != CONSENSUS_SERIALIZATION_SCHEMA_VERSION
+        or root["schema_version"] not in {3, CONSENSUS_SERIALIZATION_SCHEMA_VERSION}
     ):
         raise ValueError("consensus workflow schema version is unsupported")
     raw_events = root["events"]
     if type(raw_events) is not list or not raw_events or len(raw_events) > 10000:
         raise ValueError("serialized consensus events are invalid")
     return ConsensusStoredWorkflow(
-        submission=_submission_from_json(root["submission"]),
-        events=tuple(_event_from_json(item) for item in raw_events),
+        submission=_submission_from_json(root["submission"], schema_version=root["schema_version"]),
+        events=tuple(_event_from_json(item, schema_version=root["schema_version"]) for item in raw_events),
     )
 
 
 def _submission_to_json(value: ConsensusWorkflowSubmission) -> dict[str, Any]:
     return {
+        **({"intent": value.intent.value} if value.intent is AuthoringIntent.REVIEW_ONLY else {}),
         "execution_identity": _identity_to_json(value.execution_identity),
         "workflow_id": value.workflow_id,
         "proposal_id": value.proposal_id,
@@ -189,7 +206,7 @@ def _submission_to_json(value: ConsensusWorkflowSubmission) -> dict[str, Any]:
     }
 
 
-def _submission_from_json(value: object) -> ConsensusWorkflowSubmission:
+def _submission_from_json(value: object, *, schema_version: int) -> ConsensusWorkflowSubmission:
     raw = _object(
         value,
         {
@@ -199,10 +216,11 @@ def _submission_from_json(value: object) -> ConsensusWorkflowSubmission:
             "input_kind",
             "input_material",
             "continuation",
-        },
+        } | _intent_fields(value, schema_version),
         "submission",
     )
     return ConsensusWorkflowSubmission(
+        intent=AuthoringIntent(raw.get("intent", "authoring")),
         execution_identity=_identity_from_json(raw["execution_identity"]),
         workflow_id=raw["workflow_id"],
         proposal_id=raw["proposal_id"],
@@ -217,6 +235,7 @@ def _event_to_json(event: ConsensusEvent) -> dict[str, Any]:
     if type(payload) is ConsensusPhaseRequest:
         kind = "request"
         body = {
+            **({"intent": payload.intent.value} if payload.intent is AuthoringIntent.REVIEW_ONLY else {}),
             "workflow_id": payload.workflow_id,
             "phase_request_id": payload.phase_request_id,
             "proposal_id": payload.proposal_id,
@@ -248,6 +267,8 @@ def _event_to_json(event: ConsensusEvent) -> dict[str, Any]:
     elif type(payload) is ConsensusPhaseResult:
         kind = "result"
         body = {
+            **({"review_findings": payload.review_findings} if payload.review_findings is not None else {}),
+            **({"intent": payload.intent.value} if payload.intent is AuthoringIntent.REVIEW_ONLY else {}),
             "result_id": payload.result_id,
             "phase_request_id": payload.phase_request_id,
             "decision_event_id": payload.decision_event_id,
@@ -278,21 +299,21 @@ def _event_to_json(event: ConsensusEvent) -> dict[str, Any]:
     }
 
 
-def _event_from_json(value: object) -> ConsensusEvent:
+def _event_from_json(value: object, *, schema_version: int) -> ConsensusEvent:
     raw = _object(value, {"event_id", "sequence", "payload_type", "payload"}, "event")
     kind = raw["payload_type"]
     if kind == "request":
-        payload = _request_from_json(raw["payload"])
+        payload = _request_from_json(raw["payload"], schema_version=schema_version)
     elif kind == "decision":
         payload = _decision_from_json(raw["payload"])
     elif kind == "result":
-        payload = _result_from_json(raw["payload"])
+        payload = _result_from_json(raw["payload"], schema_version=schema_version)
     else:
         raise ValueError("consensus event payload type is unknown")
     return ConsensusEvent(raw["event_id"], raw["sequence"], payload)
 
 
-def _request_from_json(value: object) -> ConsensusPhaseRequest:
+def _request_from_json(value: object, *, schema_version: int) -> ConsensusPhaseRequest:
     raw = _object(
         value,
         {
@@ -309,10 +330,11 @@ def _request_from_json(value: object) -> ConsensusPhaseRequest:
             "previous_result_event_id",
             "continuation",
             "request_digest",
-        },
+        } | _intent_fields(value, schema_version),
         "request",
     )
     return ConsensusPhaseRequest(
+        intent=AuthoringIntent(raw.get("intent", "authoring")),
         workflow_id=raw["workflow_id"],
         phase_request_id=raw["phase_request_id"],
         proposal_id=raw["proposal_id"],
@@ -360,7 +382,7 @@ def _decision_from_json(value: object) -> ConsensusPhaseDecision:
     )
 
 
-def _result_from_json(value: object) -> ConsensusPhaseResult:
+def _result_from_json(value: object, *, schema_version: int) -> ConsensusPhaseResult:
     raw = _object(
         value,
         {
@@ -379,7 +401,10 @@ def _result_from_json(value: object) -> ConsensusPhaseResult:
             "next_phase",
             "prior_result_event_id",
             "publication_allowed",
-        } | ({"validation_details_by_provider"} if type(value) is dict and
+        } | _intent_fields(value, schema_version)
+        | ({"review_findings"} if schema_version == 4 and type(value) is dict
+           and "review_findings" in value else set())
+        | ({"validation_details_by_provider"} if type(value) is dict and
              "validation_details_by_provider" in value else set()),
         "result",
     )
@@ -395,7 +420,11 @@ def _result_from_json(value: object) -> ConsensusPhaseResult:
         if type(report) is not list or any(type(item) is not str for item in report):
             raise ValueError("serialized consensus provider report is invalid")
         reports.append(tuple(report))
+    if "review_findings" in raw and raw["review_findings"] is None:
+        raise ValueError("serialized consensus review findings must be nonempty text")
     return ConsensusPhaseResult(
+        intent=AuthoringIntent(raw.get("intent", "authoring")),
+        review_findings=raw.get("review_findings"),
         result_id=raw["result_id"],
         phase_request_id=raw["phase_request_id"],
         decision_event_id=raw["decision_event_id"],
@@ -407,7 +436,7 @@ def _result_from_json(value: object) -> ConsensusPhaseResult:
         request_digest=raw["request_digest"],
         state=ConsensusPhaseState(raw["state"]),
         candidate_digest=raw["candidate_digest"],
-        audits=tuple(_audit_from_json(item) for item in raw_audits),
+        audits=tuple(_audit_from_json(item, schema_version=schema_version) for item in raw_audits),
         next_phase=None if next_phase is None else ConsensusPhase(next_phase),
         prior_result_event_id=raw["prior_result_event_id"],
         publication_allowed=raw["publication_allowed"],
@@ -416,7 +445,7 @@ def _result_from_json(value: object) -> ConsensusPhaseResult:
 
 
 def _audit_to_json(value: ConsensusAudit) -> dict[str, Any]:
-    return {
+    raw = {
         "specialist_id": value.specialist_id,
         "revision_id": value.revision_id,
         "candidate_digest": value.candidate_digest,
@@ -424,9 +453,12 @@ def _audit_to_json(value: ConsensusAudit) -> dict[str, Any]:
         "audit_digest": value.audit_digest,
         "conflict_material": _optional_material_to_json(value.conflict_material),
     }
+    if value.report_material is not None:
+        raw["report_material"] = _material_to_json(value.report_material)
+    return raw
 
 
-def _audit_from_json(value: object) -> ConsensusAudit:
+def _audit_from_json(value: object, *, schema_version: int) -> ConsensusAudit:
     raw = _object(
         value,
         {
@@ -436,7 +468,8 @@ def _audit_from_json(value: object) -> ConsensusAudit:
             "verdict",
             "audit_digest",
             "conflict_material",
-        },
+        } | ({"report_material"} if schema_version == 4 and type(value) is dict
+             and "report_material" in value else set()),
         "audit",
     )
     return ConsensusAudit(
@@ -446,6 +479,9 @@ def _audit_from_json(value: object) -> ConsensusAudit:
         verdict=ConsensusAuditVerdict(raw["verdict"]),
         audit_digest=raw["audit_digest"],
         conflict_material=_optional_material_from_json(raw["conflict_material"]),
+        report_material=(
+            _material_from_json(raw["report_material"]) if "report_material" in raw else None
+        ),
     )
 
 
@@ -531,6 +567,10 @@ def _material_from_json(value: object) -> ConsensusMaterialHandle:
 
 def _optional_material_from_json(value: object) -> ConsensusMaterialHandle | None:
     return None if value is None else _material_from_json(value)
+
+
+def _intent_fields(value: object, schema_version: int) -> set[str]:
+    return {"intent"} if schema_version == 4 and type(value) is dict and "intent" in value else set()
 
 
 def _object(value: object, fields: set[str], label: str) -> dict[str, Any]:

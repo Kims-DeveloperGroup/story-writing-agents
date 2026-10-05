@@ -418,6 +418,10 @@ class PublicApiTests(unittest.TestCase):
                 self.assertTrue(
                     issubclass(getattr(story_writing_agents, name), base_error)
                 )
+        from story_writing_agents.consensus import AuthoringIntent
+        from story_writing_agents.specialist_routing import AuthoringIntent as intent_owner
+        self.assertIs(AuthoringIntent, intent_owner)
+        self.assertNotIn("AuthoringIntent", story_writing_agents.__all__)
 
     def test_agent_backend_signature_and_configuration_exports_are_exact(
         self,

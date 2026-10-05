@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+from ..specialist_routing import AuthoringIntent
+
 from .contracts import (
     ConsensusAuditVerdict,
     ConsensusDecision,
@@ -58,7 +60,7 @@ class ConsensusEvent:
 
 @dataclass(frozen=True, slots=True)
 class ConsensusProjection:
-    """Content-free current state derived from a complete durable history."""
+    """Current state and optional review report from a complete durable history."""
 
     workflow_id: str | None = None
     proposal_id: str | None = None
@@ -82,6 +84,8 @@ class ConsensusProjection:
     added_revision_rounds: int = 0
     remaining_revision_rounds: int = 0
     terminal: bool = False
+    intent: AuthoringIntent | None = None
+    review_findings: str | None = None
 
 
 def project_consensus(events: tuple[ConsensusEvent, ...]) -> ConsensusProjection:
@@ -106,6 +110,7 @@ def project_consensus(events: tuple[ConsensusEvent, ...]) -> ConsensusProjection
     continuation: ConsensusContinuation | None = None
     continuation_repairs = 0
     latest_conflicts: tuple[ConsensusMaterialHandle, ...] = ()
+    review_findings: str | None = None
 
     for expected_sequence, event in enumerate(events, start=1):
         if event.sequence != expected_sequence or event.event_id in seen_event_ids:
@@ -169,6 +174,7 @@ def project_consensus(events: tuple[ConsensusEvent, ...]) -> ConsensusProjection
                 or payload.decision_event_sequence != decision_event.sequence
                 or payload.proposal_id != request.proposal_id
                 or payload.phase is not request.phase
+                or payload.intent is not request.intent
                 or payload.revision_id != request.revision_id
                 or payload.request_digest != request.request_digest
             ):
@@ -183,6 +189,8 @@ def project_consensus(events: tuple[ConsensusEvent, ...]) -> ConsensusProjection
                 raise ValueError("consensus result candidate lineage changed")
             _validate_result_transition(payload, decision, result, result_event)
             result, result_event = payload, event
+            if payload.review_findings is not None:
+                review_findings = payload.review_findings
             if (
                 payload.state is ConsensusPhaseState.COMPLETED
                 and payload.phase is ConsensusPhase.REPAIR
@@ -210,6 +218,8 @@ def project_consensus(events: tuple[ConsensusEvent, ...]) -> ConsensusProjection
         raise ValueError("consensus history has no request")
     state, action = _visible_state(decision, result)
     return ConsensusProjection(
+        intent=request.intent,
+        review_findings=review_findings,
         workflow_id=workflow_id,
         proposal_id=proposal_id,
         revision_id=request.revision_id,
@@ -287,9 +297,15 @@ def _validate_request_transition(
             ):
                 raise ValueError("linked consensus continuation is invalid")
             return
-        if request.phase is not ConsensusPhase.DRAFT or request.revision_id != "r0":
-            raise ValueError("consensus lineage must begin with draft revision zero")
+        initial_phase = ConsensusPhase.INPUT_ADOPTION if request.intent is AuthoringIntent.REVIEW_ONLY else ConsensusPhase.DRAFT
+        if request.phase is not initial_phase or request.revision_id != "r0":
+            raise ValueError("consensus lineage must begin with its exact initial revision zero phase")
         return
+    if prior_request is not None and (
+        request.intent is not prior_request.intent
+        or request.input_material != prior_request.input_material
+    ):
+        raise ValueError("consensus intent or original input identity changed")
     result, event = prior
     if request.previous_result_event_id != event.event_id:
         raise ValueError("consensus request does not extend the current result")
@@ -385,6 +401,7 @@ def _visible_state(
         ConsensusPhaseState.DEADLOCKED: (
             ConsensusNextAction.CONTINUE_DEADLOCK
             if result.phase is ConsensusPhase.SYNTHESIS
+            and result.intent is AuthoringIntent.AUTHORING
             else ConsensusNextAction.INSPECT_FAILURE
         ),
     }

@@ -15,6 +15,7 @@ from ..agents import (
     EXECUTION_SPECIALIST,
     PLOT_ARCHITECT,
 )
+from ..specialist_routing import AuthoringIntent
 from ..writing_artifacts.catalog import canonical_artifact_kind
 from ..structured_output_validation import validate_details
 
@@ -45,12 +46,14 @@ class ConsensusExecutionIdentity:
 class ConsensusPhase(StrEnum):
     """Provider-independent phases of one consensus lineage."""
 
+    INPUT_ADOPTION = "input_adoption"
     DRAFT = "draft"
     AUDIT = "audit"
     REPAIR = "repair"
     REAUDIT = "reaudit"
     SYNTHESIS = "synthesis"
     FINALIZATION = "finalization"
+    REVIEW_COMPLETION = "review_completion"
 
 
 class ConsensusDecision(StrEnum):
@@ -132,6 +135,7 @@ class ConsensusAudit:
     verdict: ConsensusAuditVerdict
     audit_digest: str
     conflict_material: ConsensusMaterialHandle | None = None
+    report_material: ConsensusMaterialHandle | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         if self.specialist_id not in CONSENSUS_AUDITORS:
@@ -141,6 +145,11 @@ class ConsensusAudit:
         if type(self.verdict) is not ConsensusAuditVerdict:
             raise TypeError("consensus audit verdict is invalid")
         _digest(self.audit_digest)
+        if self.report_material is not None and (
+            type(self.report_material) is not ConsensusMaterialHandle
+            or not self.report_material.locator.startswith("candidate:")
+        ):
+            raise ValueError("consensus audit report requires immutable material")
         if self.verdict is ConsensusAuditVerdict.CONFLICT:
             if (
                 type(self.conflict_material) is not ConsensusMaterialHandle
@@ -151,6 +160,10 @@ class ConsensusAudit:
                 )
         elif self.conflict_material is not None:
             raise ValueError("consensus approval cannot carry critique material")
+        if self.report_material is not None and self.verdict is ConsensusAuditVerdict.CONFLICT and (
+            self.report_material != self.conflict_material
+        ):
+            raise ValueError("consensus conflict report must reuse critique material")
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,6 +226,7 @@ class ConsensusPhaseRequest:
     previous_result_event_id: str | None
     request_digest: str
     continuation: ConsensusContinuation | None = None
+    intent: AuthoringIntent = field(default=AuthoringIntent.AUTHORING, kw_only=True)
 
     def __post_init__(self) -> None:
         for value in (self.workflow_id, self.phase_request_id, self.proposal_id):
@@ -229,6 +243,19 @@ class ConsensusPhaseRequest:
             raise TypeError("consensus input material handle is invalid")
         if self.candidate_material is not None and type(self.candidate_material) is not ConsensusMaterialHandle:
             raise TypeError("consensus candidate material handle is invalid")
+        if type(self.intent) is not AuthoringIntent:
+            raise TypeError("consensus intent is invalid")
+        if self.intent is AuthoringIntent.REVIEW_ONLY:
+            if (
+                self.phase not in {ConsensusPhase.INPUT_ADOPTION, ConsensusPhase.AUDIT, ConsensusPhase.SYNTHESIS, ConsensusPhase.REVIEW_COMPLETION}
+                or self.revision_number != 0
+                or self.input_material != self.candidate_material
+                or not self.input_material.locator.startswith("candidate:")
+                or self.continuation is not None
+            ):
+                raise ValueError("review-only request must retain its exact supplied candidate")
+        elif self.phase in {ConsensusPhase.INPUT_ADOPTION, ConsensusPhase.REVIEW_COMPLETION}:
+            raise ValueError("provider-free review phases require review-only intent")
         if self.phase is ConsensusPhase.DRAFT:
             if self.revision_number != 0 or self.candidate_material is not None:
                 raise ValueError("draft phase must create revision zero")
@@ -259,6 +286,7 @@ class ConsensusPhaseRequest:
             proposal_id=self.proposal_id,
             session_id=self.execution_identity.session_id,
             conversation_id=self.execution_identity.conversation_id,
+            **({"intent": self.intent.value} if self.intent is AuthoringIntent.REVIEW_ONLY else {}),
             phase=self.phase,
             revision_id=self.revision_id,
             input_material_locator=self.input_material.locator,
@@ -325,7 +353,7 @@ class ConsensusPhaseDecision:
 
 @dataclass(frozen=True, slots=True)
 class ConsensusPhaseResult:
-    """One monotonic content-free phase result or execution checkpoint."""
+    """One monotonic phase result/checkpoint; review report text grants no authority."""
 
     result_id: str
     phase_request_id: str
@@ -343,6 +371,8 @@ class ConsensusPhaseResult:
     prior_result_event_id: str | None = None
     publication_allowed: bool = False
     validation_details_by_provider: tuple[tuple[str, ...], ...] = ()
+    intent: AuthoringIntent = field(default=AuthoringIntent.AUTHORING, kw_only=True)
+    review_findings: str | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         for value in (self.result_id, self.phase_request_id, self.decision_event_id, self.proposal_id):
@@ -353,6 +383,25 @@ class ConsensusPhaseResult:
             raise ValueError("consensus decision event sequence is invalid")
         if type(self.phase) is not ConsensusPhase or type(self.state) is not ConsensusPhaseState:
             raise TypeError("consensus result phase or state is invalid")
+        if type(self.intent) is not AuthoringIntent:
+            raise TypeError("consensus result intent is invalid")
+        if self.review_findings is not None:
+            if type(self.review_findings) is not str or not self.review_findings:
+                raise ValueError("consensus review findings must be nonempty text")
+            self.review_findings.encode("utf-8", errors="strict")
+            if (
+                self.intent is not AuthoringIntent.REVIEW_ONLY
+                or self.phase is not ConsensusPhase.SYNTHESIS
+                or self.state not in {ConsensusPhaseState.COMPLETED, ConsensusPhaseState.DEADLOCKED}
+            ):
+                raise ValueError("only terminal review-only synthesis may carry review findings")
+        if self.intent is AuthoringIntent.REVIEW_ONLY:
+            if self.phase not in {ConsensusPhase.INPUT_ADOPTION, ConsensusPhase.AUDIT, ConsensusPhase.SYNTHESIS, ConsensusPhase.REVIEW_COMPLETION} or self.revision_id != "r0" or self.candidate_digest is None:
+                raise ValueError("review-only result must retain supplied candidate lineage")
+        elif self.phase in {ConsensusPhase.INPUT_ADOPTION, ConsensusPhase.REVIEW_COMPLETION}:
+            raise ValueError("provider-free review result requires review-only intent")
+        if self.phase in {ConsensusPhase.INPUT_ADOPTION, ConsensusPhase.REVIEW_COMPLETION} and self.validation_details_by_provider:
+            raise ValueError("provider-free phase cannot carry provider validation details")
         if self.state in {
             ConsensusPhaseState.AWAITING_CONFIRMATION,
             ConsensusPhaseState.CONFIRMED,
@@ -384,6 +433,11 @@ class ConsensusPhaseResult:
         if type(self.audits) is not tuple or any(type(item) is not ConsensusAudit for item in self.audits):
             raise TypeError("consensus audits are invalid")
         if self.audits:
+            if any(item.report_material is not None for item in self.audits) and (
+                self.intent is not AuthoringIntent.REVIEW_ONLY
+                or self.phase is not ConsensusPhase.AUDIT
+            ):
+                raise ValueError("audit reports require review-only audit results")
             if self.phase not in {ConsensusPhase.AUDIT, ConsensusPhase.REAUDIT}:
                 raise ValueError("only audit phases may carry audits")
             if tuple(item.specialist_id for item in self.audits) != CONSENSUS_AUDITORS:
@@ -402,10 +456,10 @@ class ConsensusPhaseResult:
                 raise ValueError("deadlock must retain a nonpublishing lineage")
         if self.state not in {ConsensusPhaseState.COMPLETED} and self.next_phase is not None:
             raise ValueError("only a completed phase may select the next phase")
-        _validate_next_phase(self.phase, self.next_phase, self.audits)
+        _validate_next_phase(self.phase, self.next_phase, self.audits, self.intent)
         if (
             self.state is ConsensusPhaseState.COMPLETED
-            and self.phase is not ConsensusPhase.FINALIZATION
+            and self.phase not in {ConsensusPhase.FINALIZATION, ConsensusPhase.REVIEW_COMPLETION}
             and self.next_phase is None
         ):
             raise ValueError("completed consensus phase requires its next phase")
@@ -477,6 +531,7 @@ def prepare_consensus_phase(
     base_tail_sequence: int,
     previous_result_event_id: str | None = None,
     continuation: ConsensusContinuation | None = None,
+    intent: AuthoringIntent = AuthoringIntent.AUTHORING,
 ) -> tuple[ConsensusPhaseRequest, ConsensusConfirmationCapability]:
     """Create one durable request and its separate process-local capability."""
 
@@ -491,6 +546,7 @@ def prepare_consensus_phase(
         raise TypeError("consensus material handles are invalid")
     revision_number = int(revision_id.removeprefix("r")) if _REVISION.fullmatch(revision_id) else -1
     request = ConsensusPhaseRequest(
+        intent=intent,
         workflow_id=workflow_id,
         phase_request_id=phase_request_id,
         proposal_id=proposal_id,
@@ -509,6 +565,7 @@ def prepare_consensus_phase(
             proposal_id=proposal_id,
             session_id=execution_identity.session_id,
             conversation_id=execution_identity.conversation_id,
+            **({"intent": intent.value} if intent is AuthoringIntent.REVIEW_ONLY else {}),
             phase=phase,
             revision_id=revision_id,
             input_material_locator=input_material.locator,
@@ -560,6 +617,7 @@ def prepare_next_consensus_phase(
         or terminal_result.execution_identity != current_request.execution_identity
         or terminal_result.phase is not current_request.phase
         or terminal_result.revision_id != current_request.revision_id
+        or terminal_result.intent is not current_request.intent
         or terminal_result.request_digest != current_request.request_digest
     ):
         raise ValueError("consensus terminal result does not match its request")
@@ -585,6 +643,7 @@ def prepare_next_consensus_phase(
         raise ValueError("consensus terminal result cannot advance")
     return prepare_consensus_phase(
         owner=owner,
+        intent=current_request.intent,
         workflow_id=current_request.workflow_id,
         phase_request_id=phase_request_id,
         proposal_id=current_request.proposal_id,
@@ -612,14 +671,16 @@ def consensus_request_digest(**values: object) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _validate_next_phase(phase: ConsensusPhase, next_phase: ConsensusPhase | None, audits: tuple[ConsensusAudit, ...]) -> None:
+def _validate_next_phase(phase: ConsensusPhase, next_phase: ConsensusPhase | None, audits: tuple[ConsensusAudit, ...], intent: AuthoringIntent) -> None:
     allowed = {
+        ConsensusPhase.INPUT_ADOPTION: {ConsensusPhase.AUDIT},
         ConsensusPhase.DRAFT: {ConsensusPhase.AUDIT},
         ConsensusPhase.AUDIT: {ConsensusPhase.SYNTHESIS},
         ConsensusPhase.REAUDIT: {ConsensusPhase.SYNTHESIS},
-        ConsensusPhase.SYNTHESIS: {ConsensusPhase.REPAIR, ConsensusPhase.FINALIZATION},
+        ConsensusPhase.SYNTHESIS: ({ConsensusPhase.REVIEW_COMPLETION} if intent is AuthoringIntent.REVIEW_ONLY else {ConsensusPhase.REPAIR, ConsensusPhase.FINALIZATION}),
         ConsensusPhase.REPAIR: {ConsensusPhase.REAUDIT},
         ConsensusPhase.FINALIZATION: set(),
+        ConsensusPhase.REVIEW_COMPLETION: set(),
     }[phase]
     if next_phase is not None and next_phase not in allowed:
         raise ValueError("consensus next phase is invalid")

@@ -91,7 +91,7 @@ class ConsensusMaterialStoreTests(unittest.TestCase):
         self.assertEqual(observed.st_nlink, 1)
 
     def test_lifecycle_is_content_addressed_and_readable_by_fresh_instance(self) -> None:
-        content = "Opening revision 한글\n"
+        content = "Opening revision 한글\r\nÉcho.  \r\n"
         handle = self.store.put_text(content)
         expected_digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
         self.assertEqual(

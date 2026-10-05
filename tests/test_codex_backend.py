@@ -4880,7 +4880,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     AgentBackend._decode_reply(phase, value, revision_id="r2")
         for phase, value, error, issue in (
             (Phase.AUDIT, {"verdict": "PRIVATE", "message": "Visible."}, BackendProtocolError, "$.verdict: expected verdict approve or conflict"),
-            (Phase.SYNTHESIZE, {"next": "PRIVATE", "message": "Continue."}, BackendProtocolError, "$.next: expected repair, finalization, or deadlock"),
+            (Phase.SYNTHESIZE, {"next": "PRIVATE", "message": "Continue."}, BackendProtocolError, "$.next: expected repair, finalization, review_completion, or deadlock"),
             (Phase.AUDIT, {"verdict": "conflict", "message": ""}, BackendProtocolError, "$.response_text: expected nonempty text"),
             (Phase.FINALIZE, {"reviewed_proposal_id": "valid", "reviewed_proposal_digest": "PRIVATE"}, BackendProtocolError,
              "$.reviewed_proposal_digest: expected sha256: followed by exactly 64 lowercase hexadecimal digits"),
@@ -4892,6 +4892,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             issues = failure_issues(caught.exception) or (getattr(caught.exception, "issue", None),)
             self.assertEqual(issues, ("$: expected exact current response_type and schema fields" if ((phase is Phase.AUDIT and value.get("verdict") == "PRIVATE") or (phase is Phase.SYNTHESIZE and value.get("next") == "PRIVATE")) else issue,))
             self.assertNotIn("PRIVATE", repr(issues))
+        review_schema = AgentBackend._output_schema(Phase.SYNTHESIZE, review_only=True)
+        self.assertEqual(review_schema["properties"]["next_consensus_step"]["enum"], ["complete_review", "report_deadlock"])
+        with self.assertRaises(ValueError):
+            AgentBackend._output_schema(Phase.DRAFT, review_only=True)
 
     async def test_rejected_debate_attempts_return_phase_safe_deadlocks(self) -> None:
         backend = AgentBackend(self.workspace, executable=str(self.executable))

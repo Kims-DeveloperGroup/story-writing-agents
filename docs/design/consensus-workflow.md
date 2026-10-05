@@ -8,6 +8,9 @@ installed CLI and interactive shell do not expose this Python workflow.
 
 ## Authority and event sequence
 
+The diagram shows default AUTHORING. Explicit REVIEW_ONLY uses the provider-free
+adoption/completion branches described in phase routing below.
+
 ```mermaid
 flowchart TD
     S[Submit prompt or supplied draft] --> R[Durable phase request]
@@ -39,20 +42,34 @@ restart.
 
 Reject and Revise append a decision and terminal result without provider work.
 Revise produces `superseded`; an explicit call creates a replacement request
-for the same phase. Confirm saves its decision before consuming the capability
-and saves `running` before calling the provider. An uncertain mutation directs
+for the same phase. Confirm saves its decision before consuming the capability and saves `running`
+before the phase operation. INPUT_ADOPTION and REVIEW_COMPLETION verify the bound
+material through runtime ports without calling a provider. An uncertain mutation directs
 the caller to operator recovery instead of guessing or replaying.
 
 ## Phase routing
 
 | Consensus phase | Bound agent(s) | Provider `Phase` | Result and normal successor |
 | --- | --- | --- | --- |
+| `input_adoption` | Runtime | None | Confirm exact supplied bytes as review-only `r0` → `audit`; zero provider calls |
 | `draft` | Execution Specialist | `draft` | New unpublished `r0` candidate → `audit`; exhausted structured repair → failure with no candidate |
 | `audit` | Plot Architect, Character Custodian, Execution Specialist | `audit` | Three current-revision votes → `synthesis` |
-| `synthesis` | Lead Orchestrator | `synthesize` | Nonvoting choice of `repair`, `finalization`, or continuable deadlock retaining the candidate |
+| `synthesis` | Lead Orchestrator | `synthesize` | AUTHORING chooses `repair`, `finalization` or continuable deadlock; REVIEW_ONLY chooses `review_completion` or terminal deadlock |
 | `repair` | Execution Specialist | `propose_revision` | New unpublished candidate → `reaudit`; exhausted structured repair → noncontinuable deadlock retaining the prior candidate |
 | `reaudit` | Same three auditors | `audit` | Three fresh votes → `synthesis` |
+| `review_completion` | Runtime | None | Confirm completion of the reviewed original; zero provider calls, no artifact handoff or publication |
 | `finalization` | Lead Orchestrator | `finalize` | Validated read-only handoff; exhausted structured repair → noncontinuable deadlock retaining the candidate; no publication |
+
+`AuthoringIntent` is independent of drafting/review activity. Default AUTHORING
+keeps the existing DRAFT transformation and FINALIZATION artifact-identity
+contract. Explicit REVIEW_ONLY supplied input follows INPUT_ADOPTION → AUDIT →
+SYNTHESIS → REVIEW_COMPLETION, with separate exact confirmations. Synthesis offers
+review_completion or deadlock for that intent. It cannot select REPAIR, REAUDIT,
+DRAFT or artifact FINALIZATION; revision needs a fresh AUTHORING submission.
+Provider routing rejects adoption/completion phases, while execution verifies
+material and saves the existing running/terminal events without invoking a
+provider. Intent is immutable within the workflow and bound into review-only
+request/proposal identity.
 
 The lead does not vote. All three auditors inspect the same candidate handle
 and revision. Synthesis cannot carry an audit verdict. Repair must produce a
@@ -62,7 +79,8 @@ authority.
 
 ## Durable deadlock continuation
 
-A synthesis deadlock is terminal but resumable by an explicit new operation.
+An AUTHORING synthesis deadlock is terminal but resumable by an explicit new operation.
+REVIEW_ONLY deadlock retains the original and does not permit continuation.
 `continue_deadlock()` accepts the exact source workflow, deadlock-result event,
 and expected tail; a closed continuation mode; an immutable ruling handle; and
 a positive added-repair-round budget. It validates that the source is still an
@@ -94,13 +112,27 @@ projects `next_action=inspect_failure`; and a continuation request projects the
 ordinary `request_decision`. A repeated synthesis deadlock remains terminal and
 nonpublishing, and may be continued only by another explicit exact operation.
 
-Consensus workflow serialization is strict format version 3. No v2
-compatibility reader or migration exists. Malformed, stale, cross-session, foreign-result,
+Consensus workflow serialization writes version 4 with a strict version-3
+AUTHORING reader. Historical nested AUTHORING shapes and request/proposal digests
+remain unchanged; reserialization changes the envelope version. Version-3 records
+cannot contain new intent or phase facts. No v2 reader or migration exists. Malformed, stale, cross-session, foreign-result,
 or unavailable-material continuation input fails closed before provider or
 artifact mutation. Linked creation revalidates the source tail immediately
 before creating its content-free workflow; the event-store port does not
 provide a cross-workflow transaction, so a concurrent source append can only
 leave a harmless unexecuted linked request, never publish or invoke a provider.
+
+REVIEW_ONLY terminal synthesis additionally retains the actual untrusted review
+report as `review_findings`; inspection keeps it through completion and restart.
+The report grants no candidate, repair, artifact or Git authority.
+
+Review-only AUDIT results additionally bind each available actual auditor report
+through optional keyword-only `ConsensusAudit.report_material`. The existing
+immutable material store owns these bytes; conflicts reuse their critique handle.
+Ordered synthesis frames retain approval observations, conflict facts and report
+availability. AUTHORING and other phases reject this metadata. The version-4
+codec omits absent handles and strictly validates present ones; version 3 rejects
+the field. Older version-4 audits without report material remain readable.
 
 ## Provider and material boundary
 

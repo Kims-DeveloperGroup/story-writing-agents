@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass
 from typing import Protocol
 
+from ..specialist_routing import AuthoringIntent
+
 from .contracts import (
     ConsensusConfirmationCapability,
     ConsensusContinuation,
@@ -207,14 +209,16 @@ class ConsensusRuntimeAdapter:
         session_id: str,
         conversation_id: str,
         draft_material: ConsensusMaterialHandle,
+        intent: AuthoringIntent = AuthoringIntent.AUTHORING,
     ) -> ConsensusRuntimeInspection:
-        """Submit a complete draft for execution transformation into revision zero."""
+        """Disclose authoring transformation or provider-free exact-input adoption."""
 
         return self._submit(
             session_id=session_id,
             conversation_id=conversation_id,
             input_kind=ConsensusInputKind.SUPPLIED_DRAFT,
             input_material=draft_material,
+            intent=intent,
         )
 
     def inspect(
@@ -281,6 +285,9 @@ class ConsensusRuntimeAdapter:
         ):
             raise ValueError("consensus confirmation authority is unavailable; submit a fresh phase")
 
+        if decision.decision is ConsensusDecision.CONFIRM and request.intent is AuthoringIntent.REVIEW_ONLY:
+            if self._port.verify_consensus_material(request.input_material) is not True:
+                raise ValueError("review-only original material is unavailable")
         payload = ConsensusPhaseDecision(
             confirmation_id=decision.confirmation_id,
             phase_request_id=request.phase_request_id,
@@ -328,6 +335,7 @@ class ConsensusRuntimeAdapter:
             )
             try:
                 terminal = ConsensusPhaseResult(
+                    intent=request.intent,
                     result_id=self._new_id("consensus-result"),
                     phase_request_id=request.phase_request_id,
                     decision_event_id=decision_event.event_id,
@@ -461,15 +469,21 @@ class ConsensusRuntimeAdapter:
             self._capability_key(stored.submission, request.phase_request_id),
             None,
         )
-        try:
-            interrupted = self._port.interrupt_provider(
-                session_id,
-                conversation_id,
-                workflow_id,
-                request.phase_request_id,
-            )
-        except (Exception, KeyboardInterrupt):
-            interrupted = False
+        if request.phase in (
+            ConsensusPhase.INPUT_ADOPTION,
+            ConsensusPhase.REVIEW_COMPLETION,
+        ):
+            interrupted = True
+        else:
+            try:
+                interrupted = self._port.interrupt_provider(
+                    session_id,
+                    conversation_id,
+                    workflow_id,
+                    request.phase_request_id,
+                )
+            except (Exception, KeyboardInterrupt):
+                interrupted = False
         if interrupted is not True:
             return ConsensusRuntimeInspection(
                 submission=stored.submission,
@@ -478,6 +492,7 @@ class ConsensusRuntimeAdapter:
                 recovery_required=True,
             )
         result = ConsensusPhaseResult(
+            intent=request.intent,
             result_id=self._new_id("consensus-interrupted"),
             phase_request_id=request.phase_request_id,
             decision_event_id=decision_event.event_id,
@@ -727,6 +742,8 @@ class ConsensusRuntimeAdapter:
         ):
             raise ValueError("consensus continuation source tail is invalid")
         source = self._load(session_id, conversation_id, source_workflow_id)
+        if source.submission.intent is AuthoringIntent.REVIEW_ONLY:
+            raise ValueError("review-only deadlock requires a fresh authoring submission")
         projection = project_consensus(source.events)
         terminal_event = source.events[-1]
         if (
@@ -768,11 +785,20 @@ class ConsensusRuntimeAdapter:
         conversation_id: str,
         input_kind: ConsensusInputKind,
         input_material: ConsensusMaterialHandle,
+        intent: AuthoringIntent = AuthoringIntent.AUTHORING,
     ) -> ConsensusRuntimeInspection:
         _identifier(session_id)
         _identifier(conversation_id)
         if type(input_material) is not ConsensusMaterialHandle:
             raise TypeError("consensus input material handle is invalid")
+        if type(intent) is not AuthoringIntent:
+            raise TypeError("consensus intent is invalid")
+        if intent is AuthoringIntent.REVIEW_ONLY and (
+            input_kind is not ConsensusInputKind.SUPPLIED_DRAFT
+            or not input_material.locator.startswith("candidate:")
+            or self._port.verify_consensus_material(input_material) is not True
+        ):
+            raise ValueError("review-only adoption requires verified supplied material")
         workflow_id = self._new_id("consensus-workflow")
         proposal_id = self._new_id("consensus-proposal")
         phase_request_id = self._new_id("consensus-request")
@@ -783,14 +809,16 @@ class ConsensusRuntimeAdapter:
             phase_request_id=phase_request_id,
             proposal_id=proposal_id,
             execution_identity=execution_identity,
-            phase=ConsensusPhase.DRAFT,
+            phase=ConsensusPhase.INPUT_ADOPTION if intent is AuthoringIntent.REVIEW_ONLY else ConsensusPhase.DRAFT,
+            intent=intent,
             revision_id="r0",
             input_material=input_material,
-            candidate_material=None,
+            candidate_material=input_material if intent is AuthoringIntent.REVIEW_ONLY else None,
             base_tail_sequence=0,
         )
         request_event = ConsensusEvent(self._new_id("consensus-event"), 1, request)
         submission = ConsensusWorkflowSubmission(
+            intent=intent,
             execution_identity=execution_identity,
             workflow_id=workflow_id,
             proposal_id=proposal_id,

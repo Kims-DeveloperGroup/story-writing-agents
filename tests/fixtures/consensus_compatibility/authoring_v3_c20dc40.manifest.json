@@ -1,0 +1,52 @@
+{
+  "authored_candidate_digest": "a82d53be1baf009152ef9048dca7c5f907f6c95d76addb9c063984ec4a41f067",
+  "authored_candidate_text": "검토할 원고입니다.\nLa narratrice attend, puis choisit.\n끝.\n",
+  "byte_count": 12637,
+  "event_count": 16,
+  "expected_projection_next_action": "none",
+  "expected_requests": [
+    {
+      "payload_sha256": "996f83aee6e733d29c34a5264d869abc4256cd5019e4c65aa9122e8b48e8f43c",
+      "phase": "draft",
+      "phase_request_id": "request-draft-v3",
+      "proposal_id": "proposal-authoring-v3",
+      "request_digest": "8f37f6b47d6a97519b530a04f8b42f1f7930af7187c81dd2dfdde2bb1187e0a1"
+    },
+    {
+      "payload_sha256": "8c60db59d58610964a940b72e247d2b4668b4a767505041de38e659f944fe6ef",
+      "phase": "audit",
+      "phase_request_id": "request-audit-v3",
+      "proposal_id": "proposal-authoring-v3",
+      "request_digest": "903e3291fd769fc613eb22be2b29b0a05bcf3b815432621e20515c344c344ab3"
+    },
+    {
+      "payload_sha256": "b8cfd1fb7e4934c47a7205829c54d1408cedc6f14df42af4178dfd7340206b7c",
+      "phase": "synthesis",
+      "phase_request_id": "request-synthesis-v3",
+      "proposal_id": "proposal-authoring-v3",
+      "request_digest": "33a4eff8412be9800f7448097223133fbcb102da05a6fb43b0ddadae0ee20e24"
+    },
+    {
+      "payload_sha256": "d9d0bb43667553c3ffcbb0e0f41503cb876fe73f1a432fe609e034523fcf9a40",
+      "phase": "finalization",
+      "phase_request_id": "request-finalization-v3",
+      "proposal_id": "proposal-authoring-v3",
+      "request_digest": "38517a0b94d9b32876db5e5ac0e4726afc1f09356e614b08fb8b66c17e4ab057"
+    }
+  ],
+  "fixture": "authoring_v3_c20dc40.json",
+  "generation_method": "Accepted-base pure contracts and codec only, no unittest, coordinator, workspace, or provider execution. Fixed identity session-authoring-v3/conversation-authoring-v3, workflow-authoring-v3/proposal-authoring-v3 and revision r0. prepare_consensus_phase DRAFT followed by prepare_next_consensus_phase AUDIT/SYNTHESIS/FINALIZATION; each phase has request/Confirm/RUNNING/COMPLETED events at contiguous sequences. Event IDs are event-{request|confirm|running|completed}-{phase}-v3, request IDs request-{phase}-v3, confirmation IDs confirmation-{phase}-v3; each result_id equals its event_id and COMPLETED points to its RUNNING event. DRAFT changes input to authored_candidate_digest; later phases retain it. AUDIT emits CONSENSUS_AUDITORS in canonical order with APPROVE and audit_digest SHA256 of UTF8 audit-v3:{specialist_id}. All results remain nonpublishing. serialize_consensus_workflow emits sorted compact ensure_ascii=False JSON with no trailing newline; deserialize/serialize roundtrip checked at the accepted base. Request payload/submission hashes use the same canonical JSON encoding. This file is historical evidence and must not be regenerated from changed source.",
+  "input_digest": "c9fb6363ddbd3654960673e004ea39cf0f92423fbeaba58d65a8da0898740ee7",
+  "input_text": "검토할 원고입니다.\r\nLa narratrice hésite.  \r\n끝.\r\n",
+  "proposal_identity_note": "Version 3 has proposal_id bound into every request_digest and correlated decision/result. It has no standalone proposal_digest field; payload hashes are fixture checksums, not new runtime authority.",
+  "python_version": "3.11.16",
+  "schema_version": 3,
+  "sha256": "173023d5484c9e85c3ddf2fb2a08bcf3294c85e9a39c0ded51dc4bb96d554d2c",
+  "source_commit": "c20dc409e5b769f8992eb09310b51e7ff0984969",
+  "source_sha256": {
+    "src/story_writing_agents/consensus/contracts.py": "39ac44c100ce1d0ea70aec803880d5e39e02d339026cde001340222e02350273",
+    "src/story_writing_agents/consensus/projection.py": "541bfe85526cbc35384e12ad5c96e1f1601329edcd79fb45282df9afa357bac4",
+    "src/story_writing_agents/consensus/serialization.py": "823def531d1458ca1ebc3a5d7d6b41b671e3061515679879dd2ca0211173e636"
+  },
+  "submission_payload_sha256": "a1f6eae4c8eb006747de06dc2db695e4ab599d08a2dc012a66036ece7c2eae30"
+}

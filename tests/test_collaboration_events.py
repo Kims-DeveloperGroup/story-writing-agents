@@ -1418,6 +1418,28 @@ class CollaborationWireContractTests(unittest.TestCase):
         top["proposal"]["purpose"] = "Tampered"
         with self.assertRaises(ValueError):
             decode_collaboration_proposal(_canonical_json(top))
+        from story_writing_agents.specialist_routing import AuthoringIntent, AuthoringActivity
+        golden = (Path(__file__).parent / "fixtures/authoring_scope_compatibility/ordinary_v1_c20dc40.json").read_bytes()
+        self.assertEqual(hashlib.sha256(golden).hexdigest(), "b0f2c20d888222e16addfa05807df63dfb3fe8e0379adddb2d75f137b5c0ca1d")
+        frozen = json.loads(golden)
+        scope_wire = json.loads(frozen["scope_utf8"])
+        scope = conversations.authoring_scope_from_dict(scope_wire)
+        self.assertIs(scope.activity, AuthoringActivity.REVIEW)
+        self.assertIs(scope.intent, AuthoringIntent.AUTHORING)
+        self.assertEqual(_canonical_json(conversations.authoring_scope_to_dict(scope)), frozen["scope_utf8"].encode())
+        proposal = decode_collaboration_proposal(frozen["proposal_utf8"].encode())
+        self.assertEqual(proposal.proposal_digest, "sha256:0c4c3d0d9279e767b974a143b8cbff20d17a2fec649091fe00bcbcaed6d88c0a")
+        self.assertEqual(encode_collaboration_proposal(proposal), frozen["proposal_utf8"].encode())
+        with self.assertRaises(ValueError):
+            conversations.authoring_scope_from_dict(dict(scope_wire, intent="review_only"))
+        explicit = conversations.authoring_scope_from_dict(dict(scope_wire, schema_version=2, intent="review_only"))
+        self.assertIs(explicit.intent, AuthoringIntent.REVIEW_ONLY)
+        self.assertEqual(conversations.authoring_scope_to_dict(explicit), dict(scope_wire, schema_version=2, intent="review_only"))
+        for wrong in (dict(scope_wire, schema_version=2), dict(scope_wire, schema_version=2, intent="unknown")):
+            with self.assertRaises(ValueError):
+                conversations.authoring_scope_from_dict(wrong)
+        with self.assertRaises(ValueError):
+            replace(explicit, activity=AuthoringActivity.DRAFT)
 
 
 class CollaborationPackageBoundaryTests(unittest.TestCase):

@@ -66,6 +66,7 @@ class AgentReplyNextPhase(StrEnum):
 
     REPAIR = "repair"
     FINALIZATION = "finalization"
+    REVIEW_COMPLETION = "review_completion"
 
 
 class DebateStatus(StrEnum):
@@ -761,9 +762,21 @@ class AgentRequest:
 
     expected_reviewed_proposal: tuple[str, str] | None = field(default=None, kw_only=True)
 
+    review_only: bool = field(default=False, kw_only=True)
+
     def __post_init__(self) -> None:
         """Validate optional context without changing legacy request fields."""
 
+        if type(self.review_only) is not bool:
+            raise TypeError("review_only must be a boolean")
+        if self.review_only and (
+            self.phase not in {Phase.AUDIT, Phase.SYNTHESIZE}
+            or type(self.candidate_payload) is not str
+            or not self.candidate_payload
+            or self.candidate_payload != self.user_payload
+            or self.expected_reviewed_proposal is not None
+        ):
+            raise ValueError("review-only request must review the exact supplied original")
         if self.expected_reviewed_proposal is not None:
             if self.phase is not Phase.FINALIZE:
                 raise ValueError("expected reviewed identity is allowed only for finalization")
@@ -994,7 +1007,7 @@ class AgentReply:
         elif self.kind is AgentReplyKind.SYNTHESIS:
             require(bool(self.content), "$.content", "expected nonempty text")
             require(self.verdict is None, "$.verdict", "allowed only for an audit reply")
-            require(type(self.next_phase) is AgentReplyNextPhase, "$.next_phase", "expected repair or finalization")
+            require(type(self.next_phase) is AgentReplyNextPhase, "$.next_phase", "expected repair, finalization, or review_completion")
             require(not self.deadlocked, "$.deadlocked", "synthesis with next_phase cannot also mark deadlock")
             without_review_identity()
         elif self.kind is AgentReplyKind.DEADLOCK:

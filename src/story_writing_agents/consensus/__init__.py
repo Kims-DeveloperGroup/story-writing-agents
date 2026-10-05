@@ -1,5 +1,7 @@
 """Phase-confirmed consensus contracts, execution, adaptation, and serialization."""
 
+from ..specialist_routing import AuthoringIntent
+
 from .contracts import (
     CONSENSUS_AUDITORS,
     ConsensusAudit,
@@ -53,6 +55,7 @@ from .serialization import (
 )
 
 __all__ = [
+    "AuthoringIntent",
     "CONSENSUS_AUDITORS",
     "CONSENSUS_SERIALIZATION_SCHEMA_VERSION",
     "ConsensusAudit",
