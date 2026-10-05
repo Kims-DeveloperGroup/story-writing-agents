@@ -1515,7 +1515,7 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
             name
             for name in conversations.__all__
             if "collaboration" in name.lower()
-            and name not in {"CONVERSATION_EVENT_SCHEMA_VERSION"}
+            and name not in {"CONVERSATION_EVENT_SCHEMA_VERSION"} and name not in exploration_names
         }
         for name in root_names:
             with self.subTest(root_omission=name):

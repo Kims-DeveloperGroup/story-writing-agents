@@ -2592,11 +2592,7 @@ class CompletionDriverTests(unittest.TestCase):
                     driver, input_stream, _output, fallback, _termios, _os = (
                         make_driver(prefix + introducer + terminator + suffix)
                     )
-                    with mock.patch.object(
-                        _driver._select,
-                        "select",
-                        side_effect=lambda r, w, x, _t: (r, w, x),
-                    ) as readiness:
+                    with _ready_select_patch() as readiness:
                         self.assertEqual(self.read(driver), expected)
                     readiness.assert_called_once_with((7,), (), (), 0.05)
                     fallback.assert_not_called()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 import inspect
 import os
 import pickle
@@ -423,20 +424,20 @@ class RetainedParserContractTests(unittest.TestCase):
         all_fields = set(samples)
         for kind, (allowed, required) in rules.items():
             valid = {name: samples[name] for name in required}
-            with self.subTest(kind=kind, case="valid"):
+            with (self.subTest(kind=kind, case="valid") if kind not in (ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT) else nullcontext()):
                 self.assertIs(InteractiveAction(kind, **valid).kind, kind)
             for name in required:
                 missing = dict(valid)
                 del missing[name]
                 with (
-                    self.subTest(kind=kind, missing=name),
+                    (self.subTest(kind=kind, missing=name) if kind not in (ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT) else nullcontext()),
                     self.assertRaises(ValueError),
                 ):
                     InteractiveAction(kind, **missing)
             for name in all_fields.difference(allowed):
                 extra = dict(valid)
                 extra[name] = samples[name]
-                with self.subTest(kind=kind, extra=name), self.assertRaises(ValueError):
+                with (self.subTest(kind=kind, extra=name) if kind not in (ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT) else nullcontext()), self.assertRaises(ValueError):
                     InteractiveAction(kind, **extra)
 
     def test_action_specs_and_registry_are_immutable(self) -> None:
