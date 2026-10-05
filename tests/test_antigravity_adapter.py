@@ -645,7 +645,6 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         rules = body.decode("utf-8")
         original_prompt = self.definition.system_prompt_file.read_text()
         original_clause = "contract_guidance"
-        staged_clause = "invoke another agent, provider subagent, or model."
         self.assertIn(original_clause, original_prompt)
         self.assertIn(_expected_antigravity_role(original_prompt.encode(), contextual=False).decode(), rules)
         self.assertIn(original_clause, rules)
