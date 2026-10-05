@@ -1,6 +1,9 @@
 """Session-lobby controller contracts, transitions, and cleanup tests."""
 
 from __future__ import annotations
+from story_writing_agents import conversations as collaboration
+from story_writing_agents import lead_exploration as exploration
+import hashlib
 
 import ast
 import asyncio
@@ -188,6 +191,14 @@ _UNIQUE_C = "c_fedcba9876" + ("c" * 22)
 
 
 
+
+
+def _cancel_picker_patch(cancel):
+    return mock.patch.object(terminal_module.InteractivePickerInput, "read_picker", autospec=True, return_value=cancel)
+
+
+def _control_commit_text(text):
+    return terminal_module.ControlOutcome(terminal_module.ControlOutcomeKind.COMMIT, text=text)
 
 
 class ScriptedTerminalCallbacks:
@@ -1174,6 +1185,7 @@ class ControllerContractTests(ControllerTestCase):
                 "interactive_controller._runtime_policy",
                 "interactive_controller._session_policy",
                 "interactive_terminal",
+                "lead_exploration",
                 "orchestrator",
                 "provider_adapter",
                 "provider_auth",
@@ -1471,8 +1483,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 150)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 637)
+        self.assertEqual(len(modules), 151)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 642)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -2012,10 +2024,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     workspace,
                     auth_coordinator=coordinator,
                 )
-                choose_antigravity = terminal_module.ControlOutcome(
-                    terminal_module.ControlOutcomeKind.COMMIT,
-                    text="antigravity",
-                )
+                choose_antigravity = _control_commit_text("antigravity")
                 with mock.patch.object(
                     terminal_module.InteractivePickerInput,
                     "read_picker",
@@ -2091,10 +2100,7 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(workspace)
 
         def commit(value: str) -> terminal_module.ControlOutcome:
-            return terminal_module.ControlOutcome(
-                terminal_module.ControlOutcomeKind.COMMIT,
-                text=value,
-            )
+            return _control_commit_text(value)
 
         cancel = _cancel_control_outcome()
         with (
@@ -2627,10 +2633,7 @@ class ControllerSettingsTests(ControllerTestCase):
         )
 
         def commit(value):
-            return terminal_module.ControlOutcome(
-                terminal_module.ControlOutcomeKind.COMMIT,
-                text=value,
-            )
+            return _control_commit_text(value)
 
         cancel = _cancel_control_outcome()
 
@@ -2799,12 +2802,7 @@ class ControllerSettingsTests(ControllerTestCase):
             PLOT_ARCHITECT,
             "inactive-agy-model",
         )
-        with mock.patch.object(
-            terminal_module.InteractivePickerInput,
-            "read_picker",
-            autospec=True,
-            return_value=cancel,
-        ) as inactive_picker:
+        with _cancel_picker_patch(cancel) as inactive_picker:
             unchanged, whole_cancel = controller._edit_settings_provider(inactive_only)
         self.assertFalse(whole_cancel)
         self.assertEqual(unchanged, inactive_only)
@@ -2846,10 +2844,7 @@ class ControllerSettingsTests(ControllerTestCase):
             auth_coordinator=auth,
             provider_catalog=catalog,
         )
-        commit = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.COMMIT,
-            text=PLOT_ARCHITECT,
-        )
+        commit = _control_commit_text(PLOT_ARCHITECT)
         cancel = _cancel_control_outcome()
         with (
             mock.patch.object(
@@ -3130,10 +3125,7 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertTrue(persona_values)
 
         def commit(value: str) -> terminal_module.ControlOutcome:
-            return terminal_module.ControlOutcome(
-                terminal_module.ControlOutcomeKind.COMMIT,
-                text=value,
-            )
+            return _control_commit_text(value)
 
         cancel = _cancel_control_outcome()
         cases = (
@@ -3194,10 +3186,7 @@ class ControllerSettingsTests(ControllerTestCase):
         baseline = settings_module.load_settings_state(workspace)
 
         def commit(value: str) -> terminal_module.ControlOutcome:
-            return terminal_module.ControlOutcome(
-                terminal_module.ControlOutcomeKind.COMMIT,
-                text=value,
-            )
+            return _control_commit_text(value)
 
         cases = (
             (baseline, "off", "on", "On", True),
@@ -3267,10 +3256,7 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(workspace)
 
         def commit(value: str) -> terminal_module.ControlOutcome:
-            return terminal_module.ControlOutcome(
-                terminal_module.ControlOutcomeKind.COMMIT,
-                text=value,
-            )
+            return _control_commit_text(value)
 
         cancel = _cancel_control_outcome()
         with mock.patch.object(
@@ -3344,14 +3330,8 @@ class ControllerSettingsTests(ControllerTestCase):
     def test_provider_editor_reopens_with_latest_notice_and_selection(self) -> None:
         workspace = self.make_workspace()
         controller, _backend, _callbacks = self.make_controller(workspace)
-        commit_antigravity = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.COMMIT,
-            text="antigravity",
-        )
-        commit_codex = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.COMMIT,
-            text="codex",
-        )
+        commit_antigravity = _control_commit_text("antigravity")
+        commit_codex = _control_commit_text("codex")
         cancel = _cancel_control_outcome()
         with mock.patch.object(
             terminal_module.InteractivePickerInput,
@@ -3394,12 +3374,7 @@ class ControllerSettingsTests(ControllerTestCase):
             workspace,
             auth_coordinator=ScriptedAuthCoordinator(snapshots=(codex_only,)),
         )
-        with mock.patch.object(
-            terminal_module.InteractivePickerInput,
-            "read_picker",
-            autospec=True,
-            return_value=cancel,
-        ) as authenticated_picker:
+        with _cancel_picker_patch(cancel) as authenticated_picker:
             unchanged, whole_cancel = (
                 authenticated_controller._edit_settings_agent_provider(
                     settings_module.load_settings_state(workspace),
@@ -3451,10 +3426,7 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertTrue(persona_values)
 
         def commit(value: str) -> terminal_module.ControlOutcome:
-            return terminal_module.ControlOutcome(
-                terminal_module.ControlOutcomeKind.COMMIT,
-                text=value,
-            )
+            return _control_commit_text(value)
 
         cancel = _cancel_control_outcome()
 
@@ -3755,10 +3727,7 @@ class ControllerSettingsTests(ControllerTestCase):
         )
 
         def commit(value):
-            return terminal_module.ControlOutcome(
-                terminal_module.ControlOutcomeKind.COMMIT,
-                text=value,
-            )
+            return _control_commit_text(value)
 
         cancel = _cancel_control_outcome()
         picker_outcomes = (
@@ -3861,14 +3830,8 @@ class ControllerSettingsTests(ControllerTestCase):
             PLOT_ARCHITECT,
             "inactive-agy",
         )
-        commit_gpt_b = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.COMMIT,
-            text="settings:model:1",
-        )
-        commit_gpt_a = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.COMMIT,
-            text="settings:model:0",
-        )
+        commit_gpt_b = _control_commit_text("settings:model:1")
+        commit_gpt_a = _control_commit_text("settings:model:0")
         cancel = _cancel_control_outcome()
         with mock.patch.object(
             terminal_module.InteractivePickerInput,
@@ -3936,12 +3899,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "gpt-b",
         )
         cancel = _cancel_control_outcome()
-        with mock.patch.object(
-            terminal_module.InteractivePickerInput,
-            "read_picker",
-            autospec=True,
-            return_value=cancel,
-        ) as picker:
+        with _cancel_picker_patch(cancel) as picker:
             unchanged, whole_cancel = controller._edit_settings_agent_model(
                 selected_state,
                 PLOT_ARCHITECT,
@@ -3979,10 +3937,7 @@ class ControllerSettingsTests(ControllerTestCase):
             PLOT_ARCHITECT,
             "existing-custom",
         )
-        choose_custom = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.COMMIT,
-            text="settings:model:custom",
-        )
+        choose_custom = _control_commit_text("settings:model:custom")
         cancel = _cancel_control_outcome()
         with (
             mock.patch.object(
@@ -4040,10 +3995,7 @@ class ControllerSettingsTests(ControllerTestCase):
         )
 
         def commit(value: str) -> terminal_module.ControlOutcome:
-            return terminal_module.ControlOutcome(
-                terminal_module.ControlOutcomeKind.COMMIT,
-                text=value,
-            )
+            return _control_commit_text(value)
 
         cancel = _cancel_control_outcome()
         with (
@@ -4139,14 +4091,8 @@ class ControllerSettingsTests(ControllerTestCase):
             PLOT_ARCHITECT,
             "future_2",
         )
-        choose_low = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.COMMIT,
-            text="settings:effort:0",
-        )
-        choose_future = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.COMMIT,
-            text="settings:effort:1",
-        )
+        choose_low = _control_commit_text("settings:effort:0")
+        choose_future = _control_commit_text("settings:effort:1")
         cancel = _cancel_control_outcome()
         with mock.patch.object(
             terminal_module.InteractivePickerInput,
@@ -4204,10 +4150,7 @@ class ControllerSettingsTests(ControllerTestCase):
             PLOT_ARCHITECT,
             "legacy_mode",
         )
-        keep_current = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.COMMIT,
-            text="settings:effort:current-compatibility",
-        )
+        keep_current = _control_commit_text("settings:effort:current-compatibility")
         with mock.patch.object(
             terminal_module.InteractivePickerInput,
             "read_picker",
@@ -4263,12 +4206,7 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         cancel = _cancel_control_outcome()
         state = settings_module.load_settings_state(workspace)
-        with mock.patch.object(
-            terminal_module.InteractivePickerInput,
-            "read_picker",
-            autospec=True,
-            return_value=cancel,
-        ):
+        with _cancel_picker_patch(cancel):
             inherited, inherited_cancel = controller._edit_settings_agent_model(
                 state,
                 PLOT_ARCHITECT,
@@ -4695,37 +4633,25 @@ class ControllerSettingsTests(ControllerTestCase):
             (
                 "save-yes",
                 "save",
-                terminal_module.ControlOutcome(
-                    terminal_module.ControlOutcomeKind.COMMIT,
-                    text="yes",
-                ),
+                _control_commit_text("yes"),
                 "save",
             ),
             (
                 "save-no",
                 "save",
-                terminal_module.ControlOutcome(
-                    terminal_module.ControlOutcomeKind.COMMIT,
-                    text="no",
-                ),
+                _control_commit_text("no"),
                 "return",
             ),
             (
                 "discard-yes",
                 "cancel",
-                terminal_module.ControlOutcome(
-                    terminal_module.ControlOutcomeKind.COMMIT,
-                    text="yes",
-                ),
+                _control_commit_text("yes"),
                 "cancel",
             ),
             (
                 "discard-no",
                 "cancel",
-                terminal_module.ControlOutcome(
-                    terminal_module.ControlOutcomeKind.COMMIT,
-                    text="no",
-                ),
+                _control_commit_text("no"),
                 "return",
             ),
             (
@@ -4824,10 +4750,7 @@ class ControllerSettingsTests(ControllerTestCase):
         thread_status_before = tuple(
             backend.execution_profile_thread_status(agent_id) for agent_id in ROSTER
         )
-        commit_save = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.COMMIT,
-            text="save",
-        )
+        commit_save = _control_commit_text("save")
         events: list[str] = []
         prepared_values = []
         rendered_components = []
@@ -5056,10 +4979,7 @@ class ControllerSettingsTests(ControllerTestCase):
             settings_module.load_settings_state(workspace),
             True,
         )
-        commit_save = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.COMMIT,
-            text="save",
-        )
+        commit_save = _control_commit_text("save")
         cancel = _cancel_control_outcome()
 
         def clear_candidate(_controller, candidate, *, action):
@@ -5506,10 +5426,7 @@ class ControllerSettingsTests(ControllerTestCase):
     def test_internal_clean_save_route_is_silent_and_normalizes_highlight(self) -> None:
         workspace = self.make_workspace()
         controller, _backend, callbacks = self.make_controller(workspace)
-        commit_save = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.COMMIT,
-            text="save",
-        )
+        commit_save = _control_commit_text("save")
         cancel = _cancel_control_outcome()
 
         with (
@@ -5575,10 +5492,7 @@ class ControllerSettingsTests(ControllerTestCase):
         workspace = self.make_workspace()
         baseline = settings_module.load_settings_state(workspace)
         changed = settings_module.update_language(baseline, "EN")
-        commit_save = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.COMMIT,
-            text="save",
-        )
+        commit_save = _control_commit_text("save")
         interrupt = terminal_module.ControlOutcome(
             terminal_module.ControlOutcomeKind.INTERRUPT
         )
@@ -6718,12 +6632,14 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         calls: list[tuple[str, object]] = []
         current: list[LeadTurnResult] = [proposed]
 
+        forwarded = []
         async def lead_turn(
             _session: RuntimeSession,
             conversation_id: str,
             text: str,
             **_kwargs: object,
         ) -> LeadTurnResult:
+            forwarded.append(_kwargs)
             calls.append(("lead", (conversation_id, text)))
             return current[0]
 
@@ -6815,6 +6731,20 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 calls,
                 [("lead", (_UNIQUE_C, "replace the request"))],
             )
+            text = "Provisional 한글\r\nwhole text. "
+            idea = exploration.ExplorationIdea("ui-current-idea", exploration.ExplorationIdeaKind.ALTERNATIVE, text, hashlib.sha256(text.encode()).hexdigest())
+            report = exploration.LeadExplorationReport("ui-request", "ui-call", exploration.ExplorationReportStatus.IDEAS, "Provisional possibilities.", (idea,))
+            event = SimpleNamespace(event_id="ui-result", payload=collaboration.CollaborationLeadExplorationResultPayload(report))
+            current[:] = [replace(self._terminal_turn(CollaborationStepState.COMPLETED), message=report.message, kind=LeadOutcomeKind.EXPLORATION, state=None, interaction_mode=exploration.LeadInteractionMode.EXPLORATION, exploration=report, evidence=None, next_action=CollaborationNextAction.CONTINUE_WITH_LEAD)]
+            output = self._Output()
+            adapter = lead_policy_module.InteractiveLeadAdapter(session, runner, self._Progress(), self._Picker(self._commit(idea.idea_id)), self._Prompt(self._commit("core_documents/global_outline.md")), output, read_events=lambda conversation: (event,) if conversation == _UNIQUE_C else ())
+            self.assertFalse(adapter.submit(_UNIQUE_C, "Explore directions.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION))
+            self.assertEqual((set(forwarded[-1]), forwarded[-1]["interaction_mode"]), ({"action_progress_sink", "interaction_mode"}, exploration.LeadInteractionMode.EXPLORATION))
+            self.assertIn("Exploration (provisional)", "\n".join(render_plain(component, width=120).text for component in output.components))
+            current[:] = [self._terminal_turn(CollaborationStepState.COMPLETED)]
+            self.assertFalse(adapter.adopt(_UNIQUE_C))
+            self.assertEqual((set(forwarded[-1]), forwarded[-1]["adoption"]), ({"action_progress_sink", "adoption"}, exploration.ExplorationAdoptionSelection(_UNIQUE_C, "ui-result", idea.idea_id, idea.material_digest, ("core_documents/global_outline.md",))))
+            self.assertEqual(tuple((component.items[0].label, component.items[0].value, component.items[1].content, component.items[2].value) for component in output.components if isinstance(component, terminal_module.Panel) and component.title == "Selected whole idea"), (("Source conversation", _UNIQUE_C, text, "core_documents/global_outline.md"),))
 
     def test_ordinary_lead_progress_sink_finishes_before_lead_and_elapsed_output(self) -> None:
         session = RuntimeSession.__new__(RuntimeSession); runner = asyncio.Runner(); self.addCleanup(runner.close)

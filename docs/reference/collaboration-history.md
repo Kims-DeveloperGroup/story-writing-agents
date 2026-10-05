@@ -59,6 +59,21 @@ The authoritative history is an ordered sequence of typed exchanges among the
 user, lead, specialists, runtime, artifact, and Git actors. Facts that must
 never be separated are appended as one atomic batch.
 
+### Provisional exploration and explicit adoption records
+
+The same event store records `lead_exploration_request`,
+`lead_exploration_result` and `exploration_adoption` as typed current
+events. The request binds the actual user turn and explicit mode. The result
+payload's `report` binds that request and the submitted provider call, with
+immutable provisional ideas and qualified artifact-read observations.
+
+An adoption payload's `capture` records the current user's exact whole-idea
+selection, target paths, selected text and fresh revision-1 task. Result/idea
+identity and material SHA256 must match the current focused conversation and
+session. History projection, search or restart cannot activate exploration,
+turn an idea into draft proof, replay a confirmation or authorize a mutation.
+Ordinary pending decisions and recovery retain their existing priority.
+
 ## Explicit readable-history scenario
 
 Suppose a Python application has obtained a complete canonical v2

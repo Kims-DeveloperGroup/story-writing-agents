@@ -1,6 +1,7 @@
 """End-to-end Antigravity parity tests with a deterministic fake CLI."""
 
 from __future__ import annotations
+from tests.test_lead_orchestration import _exploration_native_contract, _exploration_outcome
 
 import asyncio
 import hashlib
@@ -1167,7 +1168,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             invocations.append(invocation)
             assert invocation.payload_json is not None
             return ProviderResult(
-                "antigravity-lead-thread",
+                "antigravity-lead-thread" if len(invocations) == 1 else "antigravity-exploration-thread",
                 response,
                 usage=ProviderUsage(input_tokens=1, output_tokens=1),
                 actual_transport_utf8_bytes=len(invocation.payload_json),
@@ -1198,6 +1199,14 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             result.accounting.usage,
             ProviderUsage(input_tokens=1, output_tokens=1),
         )
+        schema, payload = _exploration_native_contract()
+        scope = ContextScope("workspace-context", session_id, ContextSubjectKind.CONVERSATION, "lead-exploration-parity", LEAD_ORCHESTRATOR)
+        response = _exploration_outcome("Native provisional 한글 possibility.", basis_input_ids=())
+        with mock.patch.object(backend._antigravity_adapter, "invoke", new=invoke):
+            async with provider.invocation(scope, policy):
+                explored = await provider.invoke_context(ContextProviderCallRequest(scope, policy, "lead-exploration-parity-call", ProviderCallKind.COLLABORATION_INITIAL, schema, payload))
+        self.assertEqual((invocations[-1].schema, invocations[-1].payload_json), (schema, canonical_provider_json(payload)))
+        self.assertEqual((explored.response_text, explored.accounting.state), (response, ProviderCallState.SUBMITTED))
 
     @staticmethod
     def _process_is_running(pid: int) -> bool:

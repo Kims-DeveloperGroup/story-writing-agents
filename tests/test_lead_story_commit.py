@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from story_writing_agents import lead_exploration as exploration
+
 import asyncio
 import os
 import subprocess
@@ -287,7 +289,7 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         redisclosed = await restarted.lead_turn(
             self.session_id, applied.request.reviewed_proposal.conversation_id,
             "Commit these changes now.",
-        )
+         interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
         self.assertIs(redisclosed.next_action, CollaborationNextAction.SUBMIT_COMMIT_DECISION)
         self.assertEqual(redisclosed.story_commit_request, request)
         self.assertEqual(restarted_backend.calls, [])

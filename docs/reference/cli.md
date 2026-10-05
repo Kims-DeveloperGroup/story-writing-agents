@@ -400,6 +400,21 @@ Removed commands are absent from help and static completion. See the
 Confirm/Reject/Revise controls; artifact Apply and local Commit have separate
 controls and authority.
 
+### Explicit exploration controls
+
+With an attached session and focused active conversation, `/explore TEXT`
+selects exploration for that one turn. Its report is labeled
+`Exploration (provisional)`; the next ordinary line returns to normal Lead
+orchestration.
+
+`/adopt` opens a picker for one whole idea in the current conversation,
+then asks for canonical target paths, one per line. The controller supplies the exact
+durable result/idea identity and digest. Cancellation starts no task or
+provider work. Adoption starts a fresh ordinary authoring task and still
+requires drafting, full candidate review and separate Confirm, Apply and
+Commit controls. Pending decisions and recovery conditions take priority.
+See [exploration and adoption](../guides/lead-agent.md#exploration-and-adoption).
+
 <a id="runtime-debug-logs"></a>
 
 ## Errors, diagnostics, and exits

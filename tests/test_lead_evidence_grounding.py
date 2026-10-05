@@ -1,6 +1,9 @@
 """Exhaustive acceptance coverage for runtime-grounded lead judgments."""
 
 from __future__ import annotations
+from tests.test_lead_orchestration import _exploration_outcome, _read_history_hit
+from story_writing_agents import lead_exploration as exploration
+import hashlib
 
 import json
 import unittest
@@ -181,8 +184,9 @@ class DurableLeadEvidenceMatrixTests(unittest.TestCase):
     """Pin the complete 2 x 6 x 5 closed semantic matrix."""
 
     def test_all_sixty_scope_status_kind_cells_are_closed_and_exact(self) -> None:
+        normal_kinds = (LeadOutcomeKind.ANSWER, LeadOutcomeKind.QUESTION, LeadOutcomeKind.CRITIQUE, LeadOutcomeKind.RECOMMENDATION, LeadOutcomeKind.PROPOSAL)
         allowed_story = {
-            LeadEvidenceStatus.VERIFIED: set(LeadOutcomeKind),
+            LeadEvidenceStatus.VERIFIED: set(normal_kinds),
             LeadEvidenceStatus.MISSING: {
                 LeadOutcomeKind.QUESTION,
                 LeadOutcomeKind.RECOMMENDATION,
@@ -211,7 +215,7 @@ class DurableLeadEvidenceMatrixTests(unittest.TestCase):
         for scope in LeadOutcomeScope:
             for status in LeadEvidenceStatus:
                 evidence = _evidence_for(scope, status)
-                for kind in LeadOutcomeKind:
+                for kind in normal_kinds:
                     expected = (
                         scope is LeadOutcomeScope.WORKFLOW_META
                         and status is LeadEvidenceStatus.NOT_APPLICABLE
@@ -560,6 +564,22 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             await self.runtime.decide_lead_step(
                 _decision(result, self._confirm_decision())
             )
+        path = self.workspace.path("manuscript/part-01/exploration.md")
+        path.write_text("current-exploration-evidence\nSecond line.\n", encoding="utf-8")
+        observed = []
+        def grounded(call, _provider):
+            observed.append(call.payload["context_observation"]["read_results"][0])
+            return _exploration_outcome(observations=({"text": "The current artifact READ supports this observation.", "evidence_input_ids": [observed[-1]["evidence_id"]]},))
+        self.backend.enqueue(_search("current-exploration-evidence", ["w"]), _read_history_hit, grounded)
+        explored = await self.runtime.lead_turn(self.session_id, self.conversation("Grounded exploration"), "Explore using the current artifact.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
+        receipt = explored.exploration.grounded_observations[0].receipts[0]
+        self.assertEqual((receipt.evidence_id, receipt.source_id), (observed[0]["evidence_id"], observed[0]["source"]["source_id"]))
+        self.assertEqual((receipt.source_digest, receipt.boundary_digest, receipt.start_line, receipt.end_line), ("sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(), "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(), 1, 2))
+        self.assertIn("manuscript/part-01/exploration.md", receipt.locator)
+        unsupported = _exploration_outcome(observations=({"text": "An input alias is not artifact evidence.", "evidence_input_ids": ["user_input"]},))
+        self.backend.enqueue(unsupported, unsupported)
+        refused = await self.runtime.lead_turn(self.session_id, self.conversation("False evidence claim"), "Explore alternatives.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
+        self.assertIsNone(refused.exploration)
 
     async def test_empty_whole_is_evidence_but_missing_and_invalid_range_fail(
         self,

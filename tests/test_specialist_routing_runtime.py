@@ -1,17 +1,20 @@
 """Runtime routing accepts typed task facts and keeps draft/review authority separate."""
+import asyncio
 import json
+import subprocess
 from dataclasses import asdict, replace
 from unittest import mock
 
-from story_writing_agents import StoryRuntime
+from story_writing_agents import StoryRuntime, lead_exploration as exploration
 from story_writing_agents import conversations as c
 from story_writing_agents.agents import PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR
 from story_writing_agents.specialist_routing import AuthoringActivity, AuthoringIntent, AuthoringScope, ArtifactReviewDomain, SpecialistAssignmentMode, ReviewBasis
 from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
 from story_writing_agents.interactive_terminal import _collaboration_view as view
+from tests.test_lead_orchestration import _SubmittedFailure
 from tests.test_lead_orchestration import (
     LeadOrchestrationTestCase, _LeadBackend, _submitted_calls, _compact_scope, _decision, _provider_envelope,
-    _workflow_material, _live_scope, _specialist_outcome, _synthesis_outcome, _visible_outcome,
+    _workflow_material, _live_scope, _specialist_outcome, _synthesis_outcome, _visible_outcome, _exploration_outcome, _adoption_selection,
 )
 from tests.recommendation_fixture import action, recommendation, decision as recommendation_decision
 from story_writing_agents.conversations.events import shared_premises_to_dict
@@ -55,9 +58,9 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
     def _assert_continuation(self, result, field):
         self.assertIsNone(getattr(result, field))
         self.assertIs(result.next_action, c.CollaborationNextAction.CONTINUE_WITH_LEAD)
-    async def proposal_for(self, conversation, response=None, text="The synthetic brief begins with a summons, then a choice, then its consequence."):
+    async def proposal_for(self, conversation, response=None, text="The synthetic brief begins with a summons, then a choice, then its consequence.", adoption=None):
         self.backend.enqueue(response or scoped_proposal(PLOT_ARCHITECT))
-        return await self.runtime.lead_turn(self.session_id, conversation, text)
+        return await self.runtime.lead_turn(self.session_id, conversation, text, adoption=adoption)
 
     async def finish_draft(self, conversation, *, synthesis=None, **kwargs):
         proposed = await self.proposal_for(conversation, **kwargs)
@@ -190,6 +193,16 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertIsNotNone(continued.proposal, continued)
         self.assertEqual(continued.proposal.authoring_scope.task_id, selected)
         self.assertEqual(self.history(original_conversation), prefix)
+        source, foreign_focus = self.conversation("Current provisional source"), self.conversation("Foreign focus")
+        self.backend.enqueue(_exploration_outcome())
+        await self.runtime.lead_turn(self.session_id, source, "Explore alternatives.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
+        event = next(event for event in self.history(source) if event.kind is c.CollaborationEventKind.LEAD_EXPLORATION_RESULT)
+        selection = _adoption_selection(source, event, (OUTLINE,))
+        before = (self.history(source), self.history(foreign_focus), len(self.backend.calls))
+        for focus, choice in ((foreign_focus, selection), (source, replace(selection, material_digest="0" * 64)), (source, replace(selection, result_event_id="stale-current-result"))):
+            with self.assertRaises(ValueError):
+                await self.runtime.lead_turn(self.session_id, focus, "Adopt the selected whole idea.", adoption=choice)
+        self.assertEqual((self.history(source), self.history(foreign_focus), len(self.backend.calls)), before)
 
     async def test_draft_task_cannot_skip_current_revision_drafting_via_review_artifact_intent(self):
         conversation = self.conversation()
@@ -228,7 +241,10 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         )
 
     async def test_draft_integrates_exact_all_role_review_apply_and_storage_parity(self):
+        subprocess.run(['git', 'add', '--', 'core_documents', 'manuscript'], cwd=self.workspace.root, check=True)
+        subprocess.run(['git', 'commit', '-m', 'Seed lead commit test fixtures'], cwd=self.workspace.root, check=True, stdout=subprocess.DEVNULL)
         from tests.test_lead_artifact_application import _application_decision
+        from tests.test_lead_story_commit import _commit_decision, StoryCommitDecision
         from tests.test_artifact_proposal_orchestration import (
             WorkspaceConversationStorageMutationCoordinator, provision_sqlite_conversation_storage,
             transfer_conversation_storage, verify_conversation_storage,
@@ -239,22 +255,38 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         conversation = self.conversation()
         before = self.artifact_bytes()
         premise = "Synthetic tidal city 한글\r\nKeep the stated limit.  "
+        self.backend.enqueue(_exploration_outcome(premise))
+        explored = await self.runtime.lead_turn(self.session_id, conversation, "Explore a provisional setting.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
+        self.assertIs(explored.kind, c.LeadOutcomeKind.EXPLORATION)
+        self.assertEqual(tuple(getattr(explored, key) for key in ("proposal", "artifact_proposal", "artifact_application_request", "story_commit_request", "recommendation_request", "confirmation_request_id")), (None,) * 6)
+        self.assertEqual(self.artifact_bytes(), before)
+        exploration_prefix = self.history(conversation)
+        self.assertEqual(c.project_collaboration_history(exploration_prefix).artifact_objectives, ())
+        result_event = next(e for e in exploration_prefix if type(e.payload) is c.CollaborationLeadExplorationResultPayload)
+        selection = _adoption_selection(conversation, result_event, (path,))
+        self.assertEqual(tuple((call.call_id, call.invocation_kind) for call in _submitted_calls(exploration_prefix)), ((explored.exploration.provider_call_id, c.CollaborationInvocationKind.LEAD_EXPLORATION),))
         def mixed(value, material):
             scope = value["authoring_scope"]
             scope["contributions"] = [{"domain": domain, "role": "draft_owner" if domain == "tone_execution" else "constraint_assessor"} for domain in ("plot_structure", "character_world", "tone_execution")]
             scope["dependency_slots"] = [{"slot_id": "setting", "dependent_domains": ["tone_execution"]}]
-            value["proposal"]["shared_premises"] = [{"slot_id": "setting", "selected_premise": premise, "basis_input_ids": ["user_input"]}]
+            value["proposal"]["shared_premises"] = [{"slot_id": "setting", "selected_premise": premise, "basis_input_ids": ["adopted_idea"]}]
             for assignment in value["proposal"]["assignments"]:
+                assignment["input_ids"].append("adopted_idea")
                 assignment["mode"] = "draft" if assignment["agent_id"] == EXECUTION_SPECIALIST else "constraint_assessment"
         def recommend(call, provider):
             material = _workflow_material(call.payload)
             draft_reply = next(reply["reply_event_id"] for reply in material["replies"] if reply["mode"] == "draft")
-            return _synthesis_outcome(recommended_action=action(target_paths=(path,), source_ids=("user_input", draft_reply)))(call, provider)
-        drafted, draft_result = await self.finish_draft(conversation, text=premise, response=scoped_proposal(
+            return _synthesis_outcome(recommended_action=action(target_paths=(path,), source_ids=("user_input", "adopted_idea", draft_reply)))(call, provider)
+        drafted, draft_result = await self.finish_draft(conversation, text=premise, adoption=selection, response=scoped_proposal(
             *ROSTER, paths=(path,), domains=("plot_structure", "character_world"), mutate=mixed),
             synthesis=recommend)
         self.assertEqual(tuple(assignment.mode for assignment in drafted.proposal.assignments), (SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT, SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT, SpecialistAssignmentMode.DRAFT))
         capture = drafted.proposal.basis.shared_premises
+        adoption_event = next(e for e in self.history(conversation) if type(e.payload) is c.CollaborationExplorationAdoptionPayload)
+        self.assertEqual(adoption_event.payload.capture.selection, selection)
+        self.assertEqual(adoption_event.payload.capture.selected_text.encode("utf-8"), premise.encode("utf-8"))
+        self.assertEqual((drafted.proposal.authoring_scope.task_id, drafted.proposal.authoring_scope.task_revision), (adoption_event.payload.capture.fresh_task_id, 1))
+        self.assertIs(drafted.interaction_mode, exploration.LeadInteractionMode.ORCHESTRATION)
         self.assertEqual(capture[0].selected_premise, premise)
         self.assertEqual(capture[0].sources[0].source_conversation_id, conversation)
         self.assertEqual(draft_result.turn.recommendation_request.source_proposal_digest, drafted.proposal.proposal_digest)
@@ -293,19 +325,44 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             self.backend.enqueue_for(assignment.specialist_id, _specialist_outcome("supports", "The exact integrated candidate preserves the assigned domain."))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _artifact_synthesis_outcome())
         reviewed = await self.runtime.decide_lead_step(_decision(proposed,c.CollaborationConfirmationDecision.CONFIRM))
-        self.assertEqual(len(_submitted_calls(self.history(conversation))), 10, [(actor, call.call_kind.value) for actor, call in self.backend.call_records])
+        self.assertEqual(len(_submitted_calls(self.history(conversation)[len(exploration_prefix):])), 10, [(actor, call.call_kind.value) for actor, call in self.backend.call_records])
         review_frames = [_workflow_material(call.payload) for actor, call in self.backend.call_records if actor in ROSTER][-3:]
         review_candidates = [next(item["artifact_candidate"] for item in frame["inputs"] if item["input_id"] == candidate_inputs[0].input_id) for frame in review_frames]
         self.assertEqual(review_candidates, [review_candidates[0]] * len(ROSTER))
         self.assertEqual([frame["shared_premises"] for frame in review_frames], [shared_premises_to_dict(capture)] * len(ROSTER))
         self.assertEqual([frame["assignment"]["review_basis"]["candidate_input_ids"] for frame in review_frames], [[candidate_inputs[0].input_id]] * len(ROSTER))
+        adopted_inputs = [item for actor, call in self.backend.call_records if actor in ROSTER for item in _workflow_material(call.payload)["inputs"] if item["input_id"] == "adopted_idea"]
+        self.assertEqual([item["conversation_event"]["capture"]["selected_text"].encode("utf-8") for item in adopted_inputs], [premise.encode("utf-8")] * (2 * len(ROSTER)))
         self.assertEqual(self.artifact_bytes(),before)
         self.assertIsNotNone(reviewed.turn.artifact_application_request)
         self.assertEqual(self.history(conversation)[:len(draft_prefix)],draft_prefix)
         applied = await self.runtime.decide_artifact_application(_application_decision(reviewed.turn,c.ArtifactApplicationDecisionKind.APPLY))
         self.assertTrue(self.workspace.path(path).read_text().startswith("Summons leads"))
+        self.assertIsNotNone(applied.commit_request)
+        await self.runtime.decide_story_commit(_commit_decision(applied, StoryCommitDecision.REJECT))
+        for failure, code in ((ConnectionError("Known adoption failure"), c.CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED), (asyncio.CancelledError(), c.CollaborationLeadOutcomeFailureCode.CANCELLED)):
+            self.backend.enqueue(_SubmittedFailure(failure))
+            if code is c.CollaborationLeadOutcomeFailureCode.CANCELLED:
+                with self.assertRaises(asyncio.CancelledError):
+                    await self.runtime.lead_turn(self.session_id, conversation, "Draft adopted idea.", adoption=selection)
+            else:
+                failed = await self.runtime.lead_turn(self.session_id, conversation, "Draft adopted idea.", adoption=selection)
+                self.assertIs(failed.next_action, c.CollaborationNextAction.RETRY_LEAD_TURN)
+            failed_history = self.history(conversation)
+            submitted = _submitted_calls(failed_history)
+            closure = next(e.payload for e in reversed(failed_history) if type(e.payload) is c.CollaborationLeadOutcomeFailurePayload)
+            self.assertEqual((closure.code, closure.call_id, closure.invocation_id), (code, submitted[-1].call_id, submitted[-1].invocation_id))
+            self.assertIs(c.project_collaboration_history(failed_history).next_safe_action, c.CollaborationNextAction.RETRY_LEAD_TURN)
+            self.backend.enqueue(_visible_outcome("answer", "Known failure safely closed."))
+            resumed = await self.runtime.lead_turn(self.session_id, conversation, "Report status.")
+            self.assertIs(resumed.kind, c.LeadOutcomeKind.ANSWER)
+            self.assertEqual(resumed.message, "Known failure safely closed.")
+            self.assertEqual(self.history(conversation)[:len(failed_history)], failed_history)
+            self.assertEqual(len(_submitted_calls(self.history(conversation))), len(submitted) + 1)
+            self.assertEqual((resumed.proposal, resumed.artifact_proposal, resumed.artifact_application_request, resumed.story_commit_request), (None,) * 4)
         history = self.history(conversation)
         self.assertTrue(any(type(e.payload) is c.ArtifactApplicationResultPayload and e.payload.outcome is c.ArtifactApplicationOutcomeKind.APPLIED for e in history))
+        self.assertEqual(applied.commit_request.application_result_event_id, next(e.event_id for e in history if type(e.payload) is c.ArtifactApplicationResultPayload and e.payload.outcome is c.ArtifactApplicationOutcomeKind.APPLIED))
         offered = []
         def status(call,provider):
             offered.extend(_workflow_material(call.payload)["authoring_tasks"])

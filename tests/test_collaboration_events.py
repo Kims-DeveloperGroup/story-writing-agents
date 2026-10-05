@@ -19,6 +19,7 @@ import story_writing_agents
 import story_writing_agents.conversations as conversations
 import story_writing_agents.conversations.context as context_owner
 import story_writing_agents.conversations.events as events_owner
+from story_writing_agents import lead_exploration as exploration
 from story_writing_agents.agents import (
     CHARACTER_CUSTODIAN,
     LEAD_ORCHESTRATOR,
@@ -194,6 +195,9 @@ class CollaborationValueContractTests(unittest.TestCase):
         self.assertEqual(COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES, 32_768)
         expected = {
             CollaborationEventKind: (
+                'lead_exploration_request',
+                'lead_exploration_result',
+                'exploration_adoption',
                 "message",
                 "assignment_dispatch",
                 "specialist_reply",
@@ -302,6 +306,7 @@ class CollaborationValueContractTests(unittest.TestCase):
             CollaborationTerminalScope: ("assignment", "synthesis"),
             CollaborationInvocationKind: (
                 "lead",
+                "lead_exploration",
                 "specialist_assignment",
                 "lead_synthesis",
                 "specialist_advisory",
@@ -313,6 +318,7 @@ class CollaborationValueContractTests(unittest.TestCase):
             ),
             CollaborationProviderCallState: ("prepared", "submitted"),
             LeadOutcomeKind: (
+                'exploration',
                 "answer",
                 "question",
                 "critique",
@@ -1406,6 +1412,19 @@ class CollaborationWireContractTests(unittest.TestCase):
                 self.assertNotIn("private-sentinel", str(raised.exception))
         with self.assertRaises(TypeError):
             decode_collaboration_proposal("{}")  # type: ignore[arg-type]
+        text = "Synthetic possibility 한글\r\nKeep trailing space. "
+        idea = exploration.ExplorationIdea("idea-current", exploration.ExplorationIdeaKind.ALTERNATIVE, text, hashlib.sha256(text.encode("utf-8")).hexdigest())
+        report = exploration.LeadExplorationReport("request-current", "call-current", exploration.ExplorationReportStatus.IDEAS, "Provisional possibilities.", (idea,))
+        body = exploration.exploration_report_to_dict(report)
+        self.assertEqual(exploration.exploration_report_from_dict(body), report)
+        self.assertEqual(body["ideas"][0]["material_text"].encode("utf-8"), text.encode("utf-8"))
+        with self.assertRaises(ValueError):
+            exploration.exploration_report_from_dict({**body, "proposal": {}})
+        tampered = copy.deepcopy(body)
+        tampered["ideas"][0]["material_digest"] = "0" * 64
+        with self.assertRaises(ValueError):
+            exploration.exploration_report_from_dict(tampered)
+        self.assertEqual(tuple(tuple(item.value for item in enum) for enum in (exploration.LeadInteractionMode, exploration.ExplorationIdeaKind, exploration.ExplorationReportStatus)), (("orchestration", "exploration"), ("hypothesis", "alternative", "short_example"), ("ideas", "clarification")))
 
     def test_unicode_is_not_normalized_and_tampered_digest_is_rejected(self) -> None:
         composed = replace_proposal(make_proposal(), purpose="Café review")
@@ -1448,11 +1467,12 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
     def test_leaf_and_facade_exports_identity_metadata_pickle_and_root_omission(
         self,
     ) -> None:
+        exploration_names = ('CollaborationLeadExplorationRequestPayload', 'CollaborationLeadExplorationResultPayload', 'CollaborationExplorationAdoptionPayload')
         expected_event_exports = COLLABORATION_EVENT_EXPORTS
         expected_context_exports = COLLABORATION_CONTEXT_EXPORTS
         self.assertEqual(tuple(events_owner.__all__), expected_event_exports)
         self.assertEqual(tuple(context_owner.__all__), expected_context_exports)
-        self.assertEqual(len(conversations.__all__), 159)
+        self.assertEqual(len(conversations.__all__), 162)
         self.assertNotIn("__getattr__", vars(events_owner))
         self.assertNotIn("__getattr__", vars(context_owner))
         self.assertNotIn("__getattr__", vars(conversations))
@@ -1461,9 +1481,9 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
             for name in conversations.__all__
             if name.startswith("Collaboration") or name.startswith("COLLABORATION_")
         }
-        self.assertEqual(len(collaboration_names), 63)
+        self.assertEqual(len(collaboration_names), 66)
         for owner in (events_owner, context_owner):
-            for name in owner.__all__:
+            for name in (n for n in owner.__all__ if n not in exploration_names):
                 if name.startswith("Collaboration") or name.startswith(
                     "COLLABORATION_"
                 ):
@@ -1474,12 +1494,12 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
         callable_names = {
             name
             for name in conversations.__all__
-            if name.startswith("Collaboration")
+            if (name.startswith("Collaboration")
             or name.startswith("collaboration_")
             or name.startswith("encode_collaboration_")
             or name.startswith("decode_collaboration_")
             or name.startswith("project_collaboration_")
-            or name.startswith("validate_collaboration_")
+            or name.startswith("validate_collaboration_")) and name not in exploration_names
         }
         callable_names.discard("CollaborationPayload")
         for name in callable_names:
@@ -1489,18 +1509,23 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
                     "story_writing_agents.conversations",
                 )
         root_names = {
-            name for name in conversations.__all__ if name.startswith("Collaboration")
+            name for name in conversations.__all__ if (name.startswith("Collaboration")) and name not in exploration_names
         }
         root_names |= {
             name
             for name in conversations.__all__
             if "collaboration" in name.lower()
-            and name not in {"CONVERSATION_EVENT_SCHEMA_VERSION"}
+            and name not in {"CONVERSATION_EVENT_SCHEMA_VERSION"} and name not in exploration_names
         }
         for name in root_names:
             with self.subTest(root_omission=name):
                 self.assertNotIn(name, story_writing_agents.__all__)
                 self.assertFalse(hasattr(story_writing_agents, name))
+        for name in exploration_names:
+            self.assertIs(getattr(events_owner, name), getattr(conversations, name))
+            self.assertEqual(getattr(conversations, name).__module__, "story_writing_agents.conversations")
+            self.assertNotIn(name, story_writing_agents.__all__)
+            self.assertFalse(hasattr(story_writing_agents, name))
         proposal = make_proposal()
         self.assertEqual(pickle.loads(pickle.dumps(proposal)), proposal)
         self.assertIs(
@@ -1571,8 +1596,8 @@ import story_writing_agents
 import story_writing_agents.conversations as facade
 import story_writing_agents.conversations.context as context
 import story_writing_agents.conversations.events as events
-assert len(facade.__all__) == 159
-assert len(events.__all__) == 120
+assert len(facade.__all__) == 162
+assert len(events.__all__) == 123
 assert len(context.__all__) == 31
 assert facade.CollaborationProposal is events.CollaborationProposal
 assert facade.CollaborationEventStore is context.CollaborationEventStore

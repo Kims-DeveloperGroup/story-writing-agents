@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from story_writing_agents import lead_exploration as exploration
+
 import contextlib
 import errno
 import io
@@ -89,6 +91,10 @@ from tests.helpers import (
     workspace_git_identity,
 )
 from tests.sqlite_conversation_storage_fixture import database_path, provision
+
+
+def _resolved_workspace_patch(workspace):
+    return mock.patch.object(cli_module, "resolve_workspace", return_value=workspace)
 
 
 class TtyStringIO(io.StringIO):
@@ -352,6 +358,9 @@ class PublicApiTests(unittest.TestCase):
         ):
             self.assertIn(lifecycle_name, story_writing_agents.__all__)
             self.assertTrue(hasattr(story_writing_agents, lifecycle_name))
+        for facade in (story_writing_agents.StoryRuntime.lead_turn, story_writing_agents.RuntimeSession.lead_turn):
+            parameters = inspect.signature(facade).parameters
+            self.assertEqual(tuple((parameters[key].kind, parameters[key].default) for key in ("interaction_mode", "adoption")), ((inspect.Parameter.KEYWORD_ONLY, exploration.LeadInteractionMode.ORCHESTRATION), (inspect.Parameter.KEYWORD_ONLY, None)))
 
     def test_top_level_exports_include_models_directives_and_public_errors(
         self,
@@ -1565,11 +1574,7 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(sys, "stdin", stdin),
                     mock.patch.object(sys, "stdout", stdout),
                     mock.patch.object(sys, "stderr", stderr),
-                    mock.patch.object(
-                        cli_module,
-                        "resolve_workspace",
-                        return_value=workspace,
-                    ) as resolve_workspace,
+                    _resolved_workspace_patch(workspace) as resolve_workspace,
                     mock.patch.object(
                         cli_module,
                         "load_cli_context",
@@ -1982,11 +1987,7 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(sys, "stdin", stdin),
                     mock.patch.object(sys, "stdout", stdout),
                     mock.patch.object(sys, "stderr", stderr),
-                    mock.patch.object(
-                        cli_module,
-                        "resolve_workspace",
-                        return_value=workspace,
-                    ),
+                    _resolved_workspace_patch(workspace),
                     runtime_probe_context as runtime_probe,
                     mock.patch.object(
                         cli_module,
@@ -2069,11 +2070,7 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(sys, "stdin", stdin),
                     mock.patch.object(sys, "stdout", stdout),
                     mock.patch.object(sys, "stderr", stderr),
-                    mock.patch.object(
-                        cli_module,
-                        "resolve_workspace",
-                        return_value=workspace,
-                    ),
+                    _resolved_workspace_patch(workspace),
                     mock.patch.object(
                         cli_module,
                         "_run_interactive_startup_progress",
@@ -2165,11 +2162,7 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(sys, "stdin", stdin),
                     mock.patch.object(sys, "stdout", stdout),
                     mock.patch.object(sys, "stderr", stderr),
-                    mock.patch.object(
-                        cli_module,
-                        "resolve_workspace",
-                        return_value=workspace,
-                    ),
+                    _resolved_workspace_patch(workspace),
                     mock.patch.object(
                         cli_module,
                         "build_stream_terminal",
@@ -2382,11 +2375,7 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(sys, "stdin", TtyStringIO(is_terminal=True)),
                     mock.patch.object(sys, "stdout", TtyStringIO(is_terminal=True)),
                     mock.patch.object(sys, "stderr", io.StringIO()),
-                    mock.patch.object(
-                        cli_module,
-                        "resolve_workspace",
-                        return_value=workspace,
-                    ),
+                    _resolved_workspace_patch(workspace),
                     mock.patch.object(
                         cli_module,
                         "build_stream_terminal",
@@ -2563,11 +2552,7 @@ class CliTests(unittest.TestCase):
             mock.patch.object(sys, "stdin", stdin),
             mock.patch.object(sys, "stdout", stdout),
             mock.patch.object(sys, "stderr", stderr),
-            mock.patch.object(
-                cli_module,
-                "resolve_workspace",
-                return_value=workspace,
-            ),
+            _resolved_workspace_patch(workspace),
             mock.patch.object(
                 cli_module,
                 "build_stream_terminal",
@@ -2734,11 +2719,7 @@ class CliTests(unittest.TestCase):
                 mock.patch.object(sys, "stdin", stdin),
                 mock.patch.object(sys, "stdout", stdout),
                 mock.patch.object(sys, "stderr", stderr),
-                mock.patch.object(
-                    cli_module,
-                    "resolve_workspace",
-                    return_value=workspace,
-                ),
+                _resolved_workspace_patch(workspace),
                 mock.patch.object(
                     cli_module,
                     "load_cli_context",
@@ -2853,11 +2834,7 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(sys, "stdin", stdin),
                     mock.patch.object(sys, "stdout", stdout),
                     mock.patch.object(sys, "stderr", stderr),
-                    mock.patch.object(
-                        cli_module,
-                        "resolve_workspace",
-                        return_value=workspace,
-                    ),
+                    _resolved_workspace_patch(workspace),
                     mock.patch.object(
                         cli_module,
                         "load_cli_context",
@@ -2879,11 +2856,7 @@ class CliTests(unittest.TestCase):
             mock.patch.object(sys, "stdin", stdin),
             mock.patch.object(sys, "stdout", stdout),
             mock.patch.object(sys, "stderr", stderr),
-            mock.patch.object(
-                cli_module,
-                "resolve_workspace",
-                return_value=workspace,
-            ),
+            _resolved_workspace_patch(workspace),
             mock.patch.object(
                 cli_module,
                 "load_cli_context",
@@ -2923,11 +2896,7 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(sys, "stdin", stdin),
                     mock.patch.object(sys, "stdout", stdout),
                     mock.patch.object(sys, "stderr", stderr),
-                    mock.patch.object(
-                        cli_module,
-                        "resolve_workspace",
-                        return_value=workspace,
-                    ),
+                    _resolved_workspace_patch(workspace),
                     mock.patch.object(
                         cli_module,
                         "load_cli_context",
@@ -3014,11 +2983,7 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(sys, "stdin", stdin),
                     mock.patch.object(sys, "stdout", stdout),
                     mock.patch.object(sys, "stderr", stderr),
-                    mock.patch.object(
-                        cli_module,
-                        "resolve_workspace",
-                        return_value=workspace,
-                    ),
+                    _resolved_workspace_patch(workspace),
                     mock.patch.object(
                         cli_module,
                         "WorkspaceDebugLog",
@@ -3073,11 +3038,7 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(sys, "stdin", stdin),
                     mock.patch.object(sys, "stdout", stdout),
                     mock.patch.object(sys, "stderr", stderr),
-                    mock.patch.object(
-                        cli_module,
-                        "resolve_workspace",
-                        return_value=workspace,
-                    ),
+                    _resolved_workspace_patch(workspace),
                     mock.patch.object(
                         cli_module,
                         "WorkspaceDebugLog",
@@ -3148,11 +3109,7 @@ class CliTests(unittest.TestCase):
                     "session_id": "logger_optional",
                 }
                 with (
-                    mock.patch.object(
-                        cli_module,
-                        "resolve_workspace",
-                        return_value=workspace,
-                    ),
+                    _resolved_workspace_patch(workspace),
                     mock.patch.object(
                         cli_module,
                         "WorkspaceDebugLog",
@@ -3194,11 +3151,7 @@ class CliTests(unittest.TestCase):
                 stderr = io.StringIO()
                 failure = ConfigurationError("PRIVATE_POST_WORKSPACE_FAILURE")
                 with (
-                    mock.patch.object(
-                        cli_module,
-                        "resolve_workspace",
-                        return_value=workspace,
-                    ),
+                    _resolved_workspace_patch(workspace),
                     mock.patch.object(
                         cli_module,
                         "WorkspaceDebugLog",
@@ -3244,11 +3197,7 @@ class CliTests(unittest.TestCase):
         workspace = initialized_workspace(self)
         stderr = io.StringIO()
         with (
-            mock.patch.object(
-                cli_module,
-                "resolve_workspace",
-                return_value=workspace,
-            ),
+            _resolved_workspace_patch(workspace),
             mock.patch.object(
                 cli_module.WorkspaceDebugLog,
                 "error",
@@ -3285,11 +3234,7 @@ class CliTests(unittest.TestCase):
         stdout = io.StringIO()
         stderr = io.StringIO()
         with (
-            mock.patch.object(
-                cli_module,
-                "resolve_workspace",
-                return_value=workspace,
-            ),
+            _resolved_workspace_patch(workspace),
             mock.patch.object(
                 WorkspaceDebugLog,
                 "trace",
@@ -3329,11 +3274,7 @@ class CliTests(unittest.TestCase):
         stdout = io.StringIO()
         stderr = io.StringIO()
         with (
-            mock.patch.object(
-                cli_module,
-                "resolve_workspace",
-                return_value=workspace,
-            ),
+            _resolved_workspace_patch(workspace),
             contextlib.redirect_stdout(stdout),
             contextlib.redirect_stderr(stderr),
         ):
@@ -3449,11 +3390,7 @@ class CliTests(unittest.TestCase):
 
         stderr = io.StringIO()
         with (
-            mock.patch.object(
-                cli_module,
-                "resolve_workspace",
-                return_value=workspace,
-            ),
+            _resolved_workspace_patch(workspace),
             contextlib.redirect_stderr(stderr),
         ):
             exit_code = main(

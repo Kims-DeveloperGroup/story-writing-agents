@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 import inspect
 import os
 import pickle
@@ -54,6 +55,8 @@ REMOVED_COMMANDS = (
 EXPECTED_ACTION_KINDS = (
     "ignored",
     "lead_input",
+    "lead_explore",
+    "lead_adopt",
     "list_agents",
     "search",
     "transcript",
@@ -83,6 +86,8 @@ EXPECTED_ACTION_KINDS = (
 )
 
 EXPECTED_COMMANDS = (
+    CommandSpec("Writing", "/explore TEXT", (), True, False, "/explore Explore possible directions"),
+    CommandSpec("Writing", "/adopt", (), True, True, "/adopt"),
     CommandSpec("Agents", "/agents", (), False, False, "/agents"),
     CommandSpec("Agents", "/auth", (), True, True, "/auth"),
     CommandSpec("Agents", "/settings", (), True, True, "/settings"),
@@ -302,6 +307,17 @@ class InteractiveParserRetirementTests(unittest.TestCase):
         for line in removed_inputs:
             with self.subTest(line=line):
                 self.assert_unavailable(line)
+        self.assertEqual(parse_interactive_line("/explore 한글 possibility"), InteractiveAction(ActionKind.LEAD_EXPLORE, text='한글 possibility'))
+        self.assertEqual(parse_interactive_line("/adopt"), InteractiveAction(ActionKind.LEAD_ADOPT))
+        self.assertIs(parse_interactive_line("/explore").kind, ActionKind.PARSE_ERROR)
+        self.assertIs(parse_interactive_line("/adopt unexpected").kind, ActionKind.PARSE_ERROR)
+        self.assertEqual(parse_interactive_line("Explore possible directions."), InteractiveAction(ActionKind.LEAD_INPUT, text='Explore possible directions.'))
+        explore_correction = parse_interactive_line("/explroe").suggestion
+        adopt_correction = parse_interactive_line("/adotp").suggestion
+        self.assertEqual(explore_correction, "/explore")
+        self.assertEqual(adopt_correction, "/adopt")
+        self.assertEqual(parse_interactive_line(explore_correction + " idea"), InteractiveAction(ActionKind.LEAD_EXPLORE, text="idea"))
+        self.assertEqual(parse_interactive_line(adopt_correction), InteractiveAction(ActionKind.LEAD_ADOPT))
 
     def test_run_is_an_ordinary_unknown_command(self) -> None:
         self.assertEqual(
@@ -408,20 +424,20 @@ class RetainedParserContractTests(unittest.TestCase):
         all_fields = set(samples)
         for kind, (allowed, required) in rules.items():
             valid = {name: samples[name] for name in required}
-            with self.subTest(kind=kind, case="valid"):
+            with (self.subTest(kind=kind, case="valid") if kind not in (ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT) else nullcontext()):
                 self.assertIs(InteractiveAction(kind, **valid).kind, kind)
             for name in required:
                 missing = dict(valid)
                 del missing[name]
                 with (
-                    self.subTest(kind=kind, missing=name),
+                    (self.subTest(kind=kind, missing=name) if kind not in (ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT) else nullcontext()),
                     self.assertRaises(ValueError),
                 ):
                     InteractiveAction(kind, **missing)
             for name in all_fields.difference(allowed):
                 extra = dict(valid)
                 extra[name] = samples[name]
-                with self.subTest(kind=kind, extra=name), self.assertRaises(ValueError):
+                with (self.subTest(kind=kind, extra=name) if kind not in (ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT) else nullcontext()), self.assertRaises(ValueError):
                     InteractiveAction(kind, **extra)
 
     def test_action_specs_and_registry_are_immutable(self) -> None:

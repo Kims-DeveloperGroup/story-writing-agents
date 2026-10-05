@@ -26,7 +26,7 @@ parse_interactive_line(line: str) -> InteractiveAction
 Current `ActionKind` values are:
 
 ```text
-ignored lead_input list_agents search transcript inspect exchanges history status auth
+ignored lead_input lead_explore lead_adopt list_agents search transcript inspect exchanges history status auth
 settings set_language set_persona reset session_list session_create
 session_open session_pause conversation_new conversation_list
 conversation_list_all conversation_use conversation_subject
@@ -40,6 +40,7 @@ output path, direct RAG query, or legacy direct-run payload.
 
 | Group | Canonical rows |
 | --- | --- |
+| Writing | `/explore TEXT`; `/adopt` |
 | Agents | `/agents`; `/auth`; `/settings` |
 | Session overrides | `/override language LANG \| persona AGENT NAME \| reset` |
 | Sessions | `/session list \| create NAME \| resume [NAME] \| pause` |
@@ -83,6 +84,12 @@ session state.
 
 Command keywords are case-sensitive. ASCII space/tab delimit grammar. There is
 no quoting, shell expansion, provider call, file read, or network access.
+
+`/explore TEXT` returns `lead_explore` with its literal text and requires nonempty
+input. `/adopt` returns field-free `lead_adopt`; extra arguments are rejected.
+The controller owns current-focus idea selection, target prompts and exact
+adoption receipts. Neither action changes the default meaning of ordinary input
+or grants specialist, Apply or Commit authority.
 
 ## Management grammar
 

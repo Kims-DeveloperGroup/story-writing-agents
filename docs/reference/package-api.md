@@ -14,7 +14,7 @@ The stable inventories in this revision are:
 | Import boundary | Exports | Purpose |
 | --- | ---: | --- |
 | `story_writing_agents` | 106 | Management runtime, workspace/catalog, backend/session, generic models, reply traces, retrieval contracts, parser, and errors |
-| `story_writing_agents.conversations` | 158 | Catalog plus schema-v2 events, projection, evidence-grounded lead/specialist/artifact-review values, readable context, and pure validation |
+| `story_writing_agents.conversations` | 162 | Catalog plus schema-v2 events, projection, evidence-grounded lead/specialist/artifact-review values, readable context, and pure validation |
 | `story_writing_agents.conversation_search` | 18 | Schema-v2 search, exact citations, paging, and history service |
 | `story_writing_agents.conversation_retrieval` | 24 | Low-level provider search/read-history/answer contracts |
 | `story_writing_agents.conversation_storage` | 63 | Storage composition, provenance, activation, archive, and transfer contracts |
@@ -24,12 +24,11 @@ The stable inventories in this revision are:
 | `story_writing_agents.writing_artifacts` | 76 | Canonical artifact/reference values plus pure exact change-set, relationship-policy, and artifact-application contracts |
 | `story_writing_agents.artifact_proposals` | 16 | Direct-only pure intent, evidence, exact candidate, reviewer-map, and strict candidate-codec contracts |
 
-The production graph has 147 modules, 616 runtime dependency edges, no runtime
-cycles, and 618 edges when annotation-only imports are included. The package
-root has 106 exports. The conversations facade contributes 120 event exports
-and 30 context exports; its bindings are identical to the owner bindings.
-Session-transition integration contributes accepted orchestration-facing edges
-without adding an assessment facade export.
+The production graph has 151 modules and 642 runtime dependency edges, with
+no runtime cycles. The package root has 106 exports. The conversations facade
+contributes 123 event exports and 31 context exports; its bindings are identical
+to the owner bindings. Exploration adds one pure contract leaf and five
+consumer-to-leaf edges without a new storage or execution owner.
 
 Import the management facade explicitly:
 
@@ -52,6 +51,13 @@ session lifecycle, catalog, parser, retrieval, and error contracts. Those are
 component seams, not alternate runtime execution entry points. The exact list
 is authoritative in `story_writing_agents.__all__` and is checked against the
 project module index.
+
+Current exploration contracts import directly from
+`story_writing_agents.lead_exploration`: `LeadInteractionMode`, provisional
+idea/report/read-observation values, and exact whole-idea adoption selection
+and capture values. Both runtime facades accept the mode and adoption controls
+as keyword arguments. These values grant no provider, draft, confirmation or
+mutation authority. See [exploration and adoption](runtime-api.md#explicit-interaction-mode-and-adoption).
 
 <a id="safe-git-boundary"></a>
 

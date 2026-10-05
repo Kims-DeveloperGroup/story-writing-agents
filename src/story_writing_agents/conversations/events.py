@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from ..lead_exploration import (
+    LeadInteractionMode, LeadExplorationReport, ExplorationAdoptionCapture,
+    exploration_report_to_dict, exploration_report_from_dict,
+    adoption_capture_to_dict, adoption_capture_from_dict,
+)
+
 import hashlib
 import json
 import re
@@ -81,6 +87,10 @@ _EnumT = TypeVar("_EnumT", bound=StrEnum)
 
 class CollaborationEventKind(StrEnum):
     """Closed schema-v2 outer event kinds."""
+
+    LEAD_EXPLORATION_REQUEST = "lead_exploration_request"
+    LEAD_EXPLORATION_RESULT = "lead_exploration_result"
+    EXPLORATION_ADOPTION = "exploration_adoption"
 
     MESSAGE = "message"
     ASSIGNMENT_DISPATCH = "assignment_dispatch"
@@ -471,6 +481,8 @@ class CollaborationLeadJudgmentPayload:
     trace: ReplyTrace | None = None
 
     def __post_init__(self) -> None:
+        if self.kind is LeadOutcomeKind.EXPLORATION:
+            raise ValueError("exploration requires its typed request-bound report")
         _require_enum(self.kind, LeadOutcomeKind, "lead judgment kind")
         _validate_visible_text(self.message, label="lead judgment message")
         if type(self.evidence) is not CollaborationLeadEvidence:
@@ -732,6 +744,7 @@ class StoryCommitNextAction(StrEnum):
 
 
 class LeadOutcomeKind(StrEnum):
+    EXPLORATION = "exploration"
     """Closed visible semantic outcomes returned by the lead provider."""
 
     ANSWER = "answer"
@@ -1417,6 +1430,7 @@ class CollaborationInvocationKind(StrEnum):
     """Closed semantic role of one provider-call lineage."""
 
     LEAD = "lead"
+    LEAD_EXPLORATION = "lead_exploration"
     SPECIALIST_ASSIGNMENT = "specialist_assignment"
     LEAD_SYNTHESIS = "lead_synthesis"
     SPECIALIST_ADVISORY = "specialist_advisory"
@@ -3670,6 +3684,7 @@ class CollaborationProviderCallPayload:
             raise ValueError("only submitted calls may carry validation details")
         if self.invocation_kind in {
             CollaborationInvocationKind.LEAD,
+            CollaborationInvocationKind.LEAD_EXPLORATION,
             CollaborationInvocationKind.LEAD_SYNTHESIS,
         }:
             if self.role != LEAD_ORCHESTRATOR:
@@ -3678,8 +3693,40 @@ class CollaborationProviderCallPayload:
             raise ValueError("specialist calls require a canonical specialist role")
 
 
+@dataclass(frozen=True, slots=True)
+class CollaborationLeadExplorationRequestPayload:
+    user_event_id: str
+    interaction_mode: LeadInteractionMode = LeadInteractionMode.EXPLORATION
+
+    def __post_init__(self) -> None:
+        _validate_identifier(self.user_event_id, label="exploration user event ID")
+        if self.interaction_mode is not LeadInteractionMode.EXPLORATION:
+            raise ValueError("exploration request requires explicit exploration mode")
+
+
+@dataclass(frozen=True, slots=True)
+class CollaborationLeadExplorationResultPayload:
+    report: LeadExplorationReport
+
+    def __post_init__(self) -> None:
+        if type(self.report) is not LeadExplorationReport:
+            raise TypeError("exploration result requires an exact report")
+
+
+@dataclass(frozen=True, slots=True)
+class CollaborationExplorationAdoptionPayload:
+    capture: ExplorationAdoptionCapture
+
+    def __post_init__(self) -> None:
+        if type(self.capture) is not ExplorationAdoptionCapture:
+            raise TypeError("adoption requires an exact captured selection")
+
+
 CollaborationPayload = (
-    CollaborationProposal
+    CollaborationLeadExplorationRequestPayload
+    | CollaborationLeadExplorationResultPayload
+    | CollaborationExplorationAdoptionPayload
+    |     CollaborationProposal
     | ArtifactObjectivePayload
     | ArtifactObjectivePayloadV2
     | LeadRecommendationRequestPayload
@@ -4631,6 +4678,13 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
         return {"payload_type": recommendation_types[type(payload)], **value}
     if type(payload) is CollaborationProposal:
         return {"payload_type": "proposal", "proposal": _proposal_value(payload)}
+    if type(payload) is CollaborationLeadExplorationRequestPayload:
+        return {"payload_type": "lead_exploration_request", "user_event_id": payload.user_event_id,
+                "interaction_mode": payload.interaction_mode.value}
+    if type(payload) is CollaborationLeadExplorationResultPayload:
+        return {"payload_type": "lead_exploration_result", "report": exploration_report_to_dict(payload.report)}
+    if type(payload) is CollaborationExplorationAdoptionPayload:
+        return {"payload_type": "exploration_adoption", "capture": adoption_capture_to_dict(payload.capture)}
     if type(payload) is CollaborationMessagePayload:
         value = {
             "content": payload.content,
@@ -5676,6 +5730,15 @@ def _decode_payload(value: object) -> CollaborationPayload:
     if payload_type == "proposal":
         item = _object(value, {"payload_type", "proposal"}, label="proposal payload")
         return _decode_proposal(item["proposal"])
+    if payload_type == "lead_exploration_request":
+        item = _object(value, {"payload_type", "user_event_id", "interaction_mode"}, label="exploration request")
+        return CollaborationLeadExplorationRequestPayload(item["user_event_id"], LeadInteractionMode(item["interaction_mode"]))
+    if payload_type == "lead_exploration_result":
+        item = _object(value, {"payload_type", "report"}, label="exploration result")
+        return CollaborationLeadExplorationResultPayload(exploration_report_from_dict(item["report"]))
+    if payload_type == "exploration_adoption":
+        item = _object(value, {"payload_type", "capture"}, label="exploration adoption")
+        return CollaborationExplorationAdoptionPayload(adoption_capture_from_dict(item["capture"]))
     if payload_type == "message":
         item = _object_with_optional_extensions(
             value,
@@ -6480,6 +6543,9 @@ def _validate_collaboration_payload(
     payload: CollaborationPayload,
 ) -> None:
     allowed: dict[CollaborationEventKind, tuple[type[object], ...]] = {
+        CollaborationEventKind.LEAD_EXPLORATION_REQUEST: (CollaborationLeadExplorationRequestPayload,),
+        CollaborationEventKind.LEAD_EXPLORATION_RESULT: (CollaborationLeadExplorationResultPayload,),
+        CollaborationEventKind.EXPLORATION_ADOPTION: (CollaborationExplorationAdoptionPayload,),
         CollaborationEventKind.ARTIFACT_OBJECTIVE: (ArtifactObjectivePayload, ArtifactObjectivePayloadV2),
         CollaborationEventKind.LEAD_RECOMMENDATION_REQUEST: (LeadRecommendationRequestPayload,),
         CollaborationEventKind.LEAD_RECOMMENDATION_DECISION: (LeadRecommendationDecisionPayload,),
@@ -6629,6 +6695,9 @@ def _validate_collaboration_direction(
         CollaborationEventKind.LEAD_RECOMMENDATION_RESULT: {
             (CollaborationActorKind.RUNTIME, CollaborationActorKind.USER),
         },
+        CollaborationEventKind.LEAD_EXPLORATION_REQUEST: {(CollaborationActorKind.USER, CollaborationActorKind.LEAD)},
+        CollaborationEventKind.LEAD_EXPLORATION_RESULT: {(CollaborationActorKind.LEAD, CollaborationActorKind.USER)},
+        CollaborationEventKind.EXPLORATION_ADOPTION: {(CollaborationActorKind.USER, CollaborationActorKind.LEAD)},
         CollaborationEventKind.MESSAGE: {
             (CollaborationActorKind.USER, CollaborationActorKind.LEAD),
             (CollaborationActorKind.LEAD, CollaborationActorKind.USER),
@@ -7198,6 +7267,9 @@ __all__ = [
     "CollaborationLeadJudgmentPayload",
     "CollaborationLeadOutcomeFailureCode",
     "CollaborationLeadOutcomeFailurePayload",
+    "CollaborationLeadExplorationRequestPayload",
+    "CollaborationLeadExplorationResultPayload",
+    "CollaborationExplorationAdoptionPayload",
     "CollaborationMessagePayload",
     "CollaborationPayload",
     "CollaborationProposal",

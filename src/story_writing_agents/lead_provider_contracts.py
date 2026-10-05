@@ -159,6 +159,64 @@ def visible_text(value: object) -> bool:
 
 
 @dataclass(frozen=True, slots=True)
+class LeadExplorationConstraints:
+    """Offered provisional choices; runtime authorizes actual artifact READs."""
+
+    input_ids: tuple[str, ...] = ()
+
+    def prompt_facts(self) -> dict[str, object]:
+        return {
+            "interaction_mode": "exploration", "provisional": True,
+            "offered_basis_input_ids": list(self.input_ids),
+            "authority": "No specialists, completion, candidate, objective, Apply or Commit.",
+            "artifact_observations": "Cite actual authorized artifact READs only; never SEARCH, lists, user prose or earlier ideas.",
+        }
+
+    def schema(self) -> dict[str, object]:
+        idea = closed_object({
+            "kind": {"type": "string", "enum": ["hypothesis", "alternative", "short_example"]},
+            "material_text": nonempty_text_schema(), "basis_input_ids": string_array(),
+        })
+        observation = closed_object({"text": nonempty_text_schema(), "evidence_input_ids": string_array(minimum=1)})
+        common = {"kind": {"type": "string", "enum": ["exploration"]}, "message": nonempty_text_schema()}
+        result = alternatives([
+            closed_object({**common, "status": {"type": "string", "enum": ["ideas"]},
+                "ideas": {"type": "array", "items": idea, "minItems": 0},
+                "grounded_observations": {"type": "array", "items": observation, "minItems": 0}}),
+            closed_object({**common, "status": {"type": "string", "enum": ["clarification"]}}),
+        ])
+        result["description"] = "Only explicit user-selected provisional exploration; no authoring or mutation authority."
+        for variant in result.get("anyOf", (result,)):
+            variant["description"] = ("Present provisional ideas and qualified actual artifact READ observations." if "ideas" in variant["properties"] else "Ask for clarification without creating idea material or authority.")
+        return result
+
+    def diagnose(self, answer: str, *, read_ids: tuple[str, ...] = (), read_reviewers: tuple[tuple[str, str], ...] = ()) -> tuple[DomainValidationRule, ...]:
+        del read_reviewers
+        try:
+            value = json.loads(answer)
+            if type(value) is not dict or value.get("kind") != "exploration":
+                raise ValueError("exploration mode is required")
+            status = value.get("status")
+            expected = {"kind", "status", "message"} | ({"ideas", "grounded_observations"} if status == "ideas" else set())
+            if status not in {"ideas", "clarification"} or set(value) != expected or not visible_text(value["message"]):
+                raise ValueError("invalid closed exploration result")
+            if status == "ideas":
+                ideas, observations = value["ideas"], value["grounded_observations"]
+                if type(ideas) is not list or type(observations) is not list or not (ideas or observations):
+                    raise ValueError("exploration material is empty")
+                for idea in ideas:
+                    if type(idea) is not dict or set(idea) != {"kind", "material_text", "basis_input_ids"} or idea["kind"] not in {"hypothesis", "alternative", "short_example"} or not visible_text(idea["material_text"]) or type(idea["basis_input_ids"]) is not list or not set(idea["basis_input_ids"]).issubset((*self.input_ids, *read_ids)):
+                        raise ValueError("idea must use offered provisional basis")
+                for observation in observations:
+                    ids = observation.get("evidence_input_ids") if type(observation) is dict else None
+                    if type(observation) is not dict or set(observation) != {"text", "evidence_input_ids"} or not visible_text(observation["text"]) or type(ids) is not list or not ids or len(set(ids)) != len(ids) or not set(ids).issubset(read_ids):
+                        raise ValueError("observation requires current artifact READs")
+        except (ValueError, TypeError, KeyError):
+            return (DomainValidationRule.LEAD_OUTCOME_REJECTED,)
+        return ()
+
+
+@dataclass(frozen=True, slots=True)
 class LeadProviderConstraints:
     """One immutable set of offered choices shared by schema, prompt and guard."""
 

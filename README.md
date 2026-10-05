@@ -408,6 +408,12 @@ infrastructure boundaries. Start with the [runtime API](docs/reference/runtime-a
 [collaboration-history reference](docs/reference/collaboration-history.md), and
 [package API](docs/reference/package-api.md).
 
+Explicit one-turn exploration is also available through the focused shell and Python API.
+It presents hypotheses, alternatives and short examples as provisional material.
+Selecting an idea for adoption starts a fresh ordinary authoring workflow with
+required specialist drafting, complete candidate review and separate confirmation,
+Apply and Commit decisions. See [exploration and adoption](docs/guides/lead-agent.md#exploration-and-adoption).
+
 ## Canonical writing artifacts
 
 The canonical reference-source paths are the four exact core-document paths and

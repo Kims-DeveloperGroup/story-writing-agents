@@ -99,6 +99,7 @@ fields to provider wire paths. This package-internal boundary owns no provider s
 persistence, or authority and is not a public facade.
 `provider_wire` is a stateless stdlib leaf for vocabulary, projections, schemas, diagnostics, and invocation
 guidance derived from current schema choices; semantic owners retain domain APIs, storage, and state.
+`lead_exploration` is a stdlib-only report/adoption leaf; consumers own workflow authority.
 `lead_provider_contracts` owns immutable Lead choice snapshots shared by schema projections,
 prompt facts, and closed validation rules. It depends on domain contracts; orchestration
 retains confirmation, current-source membership, READ receipt, and lifecycle authority.
@@ -139,7 +140,7 @@ search/storage contracts without owning persistence.
 - `conversations.events`, `conversations.session_context`
 - `conversation_search`, `conversation_literal_search`, `conversation_retrieval`
 
-`catalog` owns catalog behavior, `events` owns schema-v2 event contracts, and `context` projects exact Commit authority or typed reprepare from durable Apply history; `session_context` projects exact session history without storage bookkeeping or native-thread ownership; `events` also owns immutable qualified premise captures and strict basis-v2 codecs; `context` validates first-confirm task pins and inherits both physical-call and round counters through the existing confirmed recommendation handoff.
+`catalog` owns catalog behavior; `events` owns typed exploration request/report/adoption captures and schema-v2 event contracts; `context` enforces current-focus provenance and fresh drafting, and `context` projects exact Commit authority or typed reprepare from durable Apply history; `session_context` projects exact session history without storage bookkeeping or native-thread ownership; `events` also owns immutable qualified premise captures and strict basis-v2 codecs; `context` validates first-confirm task pins and inherits both physical-call and round counters through the existing confirmed recommendation handoff.
 fresh delivery is complete, while compatible continuation carries unseen facts. Search implementations must return public
 search/retrieval contracts rather than expose storage internals. Conversation events and
 retrieval may carry bounded validation details associated with the physical provider call;

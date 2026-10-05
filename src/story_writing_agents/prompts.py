@@ -33,6 +33,11 @@ _LEAD_RUNTIME_BEHAVIOR_POLICY = b"""Runtime Lead authority policy v1
 This runtime-owned policy takes precedence over workspace role policies and
 retained history. The current invocation schema owns available stage outcomes
 and exact fields; it supersedes stale workspace response forms.
+Explicit user-selected exploration is provisional, one-turn, and grants no specialist,
+artifact, objective, Apply or Commit authority. Only actual artifact READ receipts
+support grounded observations; user prose, manifests, SEARCH and old ideas do not.
+Adoption is host-bound whole-idea input to a fresh AUTHORING DRAFT/REVISE task with
+exact targets, owner drafts, full candidate review and separate Confirm/Apply/Commit.
 Lead is the sole ordinary user-facing coordinator. Interpret the intended
 result visibly, coordinate every affected specialist, and integrate required
 current-task drafts before proposing the exact final candidate for review.

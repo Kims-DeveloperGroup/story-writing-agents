@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from story_writing_agents import lead_exploration as exploration
+
 import os
 import subprocess
 import unittest
@@ -161,7 +163,7 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         history = self.history(turn.conversation_id)
         redisclosed = await self.runtime.lead_turn(
             self.session_id, turn.conversation_id, "Apply the reviewed change now."
-        )
+        , interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
         self.assertEqual(redisclosed.artifact_application_request, request)
         self.assertEqual(len(self.backend.calls), calls)
         self.assertEqual(self.history(turn.conversation_id), history)

@@ -1,6 +1,7 @@
 """Concrete Codex CLI backend tests with no credentials or network access."""
 
 from __future__ import annotations
+from tests.test_lead_orchestration import _exploration_native_contract, _exploration_outcome
 
 import asyncio
 import contextlib
@@ -4410,6 +4411,18 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             (prior_user, prior_reply),
         )
         self.assertEqual(self.workspace.inspect_session(session_id)["debates"], [])
+        schema, payload = _exploration_native_contract()
+        provider = (await backend.bind(self.definition(LEAD_ORCHESTRATOR)))._context_provider()
+        scope = ContextScope("workspace-context", session_id, ContextSubjectKind.CONVERSATION, "native-exploration", LEAD_ORCHESTRATOR)
+        response, invocations = _exploration_outcome("Native provisional 한글 possibility.", basis_input_ids=()), []
+        async def invoke(_binding, invocation):
+            invocations.append(invocation)
+            return ProviderResult("codex-exploration-thread", response, usage=ProviderUsage(input_tokens=1, output_tokens=1), actual_transport_utf8_bytes=len(invocation.payload_json))
+        with mock.patch.object(backend._codex_adapter, "invoke", new=invoke):
+            async with provider.invocation(scope, "sha256:" + "5" * 64):
+                explored = await provider.invoke_context(ContextProviderCallRequest(scope, "sha256:" + "5" * 64, "codex-exploration-parity-call", ProviderCallKind.COLLABORATION_INITIAL, schema, payload))
+        self.assertEqual((invocations[0].schema, invocations[0].payload_json), (schema, canonical_provider_json(payload)))
+        self.assertEqual((explored.response_text, explored.accounting.state), (response, ProviderCallState.SUBMITTED))
 
     async def test_conversation_request_snapshots_derived_event_content(self) -> None:
         validated = "VALIDATED_CONTEXT_CONTENT"

@@ -32,6 +32,7 @@ from story_writing_agents.interactive_terminal._model import MainInputHistorySta
 
 
 EXPECTED_SUGGESTIONS = (
+    "/explore", "/adopt",
     "/agents",
     "/auth",
     "/settings",
@@ -358,7 +359,7 @@ class SuggestionContractTests(unittest.TestCase):
         )
         expected_identities = {"/?": "/help", "/toggle": "/progress"}
         for suggestion in suggestions:
-            with self.subTest(token=suggestion.token):
+            with (self.subTest(token=suggestion.token) if suggestion.token not in ('/explore', '/adopt') else contextlib.nullcontext()):
                 self.assertEqual(
                     suggestion.canonical_token,
                     expected_identities.get(suggestion.token, suggestion.token),
@@ -374,7 +375,7 @@ class SuggestionContractTests(unittest.TestCase):
 
     def test_matching_uses_the_exact_case_sensitive_whole_buffer_prefix(self) -> None:
         cases = {
-            "/a": ("/agents", "/auth"),
+            "/a": ("/adopt", "/agents", "/auth"),
             "/agent": ("/agents",),
             "/agents": ("/agents",),
             "/he": ("/help",),
