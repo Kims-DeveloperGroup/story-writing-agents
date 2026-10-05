@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+from .lead_exploration import (LeadInteractionMode, ExplorationIdeaKind, ExplorationReportStatus,
+    ExplorationIdea, ExplorationObservation, ExplorationArtifactRead, LeadExplorationReport,
+    ExplorationAdoptionSelection, ExplorationAdoptionCapture, material_sha256,
+    adoption_capture_to_dict)
+from .conversations.events import (CollaborationLeadExplorationRequestPayload,
+    CollaborationLeadExplorationResultPayload, CollaborationExplorationAdoptionPayload)
+
 from .provider_wire import project_result_schema
 
 import asyncio
@@ -27,6 +34,7 @@ from pathlib import Path
 from typing import Any, AsyncContextManager, AsyncIterator, Mapping, cast
 
 from .lead_provider_contracts import (
+    LeadExplorationConstraints,
     LeadContractError, LeadProviderConstraints, PREPARATION_INPUT_IDS,
     alternatives, canonical_assignments, canonical_scope, nonempty_text_schema, string_array, visible_text,
 )
@@ -721,8 +729,7 @@ def _lead_front_result_contract(
             if facts.objective_ids:
                 identity["enum"] = list(facts.objective_ids)
             variants.append(_closed_result_object({**scoped,
-                "kind": {"enum": [item.value for item in LeadOutcomeKind if item not in {
-                    LeadOutcomeKind.PROPOSAL, LeadOutcomeKind.RECOMMENDATION, LeadOutcomeKind.QUESTION}], "type": "string"},
+                "kind": {"enum": [LeadOutcomeKind.ANSWER.value, LeadOutcomeKind.CRITIQUE.value], "type": "string"},
                 "objective_intent": _closed_result_object({
                     "action": {"enum": ["cancel"], "type": "string"}, "objective_id": identity,
                 },
@@ -2982,6 +2989,8 @@ class StoryRuntime:
     @classmethod
     def _recommendation_event_digest(cls, event: CollaborationEvent | CollaborationEventDraft) -> str:
         payload = event.payload
+        if type(payload) is CollaborationExplorationAdoptionPayload:
+            return "sha256:" + payload.capture.selection.material_digest
         if type(payload) is CollaborationSpecialistReplyPayload:
             return cls._specialist_reply_digest(payload)
         if type(payload) in {CollaborationLeadJudgmentPayload, CollaborationLeadSynthesisPayload}:
@@ -3708,9 +3717,17 @@ class StoryRuntime:
         context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
         *,
         action_progress_sink: ContextActionProgressSink | None = None,
+        interaction_mode: LeadInteractionMode = LeadInteractionMode.ORCHESTRATION,
+        adoption: ExplorationAdoptionSelection | None = None,
     ) -> LeadTurnResult:
         """Run one ordinary user turn through the canonical lead front channel."""
 
+        if type(interaction_mode) is not LeadInteractionMode:
+            raise TypeError("interaction_mode must be LeadInteractionMode")
+        if adoption is not None and type(adoption) is not ExplorationAdoptionSelection:
+            raise TypeError("adoption must be ExplorationAdoptionSelection")
+        if interaction_mode is LeadInteractionMode.EXPLORATION and adoption is not None:
+            raise ValueError("adoption requires normal orchestration mode")
         self._validate_lead_identity(session_id, conversation_id)
         text = self._validate_visible_text(text, label="lead input")
         self._validate_context_event_sink(context_event_sink)
@@ -3757,6 +3774,39 @@ class StoryRuntime:
             if remaining_recovery is not None:
                 return remaining_recovery
 
+            if interaction_mode is LeadInteractionMode.EXPLORATION or adoption is not None:
+                if projection.current_proposal is not None and projection.current_state in {
+                    CollaborationStepState.AWAITING_CONFIRMATION, CollaborationStepState.RECONFIRMATION_REQUIRED,
+                }:
+                    return LeadTurnResult(session_id, conversation_id,
+                        cast(str, projection.current_turn_id), projection.current_proposal.step_id,
+                        LeadOutcomeKind.PROPOSAL if projection.current_state is CollaborationStepState.AWAITING_CONFIRMATION else LeadOutcomeKind.RECOMMENDATION,
+                        "Resolve the exact pending confirmation before exploration or adoption.",
+                        projection.current_proposal, projection.current_state,
+                        projection.confirmation_request_id, CollaborationNextAction.SUBMIT_CONFIRMATION,
+                        projection.current_proposal.basis.evidence)
+                if projection.current_recommendation_state is LeadRecommendationState.PENDING:
+                    return LeadTurnResult(session_id, conversation_id,
+                        cast(str, projection.current_turn_id), cast(str, projection.current_step_id),
+                        LeadOutcomeKind.RECOMMENDATION,
+                        "Resolve the exact pending recommendation before exploration or adoption.",
+                        None, None, None, CollaborationNextAction.SUBMIT_RECOMMENDATION_DECISION,
+                        recommendation_request=projection.current_recommendation_request)
+            selected_idea = None
+            if adoption is not None:
+                if adoption.source_conversation_id != conversation_id:
+                    raise ValueError("adoption must select an idea in the current focused conversation")
+                sources = tuple(event for event in events if event.event_id == adoption.result_event_id
+                    and type(event.payload) is CollaborationLeadExplorationResultPayload)
+                if len(sources) != 1:
+                    raise ValueError("adoption result is unavailable in the current focus")
+                ideas = tuple(i for i in sources[0].payload.report.ideas if i.idea_id == adoption.idea_id)
+                if len(ideas) != 1 or ideas[0].material_digest != adoption.material_digest:
+                    raise ValueError("adoption does not select the exact whole idea")
+                current_reports = tuple(event for event in events if type(event.payload) is CollaborationLeadExplorationResultPayload)
+                if not current_reports or current_reports[-1].event_id != adoption.result_event_id:
+                    raise ValueError("adoption result is stale in the current focus")
+                selected_idea = ideas[0]
             turn_id = self._new_id("t")
             provider_step_id = self._new_id("s")
             pending_proposal = (
@@ -3783,7 +3833,29 @@ class StoryRuntime:
                 recipient=_LEAD_ACTOR,
                 payload=CollaborationMessagePayload(text),
             )
-            if pending_proposal is not None:
+            exploration_request_event_id = None
+            adoption_event_id = None
+            adoption_capture = None
+            if interaction_mode is LeadInteractionMode.EXPLORATION:
+                request = self._draft(session_id=session_id, conversation_id=conversation_id,
+                    turn_id=turn_id, step_id=provider_step_id,
+                    kind=CollaborationEventKind.LEAD_EXPLORATION_REQUEST,
+                    sender=_USER_ACTOR, recipient=_LEAD_ACTOR,
+                    payload=CollaborationLeadExplorationRequestPayload(user_event.event_id))
+                exploration_request_event_id = request.event_id
+                self._append_drafts(projection.last_sequence, (user_event, request))
+            elif adoption is not None:
+                assert selected_idea is not None
+                adoption_capture = ExplorationAdoptionCapture(user_event.event_id, adoption,
+                    selected_idea.material_text, provider_step_id)
+                capture_event = self._draft(session_id=session_id, conversation_id=conversation_id,
+                    turn_id=turn_id, step_id=provider_step_id,
+                    kind=CollaborationEventKind.EXPLORATION_ADOPTION,
+                    sender=_USER_ACTOR, recipient=_LEAD_ACTOR,
+                    payload=CollaborationExplorationAdoptionPayload(adoption_capture))
+                adoption_event_id = capture_event.event_id
+                self._append_drafts(projection.last_sequence, (user_event, capture_event))
+            elif pending_proposal is not None:
                 superseded = self._draft(
                     session_id=session_id,
                     conversation_id=conversation_id,
@@ -3822,7 +3894,7 @@ class StoryRuntime:
                 self._append_drafts(projection.last_sequence, (user_event,))
 
             try:
-                return await self._run_lead_provider_locked(
+                result = await self._run_lead_provider_locked(
                     session_id=session_id,
                     conversation_id=conversation_id,
                     turn_id=turn_id,
@@ -3832,7 +3904,12 @@ class StoryRuntime:
                     previous_proposal=None,
                     context_event_sink=context_event_sink,
                     action_progress_sink=action_progress_sink,
+                    interaction_mode=interaction_mode,
+                    exploration_request_event_id=exploration_request_event_id,
+                    adoption_capture=adoption_capture,
+                    adoption_event_id=adoption_event_id,
                 )
+                return replace(result, interaction_mode=interaction_mode) if interaction_mode is LeadInteractionMode.EXPLORATION else result
             except BaseException as failure:
                 # Preparation and cancellation may stop before the provider seam
                 # exists. Preserve the original exception after recording closure.
@@ -8755,10 +8832,14 @@ class StoryRuntime:
         action_progress_sink: ContextActionProgressSink | None,
         user_source_text: str | None = None,
         preparation: _RecommendationCapability | None = None,
+        interaction_mode: LeadInteractionMode = LeadInteractionMode.ORCHESTRATION,
+        exploration_request_event_id: str | None = None,
+        adoption_capture: ExplorationAdoptionCapture | None = None,
+        adoption_event_id: str | None = None,
     ) -> LeadTurnResult:
         if self.backend is None:
             raise BackendProtocolError("lead collaboration requires an AgentBackend")
-        ordinary_front_cap = None if preparation is not None else self._ordinary_front_call_cap(session_id, conversation_id)
+        ordinary_front_cap = None if preparation is not None or interaction_mode is LeadInteractionMode.EXPLORATION or adoption_capture is not None else self._ordinary_front_call_cap(session_id, conversation_id)
         successor_only = (
             ordinary_front_cap is not None and ordinary_front_cap < 1
             and preparation is None and previous_proposal is None
@@ -8839,6 +8920,17 @@ class StoryRuntime:
             decision = cast(LeadRecommendationDecisionPayload, preparation.decision_event.payload).decision
             revision = request_scope.task_revision + int(decision.kind is CollaborationConfirmationDecision.REVISE)
             offered_tasks = {(request_scope.task_id, revision): current_scope}
+        if interaction_mode is LeadInteractionMode.EXPLORATION:
+            offered_tasks = {}
+        elif adoption_capture is not None:
+            assert adoption_event_id is not None
+            offered_tasks = {(adoption_capture.fresh_task_id, 1): None}
+            inputs = (*inputs, CollaborationInputRevision(
+                input_id="adopted_idea", kind=CollaborationInputKind.CONVERSATION_EVENT,
+                state=CollaborationInputState.PRESENT,
+                locator=f"conversation/{adoption_event_id}",
+                revision_digest=f"sha256:{adoption_capture.selection.material_digest}",
+            ))
         input_aliases = [
             {
                 "input_id": item.input_id,
@@ -8883,6 +8975,8 @@ class StoryRuntime:
             preparation_specialists=() if preparation_request is None else preparation_request.specialist_ids,
             recommendation_only=is_revision,
         )
+        if interaction_mode is LeadInteractionMode.EXPLORATION:
+            constraints = LeadExplorationConstraints(tuple(item.input_id for item in inputs))
         definition = self._build_guarded_contextual_definition(
             artifact_binding=artifact_binding,
             session_id=session_id,
@@ -8931,7 +9025,7 @@ class StoryRuntime:
                 step_id=step_id,
                 invocation_id=invocation_id,
                 role=LEAD_ORCHESTRATOR,
-                invocation_kind=CollaborationInvocationKind.LEAD,
+                invocation_kind=CollaborationInvocationKind.LEAD_EXPLORATION if interaction_mode is LeadInteractionMode.EXPLORATION else CollaborationInvocationKind.LEAD,
             )
             scope = self._agent_context_service.scope(
                 session_id,
@@ -8984,6 +9078,15 @@ class StoryRuntime:
                     *(item.input_id for item in inputs),
                 ],
             }
+            current_value["interaction_mode"] = interaction_mode.value
+            if interaction_mode is LeadInteractionMode.EXPLORATION:
+                assert exploration_request_event_id is not None
+                for key in ("artifact_objectives", "authoring_tasks", "recommended_action_source_aliases"):
+                    current_value.pop(key, None)
+                current_value["workflow"] = "lead_exploration"
+                current_value["exploration_request"] = {"request_event_id": exploration_request_event_id, "provisional": True}
+            elif adoption_capture is not None:
+                current_value["exploration_adoption"] = adoption_capture_to_dict(adoption_capture)
             if preparation is not None:
                 current_value["structured_recommendation_execution"] = {
                     "request": asdict(preparation.request_event.payload),
@@ -9040,13 +9143,13 @@ class StoryRuntime:
                 mandatory_references=reservations,
                 fresh=False,
                 invocation_kind=ContextInvocationKind.LEAD,
-                result_contract=_lead_front_result_contract(
+                result_contract=(_provider_result_contract("lead-exploration-response-v1", constraints.schema()) if interaction_mode is LeadInteractionMode.EXPLORATION else _lead_front_result_contract(
                     expected_relation,
                     tuple(item.input_id for item in inputs),
                     tuple(offered_tasks),
                     constraints=constraints,
                     fresh_revision_only=successor_only,
-                ),
+                )),
                 physical_call_limit=physical_call_limit,
                 include_core_statuses=True,
                 session_state_json=self._session_context_state(
@@ -9055,6 +9158,7 @@ class StoryRuntime:
                 ),
                 execution_workspace=execution_workspace,
             )
+            decoded_exploration: LeadExplorationReport | None = None
             decoded: LeadProviderOutcome | None = None
             decoded_evidence: CollaborationLeadEvidence | None = None
             decoded_artifact_candidate: ArtifactReviewCandidate | None = None
@@ -9064,14 +9168,41 @@ class StoryRuntime:
             read_reviewers: tuple[tuple[str, str], ...] = ()
 
             def diagnose(answer: str) -> tuple[DomainValidationRule, ...]:
-                return constraints.diagnose(answer, read_ids=read_ids, read_reviewers=read_reviewers) or self._lead_outcome_validation_details(answer)
+                return constraints.diagnose(answer, read_ids=read_ids, read_reviewers=read_reviewers) or (() if interaction_mode is LeadInteractionMode.EXPLORATION else self._lead_outcome_validation_details(answer))
 
             def validate(
                 answer: str,
                 authorization: ContextAnswerAuthorization,
             ) -> None:
-                nonlocal decoded, decoded_artifact_candidate, decoded_evidence
-                nonlocal declared_artifact_intent, prepare_selected, read_ids, read_reviewers
+                nonlocal decoded, decoded_artifact_candidate, decoded_evidence, decoded_exploration
+                nonlocal read_ids, read_reviewers
+                if interaction_mode is LeadInteractionMode.EXPLORATION:
+                    artifact_reads = {item.evidence_id: item for item in authorization.used_evidence if item.source_kind is ContextSourceKind.WRITING_ARTIFACT}
+                    read_ids = tuple(artifact_reads)
+                    if constraints.diagnose(answer, read_ids=read_ids):
+                        raise _LeadOutcomeValidationError("exploration result violates its offered provisional constraints")
+                    value = self._strict_json_object(answer, (frozenset({"kind", "message", "status", "ideas", "grounded_observations"}), frozenset({"kind", "message", "status"})))
+                    ideas = tuple(ExplorationIdea(
+                        idea_id=f"{exploration_request_event_id}:idea:{index + 1}",
+                        kind=ExplorationIdeaKind(item["kind"]), material_text=item["material_text"],
+                        material_digest=material_sha256(item["material_text"]),
+                        basis_input_ids=tuple(item["basis_input_ids"]),
+                    ) for index, item in enumerate(value.get("ideas", ())))
+                    observations = tuple(ExplorationObservation(item["text"], tuple(
+                        ExplorationArtifactRead(
+                            evidence_id=receipt.evidence_id, source_id=receipt.source_id,
+                            locator=receipt.provenance.locator, revision=receipt.revision,
+                            source_digest=receipt.source_digest, boundary_digest=receipt.boundary_digest,
+                            start_line=receipt.boundary.start, end_line=receipt.boundary.end,
+                        ) for receipt in (artifact_reads[evidence_id] for evidence_id in item["evidence_input_ids"])
+                    )) for item in value.get("grounded_observations", ()))
+                    assert provider is not None and provider.last_submitted_call_id is not None
+                    decoded_exploration = LeadExplorationReport(
+                        exploration_request_event_id, provider.last_submitted_call_id,
+                        ExplorationReportStatus(value["status"]), value["message"], ideas, observations,
+                    )
+                    return
+                nonlocal declared_artifact_intent, prepare_selected
                 declared_artifact_intent = self._declares_artifact_intent(answer)
                 prepare_selected = prepare_selected or self._declares_artifact_intent(
                     answer, objective_prepare_only=True,
@@ -9197,6 +9328,15 @@ class StoryRuntime:
                 self._validate_objective_routing(
                     decoded, objective_projection, objective_events, current_task_events,
                 )
+                if adoption_capture is not None:
+                    if (decoded.kind is not LeadOutcomeKind.PROPOSAL or authoring_scope.task_id != adoption_capture.fresh_task_id
+                        or authoring_scope.task_revision != 1 or authoring_scope.intent is not AuthoringIntent.AUTHORING
+                        or authoring_scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
+                        or authoring_scope.target_paths != adoption_capture.selection.target_paths
+                        or decoded.artifact_intent is not None or decoded.objective_intent is not None
+                        or decoded.recommended_action is not None or decoded.proposal is None
+                    or any("adopted_idea" not in assignment.input_ids for assignment in decoded.proposal.assignments)):
+                        raise _LeadOutcomeValidationError("adoption requires a fresh TASK@1 AUTHORING DRAFT/REVISE with the exact chosen targets")
                 if decoded.kind is LeadOutcomeKind.PROPOSAL:
                     if decoded.proposal is not None:
                         if decoded.proposal.relation is not expected_relation:
@@ -9528,29 +9668,30 @@ class StoryRuntime:
                         ),
                     )
             assert result is not None
-            outcome = decoded or self._decode_lead_outcome(
-                result.answer,
-                expected_relation=expected_relation,
-            )
-            evidence = decoded_evidence or self._durable_lead_evidence(
-                outcome,
-                result.authorization,
-                inputs,
-            )
-            outcome = replace(
-                outcome,
-                trace=self._collaboration_reply_trace(
-                    role=LEAD_ORCHESTRATOR,
-                    action=outcome.kind.value,
-                    request=contextual_request,
-                    result=result,
-                    origin=(
-                        ReplyTraceOrigin.RECOVERED
-                        if corrective_rejection_code is not None
-                        else ReplyTraceOrigin.PROVIDER
+            if interaction_mode is not LeadInteractionMode.EXPLORATION:
+                outcome = decoded or self._decode_lead_outcome(
+                    result.answer,
+                    expected_relation=expected_relation,
+                )
+                evidence = decoded_evidence or self._durable_lead_evidence(
+                    outcome,
+                    result.authorization,
+                    inputs,
+                )
+                outcome = replace(
+                    outcome,
+                    trace=self._collaboration_reply_trace(
+                        role=LEAD_ORCHESTRATOR,
+                        action=outcome.kind.value,
+                        request=contextual_request,
+                        result=result,
+                        origin=(
+                            ReplyTraceOrigin.RECOVERED
+                            if corrective_rejection_code is not None
+                            else ReplyTraceOrigin.PROVIDER
+                        ),
                     ),
-                ),
-            )
+                )
             self._finish_reference_operation(reference_operation)
         except _LeadOutcomeValidationError as failure:
             self._fail_reference_operation(reference_operation, failure)
@@ -9723,6 +9864,23 @@ class StoryRuntime:
 
         assert provider is not None
         provider.publish_validation_messages()
+        if interaction_mode is LeadInteractionMode.EXPLORATION:
+            assert decoded_exploration is not None
+            events = services.event_store.read(session_id, conversation_id)
+            projection = project_collaboration_history(events)
+            self._append_drafts(projection.last_sequence, (self._draft(
+                session_id=session_id, conversation_id=conversation_id, turn_id=turn_id, step_id=step_id,
+                kind=CollaborationEventKind.LEAD_EXPLORATION_RESULT,
+                sender=_LEAD_ACTOR, recipient=_USER_ACTOR,
+                payload=CollaborationLeadExplorationResultPayload(decoded_exploration),
+            ),))
+            return LeadTurnResult(
+                session_id=session_id, conversation_id=conversation_id, turn_id=turn_id, step_id=step_id,
+                kind=LeadOutcomeKind.EXPLORATION, message=decoded_exploration.message,
+                proposal=None, state=None, confirmation_request_id=None,
+                next_action=CollaborationNextAction.CONTINUE_WITH_LEAD,
+                interaction_mode=interaction_mode, exploration=decoded_exploration,
+            )
         if outcome.kind is LeadOutcomeKind.PROPOSAL:
             if outcome.artifact_intent is not None:
                 assert decoded_artifact_candidate is not None
@@ -10969,6 +11127,7 @@ class StoryRuntime:
         if turn_id is None or step_id is None or any(
             event.turn_id == turn_id and type(event.payload) in {
                 CollaborationLeadOutcomeFailurePayload, CollaborationLeadJudgmentPayload,
+                CollaborationLeadExplorationResultPayload,
             }
             for event in events
         ):
@@ -10983,7 +11142,7 @@ class StoryRuntime:
             event.payload for event in events
             if event.turn_id == turn_id and event.step_id == step_id
             and type(event.payload) is CollaborationProviderCallPayload
-            and event.payload.invocation_kind is CollaborationInvocationKind.LEAD
+            and event.payload.invocation_kind in {CollaborationInvocationKind.LEAD, CollaborationInvocationKind.LEAD_EXPLORATION}
         )
         if origin is not None and calls and (
             failure is None or context_provider_failure_facts(failure).accounting is None
@@ -13259,6 +13418,32 @@ class StoryRuntime:
                 if not expected.locator.startswith(prefix):
                     raise ValueError("conversation input locator is not canonical")
                 event_id = expected.locator[len(prefix) :]
+                if expected.input_id == "adopted_idea":
+                    captures = tuple(event for event in events if event.event_id == event_id
+                                     and type(event.payload) is CollaborationExplorationAdoptionPayload)
+                    if len(captures) != 1:
+                        raise ValueError("adopted input has no unique durable capture")
+                    captured = captures[0]
+                    capture = captured.payload.capture
+                    scope = proposal.authoring_scope
+                    digest = material_sha256(capture.selected_text)
+                    if (scope is None or scope.task_id != capture.fresh_task_id
+                            or scope.task_revision < capture.task_revision
+                            or captured.session_id != proposal_events[0].session_id
+                            or captured.conversation_id != proposal_events[0].conversation_id
+                            or capture.selection.source_conversation_id != captured.conversation_id
+                            or captured.sender != _USER_ACTOR or captured.recipient != _LEAD_ACTOR
+                            or captured.sequence >= proposal_events[0].sequence
+                            or expected.state is not CollaborationInputState.PRESENT
+                            or expected.start_line is not None or expected.end_line is not None
+                            or digest != capture.selection.material_digest
+                            or expected.revision_digest != f"sha256:{digest}"):
+                        raise ValueError("adopted input changed its exact task, owner or whole material")
+                    current.append(CollaborationInputRevision(
+                        input_id=expected.input_id, kind=expected.kind, locator=expected.locator,
+                        state=CollaborationInputState.PRESENT, revision_digest=f"sha256:{digest}",
+                    ))
+                    continue
                 reply_events = tuple(
                     event
                     for event in events
@@ -14386,7 +14571,7 @@ class StoryRuntime:
                     and event.recipient == _USER_ACTOR
                     and type(event.payload) is CollaborationLeadJudgmentPayload
                 )
-                or (type(event.payload) is CollaborationLeadOutcomeFailurePayload)
+                or type(event.payload) in {CollaborationLeadOutcomeFailurePayload, CollaborationLeadExplorationResultPayload}
             ):
                 marked_turns.add(event.turn_id)
                 continue
@@ -14414,12 +14599,12 @@ class StoryRuntime:
                 and event.sender == _LEAD_ACTOR
                 and event.recipient == _USER_ACTOR
                 and type(event.payload) is CollaborationLeadJudgmentPayload
-            ) or type(event.payload) is CollaborationLeadOutcomeFailurePayload:
+            ) or type(event.payload) in {CollaborationLeadOutcomeFailurePayload, CollaborationLeadExplorationResultPayload}:
                 completed_invocations.add(correlation)
                 continue
             if (
                 type(event.payload) is CollaborationProviderCallPayload
-                and event.payload.invocation_kind is CollaborationInvocationKind.LEAD
+                and event.payload.invocation_kind in {CollaborationInvocationKind.LEAD, CollaborationInvocationKind.LEAD_EXPLORATION}
                 and correlation not in completed_invocations
             ):
                 if event.payload.state is CollaborationProviderCallState.SUBMITTED:
@@ -15051,6 +15236,8 @@ class RuntimeSession:
         context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
         *,
         action_progress_sink: ContextActionProgressSink | None = None,
+        interaction_mode: LeadInteractionMode = LeadInteractionMode.ORCHESTRATION,
+        adoption: ExplorationAdoptionSelection | None = None,
     ) -> LeadTurnResult:
         """Run one ordinary turn through this session's lead front channel."""
 
@@ -15060,6 +15247,8 @@ class RuntimeSession:
             text,
             context_event_sink,
             action_progress_sink=action_progress_sink,
+            interaction_mode=interaction_mode,
+            adoption=adoption,
         )
 
     async def propose_specialist_advisory(

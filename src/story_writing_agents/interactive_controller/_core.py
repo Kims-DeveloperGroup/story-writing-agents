@@ -79,6 +79,7 @@ from ..interactive_auth import (
     InteractiveAuthResultKind,
     select_default_provider,
 )
+from ..lead_exploration import LeadInteractionMode
 from ..interactive_commands import (
     AGENT_ROUTES,
     ActionKind,
@@ -2059,7 +2060,7 @@ class InteractiveController:
 
         if action.kind is ActionKind.IGNORED:
             return False
-        if action.kind is ActionKind.LEAD_INPUT:
+        if action.kind in {ActionKind.LEAD_INPUT, ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT}:
             if self._attached_session_id is None:
                 self._write_error(
                     InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
@@ -2074,7 +2075,8 @@ class InteractiveController:
                 raise _ControllerAbort(
                     InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
                 )
-            assert action.text is not None
+            if action.kind is not ActionKind.LEAD_ADOPT:
+                assert action.text is not None
             adapter = InteractiveLeadAdapter(
                 self._runtime.session(self._attached_session_id),
                 self._runner,
@@ -2092,9 +2094,12 @@ class InteractiveController:
                     )
                 ),
             )
+            if action.kind is ActionKind.LEAD_ADOPT:
+                return adapter.adopt(self._focused_conversation.conversation_id)
             return adapter.submit(
                 self._focused_conversation.conversation_id,
                 action.text,
+                interaction_mode=LeadInteractionMode.EXPLORATION if action.kind is ActionKind.LEAD_EXPLORE else LeadInteractionMode.ORCHESTRATION,
             )
         if action.kind is ActionKind.HELP:
             self._terminal.write_help(action.argument)

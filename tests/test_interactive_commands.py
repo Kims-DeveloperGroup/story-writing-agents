@@ -54,6 +54,8 @@ REMOVED_COMMANDS = (
 EXPECTED_ACTION_KINDS = (
     "ignored",
     "lead_input",
+    "lead_explore",
+    "lead_adopt",
     "list_agents",
     "search",
     "transcript",
@@ -83,6 +85,8 @@ EXPECTED_ACTION_KINDS = (
 )
 
 EXPECTED_COMMANDS = (
+    CommandSpec("Writing", "/explore TEXT", (), True, False, "/explore Explore possible directions"),
+    CommandSpec("Writing", "/adopt", (), True, True, "/adopt"),
     CommandSpec("Agents", "/agents", (), False, False, "/agents"),
     CommandSpec("Agents", "/auth", (), True, True, "/auth"),
     CommandSpec("Agents", "/settings", (), True, True, "/settings"),
@@ -302,6 +306,11 @@ class InteractiveParserRetirementTests(unittest.TestCase):
         for line in removed_inputs:
             with self.subTest(line=line):
                 self.assert_unavailable(line)
+        self.assertEqual(parse_interactive_line("/explore 한글 possibility"), InteractiveAction(ActionKind.LEAD_EXPLORE, text='한글 possibility'))
+        self.assertEqual(parse_interactive_line("/adopt"), InteractiveAction(ActionKind.LEAD_ADOPT))
+        self.assertIs(parse_interactive_line("/explore").kind, ActionKind.PARSE_ERROR)
+        self.assertIs(parse_interactive_line("/adopt unexpected").kind, ActionKind.PARSE_ERROR)
+        self.assertEqual(parse_interactive_line("Explore possible directions."), InteractiveAction(ActionKind.LEAD_INPUT, text='Explore possible directions.'))
 
     def test_run_is_an_ordinary_unknown_command(self) -> None:
         self.assertEqual(

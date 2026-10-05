@@ -1,6 +1,8 @@
 """Exact session memory, recovery, and publication safety using synthetic providers."""
 
 from __future__ import annotations
+from tests.test_lead_orchestration import _exploration_outcome, _visible_outcome
+from story_writing_agents import lead_exploration as exploration
 
 import asyncio
 import json
@@ -222,3 +224,13 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertIn("Synthetic publication verification failure.", _fields(retry.payload["session_history"]))
         self.assertEqual(calls[0].continuation_identity, calls[-1].continuation_identity)
         self.assertNotEqual(calls[0].scope, calls[-1].scope)
+        provisional = self.conversation("Provisional restart")
+        self.backend.enqueue(_exploration_outcome())
+        explored = await self.runtime.lead_turn(self.session_id, provisional, "Explore possible directions.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
+        restarted = StoryRuntime(self.workspace, self.backend)
+        reports = tuple(event.payload.report for event in self.runtime.conversation_storage_services.event_store.read(self.session_id, provisional) if event.kind is CollaborationEventKind.LEAD_EXPLORATION_RESULT)
+        self.assertEqual(reports, (explored.exploration,))
+        self.backend.enqueue(_visible_outcome("answer", "Ordinary workflow remains active."))
+        normal = await restarted.lead_turn(self.session_id, provisional, "Explain the ordinary workflow.")
+        self.assertIs(normal.interaction_mode, exploration.LeadInteractionMode.ORCHESTRATION)
+        self.assertIsNone(normal.exploration)

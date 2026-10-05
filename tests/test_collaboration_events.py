@@ -19,6 +19,7 @@ import story_writing_agents
 import story_writing_agents.conversations as conversations
 import story_writing_agents.conversations.context as context_owner
 import story_writing_agents.conversations.events as events_owner
+from story_writing_agents import lead_exploration as exploration
 from story_writing_agents.agents import (
     CHARACTER_CUSTODIAN,
     LEAD_ORCHESTRATOR,
@@ -194,6 +195,9 @@ class CollaborationValueContractTests(unittest.TestCase):
         self.assertEqual(COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES, 32_768)
         expected = {
             CollaborationEventKind: (
+                'lead_exploration_request',
+                'lead_exploration_result',
+                'exploration_adoption',
                 "message",
                 "assignment_dispatch",
                 "specialist_reply",
@@ -302,6 +306,7 @@ class CollaborationValueContractTests(unittest.TestCase):
             CollaborationTerminalScope: ("assignment", "synthesis"),
             CollaborationInvocationKind: (
                 "lead",
+                "lead_exploration",
                 "specialist_assignment",
                 "lead_synthesis",
                 "specialist_advisory",
@@ -313,6 +318,7 @@ class CollaborationValueContractTests(unittest.TestCase):
             ),
             CollaborationProviderCallState: ("prepared", "submitted"),
             LeadOutcomeKind: (
+                'exploration',
                 "answer",
                 "question",
                 "critique",
@@ -1406,6 +1412,19 @@ class CollaborationWireContractTests(unittest.TestCase):
                 self.assertNotIn("private-sentinel", str(raised.exception))
         with self.assertRaises(TypeError):
             decode_collaboration_proposal("{}")  # type: ignore[arg-type]
+        text = "Synthetic possibility 한글\r\nKeep trailing space. "
+        idea = exploration.ExplorationIdea("idea-current", exploration.ExplorationIdeaKind.ALTERNATIVE, text, hashlib.sha256(text.encode("utf-8")).hexdigest())
+        report = exploration.LeadExplorationReport("request-current", "call-current", exploration.ExplorationReportStatus.IDEAS, "Provisional possibilities.", (idea,))
+        body = exploration.exploration_report_to_dict(report)
+        self.assertEqual(exploration.exploration_report_from_dict(body), report)
+        self.assertEqual(body["ideas"][0]["material_text"].encode("utf-8"), text.encode("utf-8"))
+        with self.assertRaises(ValueError):
+            exploration.exploration_report_from_dict({**body, "proposal": {}})
+        tampered = copy.deepcopy(body)
+        tampered["ideas"][0]["material_digest"] = "0" * 64
+        with self.assertRaises(ValueError):
+            exploration.exploration_report_from_dict(tampered)
+        self.assertEqual(tuple(tuple(item.value for item in enum) for enum in (exploration.LeadInteractionMode, exploration.ExplorationIdeaKind, exploration.ExplorationReportStatus)), (("orchestration", "exploration"), ("hypothesis", "alternative", "short_example"), ("ideas", "clarification")))
 
     def test_unicode_is_not_normalized_and_tampered_digest_is_rejected(self) -> None:
         composed = replace_proposal(make_proposal(), purpose="Café review")

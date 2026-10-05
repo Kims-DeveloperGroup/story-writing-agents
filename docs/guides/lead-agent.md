@@ -3,9 +3,9 @@
 The Lead Orchestrator is the normal user-facing story agent in both the
 interactive shell and Python runtime. Users discuss story work with the lead; they do not need to choose an
 agent for every turn. The lead answers workflow/status questions and asks
-focused clarification questions directly. Substantive story answers, critiques,
-drafting, revision, and review require a bounded proposal covering every
-affected specialist domain. The Lead may first recommend preparing that scoped
+focused clarification questions directly. In ordinary orchestration, substantive
+story answers, critiques, drafting, revision and review require a bounded
+proposal covering every affected specialist domain. The Lead may first recommend preparing that scoped
 proposal; preparation grants no specialist execution authority. For a requested
 story-file change, the lead can also describe a
 provider-neutral edit intent. Runtime code—not the lead provider—resolves that
@@ -117,6 +117,46 @@ content-free accounting facts are plaintext unless the surrounding environment
 protects them. Referenced story bytes are sent to the configured provider when
 that invocation is authorized, and the provider may retain them under its own
 policy.
+
+## Exploration and adoption
+
+Exploration is an explicit user choice for one turn. It lets the Lead compare
+hypotheses, alternatives or short examples while showing the material as
+provisional. The next ordinary message returns to normal orchestration; neither
+history nor a provider response can enable exploration.
+
+From Python, pass the mode through either runtime facade:
+
+```python
+from story_writing_agents.lead_exploration import LeadInteractionMode
+
+result = await session.lead_turn(
+    conversation_id,
+    "Explore two ways to stage the ending.",
+    interaction_mode=LeadInteractionMode.EXPLORATION,
+)
+```
+
+Exploration can use bounded authorized artifact reads. A grounded observation
+about an existing artifact must cite actual read evidence with its exact source,
+revision and range; a search hit, user assertion or provisional idea does not
+establish that evidence. Ideas remain provisional even when they draw on a
+grounded observation.
+
+An exploration result cannot dispatch specialists, prepare a manuscript
+candidate, open or satisfy an authoring objective, Apply a change or Commit.
+Existing pending decisions and recovery conditions retain priority. Restart or
+conversation switching preserves the report's attribution without retaining
+exploration as a standing mode.
+
+Adoption selects one whole idea from a durable result in the current focused
+conversation and session, plus the exact target paths. The runtime checks the
+result and idea identity and material digest, preserves the selected text, and
+starts a fresh task at revision 1. It requires ordinary drafting or revision,
+affected specialist duties, complete review of the same final candidate and a
+new proposal confirmation. Adoption grants no draft, review, Apply or Commit
+authority. Stale, foreign or modified selections are rejected; partial-range
+adoption is outside this interface.
 
 ## The normal workflow
 

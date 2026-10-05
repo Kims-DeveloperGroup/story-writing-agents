@@ -338,6 +338,7 @@ as a string.
 | Contract | Response types and content |
 | --- | --- |
 | `lead-response-v7` (fresh scope3; legacy scope1/2 uses v6) | `answer`, `clarification_question`, `critique`, `proposal_drafting_recommendation`, `specialist_consultation_proposal`, or `artifact_change_proposal`; always includes `response_text` and `writing_task_scope`. |
+| `lead-exploration-response-v1` | Host-selected provisional `lead_exploration`; `status` is `ideas` or `clarification`; no proposal or mutation fields. |
 | `specialist-assignment-response-v3` | `specialist_assignment_result`, `assignment_status`, and `response_text`. |
 | `specialist-assignment-response-v4` | Constraint assignment result with `constraints_assessed`, `concerns_found`, `conflicts_found`, or `insufficient_evidence`; no draft or final-review support. |
 | `consultation-summary-v4` | `consultation_summary` and `response_text`; permitted variants can add `follow_up_consultation` or `proposal_drafting_request`. |
@@ -401,6 +402,55 @@ that list, or use evidence IDs returned by completed authorized READs when the
 current contract permits them. `required_input_source_ids` describes required
 coverage; it is separate from the list of available inputs. A SEARCH hit or an
 earlier draft's event ID does not itself become an assignment input.
+
+### Explicit exploration result contract
+
+The host selects `lead-exploration-response-v1` only for the current user's
+explicit exploration mode. A provider cannot select that mode through prose or
+a normal Lead response. The outer `agent-provider-wire-v10` envelope remains
+the same; an exploration result uses the following closed shape:
+
+```json
+{
+  "agent_action": {
+    "action_type": "submit_result",
+    "task_result": {
+      "response_type": "lead_exploration",
+      "response_text": "Provisional possibilities.",
+      "status": "ideas",
+      "ideas": [
+        {
+          "idea_kind": "alternative",
+          "material_text": "A provisional alternative.",
+          "basis_input_ids": ["user_input"]
+        }
+      ],
+      "grounded_observations": []
+    }
+  }
+}
+```
+
+Idea kinds are `hypothesis`, `alternative` and `short_example`. The host
+assigns idea IDs and material SHA256 digests. A clarification result carries
+`response_type`, `response_text` and `status: "clarification"`, omitting
+both arrays. A grounded observation contains `text` and
+`evidence_input_ids`; its IDs must identify actual authorized artifact READ
+evidence in the current invocation. The host captures exact source, revision,
+range and digests. User input, search hits and provisional material cannot
+supply observation evidence.
+
+Exploration results contain no authoring scope, assignments, recommendation,
+artifact intent, candidate or mutation authority. The existing invocation,
+resource, UTF-8 and physical-call limits still apply.
+
+Explicit adoption enters normal authoring with `task_input.exploration_adoption`
+and the `adopted_idea` input alias. Its conversation-event locator and
+`sha256:` material revision pin the exact current capture; specialist inputs
+preserve the same selected whole text. This is user-selected input, never
+owner-draft or confirmation proof. Only the fresh task at revision 1 is offered,
+and drafting, complete candidate review and independent confirmations remain
+required.
 
 ## Drafting a proposal and tracking a document change
 

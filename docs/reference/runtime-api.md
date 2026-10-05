@@ -473,6 +473,8 @@ await StoryRuntime.lead_turn(
     context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
     *,
     action_progress_sink: ContextActionProgressSink | None = None,
+    interaction_mode: LeadInteractionMode = LeadInteractionMode.ORCHESTRATION,
+    adoption: ExplorationAdoptionSelection | None = None,
 ) -> LeadTurnResult
 
 await StoryRuntime.propose_specialist_advisory(
@@ -534,6 +536,33 @@ from story_writing_agents.conversations import (
 
 They are deliberately not package-root exports.
 
+### Explicit interaction mode and adoption
+
+Import current exploration values from `story_writing_agents.lead_exploration`.
+Both `lead_turn` facades accept keyword-only `interaction_mode` and
+`adoption`. The default is `LeadInteractionMode.ORCHESTRATION`; only an
+explicit current user choice of `EXPLORATION` enables the provisional path.
+History and provider output cannot select the mode.
+
+`ExplorationAdoptionSelection` contains `source_conversation_id`,
+`result_event_id`, `idea_id`, `material_digest` and `target_paths`.
+It selects one whole idea in the current focused conversation and session.
+Pass it as `adoption=` in an ordinary orchestration turn. Combining adoption
+with exploration rejects. The runtime resolves exact durable material and
+creates a fresh revision-1 authoring task; it retains required drafting, final
+candidate review and independent Confirm, Apply and Commit boundaries.
+No partial-range or foreign-conversation adoption is offered.
+A stale, foreign or tampered typed selection raises `ValueError` before a new
+user/capture append or provider call, after pending-decision priority checks.
+
+A `LeadOutcomeKind.EXPLORATION` result exposes its typed `exploration`
+report and `interaction_mode`. Reports contain a request/call-bound status,
+message, immutable ideas and qualified grounded observations. The runtime
+assigns idea identities and material digests. Provisional material cannot be
+used as previous draft or confirmation proof. Pending decisions and recovery
+take priority without starting another provider call.
+See [exploration and adoption](../guides/lead-agent.md#exploration-and-adoption).
+
 ### `LeadTurnResult`
 
 ```python
@@ -556,6 +585,9 @@ LeadTurnResult(
     trace: ReplyTrace | None = None,
     validation_details: tuple[str, ...] = (),
     story_commit_preparation_request: StoryCommitPreparationRequest | None = None,
+    *,
+    interaction_mode: LeadInteractionMode = LeadInteractionMode.ORCHESTRATION,
+    exploration: LeadExplorationReport | None = None,
 )
 ```
 
@@ -1326,6 +1358,8 @@ await RuntimeSession.lead_turn(
     context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
     *,
     action_progress_sink: ContextActionProgressSink | None = None,
+    interaction_mode: LeadInteractionMode = LeadInteractionMode.ORCHESTRATION,
+    adoption: ExplorationAdoptionSelection | None = None,
 ) -> LeadTurnResult
 await RuntimeSession.propose_specialist_advisory(
     conversation_id: str,

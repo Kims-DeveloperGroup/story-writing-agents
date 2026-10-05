@@ -6,6 +6,9 @@ from collections.abc import Iterable, Mapping
 from enum import StrEnum
 
 from ..conversations import (
+    CollaborationLeadExplorationRequestPayload,
+    CollaborationLeadExplorationResultPayload,
+    CollaborationExplorationAdoptionPayload,
     ArtifactObjectivePayload,
     ArtifactObjectivePayloadV2,
     LeadRecommendationRequestPayload,
@@ -156,7 +159,7 @@ def project_lead_turn_result(result: LeadTurnResult) -> Panel:
     )
     items: list[Section | Field | Notice | Message | Record | ListView] = [
         Field("Outcome", result.kind.value),
-        _message("Lead", result.message, role=role),
+        _message("Lead (provisional)" if result.exploration is not None else "Lead", result.message, role=role),
         *_reply_trace_items(result.trace),
     ]
     items.extend(
@@ -164,6 +167,8 @@ def project_lead_turn_result(result: LeadTurnResult) -> Panel:
         for detail in result.validation_details
         for line in detail.split("\n")
     )
+    if result.exploration is not None:
+        items.extend(_exploration_items(result.exploration))
     if result.proposal is not None:
         items.extend(_proposal_items(result.proposal, session_id=result.session_id))
     if result.evidence is not None:
@@ -461,6 +466,14 @@ def collaboration_view_context(
     return references, candidates, proposals
 
 
+def _exploration_items(report: object) -> tuple[Section | Field | Notice | Message | Record | ListView, ...]:
+    return (
+        Notice("Ideas and top message are provisional. Adoption starts fresh author drafting; no execution or writing is authorized.", label="Exploration (provisional)", role=SemanticRole.INFO),
+        *(Section(f"Provisional idea {index + 1}", (Field("Kind", idea.kind.value), _message("Provisional material", idea.material_text), Field("Idea identity", idea.idea_id), Field("Material SHA-256", idea.material_digest))) for index, idea in enumerate(report.ideas)),
+        *(Section("Grounded artifact READ observation", (_message("Observation", observation.text), *(Record("Qualified READ", fields=(Field("Evidence", receipt.evidence_id), Field("Source", receipt.source_id), Field("Locator", receipt.locator), Field("Revision", receipt.revision), Field("Source digest", receipt.source_digest), Field("Boundary digest", receipt.boundary_digest), Field("Range", "whole input" if receipt.start_line is None else f"{receipt.start_line}-{receipt.end_line}"))) for receipt in observation.receipts))) for observation in report.grounded_observations),
+    )
+
+
 def _payload_items(
     payload: object,
     input_references: Mapping[str, str],
@@ -469,6 +482,13 @@ def _payload_items(
     *,
     session_id: str | None = None,
 ) -> tuple[Section | Field | Notice | Message | Record | ListView, ...]:
+    if type(payload) is CollaborationLeadExplorationRequestPayload:
+        return (Field("Interaction mode", "exploration"), Notice("Explicit user-selected one-turn exploration.", label="Exploration (provisional)"))
+    if type(payload) is CollaborationLeadExplorationResultPayload:
+        return (_message("Provisional Lead message", payload.report.message), *_exploration_items(payload.report))
+    if type(payload) is CollaborationExplorationAdoptionPayload:
+        capture = payload.capture
+        return (Field("Selected whole idea", capture.selection.idea_id), Field("Source conversation", capture.selection.source_conversation_id), Field("Source report", capture.selection.result_event_id), Field("Material SHA-256", capture.selection.material_digest), _message("Selected provisional material", capture.selected_text), Field("Target paths", "\n".join(capture.selection.target_paths)), Field("Fresh task", f"{capture.fresh_task_id}@1"), Notice("Input to fresh owner drafting; Confirm, full candidate review, Apply and Commit remain separate.", label="Adoption"))
     if type(payload) in {ArtifactObjectivePayload, ArtifactObjectivePayloadV2}:
         return (
             _message("Artifact objective", payload.facts.request),

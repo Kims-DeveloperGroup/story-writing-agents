@@ -1,6 +1,9 @@
 """End-to-end acceptance tests for the lead-front-channel runtime."""
 
 from __future__ import annotations
+from story_writing_agents.provider_wire import project_result_schema
+from story_writing_agents.lead_provider_contracts import LeadExplorationConstraints
+from story_writing_agents.agent_context.service import ContextJsonObjectResultContract
 
 import asyncio
 import copy
@@ -90,6 +93,7 @@ from story_writing_agents.workspace.initialization import (
     provision_session_resources,
 )
 
+from story_writing_agents import lead_exploration as exploration
 from tests.provider_wire_fixture import answer as wire_answer, contract_id as wire_contract_id, scenario_input, response as wire_response, result as wire_result, assert_guidance, assert_schema_descriptions, capture_sample
 from tests.collaboration_contract_fixture import contract_batches
 from tests.helpers import materialize_pristine_initialized_workspace
@@ -111,6 +115,10 @@ _Response = (
 
 
 _LIVE_CONTEXT = {}
+
+
+def _history_validation_details(history):
+    return tuple(detail for event in history if type(event.payload) is CollaborationMessagePayload for detail in event.payload.validation_details)
 
 
 class _Finalizer:
@@ -626,6 +634,24 @@ def _compact_recommended(value):
         for key in ("kind", "instruction", "source_ids", selector, "objective_id")
         if key in value and value[key] is not None
     }
+
+
+def _exploration_outcome(text="A provisional alternative.", *, observations=(), basis_input_ids=("user_input",)):
+    return json.dumps({"agent_action": {"action_type": "submit_result", "task_result": {
+        "response_type": "lead_exploration", "response_text": "Provisional possibilities.", "status": "ideas",
+        "ideas": [{"idea_kind": "alternative", "material_text": text, "basis_input_ids": list(basis_input_ids)}],
+        "grounded_observations": list(observations)}}}, ensure_ascii=False)
+
+
+def _exploration_native_contract():
+    constraints = LeadExplorationConstraints()
+    contract = ContextJsonObjectResultContract("lead-exploration-response-v1", project_result_schema(constraints.schema(), "lead-exploration-response-v1"))
+    return contract.schema_value(), {"workflow": "lead_exploration", "interaction_mode": "exploration", "exploration_request": {"request_event_id": "native-exploration-request", "provisional": True}, "provider_constraints": constraints.prompt_facts(), "command": "Explore provisional directions.", "input_aliases": []}
+
+
+def _adoption_selection(conversation, event, paths):
+    idea = event.payload.report.ideas[0]
+    return exploration.ExplorationAdoptionSelection(conversation, event.event_id, idea.idea_id, idea.material_digest, paths)
 
 
 def _provider_envelope(call, value, *, used_handles=()):
@@ -1498,6 +1524,15 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 )
                 self.assertIsNone(rejected.proposal)
                 self.assertIn("after one repair attempt", rejected.message)
+        ordinary_conversation = self.conversation("Mode cannot be provider-selected")
+        self.backend.enqueue(_exploration_outcome(), _exploration_outcome())
+        ordinary = await self.runtime.lead_turn(self.session_id, ordinary_conversation, "Explore possible directions.")
+        self.assertEqual(ordinary.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
+        self.assertIsNone(ordinary.exploration)
+        clarification = json.dumps({"agent_action": {"action_type": "submit_result", "task_result": {"response_type": "lead_exploration", "response_text": "Which ending should we explore?", "status": "clarification"}}})
+        self.backend.enqueue(clarification)
+        clarified = await self.runtime.lead_turn(self.session_id, self.conversation("Explicit clarification"), "Explore endings.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
+        self.assertEqual((clarified.kind, clarified.exploration.status, clarified.exploration.ideas), (LeadOutcomeKind.EXPLORATION, exploration.ExplorationReportStatus.CLARIFICATION, ()))
 
     async def test_runtime_constructs_complete_ordered_content_free_proposal(
         self,
@@ -1859,9 +1894,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         submitted = _submitted_calls(history)
         self.assertEqual(len(submitted), 1)
         self.assertEqual(submitted[0].validation_details, ())
-        notices = tuple(detail for event in history
-                        if type(event.payload) is CollaborationMessagePayload
-                        for detail in event.payload.validation_details)
+        notices = _history_validation_details(history)
         self.assertEqual(notices, result.validation_details)
         self.assertEqual(project_collaboration_history(history).physical_calls_spent, 1)
         def rejected(value, path, requirement, error=BackendProtocolError):
@@ -1954,11 +1987,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertEqual(len(self.backend.calls), 2)
         reopened = compose_filesystem_conversation_storage(self.control_workspace).event_store
         history = reopened.read(self.session_id, conversation_id)
-        notices = tuple(
-            detail for event in history
-            if type(event.payload) is CollaborationMessagePayload
-            for detail in event.payload.validation_details
-        )
+        notices = _history_validation_details(history)
         self.assertEqual(len(notices), 1)
         self.assertEqual(notices, result.validation_details)
         self.assertEqual(project_collaboration_history(history).physical_calls_spent, 2)
@@ -2558,9 +2587,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 expected = tuple(chunk for payload in submitted
                                  for chunk in payload.validation_details)
                 self.assertEqual(result.validation_details, expected)
-                notices = tuple(chunk for event in history
-                                if type(event.payload) is CollaborationMessagePayload
-                                for chunk in event.payload.validation_details)
+                notices = _history_validation_details(history)
                 self.assertEqual(notices, expected)
                 self.assertNotIn(private, repr(result.validation_details))
                 self.assertNotIn(private, repr(history))

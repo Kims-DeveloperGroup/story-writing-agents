@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from ..lead_exploration import LeadInteractionMode, LeadExplorationReport
+from .events import (CollaborationLeadExplorationRequestPayload,
+    CollaborationLeadExplorationResultPayload, CollaborationExplorationAdoptionPayload)
+
 import hashlib
 import json
 import re
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Mapping, Protocol
@@ -908,8 +912,25 @@ class LeadTurnResult:
     trace: ReplyTrace | None = None
     validation_details: tuple[str, ...] = ()
     story_commit_preparation_request: StoryCommitPreparationRequest | None = None
+    interaction_mode: LeadInteractionMode = field(default=LeadInteractionMode.ORCHESTRATION, kw_only=True)
+    exploration: LeadExplorationReport | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
+        if type(self.interaction_mode) is not LeadInteractionMode:
+            raise TypeError("interaction mode must be explicit LeadInteractionMode")
+        if self.kind is LeadOutcomeKind.EXPLORATION:
+            if self.interaction_mode is not LeadInteractionMode.EXPLORATION or type(self.exploration) is not LeadExplorationReport:
+                raise ValueError("exploration result requires explicit mode and report")
+            if self.message != self.exploration.message or self.state is not None or self.evidence is not None or self.next_action is not CollaborationNextAction.CONTINUE_WITH_LEAD:
+                raise ValueError("exploration result must preserve its exact provisional report without ordinary authority")
+        elif self.exploration is not None:
+            raise ValueError("ordinary result cannot carry an exploration report")
+        if self.interaction_mode is LeadInteractionMode.EXPLORATION and any((
+            self.proposal, self.confirmation_request_id, self.artifact_proposal,
+            self.artifact_application_request, self.story_commit_request,
+            self.recommendation_request, self.story_commit_preparation_request,
+        )):
+            raise ValueError("exploration cannot carry authoring or mutation authority")
         for value, label in (
             (self.session_id, "session ID"),
             (self.conversation_id, "conversation ID"),
@@ -1082,7 +1103,7 @@ class LeadTurnResult:
                 CollaborationStepState.SUPERSEDED,
             }
         )
-        if provider_judgment and self.evidence is None:
+        if provider_judgment and self.evidence is None and self.kind is not LeadOutcomeKind.EXPLORATION:
             raise ValueError("provider lead result requires exact evidence")
         if (
             self.proposal is not None
@@ -2870,10 +2891,11 @@ def _lead_abandonment_is_safe(
                 unsafe_write = True
         if (event.turn_id == turn_id
             and type(payload) is CollaborationProviderCallPayload
-            and payload.invocation_kind is not CollaborationInvocationKind.LEAD):
+            and payload.invocation_kind not in {CollaborationInvocationKind.LEAD, CollaborationInvocationKind.LEAD_EXPLORATION}):
             return False
         if event.turn_id == turn_id and event.event_id not in origin_event_ids and type(payload) not in {
-            CollaborationMessagePayload, CollaborationProviderCallPayload,
+            CollaborationMessagePayload,
+CollaborationLeadExplorationRequestPayload, CollaborationProviderCallPayload,
             CollaborationLeadOutcomeFailurePayload,
         } and not (
             (type(payload) is CollaborationStepStatePayload
@@ -2901,9 +2923,63 @@ def _lead_abandonment_is_safe(
     )
 
 
+def _validate_exploration_history(events: tuple[CollaborationEventV2, ...]) -> None:
+    prior: dict[str, CollaborationEventV2] = {}
+    exploration_turns: set[str] = set()
+    for event in events:
+        payload = event.payload
+        if event.turn_id in exploration_turns and type(payload) not in {CollaborationMessagePayload, CollaborationLeadExplorationRequestPayload, CollaborationLeadExplorationResultPayload, CollaborationProviderCallPayload, CollaborationLeadOutcomeFailurePayload, CollaborationStepStatePayload}:
+            raise ValueError('exploration history cannot grant normal workflow authority')
+        if type(payload) is CollaborationLeadExplorationRequestPayload:
+            user = prior.get(payload.user_event_id)
+            if user is None or type(user.payload) is not CollaborationMessagePayload or user.sender.kind.value != 'user' or ((user.session_id, user.conversation_id, user.turn_id) != (event.session_id, event.conversation_id, event.turn_id)):
+                raise ValueError('exploration request requires its exact current user input')
+            if event.sender.kind.value != 'user':
+                raise ValueError('only the user selects exploration')
+            exploration_turns.add(event.turn_id)
+        elif type(payload) is CollaborationLeadExplorationResultPayload:
+            request = prior.get(payload.report.request_event_id)
+            if request is None or type(request.payload) is not CollaborationLeadExplorationRequestPayload or (request.session_id, request.conversation_id, request.turn_id, request.step_id) != (event.session_id, event.conversation_id, event.turn_id, event.step_id):
+                raise ValueError('exploration report has no matching explicit request')
+            if event.sender.kind.value != 'lead' or event.sender.agent_id != 'lead_orchestrator':
+                raise ValueError('exploration report requires the Lead actor')
+        elif type(payload) is CollaborationExplorationAdoptionPayload:
+            capture = payload.capture
+            user = prior.get(capture.user_event_id)
+            source = prior.get(capture.selection.result_event_id)
+            if user is None or user.sender.kind.value != 'user' or (user.session_id, user.conversation_id, user.turn_id) != (event.session_id, event.conversation_id, event.turn_id) or (event.sender.kind.value != 'user'):
+                raise ValueError('adoption requires its exact explicit user input')
+            if source is None or type(source.payload) is not CollaborationLeadExplorationResultPayload or source.session_id != event.session_id or (source.conversation_id != event.conversation_id) or (capture.selection.source_conversation_id != event.conversation_id):
+                raise ValueError('adoption source must belong to the current focus')
+            ideas = tuple((i for i in source.payload.report.ideas if i.idea_id == capture.selection.idea_id))
+            if len(ideas) != 1 or ideas[0].material_digest != capture.selection.material_digest or ideas[0].material_text != capture.selected_text:
+                raise ValueError('adoption does not select the exact whole idea')
+            if any((type(item.payload) is CollaborationExplorationAdoptionPayload and item.payload.capture.fresh_task_id == capture.fresh_task_id for item in prior.values())) or any((getattr(item.payload, 'authoring_scope', None) is not None and item.payload.authoring_scope.task_id == capture.fresh_task_id for item in prior.values())):
+                raise ValueError('adoption cannot reuse a previous task')
+            reports = tuple((item for item in prior.values() if type(item.payload) is CollaborationLeadExplorationResultPayload))
+            if not reports or reports[-1].event_id != source.event_id:
+                raise ValueError('adoption cannot select a stale exploration report')
+        if type(payload) is CollaborationProposal and payload.authoring_scope is not None:
+            capture_events = tuple((item for item in prior.values() if type(item.payload) is CollaborationExplorationAdoptionPayload and item.payload.capture.fresh_task_id == payload.authoring_scope.task_id))
+            if capture_events:
+                adopted = capture_events[0]
+                capture = adopted.payload.capture
+                inputs = tuple((i for i in payload.basis.inputs if i.input_id == 'adopted_idea'))
+                if any(('adopted_idea' not in assignment.input_ids for assignment in payload.assignments)):
+                    raise ValueError('every adopted-task assignment must retain the exact chosen idea')
+                if len(inputs) != 1 or inputs[0].locator != f'conversation/{adopted.event_id}' or inputs[0].revision_digest != f'sha256:{capture.selection.material_digest}':
+                    raise ValueError('adopted task must preserve its exact whole-idea input')
+                scope = payload.authoring_scope
+                if scope.task_revision == 1 and (not any((type(item.payload) is CollaborationProposal and item.payload.authoring_scope is not None and (item.payload.authoring_scope.task_id == scope.task_id) for item in prior.values()))):
+                    if scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE} or scope.intent is not AuthoringIntent.AUTHORING or scope.target_paths != capture.selection.target_paths or (payload.budget.rounds_spent != 0):
+                        raise ValueError('adoption requires fresh authoring drafts and exact targets')
+        prior[event.event_id] = event
+
+
 def _project_validated_collaboration_history(
     events: tuple[CollaborationEventV2, ...],
 ) -> CollaborationHistoryProjection:
+    _validate_exploration_history(events)
     artifact_candidates, artifact_states, artifact_reviewed = (
         _project_artifact_review_history(events)
     )
@@ -3111,6 +3187,17 @@ def _project_validated_collaboration_history(
                     running_attempts[event.step_id] = inherited_rounds
                 continue
 
+            if type(payload) is CollaborationLeadExplorationResultPayload:
+                matching = tuple(call for call_event, call in provider_call_events
+                    if call_event.step_id == event.step_id and call_event.turn_id == event.turn_id
+                    and call.invocation_kind is CollaborationInvocationKind.LEAD_EXPLORATION
+                    and call.state is CollaborationProviderCallState.SUBMITTED
+                    and call.call_id == payload.report.provider_call_id)
+                if len(matching) != 1 or matching[0].invocation_id in completed_lead_invocations:
+                    raise ValueError("exploration report requires one actual same-turn submitted call")
+                completed_lead_invocations.add(matching[0].invocation_id)
+                completed_lead_turns.add(event.turn_id)
+                continue
             if type(payload) is CollaborationLeadJudgmentPayload:
                 matching_calls = tuple(
                     (call_event, call)
@@ -3216,7 +3303,7 @@ def _project_validated_collaboration_history(
                     if call_event.step_id == event.step_id
                     and call_event.turn_id == event.turn_id
                     and call.invocation_id == payload.invocation_id
-                    and call.invocation_kind is CollaborationInvocationKind.LEAD
+                    and call.invocation_kind in {CollaborationInvocationKind.LEAD, CollaborationInvocationKind.LEAD_EXPLORATION}
                     and (not rejection or call.state is CollaborationProviderCallState.SUBMITTED)
                 )
                 if event.turn_id in completed_lead_turns:
@@ -3275,6 +3362,8 @@ def _project_validated_collaboration_history(
             }:
                 continue
 
+            if type(payload) in {CollaborationLeadExplorationRequestPayload, CollaborationExplorationAdoptionPayload}:
+                continue
             if proposal is None:
                 raise ValueError(
                     "collaboration work appears before proposal disclosure"
@@ -3720,7 +3809,7 @@ def _project_validated_collaboration_history(
     unmatched_submitted_lead = any(
         call_event.step_id == current_step_id
         and call_event.turn_id == current_turn_id
-        and call.invocation_kind is CollaborationInvocationKind.LEAD
+        and call.invocation_kind in {CollaborationInvocationKind.LEAD, CollaborationInvocationKind.LEAD_EXPLORATION}
         and call.state is CollaborationProviderCallState.SUBMITTED
         and call.invocation_id not in completed_lead_invocations
         for call_event, call in provider_call_events
@@ -3734,7 +3823,7 @@ def _project_validated_collaboration_history(
                  and event.sender.kind.value == "user"
                  and event.recipient.kind.value == "lead")
                 or (type(event.payload) is CollaborationProviderCallPayload
-                    and event.payload.invocation_kind is CollaborationInvocationKind.LEAD)
+                    and event.payload.invocation_kind in {CollaborationInvocationKind.LEAD, CollaborationInvocationKind.LEAD_EXPLORATION})
                 or (type(event.payload) is LeadRecommendationStartedPayload
                     and _recommendation_origin(events, event.turn_id, event.step_id) is not None)
             )
@@ -4968,6 +5057,10 @@ def _collaboration_readable_fields(
         StoryCommitDecisionPayload,
         StoryCommitResultPayload,
     }:
+        return ()
+    if type(payload) in {CollaborationLeadExplorationRequestPayload, CollaborationLeadExplorationResultPayload, CollaborationExplorationAdoptionPayload}:
+        # Provisional history is inspectable, never automatic normal-context evidence.
+        # Adopted bytes enter only through the explicitly captured input alias.
         return ()
     raise TypeError("unsupported collaboration payload")
 

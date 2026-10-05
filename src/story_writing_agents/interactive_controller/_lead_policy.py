@@ -8,7 +8,9 @@ import inspect
 import uuid
 from collections.abc import Awaitable, Callable
 
+from ..lead_exploration import LeadInteractionMode, ExplorationAdoptionSelection
 from ..conversations import (
+    CollaborationLeadExplorationResultPayload,
     ArtifactApplicationDecision,
     ArtifactApplicationDecisionKind,
     ArtifactApplicationDecisionResult,
@@ -29,6 +31,8 @@ from ..conversations import (
 from ..interactive_terminal import (
     AdvisoryProgressRequest,
     Choice,
+    Field,
+    Panel,
     ControlOutcomeKind,
     InteractiveAdvisoryProgress,
     InteractivePickerInput,
@@ -173,7 +177,41 @@ class InteractiveLeadAdapter:
         self._pending_elapsed: str | None = None
         self._pending_specialist_panels: tuple[object, ...] = ()
 
-    def submit(self, conversation_id: str, text: str) -> bool:
+    def adopt(self, conversation_id: str) -> bool:
+        """Bind one visible whole idea and explicit targets to a fresh normal task."""
+        events = self._read_events(conversation_id) if self._read_events is not None else ()
+        reports = tuple(event for event in events if type(event.payload) is CollaborationLeadExplorationResultPayload)
+        if not reports or not reports[-1].payload.report.ideas:
+            self._semantic_output.write_component(Notice("Explore ideas in this focused conversation before adopting one.", label="Exploration (provisional)", role=SemanticRole.INFO))
+            return False
+        source = reports[-1]
+        outcome = self._picker.read_picker(Prompt("Selected whole idea", instruction="Choose one provisional idea from this focused conversation."),
+            tuple(Choice(idea.idea_id, f"{index + 1}. {idea.kind.value}", description=idea.material_text) for index, idea in enumerate(source.payload.report.ideas)))
+        if outcome.kind is ControlOutcomeKind.EOF:
+            return True
+        if outcome.kind is not ControlOutcomeKind.COMMIT or outcome.text is None:
+            return False
+        idea = next((item for item in source.payload.report.ideas if item.idea_id == outcome.text), None)
+        if idea is None:
+            raise BackendProtocolError("selected idea is unavailable in the focused report")
+        targets = self._prompt.read_prompt(Prompt("Target paths", instruction="Enter canonical relative artifact paths, one per line. Adoption starts fresh author drafting and requires Confirm."))
+        if targets.kind is ControlOutcomeKind.EOF:
+            return True
+        if targets.kind is not ControlOutcomeKind.COMMIT or targets.text is None:
+            return False
+        try:
+            selection = ExplorationAdoptionSelection(conversation_id, source.event_id, idea.idea_id, idea.material_digest, tuple(line.strip() for line in targets.text.splitlines() if line.strip()))
+        except (TypeError, ValueError) as failure:
+            self._semantic_output.write_component(Notice(str(failure), label="Target paths", role=SemanticRole.ERROR))
+            return False
+        self._semantic_output.write_component(Panel("Selected whole idea", (Field("Source conversation", conversation_id), Message("Provisional idea", idea.material_text), Field("Target paths", "\n".join(selection.target_paths)))))
+        try:
+            return self.submit(conversation_id, "Draft the selected whole provisional idea for the exact chosen targets.", adoption=selection)
+        except ValueError as failure:
+            self._semantic_output.write_component(Notice(str(failure), label="Adoption refused", role=SemanticRole.ERROR))
+            return False
+
+    def submit(self, conversation_id: str, text: str, *, interaction_mode: LeadInteractionMode = LeadInteractionMode.ORCHESTRATION, adoption: ExplorationAdoptionSelection | None = None) -> bool:
         """Run one literal lead turn; return true only for call-local EOF."""
 
         self._semantic_output.write_component(
@@ -185,6 +223,8 @@ class InteractiveLeadAdapter:
                     conversation_id,
                     text,
                     action_progress_sink=self._progress.observe,
+                    **({"interaction_mode": interaction_mode} if interaction_mode is LeadInteractionMode.EXPLORATION else {}),
+                    **({"adoption": adoption} if adoption is not None else {}),
                 )
             )
             return self._present_and_decide(turn)

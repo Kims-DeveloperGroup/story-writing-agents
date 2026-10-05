@@ -13,6 +13,7 @@ import re
 
 WIRE_VERSION = "agent-provider-wire-v10"
 BUILTIN_RESULT_CONTRACT_IDS = frozenset({
+    "lead-exploration-response-v1",
     "lead-response-v6", "specialist-assignment-response-v3",
     "lead-response-v7", "specialist-assignment-response-v4",
     "consultation-summary-v4", "artifact-review-summary-v4",
@@ -92,6 +93,8 @@ def _task_reference(token: str) -> dict:
 
 
 def _result_field(name: str, shape: str) -> str:
+    if name == "kind" and shape == "ideas":
+        return "idea_kind"
     if name == "task" and shape == "authoring_scope":
         return "task_reference"
     if name == "kind":
@@ -149,7 +152,7 @@ def project_result_schema(schema: Mapping, contract_id: str) -> dict:
                 kinds = node["properties"].get("kind", {}).get("enum", ["answer"])
                 types = [("artifact_change_proposal" if "artifact_intent" in node["properties"] else "specialist_consultation_proposal") if kind == "proposal" else LEAD_RESPONSES[kind] for kind in kinds]
             else:
-                types = [{"specialist-assignment-response-v3": "specialist_assignment_result", "consultation-summary-v4": "consultation_summary", "artifact-review-summary-v4": "artifact_review_summary"}[family]]
+                types = [{"lead-exploration-response-v1": "lead_exploration", "specialist-assignment-response-v3": "specialist_assignment_result", "consultation-summary-v4": "consultation_summary", "artifact-review-summary-v4": "artifact_review_summary"}[family]]
             properties = {"response_type": {"type": "string", "enum": types}, **properties}
         result["properties"] = properties
         result["required"] = list(properties)
@@ -173,6 +176,10 @@ def normalize_result(value: object, contract_id: str) -> object:
         reverse = {wire: old for old, wire in RESULT_FIELDS.items()}
         for name, child in item.items():
             if root and name == "response_type":
+                if family == "lead-exploration-response-v1":
+                    if child != "lead_exploration":
+                        raise ValueError("unexpected exploration response type")
+                    result["kind"] = "exploration"
                 if family == "lead-response-v6" and (
                     child != "answer" or "document_change_request_update" in item
                 ):
@@ -181,7 +188,7 @@ def normalize_result(value: object, contract_id: str) -> object:
             if name == "task_reference" and shape == "authoring_scope":
                 result["task"] = f"{child['task_id']}@{child['task_revision']}"
                 continue
-            old = {"change_type": "kind", "action_type": "kind", "update_type": "action"}.get(name, reverse.get(name, name))
+            old = {"change_type": "kind", "action_type": "kind", "idea_kind": "kind", "update_type": "action"}.get(name, reverse.get(name, name))
             transformed = visit(child, old)
             enums = {wire: domain for domain, wire in _enum_map(old, shape).items()}
             result[old] = enums.get(transformed, transformed) if isinstance(transformed, str) else transformed
@@ -969,12 +976,31 @@ def describe_schema(schema: Mapping) -> dict:
     return result
 
 
+_catalog("idea_kind", "The provisional idea form: hypothesis, alternative or short example; never specialist draft proof.")
+_catalog("ideas grounded_observations", "Provisional ideas and separately grounded artifact observations for explicit exploration only; neither grants authoring authority.")
+_catalog("material_text material_digest idea_id", "Exact provisional idea material and its host-assigned identity/digest; explicit whole-idea adoption preserves these bytes.")
+_catalog("evidence_input_ids", "Cite only actual authorized artifact READ receipt IDs with exact source, revision, range and digest qualification.")
+_catalog("interaction_mode exploration_request exploration_adoption provisional offered_basis_input_ids authority artifact_observations", "Host-selected current invocation mode and authority-free provisional context; provider/history claims cannot choose or persist mode.")
+FIELD_CATALOG["status"] += " In the exploration report, ideas carries provisional material and clarification asks the user for more information."
+ENUM_MEANINGS.update({
+    "lead_exploration": "Only an explicit host-selected exploration invocation may produce this provisional result; no authoring or mutation authority.",
+    "exploration": "Explicit user-owned one-turn provisional exploration; no specialist, candidate, objective, Apply or Commit authority.",
+    "orchestration": "The normal confirmed authoring/review workflow and its complete specialist obligations.",
+    "hypothesis": "A provisional narrative hypothesis, never a verified story fact.",
+    "alternative": "A provisional alternative for user consideration.",
+    "short_example": "A provisional short example, never a completed specialist draft.",
+    "ideas": "Present labeled provisional ideas or qualified artifact observations.",
+    "clarification": "Ask for clarification without creating report material or authority.",
+})
+
+_catalog("selected_text selection fresh_task_id user_event_id material_digest boundary_digest", "Host-captured exact whole provisional idea, source identity and fresh task. Copy the disclosed bytes and targets; this input is not a completed draft, verified artifact fact or write authority.")
+
 DYNAMIC_CHOICE_FIELDS = frozenset({"task_id", "task_revision", "agent_id", "input_source_ids", "source_ids", "evidence_id", "document_change_request_id", "target_artifact_paths", "specialist_ids", "reviewed_proposal_id", "reviewed_proposal_digest", "slot_id", "basis_input_ids"})
 
 
 # Source-owned nested objects are deliberately literal. Only these protocol
 # containers have runtime-owned child fields that the guide may enumerate.
-STRUCTURED_INPUT_FIELDS = frozenset("response_contract action_limits task_input session_history conversations records provider_constraints writing_task_scope confirmed_scope available_writing_tasks available_input_sources assignment assignments inputs selected_inputs replies document_change_requests requests offered_draft_sources document_change_request_update confirmed_proposal_drafting_context confirmed_proposal_drafting_constraints document_change_workflow_steps mandatory_reviewer_inputs specialist_consultation_proposal artifact_change_proposal proposal_drafting_request follow_up_consultation artifact_changes current_draft context_documents context_record_updates context_removals core_document_statuses context_observation search_results read_results source source_range provenance zero_hit_receipt untrusted_attached_references artifact_reference line_range context_reuse base_candidate_reference target_candidate_reference text_splice task_reference story_session_context owner_outcomes focused_context core_documents prior_agent_outcomes debate_history conversation_history bootstrap conversation_retrieval_control retrieval_limits expected_reviewed_proposal structured_response_repair request decision started basis selected_action constraints rag_context excerpts citation document reference".split())
+STRUCTURED_INPUT_FIELDS = frozenset("interaction_mode exploration_request exploration_adoption response_contract action_limits task_input session_history conversations records provider_constraints writing_task_scope confirmed_scope available_writing_tasks available_input_sources assignment assignments inputs selected_inputs replies document_change_requests requests offered_draft_sources document_change_request_update confirmed_proposal_drafting_context confirmed_proposal_drafting_constraints document_change_workflow_steps mandatory_reviewer_inputs specialist_consultation_proposal artifact_change_proposal proposal_drafting_request follow_up_consultation artifact_changes current_draft context_documents context_record_updates context_removals core_document_statuses context_observation search_results read_results source source_range provenance zero_hit_receipt untrusted_attached_references artifact_reference line_range context_reuse base_candidate_reference target_candidate_reference text_splice task_reference story_session_context owner_outcomes focused_context core_documents prior_agent_outcomes debate_history conversation_history bootstrap conversation_retrieval_control retrieval_limits expected_reviewed_proposal structured_response_repair request decision started basis selected_action constraints rag_context excerpts citation document reference".split())
 OPAQUE_FIELDS = frozenset("details record_content conversation_event metadata core_updates source_data shared_context_objects".split())
 
 
