@@ -1402,10 +1402,10 @@ class ControllerContractTests(ControllerTestCase):
                             (ast.FunctionDef, ast.AsyncFunctionDef),
                         )
                     )
-            for node in callable_nodes:
-                with self.subTest(module=module_name, callable=node.name):
-                    self.assertTrue(ast.get_docstring(node))
-                    self.assertNotIn(node.name.strip("_"), generic_names)
+            with self.subTest(callable_contracts=module_name):
+                for node in callable_nodes:
+                    self.assertTrue(ast.get_docstring(node), node.name)
+                    self.assertNotIn(node.name.strip("_"), generic_names, node.name)
 
     def test_direct_import_is_clean_and_package_graph_is_acyclic(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
