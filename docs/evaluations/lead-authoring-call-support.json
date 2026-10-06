@@ -9,11 +9,12 @@
     "python": "CPython 3.11.16",
     "tracked_input_entries": 520,
     "tracked_input_bytes_unchanged": true,
-    "canonical_test_source_characters": 142472,
-    "canonical_test_source_cap": 142474,
     "canonical_ids": 2527,
     "test_methods_added": 0,
-    "runtime_test_configuration_edits": false
+    "runtime_test_configuration_edits": false,
+    "canonical_test_source_lines": 142472,
+    "canonical_test_source_line_cap": 142474,
+    "canonical_test_source_line_definition": "Nonblank, noncomment lines in tests/test*.py, as counted by tests.suite_budget.check_source_scope; not characters."
   },
   "accounting": {
     "unit": "unique durable provider_call_accounting events in SUBMITTED state by (invocation_id, call_id)",
@@ -736,12 +737,6 @@
     }
   ],
   "reproduction": {
-    "public_api_steps": [
-      "RuntimeSession.lead_turn",
-      "Runtime.decide_lead_step(CONFIRM)",
-      "Runtime.decide_lead_recommendation(CONFIRM)",
-      "Runtime.decide_artifact_application(REJECT)"
-    ],
     "fixture_helpers": "LeadOrchestrationTestCase setUp/doCleanups; typed existing provider-wire fixtures. No canonical test method was executed by these drivers.",
     "fixture_helper_sha256": {
       "tests/test_lead_orchestration.py": "024a79bbe8999bd3fc622024eadfd8574018481dd9fcdba6d4b4eaa65a4c751e",
@@ -752,7 +747,73 @@
       "tests/test_lead_artifact_application.py": "b66c0f352c01558a2fee538c6d1271edaafe5ebed529f7f2a4822a9a6050bfa8"
     },
     "private_driver_and_capture_location": "Root-owned local evidence directory; raw transcripts and executable private drivers are not published as canonical tests. Retained hashes and submitted ledger permit identity/accounting audit, not standalone real-provider reproduction.",
-    "canonical_supporting_evidence": "Issue819 PR824 local full CI: same runtime/test tree before these docs; 2527 completed,2506 passed,21 live-provider skips. This is prior-source evidence, not a new full-CI run on the docs commit."
+    "canonical_supporting_evidence": "Issue819 PR824 local full CI: same runtime/test tree before these docs; 2527 completed,2506 passed,21 live-provider skips. This is prior-source evidence, not a new full-CI run on the docs commit.",
+    "ordered_public_api_sequences": [
+      {
+        "observation_id": "uc1-02",
+        "steps": [
+          {
+            "phase": "existing_manuscript_revision_request",
+            "api": "RuntimeSession.lead_turn",
+            "decision_or_input": "request all-three-domain revision of existing nonempty manuscript",
+            "expected_observed_return": "budget-floor ANSWER refusal; no confirmable proposal"
+          }
+        ]
+      },
+      {
+        "observation_id": "fresh-revision-new-output-01",
+        "steps": [
+          {
+            "phase": "initial_draft_proposal",
+            "api": "RuntimeSession.lead_turn",
+            "decision_or_input": "request initial new-output draft; task revision1",
+            "fresh_revision": false
+          },
+          {
+            "phase": "initial_draft_confirm",
+            "api": "Runtime.decide_lead_step",
+            "decision_or_input": "CONFIRM",
+            "fresh_revision": false
+          },
+          {
+            "phase": "fresh_revision_recommendation",
+            "api": "RuntimeSession.lead_turn",
+            "decision_or_input": "request host-offered same-task revision2 from exact historical draft",
+            "fresh_revision": true
+          },
+          {
+            "phase": "fresh_consultation_preparation_confirm",
+            "api": "Runtime.decide_lead_recommendation",
+            "decision_or_input": "CONFIRM PREPARE_CONSULTATION",
+            "fresh_revision": true
+          },
+          {
+            "phase": "fresh_draft_confirm",
+            "api": "Runtime.decide_lead_step",
+            "decision_or_input": "CONFIRM current drafting proposal",
+            "fresh_revision": true
+          },
+          {
+            "phase": "artifact_preparation_confirm",
+            "api": "Runtime.decide_lead_recommendation",
+            "decision_or_input": "CONFIRM PREPARE_ARTIFACT",
+            "fresh_revision": true
+          },
+          {
+            "phase": "all_domain_final_review_confirm",
+            "api": "Runtime.decide_lead_step",
+            "decision_or_input": "CONFIRM exact-candidate REVIEW proposal",
+            "fresh_revision": true
+          },
+          {
+            "phase": "apply_reject",
+            "api": "Runtime.decide_artifact_application",
+            "decision_or_input": "REJECT",
+            "fresh_revision": true
+          }
+        ]
+      }
+    ]
   },
   "limits": [
     "Only one representative PRESENT-READ matrix row was executed; the other15 rows are static predictions.",
