@@ -278,7 +278,7 @@ live composition, reference activation, collaboration presentation, and the term
 Presentation modules may consume public runtime/domain contracts but never own runtime state.
 Collaboration notices render bounded validation details and scope-v3 duties, dependency choices and qualified
 captured sources before confirmation without owning runtime authority.
-The external viewer integration is lazy. `transient_only` refuses line fallback before content is rendered; `ExternalViewUnavailableError` identifies that refusal. Borrowed plain-line hosts remain for views that allow fallback. The driver owns timed viewer input polling; the persistent input reader owns partial decoding across idle intervals. Private model/render/control modules are not APIs.
+The external viewer integration is lazy. `transient_only` refuses line fallback before content is rendered; `ExternalViewUnavailableError` identifies that refusal. Borrowed plain-line hosts remain for views that allow fallback. The driver owns timed viewer input polling, scoped lobby echo suppression, and temporary default SIGTERM/SIGHUP dispositions through original-terminal restoration; required signal ownership is acquired on the main thread. Individual reads retain noncanonical-mode ownership, and the persistent reader owns partial decoding across idle intervals. `InteractiveInputLifecycle` lends original terminal settings to native login and restores them after lobby cleanup. Private model/render/control modules are not APIs.
 
 ### Interactive support
 
@@ -290,6 +290,7 @@ interactive settings. These adapters are composed by the controller and terminal
 
 `interactive_commands` is re-exported selectively by the root facade. Authentication and
 settings modules may use provider/config/workspace owners but must not own their state.
+The authentication coordinator borrows `InteractiveInputLifecycle` only around native login; terminal settings remain driver-owned.
 
 ## Maintenance checks
 

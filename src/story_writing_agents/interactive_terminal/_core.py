@@ -574,6 +574,8 @@ class InteractiveTerminal:
         "_advisory_progress",
         "_debate_progress",
         "_external_view_open",
+        "_input_session",
+        "_native_input_handoff",
         "_live_composer",
         "_read_line",
         "_width",
@@ -609,6 +611,12 @@ class InteractiveTerminal:
         if width < 20:
             raise ValueError("width must be at least 20")
         self._accepted_input_write: Callable[[str], None] = lambda _text: None
+        self._input_session: Callable[[], contextlib.AbstractContextManager[None]] = (
+            contextlib.nullcontext
+        )
+        self._native_input_handoff: Callable[
+            [], contextlib.AbstractContextManager[None]
+        ] = contextlib.nullcontext
         self._read_line = read_line
         self._main_read_line = read_line if main_read_line is None else main_read_line
         self._main_choice_read_line = (
@@ -1484,6 +1492,28 @@ class InteractiveTerminal:
 
         self._write_text("\n")
         self._write_component(notice)
+
+
+class InteractiveInputLifecycle:
+    """Bind scoped Story input and temporary native terminal ownership."""
+
+    __slots__ = ("_session", "_native_handoff")
+
+    def __init__(self, terminal: InteractiveTerminal) -> None:
+        if not isinstance(terminal, InteractiveTerminal):
+            raise TypeError("terminal must be an InteractiveTerminal")
+        self._session = terminal._input_session
+        self._native_handoff = terminal._native_input_handoff
+
+    def session(self) -> contextlib.AbstractContextManager[None]:
+        """Keep Story input transient through the complete lobby lifecycle."""
+
+        return self._session()
+
+    def native_handoff(self) -> contextlib.AbstractContextManager[None]:
+        """Temporarily give native login the original terminal settings."""
+
+        return self._native_handoff()
 
 
 class InteractiveSemanticOutput:
@@ -2920,6 +2950,8 @@ def build_stream_terminal(
         main_read_line=lambda prompt: read_main_command_line(driver, prompt),
     )
     terminal._accepted_input_write = driver.write_accepted_input
+    terminal._input_session = driver.input_session
+    terminal._native_input_handoff = driver.native_input_handoff
     terminal._main_choice_read_line = lambda prompt, provider: (
         read_main_command_line(
             driver,
