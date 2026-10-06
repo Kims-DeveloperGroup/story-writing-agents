@@ -16,7 +16,6 @@ import tempfile
 import time
 import unittest
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -1426,61 +1425,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
             process.normalized_text,
         )
 
-    def _create_conversation(
-        self,
-        process: PtyCliProcess,
-        *,
-        session_id: str = "alpha",
-        subject: str = "Harbor planning",
-    ) -> ConversationMetadata:
-        """Create one conversation through an already-authorized CLI process."""
 
-        mark = process.output_mark()
-        process.send_line(f"/conversation new {subject}")
-        process.wait_for_text(f"Subject: {subject}", after=mark)
-        process.wait_for_text(f"story[{session_id}]> ", after=mark)
-        catalog = FilesystemConversationCatalog(self.workspace)
-        matches = tuple(
-            metadata
-            for metadata in catalog.list(session_id)
-            if metadata.subject == subject
-        )
-        self.assertEqual(len(matches), 1)
-        return matches[0]
-
-    def _seed_filesystem_reference_artifacts(
-        self,
-    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-        """Write current canonical and ineligible files without publication state."""
-
-        contents = {
-            "core_documents/character_sheets.md": "characters\ncontinuity\n",
-            "core_documents/global_outline.md": "",
-            "core_documents/narrative_rules.md": "rules\nvoice\n",
-            "core_documents/part_outlines.md": "parts\npart one\n",
-            "manuscript/-older/chapter.md": "older\n",
-            "manuscript/Part_A/scenes/opening.md": "opening\n",
-            "manuscript/older drafts/{世界$ 章#1.md": "world\nscene\n",
-            "manuscript/part-01/scene.md": "scene one\n",
-            "manuscript/root.md": "root manuscript\n",
-            "manuscript/volume_2/ending.md": "ending\n",
-        }
-        excluded = {
-            "agent_states/file-picker/internal.md": "internal\n",
-            "agent_states/orchestrator_state/context_ledger/v1/checkpoint.json": (
-                "content-free internal ledger\n"
-            ),
-            "core_documents/extra.md": "extra\n",
-            "manuscript/bad}.md": "unsafe delimiter\n",
-            "manuscript/chapter.MD": "unsupported suffix\n",
-            "manuscript/part-01/.gitkeep": "",
-            "manuscript/part-01/notes.txt": "unsupported\n",
-        }
-        for relative, content in (contents | excluded).items():
-            target = self.workspace.root / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
-        return tuple(sorted(contents)), tuple(sorted(excluded))
 
     def _spawn_cli(
         self,
@@ -1622,11 +1567,12 @@ class InteractiveCliPtyTests(unittest.TestCase):
 
 
 
-    def _exercise_external_library_pty(self, *, edit_query: bool) -> None:
-        gate = self.temporary_root / ("viewer-ready-edited" if edit_query else "viewer-ready")
+    def _exercise_external_library_pty(self, *, edit_query: bool, termination_signal: int | None = None) -> None:
+        gate = self.temporary_root / f"viewer-ready-{edit_query}-{termination_signal}"
         source = r'''
 import json
 import os
+import signal
 import sys
 import time
 from pathlib import Path
@@ -1637,6 +1583,8 @@ source = b"".join((json.dumps({"content": "개요 개요 " + str(i)}, ensure_asc
 original = bytes(source)
 operation = prepare_agent_exchange_view(source, session_id="s", scope_kind=AgentExchangeScopeKind.CONVERSATION, scope_id="c", scope_subject="Subject", agent_id="lead_orchestrator")
 terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+for signum in (signal.SIGTERM, signal.SIGHUP):
+    signal.signal(signum, signal.SIG_DFL)
 lifecycle = InteractiveInputLifecycle(terminal)
 with lifecycle.session():
     assert terminal.read_main().text == "seed"
@@ -1670,6 +1618,13 @@ print(f"SHELL_VALUE={input('shell> ')}")
         flags = termios.tcgetattr(process.master_fd)[3]
         self.assertFalse(flags & (termios.ECHO | termios.ECHONL))
         self.assertTrue(flags & termios.ICANON)
+        if termination_signal is not None:
+            os.kill(process.process.pid, termination_signal)
+            self.assertEqual(process.wait_for_exit(), -termination_signal)
+            self.assertEqual(process.final_terminal_attributes, process.original_terminal_attributes)
+            self.assertEqual(_durable_tree(self.workspace.root), before)
+            self.assertFalse(self.provider_log.exists())
+            return
         mark = process.output_mark()
         process.send_bytes(b"/exchanges\n\n")
         select.select((process.master_fd,), (), (), 0.05)
@@ -1795,6 +1750,8 @@ print(f"SHELL_VALUE={input('shell> ')}")
         """Cover retained conversation management and main-input cleanup."""
         for edit_query in (False, True):
             self._exercise_external_library_pty(edit_query=edit_query)
+        for signum in (signal.SIGTERM, signal.SIGHUP):
+            self._exercise_external_library_pty(edit_query=False, termination_signal=signum)
         for provider in ("codex", "antigravity"):
             self._assert_auth_code_returns_to_story(provider)
 
