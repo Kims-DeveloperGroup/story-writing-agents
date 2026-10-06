@@ -8,6 +8,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from contextlib import contextmanager
 from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
 
@@ -522,11 +523,31 @@ class InteractiveAuthCoordinatorTests(unittest.TestCase):
         harness = TerminalHarness(
             ControlOutcome(ControlOutcomeKind.COMMIT, text="codex")
         )
+        handoff_events = []
+        @contextmanager
+        def native_handoff():
+            handoff_events.append("enter")
+            try:
+                yield
+            finally:
+                handoff_events.append("exit")
+        harness.terminal._native_input_handoff = native_handoff
+        original_login = auth.login
+        def login(provider):
+            self.assertEqual(handoff_events, ["enter"])
+            return original_login(provider)
+        auth.login = login
+        original_probe = auth.probe_all
+        def probe_all():
+            self.assertEqual(handoff_events, ["enter", "exit"])
+            return original_probe()
+        auth.probe_all = probe_all
         coordinator = harness.coordinator(auth)
         result = coordinator.run(initial)
 
         self.assertEqual(result.kind, InteractiveAuthResultKind.AUTHENTICATED)
         self.assertIs(result.snapshot, refreshed)
+        self.assertEqual(handoff_events, ["enter", "exit"])
         self.assertEqual(result.status, refreshed.status_for("codex"))
         self.assertEqual(
             auth.events,
@@ -543,6 +564,11 @@ class InteractiveAuthCoordinatorTests(unittest.TestCase):
         rendered = repr((notice, result_notice))
         for secret in ("27", "account", "token", "https://"):
             self.assertNotIn(secret, rendered)
+        handoff_events.clear()
+        auth.login_results.append(KeyboardInterrupt("native sign-in interrupted"))
+        with self.assertRaises(KeyboardInterrupt):
+            coordinator._login("codex")
+        self.assertEqual(handoff_events, ["enter", "exit"])
 
         stale_success = snapshot(
             ProviderAuthState.UNAUTHENTICATED,

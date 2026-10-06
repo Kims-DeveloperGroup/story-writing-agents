@@ -41,6 +41,7 @@ from story_writing_agents.interactive_terminal import (
     InteractiveErrorCode,
     InteractiveErrorSpec,
     InteractiveMainInput,
+    InteractiveInputLifecycle,
     InteractivePromptInput,
     InteractiveStartupPresentation,
     InteractiveTerminal,
@@ -450,6 +451,8 @@ class PublicCompatibilityFoundationTests(unittest.TestCase):
         self.assertNotIn("InteractiveMainCommitCleanup", terminal_facade.__all__)
         self.assertFalse(hasattr(terminal_facade, "InteractiveMainCommitCleanup"))
         self.assertFalse(hasattr(_core, "InteractiveMainCommitCleanup"))
+        self.assertIs(terminal_facade.InteractiveInputLifecycle, _core.InteractiveInputLifecycle)
+        self.assertNotIn("InteractiveInputLifecycle", terminal_facade.__all__)
 
     def test_public_signatures_remain_exact(self) -> None:
         positional = inspect.Parameter.POSITIONAL_OR_KEYWORD
@@ -591,6 +594,9 @@ class PublicCompatibilityFoundationTests(unittest.TestCase):
         for value, expected_shape in expected.items():
             with self.subTest(value=getattr(value, "__qualname__", repr(value))):
                 self.assertEqual(shape(value), expected_shape)
+        self.assertEqual(shape(InteractiveInputLifecycle), (("terminal", positional, required),))
+        self.assertEqual(shape(InteractiveInputLifecycle.session), ())
+        self.assertEqual(shape(InteractiveInputLifecycle.native_handoff), ())
 
     def test_public_values_pickle_and_preserve_isinstance_compatibility(self) -> None:
         samples = (

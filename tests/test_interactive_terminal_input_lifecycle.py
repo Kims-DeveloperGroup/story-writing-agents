@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import codecs
+import signal
 import unittest
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from unittest import mock
 
+from story_writing_agents.interactive_terminal import InteractiveInputLifecycle, InteractiveTerminal
+from story_writing_agents.interactive_terminal._controls import (
+    append_main_input_history, transition_line_input, transition_main_command_input,
+)
 from story_writing_agents.interactive_terminal import _input_lifecycle as lifecycle
 from story_writing_agents.interactive_terminal import _driver as driver_module
 from story_writing_agents.interactive_terminal._driver import (
@@ -91,6 +98,20 @@ def _live_capabilities(
 
 class _TermiosIdentity:
     PENDIN = 16
+    ECHO = 8
+    ECHONL = 32
+    ICANON = 2
+    TCSANOW = 10
+    TCSADRAIN = 11
+
+    def __init__(self):
+        self.attributes = [0, 0, 0, self.ICANON | self.ECHO | self.ECHONL, 0, 0, [b"\x04", b"\x03"]]
+        self.calls = []
+
+    def tcsetattr(self, descriptor, when, attributes):
+        self.calls.append((descriptor, when))
+        self.attributes = list(attributes)
+        self.attributes[6] = list(attributes[6])
 
 
 def _configuration(
@@ -135,6 +156,36 @@ def _resource_free_driver(
         os_provider=mock.Mock(name="os_provider"),
     )
     return driver, input_stream, output_stream
+
+
+@contextmanager
+def _session_driver(*chunks):
+    stream = _ByteBackedInput(*chunks)
+    termios = _TermiosIdentity()
+    fallback, output = mock.Mock(), mock.Mock()
+    output.write.side_effect = len
+    driver = RawTerminalDriver(fallback, stream, output, transition_line_input,
+                               transition_main_command_input, append_main_input_history)
+    with (
+        mock.patch.object(RawTerminalDriver, "capabilities", return_value=_live_capabilities()),
+        mock.patch.object(driver_module, "_terminal_configuration", side_effect=lambda *_a, **_k: _configuration(termios, local_flags=termios.attributes[3])),
+    ):
+        yield driver, termios, stream, output, fallback
+
+
+@contextmanager
+def _signal_state(disposition):
+    selected = (getattr(signal, name) for name in ("SIGTERM", "SIGHUP") if hasattr(signal, name))
+    state = {signal.SIGINT: lambda *_args: None, **{signum: disposition for signum in selected}}
+    def install(signum, handler):
+        previous = state[signum]
+        state[signum] = handler
+        return previous
+    with (
+        mock.patch.object(signal, "getsignal", side_effect=state.__getitem__),
+        mock.patch.object(signal, "signal", side_effect=install),
+    ):
+        yield state
 
 
 class DecoderAdmissionTests(unittest.TestCase):
@@ -423,6 +474,48 @@ class InputLatchAndDriverTests(unittest.TestCase):
                 raise ValueError("primary")
         with latch.input_operation():
             pass
+        for failure in (None, KeyboardInterrupt("interrupt"), EOFError("eof"), ValueError("operation")):
+            with _session_driver(b"s", b"e", b"e", b"d", b"\n", b"\x03", b"\x04", b"") as (driver, termios, _stream, _output, fallback), _signal_state(signal.SIG_DFL) as signals:
+                original = list(termios.attributes)
+                original_signals = dict(signals)
+                try:
+                    with driver.input_session():
+                        guarded = list(termios.attributes)
+                        guarded_signals = dict(signals)
+                        self.assertTrue(all(callable(handler) for handler in signals.values()))
+                        self.assertIs(signals[signal.SIGINT], original_signals[signal.SIGINT])
+                        self.assertEqual(guarded[3], termios.ICANON)
+                        self.assertEqual(driver.read_main_line("main> ", lambda _text: ()), "seed")
+                        self.assertEqual(termios.attributes, guarded)
+                        for control in (KeyboardInterrupt, EOFError, EOFError):
+                            with self.assertRaises(control):
+                                driver.read_line("control> ")
+                            self.assertEqual(termios.attributes, guarded)
+                        with self.assertRaisesRegex(RuntimeError, "session is already active"):
+                            with driver.input_session():
+                                pass
+                        with driver.native_input_handoff():
+                            self.assertEqual(termios.attributes, original)
+                            self.assertEqual(signals, guarded_signals)
+                            with self.assertRaisesRegex(RuntimeError, "handoff is already active"):
+                                with driver.native_input_handoff():
+                                    pass
+                            with self.assertRaisesRegex(RuntimeError, "suspended"):
+                                driver.read_line("forbidden> ")
+                        self.assertEqual(termios.attributes, guarded)
+                        self.assertEqual(signals, guarded_signals)
+                        if failure is not None:
+                            raise failure
+                except BaseException as raised:
+                    self.assertIs(raised, failure)
+                else:
+                    self.assertIsNone(failure)
+                self.assertEqual(termios.attributes, original)
+                self.assertEqual(signals, original_signals)
+                self.assertFalse(driver._input_session_active)
+                fallback.assert_not_called()
+                with driver.native_input_handoff():
+                    self.assertEqual(termios.attributes, original)
 
     def test_driver_construction_does_not_inspect_resources(self) -> None:
         fallback = mock.Mock(return_value="unused")
@@ -433,6 +526,25 @@ class InputLatchAndDriverTests(unittest.TestCase):
         fallback.assert_not_called()
         driver._termios_provider.assert_not_called()
         driver._os_provider.assert_not_called()
+        read, write = mock.Mock(), mock.Mock()
+        lifecycle = InteractiveInputLifecycle(InteractiveTerminal(read, write))
+        with lifecycle.session(), lifecycle.native_handoff():
+            pass
+        read.assert_not_called()
+        write.assert_not_called()
+        with self.assertRaisesRegex(TypeError, "terminal must be an InteractiveTerminal"):
+            InteractiveInputLifecycle(object())
+        with _session_driver() as (driver, termios, _stream, _output, _fallback):
+            original = list(termios.attributes)
+            with mock.patch.object(signal, "getsignal", return_value=signal.SIG_DFL), mock.patch.object(termios, "tcsetattr", wraps=termios.tcsetattr) as writes:
+                def acquire():
+                    with driver.input_session():
+                        pass
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    with self.assertRaises(RuntimeError):
+                        executor.submit(acquire).result(timeout=2)
+            self.assertEqual(termios.attributes, original)
+            self.assertTrue(all(call.args[2][3] == original[3] for call in writes.call_args_list))
 
     def test_accepted_input_output_obeys_the_sticky_mode_without_retention(
         self,
@@ -481,6 +593,8 @@ class InputLatchAndDriverTests(unittest.TestCase):
         ) as capabilities:
             self.assertEqual(driver.read_line("one> "), "first")
             self.assertEqual(driver.read_line("two> "), "second")
+            with driver.input_session(), driver.native_input_handoff():
+                pass
         self.assertIs(driver._input_latch.mode, TerminalInputMode.FALLBACK)
         capabilities.assert_called_once_with(driver)
         self.assertEqual(input_stream.mock_calls, [])
@@ -625,6 +739,45 @@ class InputLatchAndDriverTests(unittest.TestCase):
         ):
             driver._prepare_input(_live_capabilities())
         fallback.assert_not_called()
+        with _session_driver() as (driver, termios, stream, _output, fallback):
+            original = list(termios.attributes)
+            with driver.input_session():
+                guarded = list(termios.attributes)
+                for failure in (KeyboardInterrupt("native interrupt"), EOFError("native eof"), ValueError("native failure")):
+                    with self.assertRaises(type(failure)) as raised:
+                        with driver.native_input_handoff():
+                            raise failure
+                    self.assertIs(raised.exception, failure)
+                    self.assertEqual(termios.attributes, guarded)
+                termios.attributes[3] |= termios.ECHO
+                with self.assertRaisesRegex(RuntimeError, "configuration changed"):
+                    driver.read_line("drift> ")
+                self.assertEqual(stream.calls, [])
+            self.assertEqual(termios.attributes, original)
+            with driver.input_session():
+                with self.assertRaisesRegex(RuntimeError, "configuration changed"):
+                    with driver.native_input_handoff():
+                        termios.attributes[3] |= 64
+                with self.assertRaisesRegex(RuntimeError, "suspended"):
+                    driver.read_line("uncertain handoff> ")
+                self.assertEqual(stream.calls, [])
+            self.assertEqual(termios.attributes, original)
+            fallback.assert_not_called()
+        for disposition in (signal.SIG_IGN, lambda *_args: None):
+            with _session_driver() as (driver, _termios, _stream, _output, _fallback), _signal_state(disposition) as signals:
+                original_signals = dict(signals)
+                with driver.input_session():
+                    with driver.native_input_handoff():
+                        self.assertEqual(signals, original_signals)
+                self.assertEqual(signals, original_signals)
+        for replacement in (signal.SIG_DFL, lambda *_args: None):
+            with _session_driver() as (driver, termios, _stream, _output, _fallback), _signal_state(signal.SIG_DFL) as signals:
+                original, original_signals = list(termios.attributes), dict(signals)
+                with self.assertRaisesRegex(RuntimeError, "interactive terminal signal restoration failed"):
+                    with driver.input_session(), driver.native_input_handoff():
+                        signals[signal.SIGTERM] = replacement
+                self.assertEqual(signals, {**original_signals, signal.SIGTERM: replacement})
+                self.assertEqual(termios.attributes, original)
 
 
 if __name__ == "__main__":

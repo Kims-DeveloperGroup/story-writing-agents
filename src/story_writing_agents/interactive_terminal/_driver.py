@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import os
 import select as _select
+import signal
+import threading
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable
-from contextlib import nullcontext
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass, replace
 from typing import TextIO, TypeAlias, TypeVar
 
 from ._input_lifecycle import (
@@ -172,6 +174,24 @@ class _TerminalConfiguration:
     interrupt_character: str | None
     disabled_control_byte: int
     termios_module: object
+
+
+class _TerminalTermination(SystemExit):
+    """Carry one default termination through existing resource cleanup."""
+
+    __slots__ = ("signum",)
+
+    def __init__(self, signum: int) -> None:
+        self.signum = signum
+        super().__init__(128 + signum)
+
+
+@dataclass(slots=True)
+class _TerminalSignalState:
+    """Keep pending termination and terminal failure local to one session."""
+
+    termination: _TerminalTermination | None = None
+    terminal_restoration_failure: BaseException | None = None
 
 
 class _RawExternalViewerHost:
@@ -412,10 +432,13 @@ class RawTerminalDriver:
         "_history_state",
         "_input_stream",
         "_input_latch",
+        "_input_session_active",
+        "_input_session_configuration",
         "_line_transition",
         "_live_capabilities",
         "_live_configuration",
         "_main_transition",
+        "_native_input_handoff_active",
         "_os_provider",
         "_output_stream",
         "_progress_active",
@@ -441,8 +464,8 @@ class RawTerminalDriver:
         """Retain borrowed fallback and terminal stream collaborators.
 
         Construction performs no stream access or terminal mutation.
-        The first input call resolves and permanently selects either the live
-        byte source or the ordinary fallback callback.
+        The first live input or session lifecycle resolves and selects the live
+        byte source; ordinary fallback remains selected immediately before use.
         """
 
         if not callable(fallback_read_line):
@@ -461,6 +484,9 @@ class RawTerminalDriver:
         self._fallback_capabilities: TerminalCapabilities | None = None
         self._input_stream = input_stream
         self._input_latch = TerminalInputLatch()
+        self._input_session_active = False
+        self._input_session_configuration: _TerminalConfiguration | None = None
+        self._native_input_handoff_active = False
         self._output_stream = output_stream
         self._line_transition = line_transition
         self._live_capabilities: TerminalCapabilities | None = None
@@ -477,6 +503,86 @@ class RawTerminalDriver:
             (lambda: _termios) if termios_provider is None else termios_provider
         )
         self._os_provider = (lambda: os) if os_provider is None else os_provider
+
+    @contextmanager
+    def input_session(self) -> Iterator[None]:
+        """Keep kernel echo disabled between reads until the session exits."""
+
+        if self._input_session_active:
+            raise RuntimeError("terminal input session is already active")
+        with self._input_latch.input_operation():
+            if self._progress_active:
+                raise RuntimeError("terminal input session cannot overlap progress")
+            observed_capabilities = self._observe_input_capabilities()
+            _capabilities, configuration = self._prepare_input(observed_capabilities)
+
+        with _session_termination_signals(enabled=configuration is not None) as signals:
+            active_failure: BaseException | None = None
+            try:
+                with self._input_latch.input_operation():
+                    if configuration is not None:
+                        self._live_configuration = _guard_terminal_echo(configuration)
+                    self._input_session_configuration = configuration
+                    self._input_session_active = True
+                yield
+            except BaseException as failure:
+                active_failure = failure
+                raise
+            finally:
+                try:
+                    if configuration is not None:
+                        _restore_terminal_or_raise(configuration, active_failure)
+                except BaseException as restoration_failure:
+                    signals.terminal_restoration_failure = restoration_failure
+                    raise
+                finally:
+                    if configuration is not None:
+                        self._live_configuration = configuration
+                    self._input_session_configuration = None
+                    self._input_session_active = False
+                    self._native_input_handoff_active = False
+
+    @contextmanager
+    def native_input_handoff(self) -> Iterator[None]:
+        """Lend original terminal settings to native login, then resume echo ownership."""
+
+        configuration = self._input_session_configuration
+        if configuration is None:
+            yield
+            return
+        if self._native_input_handoff_active:
+            raise RuntimeError("native terminal input handoff is already active")
+        with self._input_latch.input_operation():
+            if self._progress_active:
+                raise RuntimeError("native terminal input cannot overlap progress")
+            self._native_input_handoff_active = True
+            _restore_terminal_or_raise(configuration, None)
+            self._live_configuration = configuration
+
+        active_failure: BaseException | None = None
+        try:
+            yield
+        except BaseException as failure:
+            active_failure = failure
+            raise
+        finally:
+            try:
+                with self._input_latch.input_operation():
+                    self._native_input_handoff_active = False
+                    observed_capabilities = self._observe_input_capabilities()
+                    _capabilities, resumed = self._prepare_input(observed_capabilities)
+                    if resumed is None:
+                        raise RuntimeError("live terminal input handoff cannot use fallback")
+                    self._live_configuration = _guard_terminal_echo(resumed)
+            except BaseException as resume_failure:
+                # A caller that catches a native-login failure must not resume
+                # Story input after an uncertain terminal handoff.
+                self._native_input_handoff_active = True
+                _restore_terminal_or_raise(
+                    configuration,
+                    active_failure or resume_failure,
+                )
+                raise
 
     def read_line(self, prompt: str) -> str:
         """Read one history-free line through the driver's selected input."""
@@ -1717,6 +1823,8 @@ class RawTerminalDriver:
     ) -> _TerminalConfiguration | None:
         """Preflight one guard without selecting the permanent input mode."""
 
+        if self._native_input_handoff_active:
+            raise RuntimeError("Story input is suspended for native terminal input")
         mode = self._input_latch.mode
         if mode is TerminalInputMode.FALLBACK:
             return None
@@ -1971,6 +2079,8 @@ class RawTerminalDriver:
 
         if type(observed_capabilities) is not TerminalCapabilities:
             raise TypeError("observed_capabilities must be a TerminalCapabilities")
+        if self._native_input_handoff_active:
+            raise RuntimeError("Story input is suspended for native terminal input")
         mode = self._input_latch.mode
         if mode is TerminalInputMode.FALLBACK:
             assert self._fallback_capabilities is not None
@@ -4641,6 +4751,103 @@ def _activate_terminal(configuration: _TerminalConfiguration) -> None:
         configuration.input_descriptor,
         termios_module.TCSANOW,
         configuration.editor_attributes,
+    )
+
+
+@contextmanager
+def _session_termination_signals(
+    *, enabled: bool,
+) -> Iterator[_TerminalSignalState]:
+    """Unwind default termination before restoring its POSIX disposition."""
+
+    state = _TerminalSignalState()
+    if not enabled:
+        yield state
+        return
+    default_signals = tuple(
+        signum
+        for name in ("SIGTERM", "SIGHUP")
+        if (signum := getattr(signal, name, None)) is not None
+        and signal.getsignal(signum) == signal.SIG_DFL
+    )
+    if default_signals and threading.current_thread() is not threading.main_thread():
+        raise RuntimeError("live terminal input requires main-thread signal ownership")
+
+    def handle_termination(signum: int, _frame: object) -> None:
+        if state.termination is not None:
+            return
+        state.termination = _TerminalTermination(signum)
+        raise state.termination
+
+    installed: list[int] = []
+    acquisition_complete = False
+    active_failure: BaseException | None = None
+    try:
+        for signum in default_signals:
+            # Record before installation: a signal can interrupt immediately
+            # after the disposition changes, before signal() returns to Python.
+            installed.append(signum)
+            signal.signal(signum, handle_termination)
+        acquisition_complete = True
+        yield state
+    except BaseException as failure:
+        active_failure = failure
+        raise
+    finally:
+        restoration_failures: list[BaseException] = []
+        for signum in reversed(installed):
+            try:
+                current = signal.getsignal(signum)
+                if current is handle_termination:
+                    signal.signal(signum, signal.SIG_DFL)
+                elif acquisition_complete or current != signal.SIG_DFL:
+                    raise RuntimeError("live terminal signal disposition changed")
+            except BaseException as restoration_failure:
+                restoration_failures.append(restoration_failure)
+        if restoration_failures:
+            if state.terminal_restoration_failure is not None:
+                state.terminal_restoration_failure.add_note(
+                    "Default termination signal restoration also failed."
+                )
+            else:
+                fatal = RuntimeError("interactive terminal signal restoration failed")
+                if active_failure is not None:
+                    fatal.add_note(
+                        "Signal restoration failed while another input failure was active."
+                    )
+                raise fatal from restoration_failures[0]
+        if state.termination is not None and state.terminal_restoration_failure is None:
+            signal.raise_signal(state.termination.signum)
+            # The restored default normally terminates here. Never continue
+            # Story input if a test double or inherited signal mask defers it.
+            raise state.termination
+
+
+def _guard_terminal_echo(
+    configuration: _TerminalConfiguration,
+) -> _TerminalConfiguration:
+    """Apply a no-echo baseline while leaving the line discipline unchanged."""
+
+    termios_module = configuration.termios_module
+    echo_flags = termios_module.ECHO
+    echo_newline = getattr(termios_module, "ECHONL", 0)
+    if type(echo_newline) is int:
+        echo_flags |= echo_newline
+    guarded_attributes = list(configuration.original_attributes)
+    guarded_attributes[6] = list(configuration.original_attributes[6])
+    guarded_attributes[3] &= ~echo_flags
+    editor_attributes = list(configuration.editor_attributes)
+    editor_attributes[6] = list(configuration.editor_attributes[6])
+    editor_attributes[3] &= ~echo_flags
+    termios_module.tcsetattr(
+        configuration.input_descriptor,
+        termios_module.TCSANOW,
+        guarded_attributes,
+    )
+    return replace(
+        configuration,
+        original_attributes=guarded_attributes,
+        editor_attributes=editor_attributes,
     )
 
 

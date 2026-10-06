@@ -115,6 +115,7 @@ from ..interactive_terminal import (
     format_agent_reply_content,
     InteractiveAdvisoryProgress,
     InteractiveMainInput,
+    InteractiveInputLifecycle,
     InputPresentation,
     AttachmentKind,
     Choice,
@@ -1120,6 +1121,53 @@ class InteractiveController:
             DebugPhase.STARTED,
         )
 
+        try:
+            with InteractiveInputLifecycle(self._terminal).session():
+                exit_code = self._run_session_lobby_body(requested_session)
+        except BaseException as exc:
+            body_control: _ExceptionState | None = None
+            cleanup_error_reported = False
+            error: InteractiveError | None = None
+            if not self._closed and isinstance(
+                exc,
+                (asyncio.CancelledError, KeyboardInterrupt, OSError),
+            ):
+                self._record_debug_error(
+                    DebugOperation.INTERACTIVE_LOBBY,
+                    exc,
+                    phase=DebugPhase.CANCELLED,
+                    outcome=DebugOutcome.INTERRUPTED,
+                )
+                error = InteractiveError(InteractiveErrorCode.OPERATION_INTERRUPTED)
+            elif isinstance(exc, Exception):
+                self._record_debug_error(DebugOperation.CLEANUP, exc)
+                error = InteractiveError(InteractiveErrorCode.CLEANUP_FAILED)
+            else:
+                body_control = (exc, exc.__traceback__)
+            if error is not None:
+                try:
+                    diagnostic_written = self._write_error_best_effort(error)
+                    cleanup_error_reported = (
+                        error.code is InteractiveErrorCode.CLEANUP_FAILED
+                        and diagnostic_written
+                    )
+                except BaseException as failure:
+                    body_control = (failure, failure.__traceback__)
+            exit_code = self._release_attachment_and_close_backend(
+                2,
+                cleanup_error_reported=cleanup_error_reported,
+                body_control=body_control,
+            )
+        self._trace_debug(
+            DebugOperation.INTERACTIVE_LOBBY,
+            DebugPhase.SUCCEEDED if exit_code == 0 else DebugPhase.FAILED,
+            outcome=(DebugOutcome.COMPLETED if exit_code == 0 else DebugOutcome.FAILED),
+        )
+        return exit_code
+
+    def _run_session_lobby_body(self, requested_session: str | None) -> int:
+        """Run and clean up while the terminal retains scoped input ownership."""
+
         exit_code = 2
         cleanup_error_reported = False
         body_control: _ExceptionState | None = None
@@ -1177,11 +1225,6 @@ class InteractiveController:
             exit_code,
             cleanup_error_reported=cleanup_error_reported,
             body_control=body_control,
-        )
-        self._trace_debug(
-            DebugOperation.INTERACTIVE_LOBBY,
-            DebugPhase.SUCCEEDED if exit_code == 0 else DebugPhase.FAILED,
-            outcome=(DebugOutcome.COMPLETED if exit_code == 0 else DebugOutcome.FAILED),
         )
         return exit_code
 
