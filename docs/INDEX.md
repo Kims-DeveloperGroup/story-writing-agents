@@ -20,6 +20,7 @@ that matches your task.
 - [Getting started](getting-started.md)
 - [Story sessions and conversations](guides/story-sessions.md)
 - [Collaborate with the Lead Agent](guides/lead-agent-collaboration.md)
+- [Authoring call limits and measured support](guides/lead-authoring-call-support.md)
 - [Lead story workflows and reviewed artifact proposals](guides/lead-agent.md)
 - [Glossary](glossary.md)
 - [Core concepts](concepts.md)

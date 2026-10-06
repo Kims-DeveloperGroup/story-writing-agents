@@ -887,6 +887,12 @@ The displayed `next_action` is guidance, not an additional authorization.
 
 ## Budgets and boundaries
 
+See [authoring call limits and measured support](lead-authoring-call-support.md) for
+current reservation rules, the observed existing-manuscript refusal, and a
+verified fresh-revision/new-output example. Actual submitted calls and static
+reservations are reported separately.
+
+
 Runtime builds a feasible allocation before confirmation. One consultation
 uses one to three specialist assignments; siblings receive disjoint context
 and call reservations. A lineage permits at most two specialist rounds and the
