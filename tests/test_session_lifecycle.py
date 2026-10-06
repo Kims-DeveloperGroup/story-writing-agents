@@ -63,6 +63,12 @@ _UPDATED = "2026-01-02T00:00:00+00:00"
 _NEWEST = "2026-01-03T00:00:00+00:00"
 
 
+def _fresh_literal_object_side_effect(target, attribute, value):
+    return mock.patch.object(target, attribute, side_effect=value)
+
+def _fresh_literal_object_return_value(target, attribute, value):
+    return mock.patch.object(target, attribute, return_value=value)
+
 def _manifest_relative(session_id: str) -> str:
     """Return the canonical V2 manifest path for ``session_id``."""
 
@@ -501,7 +507,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             ]
         )
         source_files = tuple(source_root.rglob("*.py"))
-        self.assertEqual(len(source_files), 152)
+        self.assertEqual(len(source_files), 153)
         self.assertTrue(
             {
                 source_root / "artifact_proposals.py",
@@ -592,16 +598,8 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         assessor = mock.Mock()
         assessor.inspect.return_value = assessment
         with (
-            mock.patch.object(
-                backend_module,
-                "_provision_session_resources",
-                return_value=resource,
-            ) as provision,
-            mock.patch.object(
-                backend_module,
-                "_require_ready_session_resources",
-                return_value=resource,
-            ) as verify,
+            _fresh_literal_object_return_value(backend_module, '_provision_session_resources', resource) as provision,
+            _fresh_literal_object_return_value(backend_module, '_require_ready_session_resources', resource) as verify,
             mock.patch.object(
                 backend_module,
                 "SessionTransitionAssessor",
@@ -693,9 +691,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         )
         self.assertEqual(backend.list_session_lifecycles(), ())
         with (
-            mock.patch.object(
-                backend, "acquire_session_access", side_effect=AssertionError
-            ),
+            _fresh_literal_object_side_effect(backend, 'acquire_session_access', AssertionError),
             mock.patch.object(backend, "_write_manifest", side_effect=AssertionError),
         ):
             self.assertIs(backend.validate_provider_configuration("missing"), True)
@@ -1169,11 +1165,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
 
         mark = len(_debug_records(self.workspace))
         with (
-            mock.patch.object(
-                backend,
-                "_release_access_claim",
-                side_effect=release,
-            ),
+            _fresh_literal_object_side_effect(backend, '_release_access_claim', release),
             mock.patch.object(
                 backend._codex_adapter,
                 "close",
@@ -1238,11 +1230,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
                         raise failure
 
                 mark = len(_debug_records(self.workspace))
-                with mock.patch.object(
-                    backend,
-                    "_release_access_claim",
-                    side_effect=release,
-                ):
+                with _fresh_literal_object_side_effect(backend, '_release_access_claim', release):
                     self.assertIsNone(backend.close())
 
                 self.assertEqual(attempts, list(tokens.items()))
@@ -1289,11 +1277,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
 
         error_mark = len(_debug_records(self.workspace))
         with (
-            mock.patch.object(
-                error_backend,
-                "_release_access_claim",
-                side_effect=release_for_error_sink,
-            ),
+            _fresh_literal_object_side_effect(error_backend, '_release_access_claim', release_for_error_sink),
             mock.patch.object(
                 WorkspaceDebugLog,
                 "error",
@@ -1331,16 +1315,8 @@ class AgentBackendLifecycleTests(unittest.TestCase):
 
         trace_mark = len(_debug_records(self.workspace))
         with (
-            mock.patch.object(
-                trace_backend,
-                "_release_access_claim",
-                side_effect=release_for_trace_sink,
-            ),
-            mock.patch.object(
-                WorkspaceDebugLog,
-                "trace",
-                side_effect=SystemExit("diagnostic exit"),
-            ) as debug_trace,
+            _fresh_literal_object_side_effect(trace_backend, '_release_access_claim', release_for_trace_sink),
+            _fresh_literal_object_side_effect(WorkspaceDebugLog, 'trace', SystemExit('diagnostic exit')) as debug_trace,
         ):
             self.assertIsNone(trace_backend.close())
 
@@ -1394,11 +1370,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
 
         mark = len(_debug_records(self.workspace))
         with (
-            mock.patch.object(
-                backend,
-                "_release_access_claim",
-                side_effect=release,
-            ),
+            _fresh_literal_object_side_effect(backend, '_release_access_claim', release),
             self.assertRaises(KeyboardInterrupt) as raised,
         ):
             backend.close()
@@ -1435,9 +1407,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
 
     def test_write_failures_compensate_only_newly_acquired_access(self) -> None:
         backend = self.backend()
-        with mock.patch.object(
-            backend, "_write_manifest", side_effect=OSError("create write")
-        ):
+        with _fresh_literal_object_side_effect(backend, '_write_manifest', OSError('create write')):
             with self.assertRaisesRegex(OSError, "create write"):
                 backend.create_session_with_access("create_failure")
         self.assertFalse(
@@ -1448,9 +1418,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         )
 
         self.write_manifest("new_claim", durable_state="paused")
-        with mock.patch.object(
-            backend, "_write_manifest", side_effect=OSError("reopen write")
-        ):
+        with _fresh_literal_object_side_effect(backend, '_write_manifest', OSError('reopen write')):
             with self.assertRaisesRegex(OSError, "reopen write"):
                 backend.reopen_session_with_access("new_claim")
         self.assertFalse(self.workspace.path(_access_relative("new_claim")).exists())
@@ -1460,9 +1428,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         claim_before = _artifact_snapshot(
             self.workspace.path(_access_relative("preowned"))
         )
-        with mock.patch.object(
-            backend, "_write_manifest", side_effect=OSError("owned write")
-        ):
+        with _fresh_literal_object_side_effect(backend, '_write_manifest', OSError('owned write')):
             with self.assertRaisesRegex(OSError, "owned write"):
                 backend.reopen_session_with_access("preowned")
         self.assertEqual(

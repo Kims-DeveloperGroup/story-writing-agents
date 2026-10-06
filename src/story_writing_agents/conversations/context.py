@@ -2,6 +2,17 @@
 
 from __future__ import annotations
 
+from ..lead_premise_decisions import (
+    PremiseAuthoringTaskRef,
+    PremiseDecisionReport, PremiseDecisionSelection, PremiseSelectionCapture,
+    PremiseFreshWorkAdmission, PremiseDecisionAction, PremiseChoicePolicy, PremiseDecisionCost, PremiseReportRef, PremiseAdmissionRef,
+    premise_digest, premise_value_to_dict, resolve_premise_choice,
+)
+from .events import (
+    CollaborationPremiseDecisionPayload, CollaborationPremiseSelectionPayload,
+    CollaborationPremiseFreshWorkAdmissionPayload, encode_collaboration_event,
+)
+
 from ..editorial_state import (
     EditorialStateProjection, EditorialRecordRevision, EditorialApprovalState,
     EditorialAppliedFact, EditorialProvenanceRef, EditorialStateIntegrityError,
@@ -456,6 +467,7 @@ class CollaborationNextAction(StrEnum):
     REPREPARE_COMMIT_REQUEST = "reprepare_commit_request"
     SUBMIT_RECOMMENDATION_DECISION = "submit_recommendation_decision"
     FINALIZE_RECOMMENDATION = "finalize_recommendation"
+    CHOOSE_PREMISE = "choose_premise"
 
 
 @dataclass(frozen=True, slots=True)
@@ -536,6 +548,13 @@ class CollaborationHistoryProjection:
     current_recommendation_start: LeadRecommendationStartedPayload | None = None
     current_recommendation_result: LeadRecommendationResultPayload | None = None
     current_recommendation_state: LeadRecommendationState | None = None
+
+    premise_report: PremiseDecisionReport | None = None
+    premise_report_event_id: str | None = None
+    premise_decision: PremiseDecisionSelection | None = None
+    premise_selection: PremiseSelectionCapture | None = None
+    premise_admission: PremiseFreshWorkAdmission | None = None
+    premise_admission_event_id: str | None = None
 
     def __post_init__(self) -> None:
         _validate_non_negative_integer(self.last_sequence, label="last sequence")
@@ -921,7 +940,21 @@ class LeadTurnResult:
     interaction_mode: LeadInteractionMode = field(default=LeadInteractionMode.ORCHESTRATION, kw_only=True)
     exploration: LeadExplorationReport | None = field(default=None, kw_only=True)
 
+    premise_report: PremiseDecisionReport | None = field(default=None, kw_only=True)
+    premise_report_ref: PremiseReportRef | None = field(default=None, kw_only=True)
+
     def __post_init__(self) -> None:
+        if (self.premise_report is None) != (self.premise_report_ref is None):
+            raise ValueError("premise report and durable reference must be paired")
+        if self.premise_report is not None:
+            ref = self.premise_report_ref
+            if type(ref) is not PremiseReportRef or (ref.source_conversation_id, ref.report_digest, ref.question_id) != (
+                self.conversation_id, self.premise_report.report_digest, self.premise_report.spec.question_id
+            ):
+                raise ValueError("premise report reference changed its durable identity")
+        if self.premise_report is not None:
+            if type(self.premise_report) is not PremiseDecisionReport or self.kind is not LeadOutcomeKind.RECOMMENDATION or any((self.proposal, self.confirmation_request_id, self.artifact_proposal, self.artifact_application_request, self.story_commit_request, self.recommendation_request)):
+                raise ValueError("premise report carries no authoring or mutation authority")
         if type(self.interaction_mode) is not LeadInteractionMode:
             raise TypeError("interaction mode must be explicit LeadInteractionMode")
         if self.kind is LeadOutcomeKind.EXPLORATION:
@@ -1177,6 +1210,10 @@ class LeadTurnResult:
                 or self.story_commit_preparation_request.step_id != self.step_id
             ):
                 raise ValueError("commit reprepare result is inconsistent")
+        elif self.premise_report is not None and self.next_action is CollaborationNextAction.CHOOSE_PREMISE:
+            if self.state not in {None, CollaborationStepState.COMPLETED, CollaborationStepState.FAILED,
+                                  CollaborationStepState.INTERRUPTED}:
+                raise ValueError("premise choice cannot bypass a live workflow control")
         elif self.kind is not LeadOutcomeKind.PROPOSAL and (
             self.next_action is not CollaborationNextAction.CONTINUE_WITH_LEAD
         ):
@@ -1312,6 +1349,13 @@ class LeadDecisionResult:
 
     def _validate_revise_turn(self) -> None:
         replacement = self.turn.proposal
+        if self.proposal.premise_decision is not None and replacement == self.proposal and (
+            self.turn.state in {CollaborationStepState.AWAITING_CONFIRMATION, CollaborationStepState.RECONFIRMATION_REQUIRED}
+            and self.turn.kind is (LeadOutcomeKind.PROPOSAL if self.turn.state is CollaborationStepState.AWAITING_CONFIRMATION else LeadOutcomeKind.RECOMMENDATION)
+            and self.turn.confirmation_request_id is not None
+            and self.turn.next_action is CollaborationNextAction.SUBMIT_CONFIRMATION
+        ):
+            return  # A refused premise revision preserves the exact pending authority.
         if self.turn.recommendation_request is not None:
             request = self.turn.recommendation_request
             if ((request.source_proposal_id, request.source_proposal_revision, request.source_proposal_digest)
@@ -2877,6 +2921,21 @@ def _lead_abandonment_is_safe(
 ) -> bool:
     """Exclude execution/write authority before exposing read-only retry."""
 
+    try:
+        _validate_premise_history(events)
+    except (ValueError, TypeError, KeyError):
+        return False
+    safe_premise_ids = set()
+    for captured in events:
+        if captured.turn_id == turn_id and type(captured.payload) is CollaborationPremiseSelectionPayload:
+            capture = captured.payload.capture
+            control = next((item for item in events if item.event_id == capture.selection_event_id
+                and item.turn_id == turn_id and type(item.payload) is CollaborationPremiseDecisionPayload
+                and item.payload.selection == capture.selection), None)
+            if control is not None:
+                safe_premise_ids.update((captured.event_id, control.event_id))
+        elif captured.turn_id == turn_id and type(captured.payload) is CollaborationPremiseFreshWorkAdmissionPayload:
+            safe_premise_ids.add(captured.event_id)
     states: dict[str, CollaborationStepState] = {}
     pending_writes: set[str] = set()
     unsafe_write = False
@@ -2902,7 +2961,7 @@ def _lead_abandonment_is_safe(
             and type(payload) is CollaborationProviderCallPayload
             and payload.invocation_kind not in {CollaborationInvocationKind.LEAD, CollaborationInvocationKind.LEAD_EXPLORATION}):
             return False
-        if event.turn_id == turn_id and event.event_id not in origin_event_ids and type(payload) not in {
+        if event.turn_id == turn_id and event.event_id not in origin_event_ids and event.event_id not in safe_premise_ids and type(payload) not in {
             CollaborationMessagePayload,
 CollaborationLeadExplorationRequestPayload, CollaborationExplorationAdoptionPayload, CollaborationProviderCallPayload,
             CollaborationLeadOutcomeFailurePayload,
@@ -2985,6 +3044,296 @@ def _validate_exploration_history(events: tuple[CollaborationEventV2, ...]) -> N
         prior[event.event_id] = event
 
 
+def _premise_source_cost(source, past):
+    cost = source.cost
+    proposals = tuple(event.payload for event in past if type(event.payload) is CollaborationProposal
+        and (event.payload.proposal_id, event.payload.proposal_revision, event.payload.proposal_digest)
+        == (cost.proposal_id, cost.proposal_revision, cost.proposal_digest))
+    if len(proposals) != 1:
+        raise ValueError("premise prior authoring source is unavailable")
+    proposal = proposals[0]
+    scope = proposal.authoring_scope
+    if scope is None or scope.intent is not AuthoringIntent.AUTHORING or scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE} or (scope.task_id, scope.task_revision) != (source.task.task_id, source.task.task_revision):
+        raise ValueError("premise cost source is not the exact authoring draft")
+    scopes = tuple(getattr(event.payload, "authoring_scope", None) for event in past)
+    latest = max((item.task_revision for item in scopes if item is not None and item.task_id == scope.task_id), default=0)
+    if latest != scope.task_revision or proposal not in confirmed_authoring_proposals(scope, past):
+        raise ValueError("premise prior authoring source is stale or unconfirmed")
+    result = next((event for event in past if type(event.payload) is CollaborationExecutionResult
+        and event.payload.proposal_digest == proposal.proposal_digest
+        and event.payload.execution_attempt_id == cost.execution_attempt_id
+        and event.payload.overall_outcome is CollaborationExecutionOutcomeKind.SUCCEEDED), None)
+    if result is None or not any(type(event.payload) is CollaborationStepStatePayload
+        and event.payload.state is CollaborationStepState.COMPLETED
+        and event.payload.execution_result_event_id == result.event_id for event in past):
+        raise ValueError("premise prior authoring source lacks successful terminal proof")
+    steps = {proposal.step_id, *(event.step_id for event in past
+        if type(event.payload) is LeadRecommendationRequestPayload
+        and (event.payload.source_proposal_id, event.payload.source_proposal_revision, event.payload.source_proposal_digest)
+        == (proposal.proposal_id, proposal.proposal_revision, proposal.proposal_digest))}
+    calls = tuple(event.payload.call_id for event in past if event.step_id in steps
+        and type(event.payload) is CollaborationProviderCallPayload
+        and event.payload.state is CollaborationProviderCallState.SUBMITTED)
+    rounds = sum(event.step_id in steps and type(event.payload) is CollaborationStepStatePayload
+        and event.payload.state is CollaborationStepState.RUNNING for event in past)
+    if cost.submitted_call_ids != calls or cost.rounds_spent != rounds or cost.step_id != proposal.step_id:
+        raise ValueError("premise prior costs cannot reset source calls or rounds")
+
+
+def _validate_premise_history(events):
+    if not any(type(event.payload) in {
+        CollaborationPremiseDecisionPayload, CollaborationPremiseSelectionPayload,
+        CollaborationPremiseFreshWorkAdmissionPayload,
+    } or (type(event.payload) is CollaborationProposal and event.payload.premise_decision is not None)
+       or (type(event.payload) is CollaborationLeadSynthesisPayload and event.payload.premise_report is not None)
+       or (type(event.payload) is CollaborationSpecialistReplyPayload and event.payload.premise_conflicts)
+       for event in events):
+        return (None, None, None, None, None, None)
+    prior = {}
+    admissions = {}
+    admission_steps = {}
+    decisions = {}
+    reports = []
+    captures = []
+    latest_decision = None
+    latest_admission = None
+    for event in events:
+        payload = event.payload
+        needs_past = type(payload) in {
+            CollaborationPremiseFreshWorkAdmissionPayload, CollaborationPremiseDecisionPayload,
+            CollaborationPremiseSelectionPayload,
+        } or (type(payload) is CollaborationProposal and (
+            payload.premise_decision is not None or event.step_id in admission_steps
+            or (payload.authoring_scope is not None and any(
+                old.payload.capture.authoring_task_id == payload.authoring_scope.task_id for old in captures)))) or (type(payload) is CollaborationLeadSynthesisPayload and payload.premise_report is not None) or (type(payload) is CollaborationSpecialistReplyPayload and payload.premise_conflicts)
+        past = tuple(prior.values()) if needs_past else ()
+        if type(payload) is CollaborationPremiseFreshWorkAdmissionPayload:
+            item = payload.admission
+            origin = prior.get(item.source_user_event_id)
+            if origin is None or origin.sender.kind.value != "user" or type(origin.payload) not in {CollaborationMessagePayload, CollaborationPremiseDecisionPayload} or (origin.session_id, origin.conversation_id, origin.turn_id) != (event.session_id, event.conversation_id, event.turn_id) or item.provider_step_id != event.step_id:
+                raise ValueError("fresh-work admission has no exact current USER origin")
+            if item.source_user_event_digest != "sha256:" + hashlib.sha256(encode_collaboration_event(origin)).hexdigest():
+                raise ValueError("fresh-work admission USER identity changed")
+            if item.provider_invocation_id in admissions or any(type(old.payload) is CollaborationProviderCallPayload and old.payload.invocation_id == item.provider_invocation_id for old in past):
+                raise ValueError("fresh-work admission must precede its fresh invocation")
+            if item.prior_admission_ref is not None:
+                parent = prior.get(item.prior_admission_ref.event_id)
+                if parent is None or type(parent.payload) is not CollaborationPremiseFreshWorkAdmissionPayload or premise_digest(parent.payload.admission) != item.prior_admission_ref.digest:
+                    raise ValueError("fresh-work prior admission identity changed")
+                if latest_admission is None or parent.event_id != latest_admission.event_id:
+                    raise ValueError("fresh-work admission cannot omit a newer cost head")
+            elif latest_admission is not None:
+                raise ValueError("fresh-work admission cannot erase earlier admitted spend")
+            if item.prior_analysis_report_ref is not None:
+                ref = item.prior_analysis_report_ref
+                source = prior.get(ref.report_event_id)
+                if source is None or type(source.payload) is not CollaborationLeadSynthesisPayload or source.payload.premise_report is None or source.conversation_id != event.conversation_id or ref.source_conversation_id != event.conversation_id or (source.payload.premise_report.report_digest, source.payload.premise_report.spec.question_id) != (ref.report_digest, ref.question_id):
+                    raise ValueError("fresh-work prior analysis report changed")
+            if item.prior_authoring_source_ref is not None:
+                _premise_source_cost(item.prior_authoring_source_ref, past)
+            same_turn_captures = tuple(
+                old.payload.capture for old in captures
+                if (old.turn_id, old.step_id) == (event.turn_id, event.step_id)
+            )
+            if item.selected_authoring_task is None:
+                if same_turn_captures:
+                    raise ValueError("fresh-work admission omitted its exact selected premise task")
+            elif (
+                len(same_turn_captures) != 1
+                or item.selected_authoring_task != PremiseAuthoringTaskRef(
+                    same_turn_captures[0].authoring_task_id,
+                    same_turn_captures[0].authoring_task_revision,
+                )
+            ):
+                raise ValueError("fresh-work selected task lacks its exact current USER capture")
+            admissions[item.provider_invocation_id] = event
+            admission_steps[event.step_id] = event
+            latest_admission = event
+        elif type(payload) is CollaborationProviderCallPayload and payload.invocation_id in admissions:
+            source = admissions[payload.invocation_id]
+            if (event.session_id, event.conversation_id, event.turn_id, event.step_id, payload.role, payload.invocation_kind) != (source.session_id, source.conversation_id, source.turn_id, source.step_id, "lead_orchestrator", CollaborationInvocationKind.LEAD):
+                raise ValueError("fresh-work call drifts from its admission")
+        elif type(payload) is CollaborationProposal and payload.premise_decision is not None:
+            spec = payload.premise_decision
+            origin = prior.get(spec.source_user_event_id)
+            if origin is None or origin.sender.kind.value != "user" or origin.conversation_id != event.conversation_id:
+                raise ValueError("premise question requires actual USER origin")
+            if any(type(old.payload) is CollaborationProposal and old.payload.premise_decision is not None and old.payload.premise_decision.question_id == spec.question_id and old.step_id != event.step_id for old in past):
+                raise ValueError("completed premise question cannot restart in a fresh lineage")
+            if spec.admission_ref is not None:
+                admitted = prior.get(spec.admission_ref.event_id)
+                if admitted is None or type(admitted.payload) is not CollaborationPremiseFreshWorkAdmissionPayload or premise_digest(admitted.payload.admission) != spec.admission_ref.digest or admitted.step_id != event.step_id or admitted.payload.admission.offered_question_id != spec.question_id or admitted.payload.admission.source_user_event_id != spec.source_user_event_id:
+                    raise ValueError("premise question changed its offered admission")
+                source_task = (None if admitted.payload.admission.prior_authoring_source_ref is None
+                    else admitted.payload.admission.prior_authoring_source_ref.task)
+                if spec.source_authoring_task != source_task:
+                    raise ValueError("premise question changed its actual prior authoring source")
+            elif spec.source_authoring_task is not None:
+                raise ValueError("premise question cannot invent a prior authoring source")
+        elif type(payload) is CollaborationLeadSynthesisPayload and payload.premise_report is not None:
+            report = payload.premise_report
+            previous = reports[-1] if reports else None
+            ref = report.prior_analysis_report_ref
+            if previous is None:
+                if ref is not None:
+                    raise ValueError("premise report invents earlier analysis costs")
+            elif ref is None or (ref.source_conversation_id, ref.report_event_id, ref.report_digest, ref.question_id) != (
+                event.conversation_id, previous.event_id, previous.payload.premise_report.report_digest,
+                previous.payload.premise_report.spec.question_id):
+                raise ValueError("premise report cannot erase or change earlier analysis cost identity")
+            proposal = next((old.payload for old in past if type(old.payload) is CollaborationProposal and old.payload.proposal_digest == payload.proposal_digest), None)
+            if proposal is None or proposal.premise_decision != report.spec or report.source_conversation_id != event.conversation_id or report.step_id != event.step_id:
+                raise ValueError("premise report changed its exact proposal question")
+            admitted = None if report.spec.admission_ref is None else prior.get(report.spec.admission_ref.event_id)
+            current_admission = None if admitted is None else admitted.payload.admission
+            expected_parent = (current_admission.prior_admission_ref if current_admission is not None else
+                None if latest_admission is None else PremiseAdmissionRef(latest_admission.event_id, premise_digest(latest_admission.payload.admission)))
+            expected_authoring = (None if current_admission is None or current_admission.prior_authoring_source_ref is None
+                else current_admission.prior_authoring_source_ref.cost)
+            if report.prior_admission_ref != expected_parent or report.prior_authoring_cost != expected_authoring:
+                raise ValueError("premise report changed captured prior cost heads")
+            refs = tuple(prior.get(ref.event_id) for ref in report.source_reply_refs)
+            if any(old is None or type(old.payload) is not CollaborationSpecialistReplyPayload or old.payload.premise_analysis is None for old in refs):
+                raise ValueError("premise report invents an analyst reply")
+            for ref, old, assignment in zip(report.source_reply_refs, refs, proposal.assignments, strict=True):
+                reply = old.payload
+                reply_value = {"assessment": reply.assessment.value,
+                    "assignment_id": reply.assignment_id, "message": reply.message,
+                    "input_ids": list(reply.input_ids), "mode": reply.mode.value,
+                    "premise_analysis": premise_value_to_dict(reply.premise_analysis)}
+                actual_digest = "sha256:" + hashlib.sha256(json.dumps(reply_value,
+                    ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()
+                if ref.specialist_id != assignment.specialist_id or ref.reply_digest != actual_digest:
+                    raise ValueError("premise analyst owner or exact reply material changed")
+                if reply.assignment_id != assignment.assignment_id or reply.proposal_digest != proposal.proposal_digest or reply.execution_attempt_id != report.execution_attempt_id:
+                    raise ValueError("premise analyst source identity changed")
+                for option in report.options:
+                    disposition = next(item for item in option.reply_dispositions if item.reply_event_id == ref.event_id)
+                    if not set(disposition.alternative_keys) <= {item.alternative_key for item in reply.premise_analysis.alternatives}:
+                        raise ValueError("premise option invents an analyst alternative")
+                    if disposition.disposition == "unavailable" and reply.assessment is not CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE and reply.premise_analysis.alternatives:
+                        raise ValueError("premise option hides available analysis")
+            actual = tuple(old.payload.call_id for old in past if old.step_id == event.step_id and type(old.payload) is CollaborationProviderCallPayload and old.payload.state is CollaborationProviderCallState.SUBMITTED)
+            if report.cost.submitted_call_ids != actual:
+                raise ValueError("premise report cost differs from actual submissions")
+            if report.cost.rounds_spent != sum(type(old.payload) is CollaborationStepStatePayload
+                    and old.payload.state is CollaborationStepState.RUNNING and old.step_id == event.step_id for old in past):
+                raise ValueError("premise report rounds differ from durable RUNNING facts")
+            result = next((old for old in events if old.batch_id == event.batch_id
+                and type(old.payload) is CollaborationExecutionResult
+                and old.payload.synthesis_result_event_id == event.event_id
+                and (old.payload.proposal_id, old.payload.proposal_revision, old.payload.proposal_digest,
+                     old.payload.execution_attempt_id) == (report.proposal_id, report.proposal_revision,
+                     report.proposal_digest, report.execution_attempt_id)), None)
+            if result is None or not any(old.batch_id == event.batch_id
+                    and type(old.payload) is CollaborationStepStatePayload
+                    and old.payload.execution_result_event_id == result.event_id
+                    and old.payload.state in {CollaborationStepState.COMPLETED, CollaborationStepState.FAILED,
+                        CollaborationStepState.INTERRUPTED} for old in events):
+                raise ValueError("premise report requires its exact co-batched result and terminal state")
+            reports.append(event)
+        elif type(payload) is CollaborationPremiseDecisionPayload:
+            selection = payload.selection
+            messages = tuple(old for old in past if old.turn_id == event.turn_id and old.step_id == event.step_id
+                and old.sender.kind.value == "user" and type(old.payload) is CollaborationMessagePayload
+                and old.batch_id == event.batch_id)
+            if len(messages) != 1:
+                raise ValueError("premise USER control requires its exact co-batched message origin")
+            if selection.request_id in decisions:
+                raise ValueError("premise USER request accepts only one exact durable intake")
+            source = prior.get(selection.report_event_id)
+            if not reports or source is not reports[-1] or source.conversation_id != event.conversation_id or selection.source_conversation_id != event.conversation_id:
+                raise ValueError("premise USER decision selects a stale or foreign report")
+            report = source.payload.premise_report
+            if (selection.report_digest, selection.question_id) != (report.report_digest, report.spec.question_id):
+                raise ValueError("premise USER decision changed report identity")
+            if selection.action is PremiseDecisionAction.CHOOSE:
+                actual = {(item.option_id, item.material_digest) for item in report.options}
+                allowed = ({(selection.option_id, selection.material_digest)} if selection.choice_policy is PremiseChoicePolicy.USER_CHOICE
+                    else {(item.option_id, item.material_digest) for item in selection.allowed_choices})
+                if not allowed <= actual:
+                    raise ValueError("premise USER decision changed actual whole option material")
+            if any(old.payload.selection.report_event_id == source.event_id and old.payload.selection.action is PremiseDecisionAction.REJECT for old in decisions.values()):
+                raise ValueError("rejected premise report cannot become a choice")
+            result = next((old for old in past if type(old.payload) is CollaborationExecutionResult and old.payload.synthesis_result_event_id == source.event_id and old.payload.overall_outcome is CollaborationExecutionOutcomeKind.SUCCEEDED), None)
+            if result is None or not any(type(old.payload) is CollaborationStepStatePayload and old.payload.state is CollaborationStepState.COMPLETED and old.payload.execution_result_event_id == result.event_id for old in past):
+                raise ValueError("premise selection requires successful terminal analysis")
+            decisions[selection.request_id] = event
+            latest_decision = selection
+        elif type(payload) is CollaborationPremiseSelectionPayload:
+            capture = payload.capture
+            origin = prior.get(capture.selection_event_id)
+            if origin is None or type(origin.payload) is not CollaborationPremiseDecisionPayload or origin.payload.selection != capture.selection or origin.batch_id != event.batch_id or (origin.turn_id, origin.step_id) != (event.turn_id, event.step_id):
+                raise ValueError("premise capture requires its co-batched exact USER choice")
+            source = prior[capture.selection.report_event_id]
+            report = source.payload.premise_report
+            option = resolve_premise_choice(capture.selection, report)
+            if (capture.option_id, capture.material_digest, capture.selected_text, capture.slot_id, capture.dependent_domains) != (option.option_id, option.material_digest, option.premise_text, report.spec.slot_id, report.spec.dependent_domains):
+                raise ValueError("premise capture changed whole option bytes or domains")
+            if capture.cost_link.analysis != report.cost or capture.cost_link.prior_authoring != report.prior_authoring_cost or capture.cost_link.prior_admission_ref != report.prior_admission_ref:
+                raise ValueError("premise capture erased original analysis costs")
+            scopes = tuple(getattr(old.payload, "authoring_scope", None) for old in past)
+            same = tuple(item for item in scopes if item is not None and item.task_id == capture.authoring_task_id)
+            if capture.selection.authoring_task_id is None:
+                if same or any(old.payload.capture.authoring_task_id == capture.authoring_task_id for old in captures):
+                    raise ValueError("premise selection cannot reuse a previous task")
+            elif not same or max(item.task_revision for item in same) != capture.selection.expected_authoring_task_revision:
+                raise ValueError("premise successor choice has a stale task revision")
+            captures.append(event)
+        if type(payload) is CollaborationProposal and payload.authoring_scope is not None:
+            scope = payload.authoring_scope
+            admitted = next((old.payload.admission for old in reversed(past)
+                if type(old.payload) is CollaborationPremiseFreshWorkAdmissionPayload and old.step_id == event.step_id), None)
+            if admitted is not None and (
+                PremiseAuthoringTaskRef(scope.task_id, scope.task_revision)
+                not in admitted.offered_authoring_tasks
+                or (
+                    admitted.selected_authoring_task is not None
+                    and PremiseAuthoringTaskRef(scope.task_id, scope.task_revision)
+                    != admitted.selected_authoring_task
+                )
+            ):
+                raise ValueError("fresh-work proposal changed its prospectively admitted task")
+            if admitted is not None and (scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
+                    or scope.intent is not AuthoringIntent.AUTHORING or payload.budget.rounds_spent):
+                raise ValueError("fresh-work authoring requires fresh owner drafts and Confirm")
+            relevant = tuple(old for old in captures if old.payload.capture.authoring_task_id == scope.task_id and old.payload.capture.authoring_task_revision <= scope.task_revision)
+            if relevant:
+                chosen = relevant[-1]
+                capture = chosen.payload.capture
+                selected = tuple(item for item in payload.basis.inputs if item.input_id == "selected_premise")
+                if len(selected) != 1 or selected[0].kind is not CollaborationInputKind.CONVERSATION_EVENT or selected[0].locator != f"conversation/{chosen.event_id}" or selected[0].revision_digest != "sha256:" + capture.material_digest or selected[0].start_line is not None or selected[0].end_line is not None or any("selected_premise" not in item.input_ids for item in payload.assignments):
+                    raise ValueError("every chosen-premise writer/reviewer needs the exact current whole capture")
+                if not set(capture.dependent_domains) <= set(scope.domains):
+                    raise ValueError("chosen premise cannot omit an affected specialist domain")
+                matching = tuple(item for item in payload.basis.shared_premises if item.slot_id == capture.slot_id)
+                if len(matching) != 1 or matching[0].selected_premise != capture.selected_text or not any(item.input_revision == selected[0] for item in matching[0].sources):
+                    raise ValueError("chosen premise must bind its disclosed dependency slot")
+                if scope.task_revision == capture.authoring_task_revision and not any(type(old.payload) is CollaborationProposal and old.payload.authoring_scope is not None and (old.payload.authoring_scope.task_id, old.payload.authoring_scope.task_revision) == (scope.task_id, scope.task_revision) for old in past):
+                    if scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE} or scope.intent is not AuthoringIntent.AUTHORING or scope.target_paths != capture.selection.target_paths or payload.budget.rounds_spent:
+                        raise ValueError("chosen premise starts fresh authoring drafts, never supplied-candidate review")
+        if type(payload) is CollaborationSpecialistReplyPayload and payload.premise_conflicts:
+            proposal = next((old.payload for old in past if type(old.payload) is CollaborationProposal
+                and old.payload.proposal_digest == payload.proposal_digest), None)
+            relevant = tuple(old.payload.capture for old in captures if proposal is not None
+                and proposal.authoring_scope is not None
+                and old.payload.capture.authoring_task_id == proposal.authoring_scope.task_id
+                and old.payload.capture.authoring_task_revision <= proposal.authoring_scope.task_revision)
+            if not relevant or any((conflict.slot_id, conflict.capture_digest) != (
+                relevant[-1].slot_id, relevant[-1].capture_digest) for conflict in payload.premise_conflicts):
+                raise ValueError("dependent draft conflict lacks the exact current USER capture")
+        prior[event.event_id] = event
+    current_report = reports[-1] if reports else None
+    if latest_decision is not None and (current_report is None or latest_decision.report_event_id != current_report.event_id):
+        latest_decision = None
+    current_capture = None if not captures else captures[-1].payload.capture
+    return (None if current_report is None else current_report.payload.premise_report,
+            None if current_report is None else current_report.event_id,
+            None if latest_decision is None else latest_decision,
+            current_capture, None if latest_admission is None else latest_admission.payload.admission,
+            None if latest_admission is None else latest_admission.event_id)
+
+
 def _project_validated_collaboration_history(
     events: tuple[CollaborationEventV2, ...],
 ) -> CollaborationHistoryProjection:
@@ -2998,6 +3347,7 @@ def _project_validated_collaboration_history(
         return replace(projection, session_id=events[0].session_id, conversation_id=events[0].conversation_id,
                        last_sequence=events[-1].sequence)
     _validate_exploration_history(events)
+    premise_state = _validate_premise_history(events)
     artifact_candidates, artifact_states, artifact_reviewed = (
         _project_artifact_review_history(events)
     )
@@ -3300,6 +3650,14 @@ def _project_validated_collaboration_history(
                         raise ValueError(
                             "submitted provider call drifts from its preparation"
                         )
+                    admission = next((prior.payload.admission for prior in event_by_id.values()
+                        if type(prior.payload) is CollaborationPremiseFreshWorkAdmissionPayload
+                        and prior.payload.admission.provider_invocation_id == payload.invocation_id), None)
+                    if admission is not None:
+                        actual_front = sum(call.state is CollaborationProviderCallState.SUBMITTED
+                            and call.invocation_id == payload.invocation_id for _, call in provider_call_events)
+                        if actual_front + 1 > admission.front_physical_call_limit:
+                            raise ValueError("fresh-work front exceeds its immutable admission cap")
                     submitted_call_ids.add(payload.call_id)
                     spent_calls[event.step_id] = spent_calls.get(event.step_id, 0) + 1
                     if spent_calls[event.step_id] > COLLABORATION_PHYSICAL_CALL_LIMIT:
@@ -3380,7 +3738,7 @@ def _project_validated_collaboration_history(
             }:
                 continue
 
-            if type(payload) in {CollaborationLeadExplorationRequestPayload, CollaborationExplorationAdoptionPayload}:
+            if type(payload) in {CollaborationLeadExplorationRequestPayload, CollaborationExplorationAdoptionPayload, CollaborationPremiseDecisionPayload, CollaborationPremiseSelectionPayload, CollaborationPremiseFreshWorkAdmissionPayload}:
                 continue
             if proposal is None:
                 raise ValueError(
@@ -3569,6 +3927,13 @@ def _project_validated_collaboration_history(
                     raise ValueError("lead synthesis attempt does not match running")
                 if payload.evidence != proposal.basis.evidence:
                     raise ValueError("lead synthesis evidence drifts from its proposal")
+                if (payload.premise_report is None) != (proposal.premise_decision is None):
+                    raise ValueError("analysis synthesis requires its typed report only")
+                if (
+                    payload.premise_report is not None
+                    and payload.premise_report.spec != proposal.premise_decision
+                ):
+                    raise ValueError("premise report specification drifts from its proposal")
                 if payload.authoring_scope != proposal.authoring_scope:
                     raise ValueError("lead synthesis authoring scope drifts from its proposal")
                 expected_reply_ids = tuple(
@@ -3598,6 +3963,7 @@ def _project_validated_collaboration_history(
                     if reply.assessment in {
                         CollaborationSpecialistAssessment.SUPPORTS, CollaborationSpecialistAssessment.DRAFTED,
                         CollaborationSpecialistAssessment.CONSTRAINTS_ASSESSED,
+                        CollaborationSpecialistAssessment.ALTERNATIVES_ASSESSED,
                     }:
                         continue
                     for input_id in reply.input_ids:
@@ -3802,6 +4168,11 @@ def _project_validated_collaboration_history(
                 or len(batch_judgments) != 1
                 or batch_judgments[0][1].kind is not LeadOutcomeKind.PROPOSAL
                 or lead_proposals[0].basis.evidence != batch_judgments[0][1].evidence
+                or (lead_proposals[0].premise_decision is not None)
+                != (
+                    batch_judgments[0][1].evidence.scope
+                    is LeadOutcomeScope.PREMISE_ANALYSIS
+                )
                 or lead_proposals[0].authoring_scope != batch_judgments[0][1].authoring_scope
             ):
                 raise ValueError(
@@ -3899,6 +4270,9 @@ def _project_validated_collaboration_history(
         if result_event.turn_id == current_turn_id and current_proposal is None:
             recommendation_next_action = CollaborationNextAction.CONTINUE_WITH_LEAD
     return CollaborationHistoryProjection(
+        premise_report=premise_state[0], premise_report_event_id=premise_state[1],
+        premise_decision=premise_state[2], premise_selection=premise_state[3],
+        premise_admission=premise_state[4], premise_admission_event_id=premise_state[5],
         session_id=events[0].session_id,
         conversation_id=events[0].conversation_id,
         last_sequence=events[-1].sequence,
@@ -3928,6 +4302,27 @@ def _project_validated_collaboration_history(
             if unmatched_submitted_lead
             else CollaborationNextAction.RETRY_LEAD_TURN
             if current_lead_outcome_failed
+            else CollaborationNextAction.CONTINUE_WITH_LEAD
+            if (
+                premise_state[0] is not None
+                and premise_state[2] is not None
+                and type(events[-1].payload) is CollaborationPremiseDecisionPayload
+                and events[-1].sender.kind.value == "user"
+                and events[-1].payload.selection == premise_state[2]
+                and events[-1].payload.selection.report_event_id == premise_state[1]
+                and premise_state[2].action is PremiseDecisionAction.REJECT
+                and current_proposal is None
+                and state is None
+            )
+            else CollaborationNextAction.CHOOSE_PREMISE
+            if premise_state[0] is not None
+            and (
+                premise_state[3] is None
+                or premise_state[3].selection.report_event_id != premise_state[1]
+            )
+            and (premise_state[2] is None or premise_state[2].action is not PremiseDecisionAction.REJECT)
+            and state not in {CollaborationStepState.RUNNING, CollaborationStepState.CONFIRMED,
+                CollaborationStepState.AWAITING_CONFIRMATION, CollaborationStepState.RECONFIRMATION_REQUIRED}
             else _next_action(state, projection_result)
         ),
         rounds_spent=running_attempts.get(current_step_id, 0),
@@ -4130,7 +4525,7 @@ def _project_artifact_objective_history(
                 }
             ):
                 text = payload.message
-            elif type(payload) is CollaborationLeadSynthesisPayload:
+            elif type(payload) is CollaborationLeadSynthesisPayload and payload.premise_report is None:
                 text = payload.message
             if text is not None:
                 sources[event.event_id] = ArtifactDraftSource(
@@ -4395,7 +4790,38 @@ def _validate_collaboration_execution_result(
     actual_ids = tuple(item.assignment_id for item in result.assignment_outcomes)
     if actual_ids != expected_ids:
         raise ValueError("execution result outcomes must match proposal order exactly")
-    if event is not batch[-1]:
+    if proposal.premise_decision is not None:
+        suffix = batch[event.batch_ordinal + 1:]
+        expected_terminal_state = {
+            CollaborationExecutionOutcomeKind.SUCCEEDED: CollaborationStepState.COMPLETED,
+            CollaborationExecutionOutcomeKind.FAILED: CollaborationStepState.FAILED,
+            CollaborationExecutionOutcomeKind.CANCELLED: CollaborationStepState.INTERRUPTED,
+        }.get(result.overall_outcome)
+        if (
+            proposal.step_kind is not CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION
+            or type(proposal.basis.evidence) is not CollaborationLeadEvidence
+            or proposal.basis.evidence.scope is not LeadOutcomeScope.PREMISE_ANALYSIS
+            or expected_terminal_state is None
+            or len(suffix) != 1
+            or type(suffix[0].payload) is not CollaborationStepStatePayload
+            or suffix[0].payload.state is not expected_terminal_state
+            or suffix[0].payload.execution_result_event_id != event.event_id
+            or suffix[0].step_id != event.step_id
+        ):
+            raise ValueError("analysis result requires its exact co-batched terminal state")
+        if result.overall_outcome is CollaborationExecutionOutcomeKind.SUCCEEDED:
+            analysis_synthesis_event = event_by_id.get(result.synthesis_result_event_id)
+            if (
+                result.synthesis_outcome is not CollaborationSynthesisOutcomeKind.SUCCEEDED
+                or analysis_synthesis_event is None
+                or type(analysis_synthesis_event.payload) is not CollaborationLeadSynthesisPayload
+                or analysis_synthesis_event.payload.premise_report is None
+                or analysis_synthesis_event.payload.premise_report.spec != proposal.premise_decision
+            ):
+                raise ValueError("successful analysis requires its exact typed report")
+        elif result.synthesis_result_event_id is not None:
+            raise ValueError("failed or cancelled analysis cannot publish a premise report")
+    elif event is not batch[-1]:
         suffix = batch[event.batch_ordinal + 1:]
         if (len(suffix) != 2
             or type(suffix[0].payload) is not CollaborationStepStatePayload
@@ -4718,6 +5144,65 @@ def _validate_collaboration_co_batch(
                         for source in batch)
                 for event in batch
             )
+        premise_proposal = active_proposals.get(state_event.step_id)
+        premise_result = next(
+            (
+                payload
+                for event, payload in results
+                if event.event_id == state_payload.execution_result_event_id
+                and event.step_id == state_event.step_id
+            ),
+            None,
+        )
+        premise_notice = False
+        if (
+            premise_proposal is not None
+            and premise_proposal.premise_decision is not None
+            and premise_proposal.step_kind is CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION
+            and premise_proposal.authoring_scope is None
+            and premise_proposal.basis.evidence is not None
+            and premise_proposal.basis.evidence.scope is LeadOutcomeScope.PREMISE_ANALYSIS
+            and premise_result is not None
+            and (
+                premise_result.proposal_id,
+                premise_result.proposal_revision,
+                premise_result.proposal_digest,
+            ) == (
+                premise_proposal.proposal_id,
+                premise_proposal.proposal_revision,
+                premise_proposal.proposal_digest,
+            )
+        ):
+            if premise_result.overall_outcome is CollaborationExecutionOutcomeKind.SUCCEEDED:
+                premise_notice = any(
+                    event.event_id == premise_result.synthesis_result_event_id
+                    and event.event_id in premise_result.visible_exchange_event_ids
+                    and event.step_id == state_event.step_id
+                    and event.kind is CollaborationEventKindV2.LEAD_SYNTHESIS
+                    and event.sender.kind.value == "lead"
+                    and event.recipient.kind.value == "user"
+                    and type(event.payload) is CollaborationLeadSynthesisPayload
+                    and event.payload.premise_report is not None
+                    and event.payload.premise_report.spec == premise_proposal.premise_decision
+                    and event.payload.execution_attempt_id == premise_result.execution_attempt_id
+                    for event in batch
+                )
+            elif premise_result.overall_outcome in (
+                CollaborationExecutionOutcomeKind.FAILED,
+                CollaborationExecutionOutcomeKind.CANCELLED,
+            ):
+                premise_notice = any(
+                    event.event_id in premise_result.visible_exchange_event_ids
+                    and event.step_id == state_event.step_id
+                    and event.kind is CollaborationEventKindV2.TERMINAL_OUTCOME
+                    and event.sender.kind.value == "runtime"
+                    and event.recipient.kind.value == "user"
+                    and type(event.payload) is CollaborationTerminalOutcomePayload
+                    and event.payload.execution_attempt_id == premise_result.execution_attempt_id
+                    and event.payload.outcome.value == premise_result.overall_outcome.value
+                    for event in terminal_outcomes
+                )
+        has_notice = has_notice or premise_notice
         if not has_notice:
             raise ValueError("terminal step state requires a co-batched visible notice")
         if (
@@ -4732,7 +5217,11 @@ def _validate_collaboration_co_batch(
                 ),
                 None,
             )
-            if result is not None:
+            if result is not None and not (
+                premise_notice
+                and premise_result is not None
+                and premise_result.overall_outcome is CollaborationExecutionOutcomeKind.CANCELLED
+            ):
                 raise ValueError("interrupted state requires a co-batched interruption")
 
     unknown_states = [
@@ -4780,6 +5269,13 @@ def _collaboration_readable_fields(
     payload: CollaborationPayload,
 ) -> tuple[CollaborationReadableField, ...]:
     """Project the closed searchable field set for one typed public payload."""
+
+    if type(payload) in {CollaborationPremiseDecisionPayload, CollaborationPremiseSelectionPayload,
+                         CollaborationPremiseFreshWorkAdmissionPayload}:
+        value = payload.selection if type(payload) is CollaborationPremiseDecisionPayload else (
+            payload.capture if type(payload) is CollaborationPremiseSelectionPayload else payload.admission)
+        return (CollaborationReadableField(CollaborationReadableFieldKey.MESSAGE_CONTENT,
+            json.dumps(premise_value_to_dict(value), ensure_ascii=False, sort_keys=True)),)
 
     if type(payload) is CollaborationEditorialRecordPayload:
         return (

@@ -193,6 +193,81 @@ _UNIQUE_C = "c_fedcba9876" + ("c" * 22)
 
 
 
+def _message_visibility_controller_fixture(case, workspace):
+    return case.make_controller(
+        workspace,
+        "/settings",
+        "1",
+        "2",
+        "/cancel",
+        "8",
+        "1",
+        "9",
+        "1",
+        "/quit",
+        terminal_width=160,
+    )
+
+def _auth_cancellation_controller_fixture(case, workspace, coordinator):
+    return case.make_controller(
+        workspace,
+        "/settings",
+        "7",
+        "2",
+        "1",
+        "1",
+        "2",
+        "1",
+        "1",
+        "/cancel",
+        "/cancel",
+        "9",
+        "1",
+        "/quit",
+        auth_coordinator=coordinator,
+        terminal_width=160,
+    )
+
+def _observed_picker_patch(original_picker):
+    return mock.patch.object(
+        terminal_module.InteractivePickerInput,
+        "read_picker",
+        autospec=True,
+        side_effect=original_picker,
+    )
+
+def _catalog_settings_controller_fixture(case, workspace, catalog):
+    return case.make_controller(
+        workspace,
+        provider_catalog=catalog,
+    )
+
+def _storage_selection_patch_fixture():
+    return mock.patch.object(
+        controller_core_module,
+        "select_conversation_storage",
+    )
+
+def _loaded_settings_state_patch(state):
+    return mock.patch.object(
+        controller_core_module,
+        "load_settings_state",
+        return_value=state,
+    )
+
+def _settings_routes_authentication_patch():
+    return mock.patch.object(
+        InteractiveController,
+        "_authenticate_settings_routes",
+        autospec=True,
+    )
+
+def _prepared_settings_commit_patch():
+    return mock.patch.object(
+        controller_core_module,
+        "commit_prepared_settings_save",
+    )
+
 def _cancel_picker_patch(cancel):
     return mock.patch.object(terminal_module.InteractivePickerInput, "read_picker", autospec=True, return_value=cancel)
 
@@ -200,6 +275,14 @@ def _cancel_picker_patch(cancel):
 def _control_commit_text(text):
     return terminal_module.ControlOutcome(terminal_module.ControlOutcomeKind.COMMIT, text=text)
 
+
+def _observed_prompt_patch(original_prompt):
+    return mock.patch.object(
+        terminal_module.InteractivePromptInput,
+        "read_prompt",
+        autospec=True,
+        side_effect=original_prompt,
+    )
 
 class ScriptedTerminalCallbacks:
     """Record terminal traffic and supply scripted text, events, or callbacks."""
@@ -1511,8 +1594,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 152)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 646)
+        self.assertEqual(len(modules), 153)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 654)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -1878,10 +1961,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 "prepare_settings_save",
                 wraps=controller_core_module.prepare_settings_save,
             ) as prepare,
-            mock.patch.object(
-                controller_core_module,
-                "select_conversation_storage",
-            ) as select_storage,
+            _storage_selection_patch_fixture() as select_storage,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
 
@@ -1932,24 +2012,7 @@ class ControllerSettingsTests(ControllerTestCase):
             snapshots=(codex_only,) * 9,
             results=(_auth_result(codex_only, "antigravity"),),
         )
-        controller, _backend, callbacks = self.make_controller(
-            workspace,
-            "/settings",
-            "7",
-            "2",
-            "1",
-            "1",
-            "2",
-            "1",
-            "1",
-            "/cancel",
-            "/cancel",
-            "9",
-            "1",
-            "/quit",
-            auth_coordinator=coordinator,
-            terminal_width=160,
-        )
+        controller, _backend, callbacks = _auth_cancellation_controller_fixture(self, workspace, coordinator)
         self.assertEqual(controller.run_session_lobby(), 0)
 
         configuration = settings_module.load_settings_state(workspace).pending
@@ -1989,24 +2052,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 ),
             ),
         )
-        controller, _backend, callbacks = self.make_controller(
-            workspace,
-            "/settings",
-            "7",
-            "2",
-            "1",
-            "1",
-            "2",
-            "1",
-            "1",
-            "/cancel",
-            "/cancel",
-            "9",
-            "1",
-            "/quit",
-            auth_coordinator=coordinator,
-            terminal_width=160,
-        )
+        controller, _backend, callbacks = _auth_cancellation_controller_fixture(self, workspace, coordinator)
         self.assertEqual(controller.run_session_lobby(), 0)
 
         self.assertEqual(
@@ -2053,12 +2099,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     auth_coordinator=coordinator,
                 )
                 choose_antigravity = _control_commit_text("antigravity")
-                with mock.patch.object(
-                    terminal_module.InteractivePickerInput,
-                    "read_picker",
-                    autospec=True,
-                    return_value=choose_antigravity,
-                ):
+                with _cancel_picker_patch(choose_antigravity):
                     unchanged, whole_cancel = controller._edit_settings_agent_provider(
                         settings_module.load_settings_state(workspace),
                         PLOT_ARCHITECT,
@@ -2132,11 +2173,8 @@ class ControllerSettingsTests(ControllerTestCase):
 
         cancel = _cancel_control_outcome()
         with (
-            mock.patch.object(
-                terminal_module.InteractivePickerInput,
-                "read_picker",
-                autospec=True,
-                side_effect=(
+            _observed_picker_patch(
+                (
                     commit("language"),
                     commit(changed),
                     cancel,
@@ -2147,10 +2185,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     cancel,
                 ),
             ) as picker,
-            mock.patch.object(
-                controller_core_module,
-                "select_conversation_storage",
-            ) as save,
+            _storage_selection_patch_fixture() as save,
         ):
             controller._run_settings()
 
@@ -2431,21 +2466,9 @@ class ControllerSettingsTests(ControllerTestCase):
                 terminal_module.ControlOutcomeKind.INTERRUPT
             )
             with (
-                mock.patch.object(
-                    controller_core_module,
-                    "load_settings_state",
-                    return_value=state,
-                ),
-                mock.patch.object(
-                    terminal_module.InteractivePickerInput,
-                    "read_picker",
-                    autospec=True,
-                    return_value=interrupt,
-                ) as picker,
-                mock.patch.object(
-                    controller_core_module,
-                    "select_conversation_storage",
-                ) as select_storage,
+                _loaded_settings_state_patch(state),
+                _cancel_picker_patch(interrupt) as picker,
+                _storage_selection_patch_fixture() as select_storage,
             ):
                 controller._run_settings()
             select_storage.assert_not_called()
@@ -2672,16 +2695,13 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         before_tree = _tree_snapshot(workspace.root)
         with (
-            mock.patch.object(
-                terminal_module.InteractivePickerInput,
-                "read_picker",
-                autospec=True,
-                side_effect=(
+            _observed_picker_patch(
+                (
                     commit(PLOT_ARCHITECT),
                     commit("provider"),
                     cancel,
                     cancel,
-                ),
+                )
             ) as picker,
             mock.patch.object(
                 InteractiveController,
@@ -2795,12 +2815,7 @@ class ControllerSettingsTests(ControllerTestCase):
             PLOT_ARCHITECT,
             "future_2",
         )
-        with mock.patch.object(
-            terminal_module.InteractivePickerInput,
-            "read_picker",
-            autospec=True,
-            side_effect=(commit(PLOT_ARCHITECT), cancel, cancel),
-        ) as pending_picker:
+        with _observed_picker_patch((commit(PLOT_ARCHITECT), cancel, cancel)) as pending_picker:
             unchanged, whole_cancel = controller._edit_settings_provider(
                 model_effort_pending
             )
@@ -2875,12 +2890,7 @@ class ControllerSettingsTests(ControllerTestCase):
         commit = _control_commit_text(PLOT_ARCHITECT)
         cancel = _cancel_control_outcome()
         with (
-            mock.patch.object(
-                terminal_module.InteractivePickerInput,
-                "read_picker",
-                autospec=True,
-                side_effect=(commit, cancel, cancel),
-            ) as picker,
+            _observed_picker_patch((commit, cancel, cancel)) as picker,
             mock.patch.object(subprocess, "Popen") as popen,
             mock.patch.object(subprocess, "run") as run,
             mock.patch.object(socket, "create_connection") as connect,
@@ -2938,12 +2948,7 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         original_picker = terminal_module.InteractivePickerInput.read_picker
         with (
-            mock.patch.object(
-                terminal_module.InteractivePickerInput,
-                "read_picker",
-                autospec=True,
-                side_effect=original_picker,
-            ) as picker,
+            _observed_picker_patch(original_picker) as picker,
             mock.patch.object(
                 controller_core_module,
                 "parse_interactive_line",
@@ -3120,12 +3125,7 @@ class ControllerSettingsTests(ControllerTestCase):
         cancel = _cancel_control_outcome()
         state = settings_module.load_settings_state(workspace)
         try:
-            with mock.patch.object(
-                terminal_module.InteractivePickerInput,
-                "read_picker",
-                autospec=True,
-                side_effect=(cancel, cancel, cancel),
-            ):
+            with _observed_picker_patch((cancel, cancel, cancel)):
                 controller._edit_settings_agent_provider(state, PLOT_ARCHITECT)
                 controller._edit_settings_agent_model(state, PLOT_ARCHITECT)
                 controller._edit_settings_agent_reasoning(state, PLOT_ARCHITECT)
@@ -3172,12 +3172,7 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         for field, editor, values, pending_value in cases:
             with self.subTest(field=field):
-                with mock.patch.object(
-                    terminal_module.InteractivePickerInput,
-                    "read_picker",
-                    autospec=True,
-                    side_effect=(commit(values[0]), commit(values[1]), cancel),
-                ) as picker:
+                with _observed_picker_patch((commit(values[0]), commit(values[1]), cancel)) as picker:
                     updated, whole_cancel = editor(state)
 
                 self.assertFalse(whole_cancel)
@@ -3232,12 +3227,7 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         for state, initial, selected, display, expected in cases:
             with self.subTest(selected=selected):
-                with mock.patch.object(
-                    terminal_module.InteractivePickerInput,
-                    "read_picker",
-                    autospec=True,
-                    side_effect=(commit(selected), commit(selected)),
-                ) as picker:
+                with _observed_picker_patch((commit(selected), commit(selected))) as picker:
                     updated, whole_cancel = controller._edit_settings_message_details(
                         state
                     )
@@ -3287,12 +3277,7 @@ class ControllerSettingsTests(ControllerTestCase):
             return _control_commit_text(value)
 
         cancel = _cancel_control_outcome()
-        with mock.patch.object(
-            terminal_module.InteractivePromptInput,
-            "read_prompt",
-            autospec=True,
-            side_effect=(commit("2"), commit("bad"), commit("3"), cancel),
-        ) as prompt:
+        with _observed_prompt_patch((commit("2"), commit("bad"), commit("3"), cancel)) as prompt:
             updated, whole_cancel = controller._edit_settings_rounds(
                 settings_module.load_settings_state(workspace)
             )
@@ -3333,12 +3318,7 @@ class ControllerSettingsTests(ControllerTestCase):
             1,
         )
 
-        with mock.patch.object(
-            terminal_module.InteractivePromptInput,
-            "read_prompt",
-            autospec=True,
-            side_effect=(commit("1"), commit("1")),
-        ) as unchanged_prompt:
+        with _observed_prompt_patch((commit("1"), commit("1"))) as unchanged_prompt:
             unchanged, whole_cancel = controller._edit_settings_rounds(
                 settings_module.load_settings_state(workspace)
             )
@@ -3361,12 +3341,7 @@ class ControllerSettingsTests(ControllerTestCase):
         commit_antigravity = _control_commit_text("antigravity")
         commit_codex = _control_commit_text("codex")
         cancel = _cancel_control_outcome()
-        with mock.patch.object(
-            terminal_module.InteractivePickerInput,
-            "read_picker",
-            autospec=True,
-            side_effect=(commit_antigravity, commit_codex, cancel),
-        ) as picker:
+        with _observed_picker_patch((commit_antigravity, commit_codex, cancel)) as picker:
             updated, whole_cancel = controller._edit_settings_agent_provider(
                 settings_module.load_settings_state(workspace),
                 PLOT_ARCHITECT,
@@ -3445,10 +3420,7 @@ class ControllerSettingsTests(ControllerTestCase):
             ),
         )
         catalog = ScriptedProviderCatalog(_ready_provider_catalog("codex", *models))
-        controller, _backend, callbacks = self.make_controller(
-            workspace,
-            provider_catalog=catalog,
-        )
+        controller, _backend, callbacks = _catalog_settings_controller_fixture(self, workspace, catalog)
         state = settings_module.load_settings_state(workspace)
         persona_values = tuple(entry.name for entry in state.baseline.persona_catalog)
         self.assertTrue(persona_values)
@@ -3471,11 +3443,8 @@ class ControllerSettingsTests(ControllerTestCase):
             with self.subTest(editor=label, phase="armed"):
                 updater = getattr(controller_core_module, updater_name)
                 with (
-                    mock.patch.object(
-                        terminal_module.InteractivePickerInput,
-                        "read_picker",
-                        autospec=True,
-                        side_effect=(
+                    _observed_picker_patch(
+                        (
                             commit(first),
                             commit(second),
                             commit(second),
@@ -3496,12 +3465,7 @@ class ControllerSettingsTests(ControllerTestCase):
             with self.subTest(editor=label, phase="reentry"):
                 updater = getattr(controller_core_module, updater_name)
                 with (
-                    mock.patch.object(
-                        terminal_module.InteractivePickerInput,
-                        "read_picker",
-                        autospec=True,
-                        side_effect=(commit(second), cancel),
-                    ) as picker,
+                    _observed_picker_patch((commit(second), cancel)) as picker,
                     mock.patch.object(
                         controller_core_module,
                         updater_name,
@@ -3520,10 +3484,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 controller_core_module,
                 "prepare_settings_save",
             ) as prepare,
-            mock.patch.object(
-                controller_core_module,
-                "select_conversation_storage",
-            ) as select_storage,
+            _storage_selection_patch_fixture() as select_storage,
         ):
             state = exercise_picker(
                 "Language",
@@ -3536,11 +3497,8 @@ class ControllerSettingsTests(ControllerTestCase):
                 "update_language",
             )
             with (
-                mock.patch.object(
-                    terminal_module.InteractivePickerInput,
-                    "read_picker",
-                    autospec=True,
-                    side_effect=(
+                _observed_picker_patch(
+                    (
                         commit(persona_values[0]),
                         commit(persona_values[0]),
                     ),
@@ -3556,12 +3514,7 @@ class ControllerSettingsTests(ControllerTestCase):
             self.assertEqual(picker.call_count, 2)
             self.assertEqual(update.call_count, 1)
             with (
-                mock.patch.object(
-                    terminal_module.InteractivePickerInput,
-                    "read_picker",
-                    autospec=True,
-                    side_effect=(commit(persona_values[0]), cancel),
-                ) as picker,
+                _observed_picker_patch((commit(persona_values[0]), cancel)) as picker,
                 mock.patch.object(
                     controller_core_module,
                     "update_persona",
@@ -3631,12 +3584,7 @@ class ControllerSettingsTests(ControllerTestCase):
             )
 
             with (
-                mock.patch.object(
-                    terminal_module.InteractivePromptInput,
-                    "read_prompt",
-                    autospec=True,
-                    side_effect=(commit("02"), commit("3"), commit("03")),
-                ) as prompt,
+                _observed_prompt_patch((commit("02"), commit("3"), commit("03"))) as prompt,
                 mock.patch.object(
                     controller_core_module,
                     "update_max_debate_rounds",
@@ -3650,12 +3598,7 @@ class ControllerSettingsTests(ControllerTestCase):
             self.assertEqual(state.pending.system_defaults.max_debate_rounds, 3)
 
             with (
-                mock.patch.object(
-                    terminal_module.InteractivePromptInput,
-                    "read_prompt",
-                    autospec=True,
-                    side_effect=(commit("bad"), commit("03"), commit("3")),
-                ) as prompt,
+                _observed_prompt_patch((commit("bad"), commit("03"), commit("3"))) as prompt,
                 mock.patch.object(
                     controller_core_module,
                     "update_max_debate_rounds",
@@ -3669,12 +3612,7 @@ class ControllerSettingsTests(ControllerTestCase):
             self.assertEqual(reentered, state)
 
             with (
-                mock.patch.object(
-                    terminal_module.InteractivePromptInput,
-                    "read_prompt",
-                    autospec=True,
-                    side_effect=(commit("custom-a"), commit(""), commit("")),
-                ) as prompt,
+                _observed_prompt_patch((commit("custom-a"), commit(""), commit(""))) as prompt,
                 mock.patch.object(
                     controller_core_module,
                     "update_agent_codex_model",
@@ -3692,12 +3630,7 @@ class ControllerSettingsTests(ControllerTestCase):
             self.assertIsNone(state.pending.agent_configs[PLOT_ARCHITECT].codex_model)
 
             with (
-                mock.patch.object(
-                    terminal_module.InteractivePromptInput,
-                    "read_prompt",
-                    autospec=True,
-                    side_effect=(commit("-unsafe"), commit(""), commit("")),
-                ) as prompt,
+                _observed_prompt_patch((commit("-unsafe"), commit(""), commit(""))) as prompt,
                 mock.patch.object(
                     controller_core_module,
                     "update_agent_codex_model",
@@ -3749,10 +3682,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 ),
             )
         )
-        controller, _backend, _callbacks = self.make_controller(
-            workspace,
-            provider_catalog=catalog,
-        )
+        controller, _backend, _callbacks = _catalog_settings_controller_fixture(self, workspace, catalog)
 
         def commit(value):
             return _control_commit_text(value)
@@ -3771,12 +3701,7 @@ class ControllerSettingsTests(ControllerTestCase):
             cancel,
             cancel,
         )
-        with mock.patch.object(
-            terminal_module.InteractivePickerInput,
-            "read_picker",
-            autospec=True,
-            side_effect=picker_outcomes,
-        ) as picker:
+        with _observed_picker_patch(picker_outcomes) as picker:
             updated, whole_cancel = controller._edit_settings_provider(
                 settings_module.load_settings_state(workspace)
             )
@@ -3861,12 +3786,7 @@ class ControllerSettingsTests(ControllerTestCase):
         commit_gpt_b = _control_commit_text("settings:model:1")
         commit_gpt_a = _control_commit_text("settings:model:0")
         cancel = _cancel_control_outcome()
-        with mock.patch.object(
-            terminal_module.InteractivePickerInput,
-            "read_picker",
-            autospec=True,
-            side_effect=(commit_gpt_b, commit_gpt_a, cancel),
-        ) as picker:
+        with _observed_picker_patch((commit_gpt_b, commit_gpt_a, cancel)) as picker:
             updated, whole_cancel = controller._edit_settings_agent_model(
                 state,
                 PLOT_ARCHITECT,
@@ -3956,10 +3876,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 ProviderModel("gpt-a", "GPT Alpha", None, None, ()),
             )
         )
-        controller, _backend, _callbacks = self.make_controller(
-            workspace,
-            provider_catalog=catalog,
-        )
+        controller, _backend, _callbacks = _catalog_settings_controller_fixture(self, workspace, catalog)
         state = settings_module.update_agent_codex_model(
             settings_module.load_settings_state(workspace),
             PLOT_ARCHITECT,
@@ -3968,12 +3885,7 @@ class ControllerSettingsTests(ControllerTestCase):
         choose_custom = _control_commit_text("settings:model:custom")
         cancel = _cancel_control_outcome()
         with (
-            mock.patch.object(
-                terminal_module.InteractivePickerInput,
-                "read_picker",
-                autospec=True,
-                side_effect=(choose_custom, cancel),
-            ) as picker,
+            _observed_picker_patch((choose_custom, cancel)) as picker,
             mock.patch.object(
                 terminal_module.InteractivePromptInput,
                 "read_prompt",
@@ -4017,27 +3929,16 @@ class ControllerSettingsTests(ControllerTestCase):
                 ProviderModel("gpt-a", "GPT Alpha", None, None, ()),
             )
         )
-        controller, _backend, callbacks = self.make_controller(
-            workspace,
-            provider_catalog=catalog,
-        )
+        controller, _backend, callbacks = _catalog_settings_controller_fixture(self, workspace, catalog)
 
         def commit(value: str) -> terminal_module.ControlOutcome:
             return _control_commit_text(value)
 
         cancel = _cancel_control_outcome()
         with (
-            mock.patch.object(
-                terminal_module.InteractivePickerInput,
-                "read_picker",
-                autospec=True,
-                side_effect=(commit("settings:model:custom"), cancel),
-            ) as picker,
-            mock.patch.object(
-                terminal_module.InteractivePromptInput,
-                "read_prompt",
-                autospec=True,
-                side_effect=(
+            _observed_picker_patch((commit("settings:model:custom"), cancel)) as picker,
+            _observed_prompt_patch(
+                (
                     commit("first-custom"),
                     commit("-unsafe"),
                     commit(""),
@@ -4106,10 +4007,7 @@ class ControllerSettingsTests(ControllerTestCase):
             ),
         )
         catalog = ScriptedProviderCatalog(_ready_provider_catalog("codex", *models))
-        controller, _backend, _callbacks = self.make_controller(
-            workspace,
-            provider_catalog=catalog,
-        )
+        controller, _backend, _callbacks = _catalog_settings_controller_fixture(self, workspace, catalog)
         state = settings_module.update_agent_codex_reasoning_effort(
             settings_module.update_agent_codex_model(
                 settings_module.load_settings_state(workspace),
@@ -4122,12 +4020,7 @@ class ControllerSettingsTests(ControllerTestCase):
         choose_low = _control_commit_text("settings:effort:0")
         choose_future = _control_commit_text("settings:effort:1")
         cancel = _cancel_control_outcome()
-        with mock.patch.object(
-            terminal_module.InteractivePickerInput,
-            "read_picker",
-            autospec=True,
-            side_effect=(choose_low, choose_future, cancel),
-        ) as picker:
+        with _observed_picker_patch((choose_low, choose_future, cancel)) as picker:
             updated, whole_cancel = controller._edit_settings_agent_reasoning(
                 state,
                 PLOT_ARCHITECT,
@@ -4179,12 +4072,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "legacy_mode",
         )
         keep_current = _control_commit_text("settings:effort:current-compatibility")
-        with mock.patch.object(
-            terminal_module.InteractivePickerInput,
-            "read_picker",
-            autospec=True,
-            side_effect=(keep_current, cancel),
-        ) as picker:
+        with _observed_picker_patch((keep_current, cancel)) as picker:
             unchanged, whole_cancel = controller._edit_settings_agent_reasoning(
                 compatibility,
                 PLOT_ARCHITECT,
@@ -4228,10 +4116,7 @@ class ControllerSettingsTests(ControllerTestCase):
             _ready_provider_catalog("antigravity", agy_model),
             _ready_provider_catalog("codex", codex_model),
         )
-        controller, _backend, _callbacks = self.make_controller(
-            workspace,
-            provider_catalog=catalog,
-        )
+        controller, _backend, _callbacks = _catalog_settings_controller_fixture(self, workspace, catalog)
         cancel = _cancel_control_outcome()
         state = settings_module.load_settings_state(workspace)
         with _cancel_picker_patch(cancel):
@@ -4271,18 +4156,10 @@ class ControllerSettingsTests(ControllerTestCase):
                 workspace = self.make_workspace()
                 discovery = ProviderCatalogDiscovery("codex", discovery_state)
                 catalog = ScriptedProviderCatalog(discovery)
-                controller, _backend, _callbacks = self.make_controller(
-                    workspace,
-                    provider_catalog=catalog,
-                )
+                controller, _backend, _callbacks = _catalog_settings_controller_fixture(self, workspace, catalog)
                 state = settings_module.load_settings_state(workspace)
                 cancel = _cancel_control_outcome()
-                with mock.patch.object(
-                    terminal_module.InteractivePickerInput,
-                    "read_picker",
-                    autospec=True,
-                    side_effect=(cancel, cancel),
-                ) as picker:
+                with _observed_picker_patch((cancel, cancel)) as picker:
                     controller._edit_settings_agent_model(state, PLOT_ARCHITECT)
                     controller._edit_settings_agent_reasoning(state, PLOT_ARCHITECT)
                 model_notice = picker.call_args_list[0].kwargs["notice"]
@@ -4310,16 +4187,8 @@ class ControllerSettingsTests(ControllerTestCase):
             with self.subTest(outcome=type(outcome).__name__):
                 workspace = self.make_workspace()
                 catalog = ScriptedProviderCatalog(outcome)
-                controller, _backend, _callbacks = self.make_controller(
-                    workspace,
-                    provider_catalog=catalog,
-                )
-                with mock.patch.object(
-                    terminal_module.InteractivePickerInput,
-                    "read_picker",
-                    autospec=True,
-                    return_value=_cancel_control_outcome(),
-                ) as picker:
+                controller, _backend, _callbacks = _catalog_settings_controller_fixture(self, workspace, catalog)
+                with _cancel_picker_patch(_cancel_control_outcome()) as picker:
                     controller._edit_settings_agent_model(
                         settings_module.load_settings_state(workspace),
                         PLOT_ARCHITECT,
@@ -4342,18 +4211,10 @@ class ControllerSettingsTests(ControllerTestCase):
                 catalog = ScriptedProviderCatalog(
                     _ready_provider_catalog("codex", model)
                 )
-                controller, _backend, _callbacks = self.make_controller(
-                    workspace,
-                    provider_catalog=catalog,
-                )
+                controller, _backend, _callbacks = _catalog_settings_controller_fixture(self, workspace, catalog)
                 state = settings_module.load_settings_state(workspace)
                 outcome = terminal_module.ControlOutcome(kind)
-                with mock.patch.object(
-                    terminal_module.InteractivePickerInput,
-                    "read_picker",
-                    autospec=True,
-                    side_effect=(outcome, outcome),
-                ):
+                with _observed_picker_patch((outcome, outcome)):
                     model_state, model_cancel = controller._edit_settings_agent_model(
                         state,
                         PLOT_ARCHITECT,
@@ -4453,18 +4314,8 @@ class ControllerSettingsTests(ControllerTestCase):
         original_picker = terminal_module.InteractivePickerInput.read_picker
         original_prompt = terminal_module.InteractivePromptInput.read_prompt
         with (
-            mock.patch.object(
-                terminal_module.InteractivePickerInput,
-                "read_picker",
-                autospec=True,
-                side_effect=original_picker,
-            ) as picker,
-            mock.patch.object(
-                terminal_module.InteractivePromptInput,
-                "read_prompt",
-                autospec=True,
-                side_effect=original_prompt,
-            ) as prompt,
+            _observed_picker_patch(original_picker) as picker,
+            _observed_prompt_patch(original_prompt) as prompt,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
 
@@ -4562,18 +4413,8 @@ class ControllerSettingsTests(ControllerTestCase):
             self.make_controller(workspace, "/help", "/quit", terminal_width=120)
         )
         with (
-            mock.patch.object(
-                terminal_module.InteractivePickerInput,
-                "read_picker",
-                autospec=True,
-                side_effect=original_picker,
-            ) as ordinary_picker,
-            mock.patch.object(
-                terminal_module.InteractivePromptInput,
-                "read_prompt",
-                autospec=True,
-                side_effect=original_prompt,
-            ) as ordinary_prompt,
+            _observed_picker_patch(original_picker) as ordinary_picker,
+            _observed_prompt_patch(original_prompt) as ordinary_prompt,
         ):
             self.assertEqual(ordinary_controller.run_session_lobby(), 0)
         ordinary_picker.assert_not_called()
@@ -4598,12 +4439,7 @@ class ControllerSettingsTests(ControllerTestCase):
             terminal_width=48,
         )
         original_picker = terminal_module.InteractivePickerInput.read_picker
-        with mock.patch.object(
-            terminal_module.InteractivePickerInput,
-            "read_picker",
-            autospec=True,
-            side_effect=original_picker,
-        ) as picker:
+        with _observed_picker_patch(original_picker) as picker:
             self.assertEqual(controller.run_session_lobby(), 0)
 
         self.assertGreaterEqual(len(picker.call_args_list), 3)
@@ -4825,17 +4661,8 @@ class ControllerSettingsTests(ControllerTestCase):
         runtime_commit = mock.AsyncMock()
         runtime_discard = mock.Mock()
         with (
-            mock.patch.object(
-                controller_core_module,
-                "load_settings_state",
-                return_value=state,
-            ),
-            mock.patch.object(
-                terminal_module.InteractivePickerInput,
-                "read_picker",
-                autospec=True,
-                return_value=commit_save,
-            ) as picker,
+            _loaded_settings_state_patch(state),
+            _cancel_picker_patch(commit_save) as picker,
             mock.patch.object(
                 InteractiveController,
                 "_settings_save_confirmation",
@@ -4860,11 +4687,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 autospec=True,
                 side_effect=commit,
             ) as committed_save,
-            mock.patch.object(
-                InteractiveController,
-                "_authenticate_settings_routes",
-                autospec=True,
-            ) as authenticate,
+            _settings_routes_authentication_patch() as authenticate,
             mock.patch.object(
                 backend,
                 "execution_profiles",
@@ -4900,10 +4723,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 "discard_runtime_configuration",
                 new=runtime_discard,
             ),
-            mock.patch.object(
-                controller_core_module,
-                "select_conversation_storage",
-            ) as select_storage,
+            _storage_selection_patch_fixture() as select_storage,
             mock.patch.object(
                 workspace,
                 "write_text",
@@ -5020,17 +4840,8 @@ class ControllerSettingsTests(ControllerTestCase):
             return "save"
 
         with (
-            mock.patch.object(
-                controller_core_module,
-                "load_settings_state",
-                return_value=state,
-            ),
-            mock.patch.object(
-                terminal_module.InteractivePickerInput,
-                "read_picker",
-                autospec=True,
-                side_effect=(commit_save, cancel),
-            ) as picker,
+            _loaded_settings_state_patch(state),
+            _observed_picker_patch((commit_save, cancel)) as picker,
             mock.patch.object(
                 InteractiveController,
                 "_settings_save_confirmation",
@@ -5046,15 +4857,8 @@ class ControllerSettingsTests(ControllerTestCase):
                 controller_core_module,
                 "prepare_settings_save",
             ) as prepare,
-            mock.patch.object(
-                controller_core_module,
-                "commit_prepared_settings_save",
-            ) as commit,
-            mock.patch.object(
-                InteractiveController,
-                "_authenticate_settings_routes",
-                autospec=True,
-            ) as authenticate,
+            _prepared_settings_commit_patch() as commit,
+            _settings_routes_authentication_patch() as authenticate,
         ):
             controller._run_settings()
 
@@ -5109,10 +4913,7 @@ class ControllerSettingsTests(ControllerTestCase):
                             operation,
                             side_effect=settings_module.SettingsError(kind),
                         ) as failed,
-                        mock.patch.object(
-                            controller_core_module,
-                            "commit_prepared_settings_save",
-                        ) as commit,
+                        _prepared_settings_commit_patch() as commit,
                     ):
                         outcome = controller._save_message_details_setting(state)
                     commit.assert_not_called()
@@ -5170,10 +4971,7 @@ class ControllerSettingsTests(ControllerTestCase):
                         "prepare_settings_save",
                         return_value=tampered,
                     ) as prepare,
-                    mock.patch.object(
-                        controller_core_module,
-                        "commit_prepared_settings_save",
-                    ) as commit,
+                    _prepared_settings_commit_patch() as commit,
                 ):
                     with self.assertRaises(controller_core_module._ControllerAbort):
                         controller._save_message_details_setting(state)
@@ -5407,12 +5205,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     terminal_width=80,
                 )
                 original_picker = terminal_module.InteractivePickerInput.read_picker
-                with mock.patch.object(
-                    terminal_module.InteractivePickerInput,
-                    "read_picker",
-                    autospec=True,
-                    side_effect=original_picker,
-                ) as picker:
+                with _observed_picker_patch(original_picker) as picker:
                     self.assertEqual(controller.run_session_lobby(), 0)
                 self.assertEqual(_tree_snapshot(workspace.root), before)
                 rendered = "".join(callbacks.records)
@@ -5458,26 +5251,14 @@ class ControllerSettingsTests(ControllerTestCase):
         cancel = _cancel_control_outcome()
 
         with (
-            mock.patch.object(
-                terminal_module.InteractivePickerInput,
-                "read_picker",
-                autospec=True,
-                side_effect=(commit_save, cancel),
-            ) as picker,
+            _observed_picker_patch((commit_save, cancel)) as picker,
             mock.patch.object(
                 InteractiveController,
                 "_settings_save_confirmation",
                 autospec=True,
             ) as confirmation,
-            mock.patch.object(
-                InteractiveController,
-                "_authenticate_settings_routes",
-                autospec=True,
-            ) as authenticate,
-            mock.patch.object(
-                controller_core_module,
-                "select_conversation_storage",
-            ) as save,
+            _settings_routes_authentication_patch() as authenticate,
+            _storage_selection_patch_fixture() as save,
             mock.patch.object(
                 InteractiveController,
                 "_settings_panel",
@@ -5538,17 +5319,8 @@ class ControllerSettingsTests(ControllerTestCase):
                     auth_coordinator=mock.Mock(),
                 )
                 with (
-                    mock.patch.object(
-                        controller_core_module,
-                        "load_settings_state",
-                        return_value=changed,
-                    ),
-                    mock.patch.object(
-                        terminal_module.InteractivePickerInput,
-                        "read_picker",
-                        autospec=True,
-                        side_effect=picker_outcomes,
-                    ) as picker,
+                    _loaded_settings_state_patch(changed),
+                    _observed_picker_patch(picker_outcomes) as picker,
                     mock.patch.object(
                         InteractiveController,
                         "_settings_save_confirmation",
@@ -5561,10 +5333,7 @@ class ControllerSettingsTests(ControllerTestCase):
                         autospec=True,
                         return_value=(authenticated_state, auth_outcome),
                     ) as authenticate,
-                    mock.patch.object(
-                        controller_core_module,
-                        "select_conversation_storage",
-                    ) as save,
+                    _storage_selection_patch_fixture() as save,
                 ):
                     controller._run_settings()
 
@@ -6148,19 +5917,7 @@ class ControllerSettingsTests(ControllerTestCase):
         workspace = self.make_workspace()
         system_before = workspace.path("config/system_defaults.json").read_bytes()
         agents_before = workspace.path("config/agent_configs.json").read_bytes()
-        controller, _backend, callbacks = self.make_controller(
-            workspace,
-            "/settings",
-            "1",
-            "2",
-            "/cancel",
-            "8",
-            "1",
-            "9",
-            "1",
-            "/quit",
-            terminal_width=160,
-        )
+        controller, _backend, callbacks = _message_visibility_controller_fixture(self, workspace)
         real_select = controller_core_module.select_conversation_storage
 
         def race_persona_catalog(*args, **kwargs):
@@ -6215,19 +5972,7 @@ class ControllerSettingsTests(ControllerTestCase):
             with self.subTest(kind=kind):
                 workspace = self.make_workspace()
                 before = _tree_snapshot(workspace.root)
-                controller, _backend, callbacks = self.make_controller(
-                    workspace,
-                    "/settings",
-                    "1",
-                    "2",
-                    "/cancel",
-                    "8",
-                    "1",
-                    "9",
-                    "1",
-                    "/quit",
-                    terminal_width=160,
-                )
+                controller, _backend, callbacks = _message_visibility_controller_fixture(self, workspace)
                 operation = (
                     "prepare_settings_save"
                     if kind
@@ -6317,19 +6062,7 @@ class ControllerSettingsTests(ControllerTestCase):
             with self.subTest(failure=failure):
                 workspace = self.make_workspace()
                 before = _tree_snapshot(workspace.root)
-                controller, _backend, callbacks = self.make_controller(
-                    workspace,
-                    "/settings",
-                    "1",
-                    "2",
-                    "/cancel",
-                    "8",
-                    "1",
-                    "9",
-                    "1",
-                    "/quit",
-                    terminal_width=160,
-                )
+                controller, _backend, callbacks = _message_visibility_controller_fixture(self, workspace)
                 with mock.patch.object(
                     controller_core_module,
                     "select_conversation_storage",
@@ -6600,9 +6333,13 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             return await operation  # type: ignore[misc]
 
     class _Picker:
-        def __init__(self, *outcomes: ControlOutcome) -> None: self.outcomes = list(outcomes)
+        def __init__(self, *outcomes: ControlOutcome) -> None:
+            self.outcomes = list(outcomes)
+            self.calls = []
 
-        def read_picker(self, *_args: object, **_kwargs: object) -> ControlOutcome: return self.outcomes.pop(0)
+        def read_picker(self, *_args: object, **_kwargs: object) -> ControlOutcome:
+            self.calls.append(_args)
+            return self.outcomes.pop(0)
 
     class _Prompt:
         def __init__(self, *outcomes: ControlOutcome) -> None: self.outcomes = list(outcomes)
@@ -6773,6 +6510,47 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             self.assertFalse(adapter.adopt(_UNIQUE_C))
             self.assertEqual((set(forwarded[-1]), forwarded[-1]["adoption"]), ({"action_progress_sink", "adoption"}, exploration.ExplorationAdoptionSelection(_UNIQUE_C, "ui-result", idea.idea_id, idea.material_digest, ("core_documents/global_outline.md",))))
             self.assertEqual(tuple((component.items[0].label, component.items[0].value, component.items[1].content, component.items[2].value) for component in output.components if isinstance(component, terminal_module.Panel) and component.title == "Selected whole idea"), (("Source conversation", _UNIQUE_C, text, "core_documents/global_outline.md"),))
+
+
+            from tests.test_lead_orchestration import LeadOrchestrationTestCase, _confirmed_premise, _premise_choice, _SubmittedFailure
+            from story_writing_agents import lead_premise_decisions as premise
+            fixture = LeadOrchestrationTestCase("runTest")
+            fixture.setUp()
+            self.addCleanup(fixture.doCleanups)
+            conversation = fixture.conversation()
+            _, first_report = runner.run(_confirmed_premise(fixture, conversation))
+            fixture.backend.enqueue(_SubmittedFailure(RuntimeError("known selected front failure")))
+            runner.run(fixture.runtime.lead_turn(fixture.session_id, conversation, "Keep this whole choice.", premise_selection=_premise_choice(first_report, ("core_documents/global_outline.md",))))
+            _, latest = runner.run(_confirmed_premise(fixture, conversation))
+            history = fixture.history(conversation)
+            retained = collaboration.project_collaboration_history(history).premise_selection
+            self.assertNotIn(retained.option_id, tuple(item.option_id for item in latest.premise_report.options))
+            selected = latest.premise_report.options[1]
+            output = self._Output()
+            current[:] = [self._terminal_turn(CollaborationStepState.COMPLETED)]
+            adapter = lead_policy_module.InteractiveLeadAdapter(session, runner, self._Progress(), self._Picker(self._commit("choose"), self._commit(selected.option_id), self._commit("user_choice")), self._Prompt(self._commit("core_documents/global_outline.md"), self._commit("core_documents/character_sheets.md"), self._commit("")), output, read_events=lambda current_conversation: history)
+            self.assertFalse(adapter.premise(conversation))
+            selection = forwarded[-1]["premise_selection"]
+            self.assertEqual((selection.report_event_id, selection.option_id, selection.material_digest), (latest.premise_report_ref.report_event_id, selected.option_id, selected.material_digest))
+            self.assertIs(selection.choice_policy, premise.PremiseChoicePolicy.USER_CHOICE)
+            self.assertEqual(selection.target_paths, ("core_documents/global_outline.md", "core_documents/character_sheets.md"))
+            self.assertEqual(tuple(item.identity for item in adapter._picker.calls[0][1]), ("choose", "reject", "defer"))
+            self.assertEqual(tuple(item.identity for item in adapter._picker.calls[2][1]), ("user_choice",))
+            self.assertTrue(any(component.title == "Retained USER choice (reference)" for component in output.components if isinstance(component, terminal_module.Panel)))
+            before_cancel = tuple(forwarded)
+            adapter._picker = self._Picker(ControlOutcome(ControlOutcomeKind.CANCEL))
+            self.assertFalse(adapter.premise(conversation))
+            self.assertEqual(tuple(forwarded), before_cancel)
+            conversation = fixture.conversation()
+            _, unranked = runner.run(_confirmed_premise(fixture, conversation, recommendation=None))
+            history = fixture.history(conversation)
+            self.assertIsNone(unranked.premise_report.recommended_option_id)
+            option = unranked.premise_report.options[0]
+            adapter._picker = self._Picker(self._commit("choose"), self._commit(option.option_id), self._commit("user_choice"))
+            adapter._prompt = self._Prompt(self._commit("core_documents/global_outline.md"), self._commit(""))
+            self.assertFalse(adapter.premise(conversation))
+            self.assertEqual(tuple(item.identity for item in adapter._picker.calls[2][1]), ("user_choice",))
+            self.assertEqual(forwarded[-1]["premise_selection"].report_event_id, unranked.premise_report_ref.report_event_id)
 
     def test_ordinary_lead_progress_sink_finishes_before_lead_and_elapsed_output(self) -> None:
         session = RuntimeSession.__new__(RuntimeSession); runner = asyncio.Runner(); self.addCleanup(runner.close)

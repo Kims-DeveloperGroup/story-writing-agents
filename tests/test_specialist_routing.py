@@ -3,6 +3,7 @@ from dataclasses import FrozenInstanceError, fields, replace
 import json
 from pathlib import Path
 import unittest
+from story_writing_agents import lead_premise_decisions as premise
 
 from story_writing_agents import conversations as c
 from story_writing_agents.specialist_routing import (
@@ -105,6 +106,16 @@ class SpecialistRoutingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             required_authoring_domains(workflow, affected_paths=("core_documents/global_outline.md",))
 
+
+        literal = "Éither the narrator knows.\r\nOr the reader learns first.  "
+        spec = premise.PremiseDecisionSpec("question-1", "knowledge", literal, (Domain.PLOT_STRUCTURE,), "user-1")
+        self.assertEqual(spec.question, literal)
+        self.assertNotEqual(spec.question_digest, replace(spec, question=literal + "?").question_digest)
+        with self.assertRaises(FrozenInstanceError):
+            spec.question = "Changed"
+        with self.assertRaises(ValueError):
+            replace(spec, dependent_domains=())
+
     def test_review_requires_disclosed_concrete_basis_while_draft_forbids_it(self):
         basis = ReviewBasis(("candidate",), "Compare motivation and chronology.")
         validate_specialist_assignment(Mode.CONSTRAINT_ASSESSMENT, ("brief",), None)
@@ -127,6 +138,13 @@ class SpecialistRoutingTests(unittest.TestCase):
                 wrong = dict(wire); wrong.pop(key)
                 with self.subTest(missing=key), self.assertRaises((TypeError, ValueError)): decode(wrong)
             with self.assertRaises((TypeError, ValueError)): decode(dict(wire, authority=True))
+
+
+        spec = premise.PremiseDecisionSpec("question-1", "knowledge", "Keep the knowledge choice unresolved.", (Domain.PLOT_STRUCTURE,), "user-1")
+        encoded = premise.premise_value_to_dict(spec)
+        self.assertEqual(premise.premise_spec_from_dict(encoded), spec)
+        with self.assertRaises(ValueError):
+            premise.premise_spec_from_dict({**encoded, "candidate_input_ids": ["user_input"]})
 
     def test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest(self):
         frozen = json.loads((Path(__file__).parent / "fixtures/authoring_scope_compatibility/scope_v2_basis_v1_76a80f7.json").read_bytes())
@@ -201,3 +219,17 @@ class SpecialistRoutingTests(unittest.TestCase):
                                  (None, c.CollaborationSpecialistAssessment.DRAFTED)):
             with self.subTest(mode=mode), self.assertRaises((TypeError, ValueError)):
                 replace(reply, mode=mode, assessment=assessment)
+
+
+        analysis = premise.PremiseAnalysis("alternatives_assessed", "No candidate was reviewed.", (premise.PremiseAlternative("knows", "The narrator knows.", "Preserve intentional ambiguity.", ("The reader may remain uncertain.",), ("user_input",)),))
+        self.assertEqual(premise.premise_analysis_from_dict(premise.premise_value_to_dict(analysis)), analysis)
+        with self.assertRaises(ValueError):
+            replace(analysis, assessment="drafted")
+        from story_writing_agents.lead_provider_contracts import PremiseDecisionConstraints
+        constraints = PremiseDecisionConstraints("grounded-question", input_ids=("user_input",))
+        value = premise.premise_value_to_dict(analysis)
+        self.assertEqual(constraints.validate_analysis(value), analysis)
+        self.assertEqual(constraints.analysis_schema()["properties"]["alternatives"]["items"]["properties"]["basis_input_ids"]["minItems"], 1)
+        value["alternatives"][0]["basis_input_ids"] = []
+        with self.assertRaises(ValueError):
+            constraints.validate_analysis(value)

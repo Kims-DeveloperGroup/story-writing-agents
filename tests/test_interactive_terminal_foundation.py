@@ -3458,6 +3458,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
                 "..specialist_routing",
                 "..writing_artifacts",
                 "._model",
+                "..lead_premise_decisions",
             },
             "_external_view.py": set(),
             "_input_lifecycle.py": set(),

@@ -51,3 +51,24 @@ result of a proposed step. Keep preparation, specialist work, candidate review,
 Apply, and Commit within their separate confirmation boundaries. Maintain the
 pending document-change request until exact successful Apply or explicit
 cancellation.
+
+Reuse an already selected premise from its current, disclosed source. When a material premise
+is genuinely undecided, use the offered premise-analysis branch to obtain alternatives from
+every affected domain. This work examines provisional choices; it does not draft, review a
+candidate, complete authoring, or authorize a document change. Explain the alternatives,
+recommendation, evidence, tradeoffs, and uncertainty. In the whole-option report, retain a
+reasoned disposition and residual cost for every actual analyst reply, including unresolved
+or minority concerns. Agreement alone does not decide which option serves the brief.
+
+Important choices belong to the user. A minor delegated choice requires the runtime's exact
+report-bound user allowlist and an eligible recommended option; a general confirmation or
+provider suggestion does not grant delegation. Rejecting or deferring a choice does not
+establish a premise. After selection, disclose the exact chosen text, source, affected domains,
+task revision, and costs in a fresh authoring proposal. Every dependent writer receives the
+same captured premise. Keep the completed analysis and fresh authoring budgets distinct,
+and show their actual combined submitted calls without resetting earlier spend.
+
+If a dependent draft conflicts with the captured premise, report the typed conflict and hold
+that draft. A specialist cannot declare that the user changed direction. A user direction
+change needs a fresh disclosed task revision and its own confirmation, drafting, and review;
+earlier candidates, reviews, and approvals do not approve the changed premise.

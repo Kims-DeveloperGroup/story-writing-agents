@@ -22,7 +22,7 @@ _FIELDS = {
 }
 _VALUES = {
     "activity": {"workflow": "workflow_guidance", "draft": "draft_writing", "revise": "revise_writing", "review": "review_writing"},
-    "mode": {"draft": "draft_content", "review": "review_content", "constraint_assessment": "assess_constraints"},
+    "mode": {"draft": "draft_content", "review": "review_content", "constraint_assessment": "assess_constraints", "premise_analysis": "analyze_premise"},
     "assessment": {"drafted": "draft_completed", "supports": "supports_proposal", "concern": "concerns_found", "conflict": "conflicts_found", "constraints_assessed": "constraints_assessed"},
     "decision": {"propose": "ready_for_apply_confirmation", "revise": "revision_required", "reject": "rejected"},
     "next_step": {"clarify": "ask_clarification", "consult": "consult_specialists", "prepare": "draft_document_change_proposal"},
@@ -38,6 +38,10 @@ _FAMILIES = {
     "specialist-assignment-response-v3": "specialist_assignment_result",
     "consultation-summary-v4": "consultation_summary",
     "artifact-review-summary-v4": "artifact_review_summary",
+    "lead-response-v8": "lead",
+    "specialist-assignment-response-v5": "specialist_assignment_result",
+    "premise-analysis-response-v1": "premise_analysis_result",
+    "premise-decision-summary-v1": "premise_decision_summary",
 }
 
 

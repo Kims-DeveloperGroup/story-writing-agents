@@ -95,6 +95,12 @@ from tests.sqlite_conversation_storage_fixture import database_path, provision
 
 from tests.test_smoke_cli import editorial_action, editorial_fixture
 
+def _fresh_construction_seam_patch(module, attribute):
+    return mock.patch.object(
+        module,
+        attribute,
+    )
+
 def _resolved_workspace_patch(workspace):
     return mock.patch.object(cli_module, "resolve_workspace", return_value=workspace)
 
@@ -105,6 +111,10 @@ def _fresh_cli_value_patch(attribute, value):
         attribute,
         return_value=value,
     )
+
+
+def _fresh_cli_effect_patch(attribute, effect):
+    return mock.patch.object(cli_module, attribute, side_effect=effect)
 
 def _fresh_terminal_builder_patch(terminal):
     return mock.patch.object(
@@ -121,11 +131,7 @@ def _fresh_logger_failure_patch(control_type):
         side_effect=control_type("logger acquisition"),
     )
 
-def _fresh_controller_constructor_patch():
-    return mock.patch.object(
-        cli_module,
-        "InteractiveController",
-    )
+
 
 def _fresh_auth_service_patch():
     return mock.patch.object(
@@ -151,11 +157,7 @@ def _fresh_cli_context_failure_patch(failure):
         side_effect=failure,
     )
 
-def _fresh_initialization_operations_patch():
-    return mock.patch.object(
-        workspace_initialization_module,
-        "_require_initialization_operations",
-    )
+
 
 def _fresh_recording_cli_context_patch(events):
     return mock.patch.object(
@@ -1187,10 +1189,7 @@ class CliTests(unittest.TestCase):
             contextlib.redirect_stderr(stderr),
             mock.patch.object(cli_module, "resolve_workspace") as workspace,
             mock.patch.object(cli_module, "AgentBackend") as backend,
-            mock.patch.object(
-                cli_module,
-                "activate_configured_conversation_storage",
-            ) as storage,
+            _fresh_construction_seam_patch(cli_module, "activate_configured_conversation_storage") as storage,
             mock.patch.object(cli_module, "InteractiveController") as controller,
             self.assertRaises(SystemExit) as raised,
         ):
@@ -1357,11 +1356,8 @@ class CliTests(unittest.TestCase):
                     _fresh_workspace_resolution_failure_patch(AssertionError("resolved workspace before TTY")) as resolve_workspace,
                     _fresh_cli_context_failure_patch(AssertionError("loaded context before TTY")) as load_context,
                     mock.patch.object(cli_module, "AgentBackend") as backend,
-                    mock.patch.object(
-                        cli_module,
-                        "build_stream_terminal",
-                    ) as terminal_factory,
-                    _fresh_controller_constructor_patch() as controller,
+                    _fresh_construction_seam_patch(cli_module, "build_stream_terminal") as terminal_factory,
+                    _fresh_construction_seam_patch(cli_module, 'InteractiveController') as controller,
                 ):
                     exit_code = main(arguments)
                 self.assertEqual(exit_code, 2)
@@ -1407,11 +1403,7 @@ class CliTests(unittest.TestCase):
             stderr = io.StringIO()
             failure = WorkspaceFormatError("initialization failed")
             with (
-                mock.patch.object(
-                    cli_module,
-                    "initialize_workspace",
-                    side_effect=failure,
-                ) as initialize,
+                _fresh_cli_effect_patch('initialize_workspace', failure) as initialize,
                 contextlib.redirect_stderr(stderr),
             ):
                 self.assertEqual(main(["init", str(target)]), 2)
@@ -1489,7 +1481,7 @@ class CliTests(unittest.TestCase):
 
             stdout, stderr = _fresh_cli_output_streams()
             with (
-                _fresh_initialization_operations_patch(),
+                _fresh_construction_seam_patch(workspace_initialization_module, '_require_initialization_operations'),
                 _fresh_workspace_mkdir_callback_patch(substitute_final_root),
                 contextlib.redirect_stdout(stdout),
                 contextlib.redirect_stderr(stderr),
@@ -1547,7 +1539,7 @@ class CliTests(unittest.TestCase):
 
                 stdout, stderr = _fresh_cli_output_streams()
                 with (
-                    _fresh_initialization_operations_patch(),
+                    _fresh_construction_seam_patch(workspace_initialization_module, '_require_initialization_operations'),
                     _fresh_workspace_mkdir_callback_patch(fail_final_creation),
                     contextlib.redirect_stdout(stdout),
                     contextlib.redirect_stderr(stderr),
@@ -1701,21 +1693,9 @@ class CliTests(unittest.TestCase):
                     _resolved_workspace_patch(workspace) as resolve_workspace,
                     _fresh_captured_cli_context_patch(cli_context) as load_context,
                     _fresh_cli_value_patch('AgentBackend', backend_value) as backend_factory,
-                    mock.patch.object(
-                        cli_module,
-                        "ProviderCatalogService",
-                        return_value=catalog_value,
-                    ) as catalog_factory,
-                    mock.patch.object(
-                        cli_module,
-                        "build_stream_terminal",
-                        return_value=terminal_value,
-                    ) as terminal_factory,
-                    mock.patch.object(
-                        cli_module,
-                        "InteractiveController",
-                        return_value=controller_value,
-                    ) as controller_factory,
+                    _fresh_cli_value_patch('ProviderCatalogService', catalog_value) as catalog_factory,
+                    _fresh_terminal_builder_patch(terminal_value) as terminal_factory,
+                    _fresh_cli_value_patch('InteractiveController', controller_value) as controller_factory,
                 ):
                     self.assertEqual(main(arguments), 7)
 
@@ -1868,57 +1848,27 @@ class CliTests(unittest.TestCase):
             mock.patch.object(sys, "stdin", stdin),
             mock.patch.object(sys, "stdout", stdout),
             mock.patch.object(sys, "stderr", stderr),
-            mock.patch.object(
-                cli_module,
-                "_validate_antigravity_executable",
-                side_effect=validate_executable,
-            ),
+            _fresh_cli_effect_patch('_validate_antigravity_executable', validate_executable),
             _fresh_workspace_resolution_failure_patch(lambda option: (
                     events.append(("workspace", option)) or workspace
                 )),
-            mock.patch.object(
-                cli_module,
-                "activate_configured_conversation_storage",
-                side_effect=activate,
-            ),
+            _fresh_cli_effect_patch('activate_configured_conversation_storage', activate),
             _fresh_stream_terminal_failure_patch(lambda *args: (
                     events.append(("terminal", None)) or terminal
                 )),
-            mock.patch.object(
-                cli_module,
-                "ProviderAuthService",
-                side_effect=lambda *args, **kwargs: (
-                    events.append(("auth_service", args[0])) or auth_service
-                ),
+            _fresh_cli_effect_patch(
+                'ProviderAuthService',
+                lambda *args, **kwargs: events.append(('auth_service', args[0])) or auth_service,
             ),
-            mock.patch.object(
-                cli_module,
-                "ProviderCatalogService",
-                side_effect=lambda *args, **kwargs: (
-                    self.assertEqual(args, (workspace.root,))
-                    or self.assertEqual(
-                        kwargs,
-                        {"antigravity_executable": "agy"},
-                    )
-                    or events.append(("catalog_service", args[0]))
-                    or catalog_service
-                ),
-            ),
-            mock.patch.object(
-                cli_module,
-                "InteractiveAuthCoordinator",
-                side_effect=lambda service, current_terminal: (
-                    self.assertIs(service, auth_service)
-                    or self.assertIs(current_terminal, terminal)
-                    or events.append(("auth_coordinator", None))
-                    or coordinator
-                ),
-            ),
-            mock.patch.object(
-                cli_module,
-                "select_default_provider",
-                side_effect=select_default,
-            ),
+            _fresh_cli_effect_patch('ProviderCatalogService', lambda *args, **kwargs: (
+                self.assertEqual(args, (workspace.root,)) or self.assertEqual(kwargs, {'antigravity_executable': 'agy'})
+                or events.append(('catalog_service', args[0])) or catalog_service
+            )),
+            _fresh_cli_effect_patch('InteractiveAuthCoordinator', lambda service, current_terminal: (
+                self.assertIs(service, auth_service) or self.assertIs(current_terminal, terminal)
+                or events.append(('auth_coordinator', None)) or coordinator
+            )),
+            _fresh_cli_effect_patch('select_default_provider', select_default),
             mock.patch.object(
                 cli_module.ConfigManager,
                 "load_configuration_snapshot",
@@ -1926,24 +1876,13 @@ class CliTests(unittest.TestCase):
                 side_effect=load_snapshot,
             ),
             _fresh_default_backend_attempt_patch(establish_default),
-            mock.patch.object(
-                cli_module,
-                "_effective_interactive_providers",
-                side_effect=routes,
-            ),
+            _fresh_cli_effect_patch('_effective_interactive_providers', routes),
             _fresh_recording_cli_context_patch(events),
-            mock.patch.object(
-                cli_module,
-                "AgentBackend",
-                side_effect=lambda *args, **kwargs: (
-                    events.append(("backend", None)) or backend
-                ),
+            _fresh_cli_effect_patch(
+                'AgentBackend',
+                lambda *args, **kwargs: events.append(('backend', None)) or backend,
             ),
-            mock.patch.object(
-                cli_module,
-                "InteractiveController",
-                side_effect=controller_factory,
-            ),
+            _fresh_cli_effect_patch('InteractiveController', controller_factory),
         ):
             self.assertEqual(
                 main(
@@ -2090,7 +2029,7 @@ class CliTests(unittest.TestCase):
                     _fresh_terminal_builder_patch(terminal) as terminal_factory,
                     mock.patch.object(cli_module, "load_cli_context") as context,
                     mock.patch.object(cli_module, "AgentBackend") as backend,
-                    _fresh_controller_constructor_patch() as controller,
+                    _fresh_construction_seam_patch(cli_module, 'InteractiveController') as controller,
                 ):
                     self.assertEqual(
                         main(["chat", "--workspace", str(workspace.root)]),
@@ -2162,14 +2101,10 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(sys, "stdout", stdout),
                     mock.patch.object(sys, "stderr", stderr),
                     _resolved_workspace_patch(workspace),
-                    mock.patch.object(
-                        cli_module,
-                        "_run_interactive_startup_progress",
-                        side_effect=run_progress,
-                    ),
+                    _fresh_cli_effect_patch('_run_interactive_startup_progress', run_progress),
                     mock.patch.object(cli_module, "load_cli_context") as context,
                     mock.patch.object(cli_module, "AgentBackend") as backend,
-                    _fresh_controller_constructor_patch() as controller,
+                    _fresh_construction_seam_patch(cli_module, 'InteractiveController') as controller,
                 ):
                     self.assertEqual(main(["chat"]), 2)
 
@@ -2256,7 +2191,7 @@ class CliTests(unittest.TestCase):
                     _fresh_cli_value_patch('InteractiveAuthCoordinator', coordinator),
                     mock.patch.object(cli_module, "load_cli_context") as context,
                     mock.patch.object(cli_module, "AgentBackend") as backend,
-                    _fresh_controller_constructor_patch() as controller,
+                    _fresh_construction_seam_patch(cli_module, 'InteractiveController') as controller,
                 ):
                     self.assertEqual((main(["chat"]), stderr.getvalue()), (0, ""))
                 context.assert_not_called()
@@ -2607,12 +2542,9 @@ class CliTests(unittest.TestCase):
             _fresh_cli_value_patch('InteractiveAuthCoordinator', coordinator),
             mock.patch.object(cli_module, "establish_default_backend") as establish,
             _fresh_recording_cli_context_patch(events),
-            mock.patch.object(
-                cli_module,
-                "AgentBackend",
-                side_effect=lambda *args, **kwargs: (
-                    events.append(("backend", None)) or mock.Mock()
-                ),
+            _fresh_cli_effect_patch(
+                'AgentBackend',
+                lambda *args, **kwargs: events.append(('backend', None)) or mock.Mock(),
             ),
             _fresh_cli_value_patch('InteractiveController', controller),
         ):
@@ -2872,10 +2804,7 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(sys, "stdin", stdin),
                     mock.patch.object(sys, "stdout", stdout),
                     mock.patch.object(sys, "stderr", stderr),
-                    mock.patch.object(
-                        cli_module,
-                        "resolve_workspace",
-                    ) as resolve_workspace,
+                    _fresh_construction_seam_patch(cli_module, "resolve_workspace") as resolve_workspace,
                 ):
                     self.assertEqual(main(arguments), 2)
                 self.assertEqual(

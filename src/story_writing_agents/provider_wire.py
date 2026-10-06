@@ -16,6 +16,8 @@ BUILTIN_RESULT_CONTRACT_IDS = frozenset({
     "lead-exploration-response-v1",
     "lead-response-v6", "specialist-assignment-response-v3",
     "lead-response-v7", "specialist-assignment-response-v4",
+    "lead-response-v8", "specialist-assignment-response-v5",
+    "premise-analysis-response-v1", "premise-decision-summary-v1",
     "consultation-summary-v4", "artifact-review-summary-v4",
 })
 SOURCE_TYPES = {
@@ -31,10 +33,10 @@ WORKFLOWS = {"lead": "lead_user_turn", "lead_front_channel": "lead_user_turn",
              "specialist_assignment": "specialist_task", "lead_synthesis": "consultation_summary", "lead_specialist_consultation": "specialist_consultation", "specialist_advisory": "specialist_advice", "artifact_mutation": "artifact_change_review"}
 ACTIVITIES = {"workflow": "workflow_guidance", "draft": "draft_writing",
               "revise": "revise_writing", "review": "review_writing"}
-ASSIGNMENT_TYPES = {"draft": "draft_content", "review": "review_content", "constraint_assessment": "assess_constraints"}
+ASSIGNMENT_TYPES = {"draft": "draft_content", "review": "review_content", "constraint_assessment": "assess_constraints", "premise_analysis": "analyze_premise"}
 ASSIGNMENT_STATUSES = {"drafted": "draft_completed", "supports": "supports_proposal",
                        "concern": "concerns_found", "conflict": "conflicts_found",
-                       "insufficient_evidence": "insufficient_evidence", "constraints_assessed": "constraints_assessed"}
+                       "insufficient_evidence": "insufficient_evidence", "constraints_assessed": "constraints_assessed", "alternatives_assessed": "alternatives_assessed"}
 REVIEW_OUTCOMES = {"propose": "ready_for_apply_confirmation", "revise": "revision_required", "reject": "rejected"}
 DRAFTING_ACTIONS = {"prepare_artifact": "draft_document_change_proposal",
                    "prepare_consultation": "draft_specialist_consultation_proposal"}
@@ -113,7 +115,7 @@ def _enum_map(name: str, shape: str) -> dict:
 
 def project_result_schema(schema: Mapping, contract_id: str) -> dict:
     """Project an owner-authored result schema without changing its domain schema."""
-    family = {"lead-response-v7": "lead-response-v6", "specialist-assignment-response-v4": "specialist-assignment-response-v3"}.get(contract_id, contract_id)
+    family = {"lead-response-v7": "lead-response-v6", "lead-response-v8": "lead-response-v6", "specialist-assignment-response-v4": "specialist-assignment-response-v3", "specialist-assignment-response-v5": "specialist-assignment-response-v3"}.get(contract_id, contract_id)
     known = family in BUILTIN_RESULT_CONTRACT_IDS
     if not known:
         return deepcopy(dict(schema))
@@ -152,7 +154,7 @@ def project_result_schema(schema: Mapping, contract_id: str) -> dict:
                 kinds = node["properties"].get("kind", {}).get("enum", ["answer"])
                 types = [("artifact_change_proposal" if "artifact_intent" in node["properties"] else "specialist_consultation_proposal") if kind == "proposal" else LEAD_RESPONSES[kind] for kind in kinds]
             else:
-                types = [{"lead-exploration-response-v1": "lead_exploration", "specialist-assignment-response-v3": "specialist_assignment_result", "consultation-summary-v4": "consultation_summary", "artifact-review-summary-v4": "artifact_review_summary"}[family]]
+                types = [{"lead-exploration-response-v1": "lead_exploration", "specialist-assignment-response-v3": "specialist_assignment_result", "consultation-summary-v4": "consultation_summary", "artifact-review-summary-v4": "artifact_review_summary", "premise-analysis-response-v1": "premise_analysis_result", "premise-decision-summary-v1": "premise_decision_summary"}[family]]
             properties = {"response_type": {"type": "string", "enum": types}, **properties}
         result["properties"] = properties
         result["required"] = list(properties)
@@ -163,7 +165,7 @@ def project_result_schema(schema: Mapping, contract_id: str) -> dict:
 
 def normalize_result(value: object, contract_id: str) -> object:
     """Restore internal domain field names after strict new-wire validation."""
-    family = {"lead-response-v7": "lead-response-v6", "specialist-assignment-response-v4": "specialist-assignment-response-v3"}.get(contract_id, contract_id)
+    family = {"lead-response-v7": "lead-response-v6", "lead-response-v8": "lead-response-v6", "specialist-assignment-response-v4": "specialist-assignment-response-v3", "specialist-assignment-response-v5": "specialist-assignment-response-v3"}.get(contract_id, contract_id)
     if family not in BUILTIN_RESULT_CONTRACT_IDS:
         return value
 
@@ -176,6 +178,9 @@ def normalize_result(value: object, contract_id: str) -> object:
         reverse = {wire: old for old, wire in RESULT_FIELDS.items()}
         for name, child in item.items():
             if root and name == "response_type":
+                expected_type = {"premise-analysis-response-v1": "premise_analysis_result", "premise-decision-summary-v1": "premise_decision_summary"}.get(family)
+                if expected_type is not None and child != expected_type:
+                    raise ValueError("unexpected premise response type")
                 if family == "lead-exploration-response-v1":
                     if child != "lead_exploration":
                         raise ValueError("unexpected exploration response type")
@@ -1402,3 +1407,42 @@ def normalize_retrieval_action(value: object) -> dict:
         raise WireShapeError("$.agent_action", "expected exactly action_type and search_query" if kind == "search_conversations" else "expected action_type, citation_id, start_sequence_number, and optional end_sequence_number")
     aliases = {"action_type": "kind", "search_query": "query", "start_sequence_number": "start_sequence", "end_sequence_number": "end_sequence"}
     return {"action": {aliases.get(name, name): kind if name == "action_type" else item for name, item in action.items()}}
+
+
+_catalog("premise_analysis_rule", "Runtime-owned boundary for candidate-free analysis of an unresolved premise. Reuse disclosed resolved inputs; analysis needs separate Confirm and cannot draft, review a candidate, select a premise or update an objective.")
+_catalog("premise_decision offered_premise_question_id question_id slot_id question dependent_domains", "A host-offered unresolved premise question and its affected analyst domains. Analysis is provisional and needs separate Confirm; it is not drafting, exact-candidate review, USER choice or artifact authority.")
+_catalog("premise_analysis alternatives alternative_key premise_text tradeoffs", "Actual provisional analyst alternatives and their tradeoffs. Exact source aliases must be offered; no alternative is a selected USER premise or verified artifact fact.")
+_catalog("options option_key option_id recommended_option_key recommended_option_id reply_dispositions alternative_keys disposition reason residual_cost", "Whole provisional premise options. Disclose disposition, reason and remaining cost for every ordered actual analyst reply; selecting a recommendation never grants execution or write authority.")
+_catalog("premise_report premise_selection selected_text selection_event_id capture_digest material_digest allowed_choices choice_policy", "Exact completed report and explicit USER whole-material choice or bounded report-bound delegation. Preserve every identity/digest and selected byte; generic Confirm cannot choose a premise.")
+_catalog("fresh_work_admission admission_ref prior_admission_ref prior_analysis_report_ref prior_authoring_source_ref cost cost_link analysis prior_authoring prior_authoring_cost submitted_call_ids rounds_spent physical_calls_spent front_physical_call_limit provider_step_id provider_invocation_id source_user_event_id source_user_event_digest offered_question_id source_authoring_task source_reply_refs reply_digest spec summary intent task", "Runtime-owned exact source or cost-attribution receipt. Recorded calls stay in their original lineage; these historical facts grant no preparation, continuation, READ, drafting, Apply or Commit authority.")
+_catalog("offered_authoring_tasks", "Exact ordered runtime-offered fresh task/revision pairs captured before this front call. A proposal must preserve one whole offered pair; this cost admission grants no confirmation or execution authority.")
+_catalog("selected_authoring_task", "The exact fresh task/revision bound to this same-turn explicit USER whole-premise capture, or null when no such capture exists. It is distinct from historical cost/source references and cannot be chosen by provider prose.")
+_catalog("premise_conflicts", "Dependent draft conflicts tied to an exact current slot/capture. A conflict holds drafting proof and cannot impersonate USER direction change; changing the premise requires a fresh revision and Confirm.")
+ENUM_MEANINGS.update({
+    "analyze_premise": "analyze unresolved premise alternatives without a candidate or drafting authority",
+    "alternatives_assessed": "actual provisional premise alternatives were assessed; no draft or candidate approval",
+    "options": "whole provisional options remain subject to exact USER choice",
+    "clarification": "insufficient premise information; no selected option",
+    "used": "actual analyst alternative used with disclosed residual cost",
+    "modified": "actual analyst alternative modified with disclosed reason and residual cost",
+    "deferred": "analyst concern retained for later handling",
+    "unavailable": "actual analysis is missing or insufficient, without invented explanations",
+    "user_choice": "exact USER selection of one whole actual report option",
+    "delegated_minor": "report-bound USER allowlist permits only an in-set supplied recommendation",
+    "choose": "explicit USER whole-option choice", "defer": "keep premise choice unresolved",
+    "premise_analysis": "candidate-free alternatives analysis", "premise_decision": "exact USER premise control",
+    "premise_selection": "exact whole selected premise capture", "premise_fresh_work_admission": "authority-free call attribution",
+})
+STRUCTURED_INPUT_FIELDS = STRUCTURED_INPUT_FIELDS | frozenset("premise_decision premise_analysis alternatives options reply_dispositions premise_report premise_selection fresh_work_admission admission_ref prior_admission_ref prior_analysis_report_ref prior_authoring_source_ref allowed_choices cost cost_link analysis prior_authoring prior_authoring_cost source_authoring_task source_reply_refs spec summary intent task premise_conflicts offered_authoring_tasks selected_authoring_task".split())
+DYNAMIC_CHOICE_FIELDS = DYNAMIC_CHOICE_FIELDS | frozenset({"question_id", "reply_event_id", "alternative_keys", "option_id", "capture_digest"})
+_catalog("authoring_task_id authoring_task_revision expected_authoring_task_revision", "Exact host-offered fresh authoring task/revision or USER-selected current-task successor. No prior draft proof, calls or rounds are reused.")
+_catalog("report_event_id report_digest proposal_digest", "Exact durable source identity/digest in the enclosing report or receipt. A historical cost reference grants no current execution, candidate, Apply or Commit authority.")
+_catalog("assessment", "The enclosing mode-specific judgment about actual supplied inputs; analysis and dependent conflicts grant no draft proof or candidate approval.")
+_catalog("target_paths", "Exact USER-selected canonical targets for separately disclosed and confirmed authoring; targetless work has no artifact mutation authority.")
+ENUM_MEANINGS.update({
+    "premise_analysis_result": "Provisional actual analyst alternatives, without candidate or approval authority",
+    "premise_decision_summary": "Terminal whole-option synthesis retaining every current analyst disposition",
+    "alternatives_assessed": "Actual provisional alternatives assessed; no draft proof or candidate approval",
+    "options": "Whole provisional options are available for explicit USER choice",
+    "clarification": "Premise analysis cannot yet offer a grounded whole option",
+})

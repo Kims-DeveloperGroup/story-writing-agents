@@ -2,6 +2,15 @@
 
 from __future__ import annotations
 
+from ..lead_premise_decisions import (
+    PremiseQuestionIntent, PremiseDecisionSpec, PremiseAnalysis, PremiseDecisionReport,
+    PremiseDecisionSelection, PremiseSelectionCapture, PremiseFreshWorkAdmission,
+    PremiseConflict, premise_value_to_dict, premise_question_intent_from_dict,
+    premise_spec_from_dict, premise_analysis_from_dict, premise_report_from_dict,
+    premise_selection_from_dict, premise_capture_from_dict, premise_admission_from_dict,
+    premise_conflicts_from_dict,
+)
+
 from ..lead_exploration import (
     LeadInteractionMode, LeadExplorationReport, ExplorationAdoptionCapture,
     exploration_report_to_dict, exploration_report_from_dict,
@@ -97,6 +106,9 @@ class CollaborationEventKind(StrEnum):
     LEAD_EXPLORATION_RESULT = "lead_exploration_result"
     EXPLORATION_ADOPTION = "exploration_adoption"
     EDITORIAL_RECORD = "editorial_record"
+    PREMISE_DECISION = "premise_decision"
+    PREMISE_SELECTION = "premise_selection"
+    PREMISE_FRESH_WORK_ADMISSION = "premise_fresh_work_admission"
 
     MESSAGE = "message"
     ASSIGNMENT_DISPATCH = "assignment_dispatch"
@@ -526,6 +538,21 @@ def _validate_lead_evidence_matrix(
     evidence: CollaborationLeadEvidence,
 ) -> None:
     receipts = evidence.receipts
+    if evidence.scope is LeadOutcomeScope.PREMISE_ANALYSIS:
+        if kind is not LeadOutcomeKind.PROPOSAL:
+            raise validation_failure(
+                ValueError("premise analysis evidence requires a proposal"),
+                "$.kind",
+                "premise analysis evidence requires a candidate-free proposal",
+            )
+        if evidence.status is LeadEvidenceStatus.NOT_APPLICABLE:
+            if receipts:
+                raise validation_failure(
+                    ValueError("unobserved premise analysis cannot carry evidence"),
+                    "$.authoring_scope",
+                    "USER-only premise analysis has no artifact evidence receipts",
+                )
+            return
     if evidence.scope is LeadOutcomeScope.WORKFLOW_META:
         if (
             evidence.status is not LeadEvidenceStatus.NOT_APPLICABLE
@@ -761,10 +788,11 @@ class LeadOutcomeKind(StrEnum):
 
 
 class LeadOutcomeScope(StrEnum):
-    """Provider-declared semantic scope of one visible lead judgment."""
+    """Closed judgment scope; premise analysis is derived by the host."""
 
     STORY_SPECIFIC = "story_specific"
     WORKFLOW_META = "workflow_meta"
+    PREMISE_ANALYSIS = "premise_analysis"
 
 
 class LeadEvidenceStatus(StrEnum):
@@ -1245,6 +1273,7 @@ class LeadProposalIntent:
     assignments: tuple[LeadAssignmentIntent, ...]
     authoring_scope: AuthoringScope | None = None
     shared_premises: tuple[LeadSharedPremiseIntent, ...] = field(default=(), kw_only=True)
+    premise_decision: PremiseQuestionIntent | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         validation_call(
@@ -1286,6 +1315,7 @@ class LeadProposalIntent:
             self.authoring_scope,
             tuple((item.agent_id for item in self.assignments)),
             tuple((item.mode for item in self.assignments)),
+            self.premise_decision,
         )
         _validate_exact_tuple(self.shared_premises, LeadSharedPremiseIntent, label="shared premise intents")
         if self.authoring_scope is None or self.authoring_scope.schema_version < 3:
@@ -1474,6 +1504,7 @@ class CollaborationSpecialistAssessment(StrEnum):
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
     DRAFTED = "drafted"
     CONSTRAINTS_ASSESSED = "constraints_assessed"
+    ALTERNATIVES_ASSESSED = "alternatives_assessed"
 
 
 class CollaborationSynthesisOutcomeKind(StrEnum):
@@ -2073,6 +2104,7 @@ class CollaborationProposal:
     basis: CollaborationProposalBasis
     proposal_digest: str
     authoring_scope: AuthoringScope | None = None
+    premise_decision: PremiseDecisionSpec | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         _validate_identifier(self.step_id, label="collaboration step ID")
@@ -2106,7 +2138,15 @@ class CollaborationProposal:
             self.authoring_scope,
             specialists,
             tuple(item.mode for item in self.assignments),
+            None if self.premise_decision is None else self.premise_decision.intent,
         )
+        if self.premise_decision is not None:
+            if self.step_kind is not CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION:
+                raise ValueError("premise analysis requires a lead-specialist consultation")
+            if type(self.premise_decision) is not PremiseDecisionSpec or self.budget.rounds_spent != 0 or self.budget.rounds_added != 1:
+                raise ValueError("premise analysis cannot restart a completed analyst round")
+            if self.basis.shared_premises or self.side_effects != (CollaborationSideEffect.PROVIDER_INVOCATION,):
+                raise ValueError("premise analysis cannot carry authoring or mutation authority")
         expected_round = self.budget.rounds_spent + 1
         validate_captured_authoring_basis(self)
         if any(item.round != expected_round for item in self.assignments):
@@ -2158,13 +2198,20 @@ class CollaborationProposal:
             )
         elif self.step_kind is CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION:
             evidence = self.basis.evidence
-            if (
-                type(evidence) is not CollaborationLeadEvidence
-                or evidence.scope is not LeadOutcomeScope.STORY_SPECIFIC
-            ):
-                raise ValueError(
-                    "lead-specialist consultation requires story-specific evidence"
-                )
+            if self.premise_decision is not None:
+                if (
+                    type(evidence) is not CollaborationLeadEvidence
+                    or evidence.scope is not LeadOutcomeScope.PREMISE_ANALYSIS
+                ):
+                    raise ValueError("premise analysis requires matching analysis evidence")
+            else:
+                if (
+                    type(evidence) is not CollaborationLeadEvidence
+                    or evidence.scope is not LeadOutcomeScope.STORY_SPECIFIC
+                ):
+                    raise ValueError(
+                        "lead-specialist consultation requires story-specific evidence"
+                    )
             _validate_lead_evidence_matrix(LeadOutcomeKind.PROPOSAL, evidence)
         if self.proposal_digest != collaboration_proposal_digest(self):
             raise ValueError("proposal digest does not match canonical proposal fields")
@@ -2190,6 +2237,7 @@ class CollaborationProposal:
         budget: CollaborationBudget,
         basis: CollaborationProposalBasis,
         authoring_scope: AuthoringScope | None = None,
+        premise_decision: PremiseDecisionSpec | None = None,
     ) -> CollaborationProposal:
         """Create a proposal with its canonical digest."""
 
@@ -2207,6 +2255,8 @@ class CollaborationProposal:
         }
         if authoring_scope is not None:
             fields["authoring_scope"] = authoring_scope_to_dict(authoring_scope)
+        if premise_decision is not None:
+            fields["premise_decision"] = premise_value_to_dict(premise_decision)
         digest = _digest_value(fields)
         return cls(
             step_id=step_id,
@@ -2221,6 +2271,7 @@ class CollaborationProposal:
             basis=basis,
             proposal_digest=digest,
             authoring_scope=authoring_scope,
+            premise_decision=premise_decision,
         )
 
 
@@ -2421,6 +2472,8 @@ class CollaborationSpecialistReplyPayload:
     input_ids: tuple[str, ...]
     mode: SpecialistAssignmentMode | None = None
     trace: ReplyTrace | None = None
+    premise_analysis: PremiseAnalysis | None = field(default=None, kw_only=True)
+    premise_conflicts: tuple[PremiseConflict, ...] = field(default=(), kw_only=True)
 
     def __post_init__(self) -> None:
         validation_call(
@@ -2481,10 +2534,18 @@ class CollaborationSpecialistReplyPayload:
                 SpecialistAssignmentMode,
                 'specialist reply mode',
             )
-        if self.assessment not in specialist_assessments_for_mode(self.mode):
+        if self.mode is SpecialistAssignmentMode.PREMISE_ANALYSIS:
+            if type(self.premise_analysis) is not PremiseAnalysis or self.premise_analysis.assessment != self.assessment.value or self.premise_analysis.message != self.message:
+                raise ValueError("premise analysis must retain the actual specialist result")
+        elif self.premise_analysis is not None:
+            raise ValueError("ordinary specialist reply cannot carry premise analysis")
+        _validate_exact_tuple(self.premise_conflicts, PremiseConflict, label="premise conflicts")
+        if self.premise_conflicts and (self.mode is not SpecialistAssignmentMode.DRAFT or self.assessment is not CollaborationSpecialistAssessment.CONFLICT):
+            raise ValueError("typed premise conflict is only a held dependent draft")
+        if self.assessment not in specialist_assessments_for_mode(self.mode) and not self.premise_conflicts:
             raise validation_failure(ValueError('specialist result is not offered for its mode'), '$.assessment', 'assessment must match the exact assignment mode')
         if self.mode is SpecialistAssignmentMode.DRAFT:
-            if self.assessment not in {
+            if not self.premise_conflicts and self.assessment not in {
                 CollaborationSpecialistAssessment.DRAFTED,
                 CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE,
             }:
@@ -2522,6 +2583,7 @@ class CollaborationLeadSynthesisPayload:
     next_intent: LeadProposalIntent | None = None
     authoring_scope: AuthoringScope | None = None
     trace: ReplyTrace | None = None
+    premise_report: PremiseDecisionReport | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         validation_call(
@@ -2573,19 +2635,35 @@ class CollaborationLeadSynthesisPayload:
                 '$.trace',
                 'lead synthesis trace must be ReplyTrace or None',
             )
-        if self.evidence.scope is not LeadOutcomeScope.STORY_SPECIFIC:
-            raise validation_failure(
-                ValueError('lead synthesis must remain story-specific'),
-                '$.evidence',
-                'lead synthesis must remain story-specific',
-            )
-        _validate_lead_evidence_matrix(LeadOutcomeKind.RECOMMENDATION, self.evidence)
+        if self.premise_report is not None:
+            if self.evidence.scope is not LeadOutcomeScope.PREMISE_ANALYSIS:
+                raise validation_failure(
+                    ValueError("premise report requires analysis evidence"),
+                    "$.evidence",
+                    "a typed premise report must retain its confirmed analysis evidence",
+                )
+            # The report carries proposal evidence; it does not create a Lead judgment.
+            _validate_lead_evidence_matrix(LeadOutcomeKind.PROPOSAL, self.evidence)
+        else:
+            if self.evidence.scope is not LeadOutcomeScope.STORY_SPECIFIC:
+                raise validation_failure(
+                    ValueError('lead synthesis must remain story-specific'),
+                    '$.evidence',
+                    'lead synthesis must remain story-specific',
+                )
+            _validate_lead_evidence_matrix(LeadOutcomeKind.RECOMMENDATION, self.evidence)
         validation_call(
             '$.authoring_scope',
             _validate_authoring_evidence_scope,
             self.authoring_scope,
             self.evidence.scope,
         )
+        if self.premise_report is not None:
+            if type(self.premise_report) is not PremiseDecisionReport or self.authoring_scope is not None or self.next_intent is not None:
+                raise ValueError("premise report cannot carry authoring continuation")
+            report = self.premise_report
+            if (report.proposal_id, report.proposal_revision, report.proposal_digest, report.execution_attempt_id) != (self.proposal_id, self.proposal_revision, self.proposal_digest, self.execution_attempt_id) or report.summary.message != self.message or tuple(item.event_id for item in report.source_reply_refs) != self.reply_event_ids:
+                raise ValueError("premise report identity or actual synthesis differs")
         if self.next_intent is not None:
             if type(self.next_intent) is not LeadProposalIntent:
                 raise validation_failure(
@@ -3744,7 +3822,38 @@ class CollaborationEditorialRecordPayload:
             raise TypeError("editorial record payload is invalid")
 
 
+@dataclass(frozen=True, slots=True)
+class CollaborationPremiseDecisionPayload:
+    selection: PremiseDecisionSelection
+
+    def __post_init__(self) -> None:
+        if type(self.selection) is not PremiseDecisionSelection:
+            raise TypeError("premise decision requires exact USER control")
+
+
+@dataclass(frozen=True, slots=True)
+class CollaborationPremiseSelectionPayload:
+    capture: PremiseSelectionCapture
+
+    def __post_init__(self) -> None:
+        if type(self.capture) is not PremiseSelectionCapture:
+            raise TypeError("premise selection requires exact whole material capture")
+
+
+@dataclass(frozen=True, slots=True)
+class CollaborationPremiseFreshWorkAdmissionPayload:
+    admission: PremiseFreshWorkAdmission
+
+    def __post_init__(self) -> None:
+        if type(self.admission) is not PremiseFreshWorkAdmission:
+            raise TypeError("premise admission requires exact runtime attribution")
+
+
 CollaborationPayload = (
+    CollaborationPremiseDecisionPayload
+    | CollaborationPremiseSelectionPayload
+    | CollaborationPremiseFreshWorkAdmissionPayload
+    |
     CollaborationEditorialRecordPayload
     |     CollaborationLeadExplorationRequestPayload
     | CollaborationLeadExplorationResultPayload
@@ -4038,6 +4147,10 @@ def validate_captured_authoring_basis(proposal: CollaborationProposal) -> None:
 
 def specialist_assessments_for_mode(mode: SpecialistAssignmentMode | None) -> tuple[CollaborationSpecialistAssessment, ...]:
     """Closed semantics per mode; legacy absence never gains new responsibilities."""
+    if mode is SpecialistAssignmentMode.PREMISE_ANALYSIS:
+        return (CollaborationSpecialistAssessment.ALTERNATIVES_ASSESSED,
+                CollaborationSpecialistAssessment.CONFLICT,
+                CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE)
     if mode is SpecialistAssignmentMode.DRAFT:
         return (CollaborationSpecialistAssessment.DRAFTED, CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE)
     if mode is SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT:
@@ -4554,6 +4667,7 @@ def _authoring_scope_fields(scope: AuthoringScope | None) -> dict[str, object]:
 def _lead_proposal_intent_value(intent: LeadProposalIntent) -> dict[str, object]:
     return {
         **({'shared_premises': [{'slot_id': item.slot_id, 'selected_premise': item.selected_premise, 'basis_input_ids': list(item.basis_input_ids)} for item in intent.shared_premises]} if intent.authoring_scope is not None and intent.authoring_scope.schema_version == 3 else {}),
+        **({"premise_decision": premise_value_to_dict(intent.premise_decision)} if intent.premise_decision is not None else {}),
         "assignments": [
             {
                 "agent_id": assignment.agent_id,
@@ -4587,6 +4701,7 @@ def _proposal_value(
     include_digest: bool = True,
 ) -> dict[str, object]:
     value: dict[str, object] = {
+        **({"premise_decision": premise_value_to_dict(proposal.premise_decision)} if proposal.premise_decision is not None else {}),
         "assignments": [_assignment_value(item) for item in proposal.assignments],
         "basis": _basis_value(proposal.basis),
         "budget": _budget_value(proposal.budget),
@@ -4683,6 +4798,12 @@ def _artifact_reviewed_proposal_value(
 
 
 def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
+    if type(payload) is CollaborationPremiseDecisionPayload:
+        return {"payload_type": "premise_decision", "selection": premise_value_to_dict(payload.selection)}
+    if type(payload) is CollaborationPremiseSelectionPayload:
+        return {"payload_type": "premise_selection", "capture": premise_value_to_dict(payload.capture)}
+    if type(payload) is CollaborationPremiseFreshWorkAdmissionPayload:
+        return {"payload_type": "premise_fresh_work_admission", "admission": premise_value_to_dict(payload.admission)}
     if type(payload) is ArtifactObjectivePayload:
         return {"payload_type": "artifact_objective_v1", **asdict(payload)}
     if type(payload) is ArtifactObjectivePayloadV2:
@@ -4743,6 +4864,8 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
         }
     if type(payload) is CollaborationSpecialistReplyPayload:
         return {
+            **({"premise_analysis": premise_value_to_dict(payload.premise_analysis)} if payload.premise_analysis is not None else {}),
+            **({"premise_conflicts": premise_value_to_dict(payload.premise_conflicts)} if payload.premise_conflicts else {}),
             "assignment_id": payload.assignment_id,
             "assessment": payload.assessment.value,
             "dispatch_event_id": payload.dispatch_event_id,
@@ -4758,6 +4881,7 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
         }
     if type(payload) is CollaborationLeadSynthesisPayload:
         return {
+            **({"premise_report": premise_value_to_dict(payload.premise_report)} if payload.premise_report is not None else {}),
             "evidence": _lead_evidence_value(payload.evidence),
             "execution_attempt_id": payload.execution_attempt_id,
             "message": payload.message,
@@ -5234,10 +5358,10 @@ def _decode_lead_evidence(value: object) -> CollaborationLeadEvidence:
 
 
 def _decode_lead_proposal_intent(value: object) -> LeadProposalIntent:
-    item = _object_with_extension(
+    item = _object_with_optional_extensions(
         value,
         {"assignments", "purpose", "relation"} | ({"shared_premises"} if type(value) is dict and type(value.get("authoring_scope")) is dict and value["authoring_scope"].get("schema_version") == 3 else set()),
-        {"authoring_scope"},
+        {"authoring_scope", "premise_decision"},
         label="lead proposal intent",
     )
     assignments = []
@@ -5267,6 +5391,7 @@ def _decode_lead_proposal_intent(value: object) -> LeadProposalIntent:
             )
         )
     return LeadProposalIntent(
+        premise_decision=premise_question_intent_from_dict(item["premise_decision"]) if "premise_decision" in item else None,
         shared_premises=tuple(_decode_shared_premise_intent(entry) for entry in _array(item['shared_premises'], label='shared premise intents')) if 'shared_premises' in item else (),
         relation=_enum(
             LeadProposalRelation,
@@ -5397,7 +5522,7 @@ def _decode_budget(value: object) -> CollaborationBudget:
 
 
 def _decode_proposal(value: object) -> CollaborationProposal:
-    item = _object_with_extension(
+    item = _object_with_optional_extensions(
         value,
         {
             "assignments",
@@ -5412,10 +5537,11 @@ def _decode_proposal(value: object) -> CollaborationProposal:
             "step_kind",
             "user_impact",
         },
-        {"authoring_scope"},
+        {"authoring_scope", "premise_decision"},
         label="collaboration proposal",
     )
     return CollaborationProposal(
+        premise_decision=premise_spec_from_dict(item["premise_decision"]) if "premise_decision" in item else None,
         step_id=_string(item["step_id"], label="proposal step ID"),
         proposal_id=_string(item["proposal_id"], label="proposal ID"),
         proposal_revision=_integer(
@@ -5682,6 +5808,15 @@ def _decode_payload(value: object) -> CollaborationPayload:
     if type(value) is not dict:
         raise ValueError("collaboration payload must be an object")
     payload_type = value.get("payload_type")
+    if payload_type == "premise_decision":
+        item = _object(value, {"payload_type", "selection"}, label="premise decision")
+        return CollaborationPremiseDecisionPayload(premise_selection_from_dict(item["selection"]))
+    if payload_type == "premise_selection":
+        item = _object(value, {"payload_type", "capture"}, label="premise selection")
+        return CollaborationPremiseSelectionPayload(premise_capture_from_dict(item["capture"]))
+    if payload_type == "premise_fresh_work_admission":
+        item = _object(value, {"payload_type", "admission"}, label="premise admission")
+        return CollaborationPremiseFreshWorkAdmissionPayload(premise_admission_from_dict(item["admission"]))
     if payload_type in {"artifact_objective_v1", "artifact_objective_v2"}:
         item = _object(value, {
             "payload_type", "facts", "action", "previous_objective_event_id",
@@ -5852,10 +5987,12 @@ def _decode_payload(value: object) -> CollaborationPayload:
                 "proposal_id",
                 "proposal_revision",
             },
-            {"mode", "trace"},
+            {"mode", "trace", "premise_analysis", "premise_conflicts"},
             label="specialist reply payload",
         )
         return CollaborationSpecialistReplyPayload(
+            premise_analysis=premise_analysis_from_dict(item["premise_analysis"]) if "premise_analysis" in item else None,
+            premise_conflicts=premise_conflicts_from_dict(item["premise_conflicts"]) if "premise_conflicts" in item else (),
             proposal_id=_string(item["proposal_id"], label="reply proposal ID"),
             proposal_revision=_integer(
                 item["proposal_revision"],
@@ -5902,10 +6039,11 @@ def _decode_payload(value: object) -> CollaborationPayload:
                 "reply_event_ids",
                 "unresolved_input_ids",
             },
-            {"authoring_scope", "trace"},
+            {"authoring_scope", "trace", "premise_report"},
             label="lead synthesis payload",
         )
         return CollaborationLeadSynthesisPayload(
+            premise_report=premise_report_from_dict(item["premise_report"]) if "premise_report" in item else None,
             proposal_id=_string(item["proposal_id"], label="synthesis proposal ID"),
             proposal_revision=_integer(
                 item["proposal_revision"],
@@ -6578,6 +6716,9 @@ def _validate_collaboration_payload(
         CollaborationEventKind.LEAD_EXPLORATION_RESULT: (CollaborationLeadExplorationResultPayload,),
         CollaborationEventKind.EXPLORATION_ADOPTION: (CollaborationExplorationAdoptionPayload,),
         CollaborationEventKind.EDITORIAL_RECORD: (CollaborationEditorialRecordPayload,),
+        CollaborationEventKind.PREMISE_DECISION: (CollaborationPremiseDecisionPayload,),
+        CollaborationEventKind.PREMISE_SELECTION: (CollaborationPremiseSelectionPayload,),
+        CollaborationEventKind.PREMISE_FRESH_WORK_ADMISSION: (CollaborationPremiseFreshWorkAdmissionPayload,),
         CollaborationEventKind.ARTIFACT_OBJECTIVE: (ArtifactObjectivePayload, ArtifactObjectivePayloadV2),
         CollaborationEventKind.LEAD_RECOMMENDATION_REQUEST: (LeadRecommendationRequestPayload,),
         CollaborationEventKind.LEAD_RECOMMENDATION_DECISION: (LeadRecommendationDecisionPayload,),
@@ -6731,6 +6872,9 @@ def _validate_collaboration_direction(
         CollaborationEventKind.LEAD_EXPLORATION_RESULT: {(CollaborationActorKind.LEAD, CollaborationActorKind.USER)},
         CollaborationEventKind.EXPLORATION_ADOPTION: {(CollaborationActorKind.USER, CollaborationActorKind.LEAD)},
         CollaborationEventKind.EDITORIAL_RECORD: {(CollaborationActorKind.USER, CollaborationActorKind.LEAD)},
+        CollaborationEventKind.PREMISE_DECISION: {(CollaborationActorKind.USER, CollaborationActorKind.LEAD)},
+        CollaborationEventKind.PREMISE_SELECTION: {(CollaborationActorKind.RUNTIME, CollaborationActorKind.USER)},
+        CollaborationEventKind.PREMISE_FRESH_WORK_ADMISSION: {(CollaborationActorKind.RUNTIME, CollaborationActorKind.LEAD)},
         CollaborationEventKind.MESSAGE: {
             (CollaborationActorKind.USER, CollaborationActorKind.LEAD),
             (CollaborationActorKind.LEAD, CollaborationActorKind.USER),
@@ -6835,6 +6979,12 @@ def _validate_authoring_evidence_scope(
 ) -> None:
     if scope is None:
         return
+    if evidence_scope is LeadOutcomeScope.PREMISE_ANALYSIS:
+        raise validation_failure(
+            ValueError("premise analysis cannot carry authoring scope"),
+            "$.authoring_scope",
+            "premise analysis requires no authoring scope or candidate authority",
+        )
     if type(scope) is not AuthoringScope:
         raise validation_failure(
             TypeError('authoring scope must be an AuthoringScope'),
@@ -6872,7 +7022,14 @@ def _validate_scoped_assignments(
     scope: AuthoringScope | None,
     specialist_ids: tuple[str, ...],
     modes: tuple[SpecialistAssignmentMode | None, ...],
+    premise_decision: PremiseQuestionIntent | None = None,
 ) -> None:
+    if premise_decision is not None:
+        if type(premise_decision) is not PremiseQuestionIntent or scope is not None:
+            raise ValueError("premise analysis is separate from authoring scope")
+        if specialist_ids != specialists_for_domains(premise_decision.dependent_domains) or any(mode is not SpecialistAssignmentMode.PREMISE_ANALYSIS for mode in modes):
+            raise ValueError("premise analyst roster must match the complete question domains")
+        return
     if scope is None:
         if any(mode is not None for mode in modes):
             raise validation_failure(
@@ -7305,6 +7462,9 @@ __all__ = [
     "CollaborationExplorationAdoptionPayload",
     "CollaborationMessagePayload",
     "CollaborationEditorialRecordPayload",
+    "CollaborationPremiseDecisionPayload",
+    "CollaborationPremiseSelectionPayload",
+    "CollaborationPremiseFreshWorkAdmissionPayload",
     "CollaborationPayload",
     "CollaborationProposal",
     "CollaborationProposalBasis",

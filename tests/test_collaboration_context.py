@@ -79,6 +79,20 @@ from tests.collaboration_contract_fixture import (
 )
 
 
+def _legacy_rejection_input_fixture():
+    return ConversationEvent(
+        schema_version=CONVERSATION_EVENT_SCHEMA_VERSION,
+        session_id=SESSION_ID,
+        conversation_id=CONVERSATION_ID,
+        turn_id="legacy_turn",
+        sequence=1,
+        timestamp="2026-08-31T00:00:00+00:00",
+        sender="user",
+        recipient="lead_orchestrator",
+        kind=ConversationEventKind.USER_MESSAGE,
+        content="Legacy content.",
+    )
+
 def _state_draft(event_id, proposal, state, **changes):
     return make_draft(
         event_id, CollaborationEventKind.STEP_STATE, RUNTIME, USER,
@@ -265,6 +279,12 @@ class CollaborationTransitionTests(unittest.TestCase):
                 "current_recommendation_start",
                 "current_recommendation_result",
                 "current_recommendation_state",
+                "premise_report",
+                "premise_report_event_id",
+                "premise_decision",
+                "premise_selection",
+                "premise_admission",
+                "premise_admission_event_id",
             ),
         )
 
@@ -1454,18 +1474,7 @@ class CollaborationReadableProjectionTests(unittest.TestCase):
     def test_readable_projection_rejects_v1_and_every_corrupt_history_shape(
         self,
     ) -> None:
-        legacy = ConversationEvent(
-            schema_version=CONVERSATION_EVENT_SCHEMA_VERSION,
-            session_id=SESSION_ID,
-            conversation_id=CONVERSATION_ID,
-            turn_id="legacy_turn",
-            sequence=1,
-            timestamp="2026-08-31T00:00:00+00:00",
-            sender="user",
-            recipient="lead_orchestrator",
-            kind=ConversationEventKind.USER_MESSAGE,
-            content="Legacy content.",
-        )
+        legacy = _legacy_rejection_input_fixture()
         with self.assertRaises(TypeError):
             project_collaboration_readable_history((legacy,))  # type: ignore[arg-type]
 
@@ -1515,18 +1524,7 @@ class CollaborationPortAndLegacyIsolationTests(unittest.TestCase):
         )
 
     def test_schema_v1_values_are_rejected_without_migration_or_union(self) -> None:
-        legacy = ConversationEvent(
-            schema_version=CONVERSATION_EVENT_SCHEMA_VERSION,
-            session_id=SESSION_ID,
-            conversation_id=CONVERSATION_ID,
-            turn_id="legacy_turn",
-            sequence=1,
-            timestamp="2026-08-31T00:00:00+00:00",
-            sender="user",
-            recipient="lead_orchestrator",
-            kind=ConversationEventKind.USER_MESSAGE,
-            content="Legacy content.",
-        )
+        legacy = _legacy_rejection_input_fixture()
         with self.assertRaises(TypeError):
             project_collaboration_history((legacy,))  # type: ignore[arg-type]
         for forbidden in ("migrate", "convert", "upgrade", "legacy"):

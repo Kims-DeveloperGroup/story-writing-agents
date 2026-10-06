@@ -57,6 +57,7 @@ EXPECTED_ACTION_KINDS = (
     "lead_input",
     "lead_explore",
     "lead_adopt",
+    "premise_decision",
     "list_agents",
     "search",
     "transcript",
@@ -88,6 +89,7 @@ EXPECTED_ACTION_KINDS = (
 EXPECTED_COMMANDS = (
     CommandSpec("Writing", "/explore TEXT", (), True, False, "/explore Explore possible directions"),
     CommandSpec("Writing", "/adopt", (), True, True, "/adopt"),
+    CommandSpec("Writing", "/premise", (), True, True, "/premise"),
     CommandSpec("Agents", "/agents", (), False, False, "/agents"),
     CommandSpec("Agents", "/auth", (), True, True, "/auth"),
     CommandSpec("Agents", "/settings", (), True, True, "/settings"),
@@ -389,6 +391,10 @@ class InteractiveParserRetirementTests(unittest.TestCase):
             with self.subTest(line=line):
                 self.assertEqual(parse_interactive_line(line), expected)
 
+
+        self.assertEqual(parse_interactive_line("/premise"), InteractiveAction(ActionKind.PREMISE_DECISION))
+        self.assertIs(parse_interactive_line("/premise choose forged-option").kind, ActionKind.PARSE_ERROR)
+
     def test_parser_is_provider_filesystem_process_and_network_free(self) -> None:
         with (
             mock.patch("builtins.open", side_effect=AssertionError("file I/O")),
@@ -424,20 +430,20 @@ class RetainedParserContractTests(unittest.TestCase):
         all_fields = set(samples)
         for kind, (allowed, required) in rules.items():
             valid = {name: samples[name] for name in required}
-            with (self.subTest(kind=kind, case="valid") if kind not in (ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT) else nullcontext()):
+            with (self.subTest(kind=kind, case="valid") if kind not in (ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT, ActionKind.PREMISE_DECISION) else nullcontext()):
                 self.assertIs(InteractiveAction(kind, **valid).kind, kind)
             for name in required:
                 missing = dict(valid)
                 del missing[name]
                 with (
-                    (self.subTest(kind=kind, missing=name) if kind not in (ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT) else nullcontext()),
+                    (self.subTest(kind=kind, missing=name) if kind not in (ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT, ActionKind.PREMISE_DECISION) else nullcontext()),
                     self.assertRaises(ValueError),
                 ):
                     InteractiveAction(kind, **missing)
             for name in all_fields.difference(allowed):
                 extra = dict(valid)
                 extra[name] = samples[name]
-                with (self.subTest(kind=kind, extra=name) if kind not in (ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT) else nullcontext()), self.assertRaises(ValueError):
+                with (self.subTest(kind=kind, extra=name) if kind not in (ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT, ActionKind.PREMISE_DECISION) else nullcontext()), self.assertRaises(ValueError):
                     InteractiveAction(kind, **extra)
 
     def test_action_specs_and_registry_are_immutable(self) -> None:

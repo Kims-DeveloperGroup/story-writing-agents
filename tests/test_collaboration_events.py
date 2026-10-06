@@ -235,6 +235,9 @@ class CollaborationValueContractTests(unittest.TestCase):
                 'lead_exploration_result',
                 'exploration_adoption',
                 "editorial_record",
+                "premise_decision",
+                "premise_selection",
+                "premise_fresh_work_admission",
                 "message",
                 "assignment_dispatch",
                 "specialist_reply",
@@ -362,7 +365,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                 "recommendation",
                 "proposal",
             ),
-            LeadOutcomeScope: ("story_specific", "workflow_meta"),
+            LeadOutcomeScope: ("story_specific", "workflow_meta", "premise_analysis"),
             LeadEvidenceStatus: (
                 "not_applicable",
                 "verified",
@@ -600,6 +603,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                     "basis",
                     "proposal_digest",
                     "authoring_scope",
+                    'premise_decision',
                 ),
             ),
             (
@@ -669,7 +673,7 @@ class CollaborationValueContractTests(unittest.TestCase):
             ),
             (
                 lead_intent,
-                ("relation", "purpose", "assignments", "authoring_scope", "shared_premises"),
+                ("relation", "purpose", "assignments", "authoring_scope", "shared_premises", 'premise_decision'),
             ),
             (
                 lead_outcome,
@@ -701,6 +705,8 @@ class CollaborationValueContractTests(unittest.TestCase):
                     "input_ids",
                     "mode",
                     "trace",
+                    'premise_analysis',
+                    'premise_conflicts',
                 ),
             ),
             (
@@ -717,6 +723,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                     "next_intent",
                     "authoring_scope",
                     "trace",
+                    'premise_report',
                 ),
             ),
             (
@@ -1053,6 +1060,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                 "basis",
                 "proposal_digest",
                 "authoring_scope",
+                "premise_decision",
             },
         )
         wire = encode_collaboration_proposal(proposal)
@@ -1543,13 +1551,13 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
     def test_leaf_and_facade_exports_identity_metadata_pickle_and_root_omission(
         self,
     ) -> None:
-        exploration_names = ('CollaborationLeadExplorationRequestPayload', 'CollaborationLeadExplorationResultPayload', 'CollaborationExplorationAdoptionPayload')
+        exploration_names = ('CollaborationLeadExplorationRequestPayload', 'CollaborationLeadExplorationResultPayload', 'CollaborationExplorationAdoptionPayload', 'CollaborationPremiseDecisionPayload', 'CollaborationPremiseSelectionPayload', 'CollaborationPremiseFreshWorkAdmissionPayload')
         exploration_names += ("CollaborationEditorialRecordPayload",)
         expected_event_exports = COLLABORATION_EVENT_EXPORTS
         expected_context_exports = COLLABORATION_CONTEXT_EXPORTS
         self.assertEqual(tuple(events_owner.__all__), expected_event_exports)
         self.assertEqual(tuple(context_owner.__all__), expected_context_exports)
-        self.assertEqual(len(conversations.__all__), 165)
+        self.assertEqual(len(conversations.__all__), 168)
         self.assertNotIn("__getattr__", vars(events_owner))
         self.assertNotIn("__getattr__", vars(context_owner))
         self.assertNotIn("__getattr__", vars(conversations))
@@ -1558,7 +1566,7 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
             for name in conversations.__all__
             if name.startswith("Collaboration") or name.startswith("COLLABORATION_")
         }
-        self.assertEqual(len(collaboration_names), 67)
+        self.assertEqual(len(collaboration_names), 70)
         for owner in (events_owner, context_owner):
             for name in (n for n in owner.__all__ if n not in exploration_names):
                 if name.startswith("Collaboration") or name.startswith(
@@ -1677,8 +1685,8 @@ import story_writing_agents
 import story_writing_agents.conversations as facade
 import story_writing_agents.conversations.context as context
 import story_writing_agents.conversations.events as events
-assert len(facade.__all__) == 165
-assert len(events.__all__) == 124
+assert len(facade.__all__) == 168
+assert len(events.__all__) == 127
 assert len(context.__all__) == 33
 assert facade.CollaborationProposal is events.CollaborationProposal
 assert facade.CollaborationEventStore is context.CollaborationEventStore

@@ -33,6 +33,7 @@ from story_writing_agents.interactive_terminal._model import MainInputHistorySta
 
 EXPECTED_SUGGESTIONS = (
     "/explore", "/adopt",
+    "/premise",
     "/agents",
     "/auth",
     "/settings",
@@ -359,7 +360,7 @@ class SuggestionContractTests(unittest.TestCase):
         )
         expected_identities = {"/?": "/help", "/toggle": "/progress"}
         for suggestion in suggestions:
-            with (self.subTest(token=suggestion.token) if suggestion.token not in ('/explore', '/adopt') else contextlib.nullcontext()):
+            with (self.subTest(token=suggestion.token) if suggestion.token not in ("/explore", "/adopt", "/premise") else contextlib.nullcontext()):
                 self.assertEqual(
                     suggestion.canonical_token,
                     expected_identities.get(suggestion.token, suggestion.token),
@@ -401,6 +402,9 @@ class SuggestionContractTests(unittest.TestCase):
                 )
         with self.assertRaises(TypeError):
             slash_command_suggestions(None)  # type: ignore[arg-type]
+
+
+        self.assertEqual(tuple(item.token for item in slash_command_suggestions("/prem")), ("/premise",))
 
     def test_projection_reads_the_registry_and_preserves_alias_identity(self) -> None:
         registry = (

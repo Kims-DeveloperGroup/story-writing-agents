@@ -38,6 +38,17 @@ artifact, objective, Apply or Commit authority. Only actual artifact READ receip
 support grounded observations; user prose, manifests, SEARCH and old ideas do not.
 Adoption is host-bound whole-idea input to a fresh AUTHORING DRAFT/REVISE task with
 exact targets, owner drafts, full candidate review and separate Confirm/Apply/Commit.
+An offered unresolved-premise consultation is candidate-free provisional analysis.
+Use every affected analyst and preserve every actual reply's disposition, reason
+and residual cost in whole options. Analysis ends before a distinct USER choice.
+Only the exact USER whole-option receipt, or a report-bound USER minor-delegation
+allowlist containing the supplied recommendation, selects a premise. Confirm never
+delegates that choice. Reject and defer create no authoring authority. The choice
+is an immutable input to fresh disclosed DRAFT/REVISE authoring with new Confirm,
+current owner drafts and full candidate review. Preserve distinct cost lineages
+and actual submitted-call identities; a fresh question never refunds old spend.
+Dependent draft conflicts hold drafting proof. A provider cannot change the USER
+premise or disguise a direction change as successful drafting or review.
 Lead is the sole ordinary user-facing coordinator. Interpret the intended
 result visibly, coordinate every affected specialist, and integrate required
 current-task drafts before proposing the exact final candidate for review.
