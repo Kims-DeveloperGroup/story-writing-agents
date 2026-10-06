@@ -1,0 +1,116 @@
+{
+  "format_version": 1,
+  "comparison_id": "offline-synthetic-mechanics",
+  "dataset_sha256": "35921956754ac3b081a422507d958c4d582b6a45bac1bff03b50bdc85bb10440",
+  "comparison_kind": "before_after",
+  "treatment": "Identical constructed outputs demonstrate offline comparison mechanics only. No agent, provider, human reviewer, Apply, Commit or publication was executed.",
+  "seed": 791,
+  "protocol": {
+    "status": "unknown",
+    "evidence": null
+  },
+  "arms": [
+    {
+      "arm_id": "fixture-before",
+      "label": "Explicit synthetic fixture before"
+    },
+    {
+      "arm_id": "fixture-after",
+      "label": "Explicit synthetic fixture after"
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "dialogue-boundaries",
+      "case_sha256": "31ae3a64810d4b6506b18db417f0975abbcda29d33faf6cc458b7cb8c1fc1989",
+      "runs": {
+        "fixture-before": {
+          "status": "captured",
+          "run_kind": "synthetic_capture",
+          "input_sha256": "c8d1863d7eb729b1fbd9727d5683e824399fcd0d9f69d8192cb164d41ae35418",
+          "conditions": {
+            "repository_commit": null,
+            "provider": null,
+            "model": null,
+            "settings": null,
+            "unknown_settings": [],
+            "call_ceiling": null,
+            "evidence_access": null,
+            "user_decision_policy": null
+          },
+          "output": {
+            "kind": "output",
+            "path": "output-a.txt",
+            "sha256": "0fccf50dcb3f2f9aa7c042b5bc05130e16d6f739cb55159fa0502d5cf0b46e81"
+          },
+          "capture_evidence": null,
+          "input_evidence": null,
+          "costs": {
+            "submitted_calls": null,
+            "prompt_tokens": null,
+            "completion_tokens": null,
+            "instruction_utf8_bytes": null,
+            "schema_utf8_bytes": null,
+            "payload_utf8_bytes": null,
+            "wall_seconds": null,
+            "decisions": {
+              "clarifications": null,
+              "confirmations": null,
+              "revisions": null,
+              "apply": null,
+              "commit": null,
+              "rejections": null
+            },
+            "evidence": []
+          },
+          "workflow_observations": [],
+          "reason": "Constructed fixture copied unchanged from the versioned source; no actual provider output or quality judgment.",
+          "interaction_context": null
+        },
+        "fixture-after": {
+          "status": "captured",
+          "run_kind": "synthetic_capture",
+          "input_sha256": "c8d1863d7eb729b1fbd9727d5683e824399fcd0d9f69d8192cb164d41ae35418",
+          "conditions": {
+            "repository_commit": null,
+            "provider": null,
+            "model": null,
+            "settings": null,
+            "unknown_settings": [],
+            "call_ceiling": null,
+            "evidence_access": null,
+            "user_decision_policy": null
+          },
+          "output": {
+            "kind": "output",
+            "path": "output-b.txt",
+            "sha256": "0fccf50dcb3f2f9aa7c042b5bc05130e16d6f739cb55159fa0502d5cf0b46e81"
+          },
+          "capture_evidence": null,
+          "input_evidence": null,
+          "costs": {
+            "submitted_calls": null,
+            "prompt_tokens": null,
+            "completion_tokens": null,
+            "instruction_utf8_bytes": null,
+            "schema_utf8_bytes": null,
+            "payload_utf8_bytes": null,
+            "wall_seconds": null,
+            "decisions": {
+              "clarifications": null,
+              "confirmations": null,
+              "revisions": null,
+              "apply": null,
+              "commit": null,
+              "rejections": null
+            },
+            "evidence": []
+          },
+          "workflow_observations": [],
+          "reason": "Constructed fixture copied unchanged from the versioned source; no actual provider output or quality judgment.",
+          "interaction_context": null
+        }
+      }
+    }
+  ]
+}

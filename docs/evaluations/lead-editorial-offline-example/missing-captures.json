@@ -1,0 +1,23 @@
+{
+  "format_version": 1,
+  "comparison_id": "offline-missing-evidence",
+  "dataset_sha256": "35921956754ac3b081a422507d958c4d582b6a45bac1bff03b50bdc85bb10440",
+  "comparison_kind": "before_after",
+  "treatment": "Identical constructed outputs demonstrate offline comparison mechanics only. No agent, provider, human reviewer, Apply, Commit or publication was executed.",
+  "seed": 791,
+  "protocol": {
+    "status": "unknown",
+    "evidence": null
+  },
+  "arms": [
+    {
+      "arm_id": "fixture-before",
+      "label": "Explicit synthetic fixture before"
+    },
+    {
+      "arm_id": "fixture-after",
+      "label": "Explicit synthetic fixture after"
+    }
+  ],
+  "cases": []
+}

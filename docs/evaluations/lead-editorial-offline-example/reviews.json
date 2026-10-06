@@ -1,0 +1,135 @@
+{
+  "format_version": 1,
+  "comparison_id": "offline-synthetic-mechanics",
+  "review_packet_sha256": "a4504bd10c69016bd12de951c8a3914b87c79b284ce29fda9d6c58fc56f334a7",
+  "reviews": [
+    {
+      "reviewer_id": "mechanics-author",
+      "role": "author_intent",
+      "evidence_kind": "synthetic_fixture",
+      "case_id": "dialogue-boundaries",
+      "ratings": {
+        "A": {
+          "intent_fulfillment": {
+            "score": 3,
+            "rationale": "Synthetic mechanics-only value for intent_fulfillment; this is not a human quality assessment or an observed effect."
+          },
+          "voice_preservation": {
+            "score": 3,
+            "rationale": "Synthetic mechanics-only value for voice_preservation; this is not a human quality assessment or an observed effect."
+          },
+          "important_error_avoidance": {
+            "score": 4,
+            "rationale": "Synthetic mechanics-only value for important_error_avoidance; this is not a human quality assessment or an observed effect."
+          },
+          "edit_restraint": {
+            "score": 4,
+            "rationale": "Synthetic mechanics-only value for edit_restraint; this is not a human quality assessment or an observed effect."
+          },
+          "approval_burden": {
+            "score": 3,
+            "rationale": "Synthetic mechanics-only value for approval_burden; this is not a human quality assessment or an observed effect."
+          }
+        },
+        "B": {
+          "intent_fulfillment": {
+            "score": 2,
+            "rationale": "Synthetic mechanics-only value for intent_fulfillment; this is not a human quality assessment or an observed effect."
+          },
+          "voice_preservation": {
+            "score": 3,
+            "rationale": "Synthetic mechanics-only value for voice_preservation; this is not a human quality assessment or an observed effect."
+          },
+          "important_error_avoidance": {
+            "score": 4,
+            "rationale": "Synthetic mechanics-only value for important_error_avoidance; this is not a human quality assessment or an observed effect."
+          },
+          "edit_restraint": {
+            "score": 3,
+            "rationale": "Synthetic mechanics-only value for edit_restraint; this is not a human quality assessment or an observed effect."
+          },
+          "approval_burden": {
+            "score": 2,
+            "rationale": "Synthetic mechanics-only value for approval_burden; this is not a human quality assessment or an observed effect."
+          }
+        }
+      },
+      "preference": "A",
+      "important_errors": [
+        {
+          "side": "A",
+          "source_id": "dialogue-draft-v1",
+          "description": "Synthetic concern demonstrates retained disagreement, not a diagnosed writing error.",
+          "impact": "Illustrative report mechanics only.",
+          "disposition": "unresolved",
+          "reason": "No real provider output or human review exists for this fixture."
+        }
+      ],
+      "evidence": null
+    },
+    {
+      "reviewer_id": "mechanics-editor",
+      "role": "reader_editor",
+      "evidence_kind": "synthetic_fixture",
+      "case_id": "dialogue-boundaries",
+      "ratings": {
+        "A": {
+          "intent_fulfillment": {
+            "score": 2,
+            "rationale": "Synthetic mechanics-only value for intent_fulfillment; this is not a human quality assessment or an observed effect."
+          },
+          "voice_preservation": {
+            "score": 2,
+            "rationale": "Synthetic mechanics-only value for voice_preservation; this is not a human quality assessment or an observed effect."
+          },
+          "important_error_avoidance": {
+            "score": 4,
+            "rationale": "Synthetic mechanics-only value for important_error_avoidance; this is not a human quality assessment or an observed effect."
+          },
+          "edit_restraint": {
+            "score": 3,
+            "rationale": "Synthetic mechanics-only value for edit_restraint; this is not a human quality assessment or an observed effect."
+          },
+          "approval_burden": {
+            "score": 1,
+            "rationale": "Synthetic mechanics-only value for approval_burden; this is not a human quality assessment or an observed effect."
+          }
+        },
+        "B": {
+          "intent_fulfillment": {
+            "score": 3,
+            "rationale": "Synthetic mechanics-only value for intent_fulfillment; this is not a human quality assessment or an observed effect."
+          },
+          "voice_preservation": {
+            "score": 3,
+            "rationale": "Synthetic mechanics-only value for voice_preservation; this is not a human quality assessment or an observed effect."
+          },
+          "important_error_avoidance": {
+            "score": 4,
+            "rationale": "Synthetic mechanics-only value for important_error_avoidance; this is not a human quality assessment or an observed effect."
+          },
+          "edit_restraint": {
+            "score": 4,
+            "rationale": "Synthetic mechanics-only value for edit_restraint; this is not a human quality assessment or an observed effect."
+          },
+          "approval_burden": {
+            "score": 2,
+            "rationale": "Synthetic mechanics-only value for approval_burden; this is not a human quality assessment or an observed effect."
+          }
+        }
+      },
+      "preference": "B",
+      "important_errors": [
+        {
+          "side": "B",
+          "source_id": "dialogue-draft-v1",
+          "description": "Synthetic concern demonstrates retained disagreement, not a diagnosed writing error.",
+          "impact": "Illustrative report mechanics only.",
+          "disposition": "unresolved",
+          "reason": "No real provider output or human review exists for this fixture."
+        }
+      ],
+      "evidence": null
+    }
+  ]
+}

@@ -1,0 +1,243 @@
+{
+  "comparison_id": "constructed-editorial-review-regression",
+  "format_version": 1,
+  "review_packet_sha256": "b13bb1779c3ef1581502c6cebf972b87fa52e28191fb4f8dc45f0db145e2557f",
+  "reviews": [
+    {
+      "case_id": "stronger-effect",
+      "evidence": {
+        "kind": "review_record",
+        "path": "record.txt",
+        "sha256": "4dafb39cec8926ebdb9707162af4060af4f50e861380cc9427a7ac2c94f2e711"
+      },
+      "evidence_kind": "human_blinded",
+      "important_errors": [],
+      "preference": "tie",
+      "ratings": {
+        "A": {
+          "approval_burden": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "edit_restraint": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "important_error_avoidance": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "intent_fulfillment": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "voice_preservation": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          }
+        },
+        "B": {
+          "approval_burden": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "edit_restraint": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "important_error_avoidance": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "intent_fulfillment": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "voice_preservation": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          }
+        }
+      },
+      "reviewer_id": "constructed-author",
+      "role": "author_intent"
+    },
+    {
+      "case_id": "stronger-effect",
+      "evidence": {
+        "kind": "review_record",
+        "path": "record.txt",
+        "sha256": "4dafb39cec8926ebdb9707162af4060af4f50e861380cc9427a7ac2c94f2e711"
+      },
+      "evidence_kind": "human_blinded",
+      "important_errors": [],
+      "preference": "tie",
+      "ratings": {
+        "A": {
+          "approval_burden": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "edit_restraint": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "important_error_avoidance": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "intent_fulfillment": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "voice_preservation": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          }
+        },
+        "B": {
+          "approval_burden": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "edit_restraint": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "important_error_avoidance": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "intent_fulfillment": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "voice_preservation": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          }
+        }
+      },
+      "reviewer_id": "constructed-editor",
+      "role": "reader_editor"
+    },
+    {
+      "case_id": "incompatible-recommendations",
+      "evidence": {
+        "kind": "review_record",
+        "path": "record.txt",
+        "sha256": "4dafb39cec8926ebdb9707162af4060af4f50e861380cc9427a7ac2c94f2e711"
+      },
+      "evidence_kind": "human_blinded",
+      "important_errors": [],
+      "preference": "tie",
+      "ratings": {
+        "A": {
+          "approval_burden": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "edit_restraint": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "important_error_avoidance": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "intent_fulfillment": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "voice_preservation": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          }
+        },
+        "B": {
+          "approval_burden": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "edit_restraint": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "important_error_avoidance": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "intent_fulfillment": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "voice_preservation": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          }
+        }
+      },
+      "reviewer_id": "constructed-author",
+      "role": "author_intent"
+    },
+    {
+      "case_id": "incompatible-recommendations",
+      "evidence": {
+        "kind": "review_record",
+        "path": "record.txt",
+        "sha256": "4dafb39cec8926ebdb9707162af4060af4f50e861380cc9427a7ac2c94f2e711"
+      },
+      "evidence_kind": "human_blinded",
+      "important_errors": [],
+      "preference": "tie",
+      "ratings": {
+        "A": {
+          "approval_burden": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "edit_restraint": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "important_error_avoidance": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "intent_fulfillment": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "voice_preservation": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          }
+        },
+        "B": {
+          "approval_burden": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "edit_restraint": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "important_error_avoidance": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "intent_fulfillment": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          },
+          "voice_preservation": {
+            "rationale": "Constructed mechanics only; no real quality or human observation",
+            "score": 3
+          }
+        }
+      },
+      "reviewer_id": "constructed-editor",
+      "role": "reader_editor"
+    }
+  ]
+}
