@@ -835,6 +835,34 @@ class ControllerContractTests(ControllerTestCase):
                 controller.run_session_lobby()
             close.assert_called_once_with()
 
+        for failure, after_body in (
+            (KeyboardInterrupt("input guard activation"), False),
+            (SystemExit("input guard activation"), False),
+            (RuntimeError("interactive terminal restoration failed"), True),
+        ):
+            controller, backend, callbacks = self.make_controller(self.make_workspace(), "/quit")
+            @contextmanager
+            def fail_guard():
+                if not after_body:
+                    raise failure
+                yield
+                raise failure
+            controller._terminal._input_session = fail_guard
+            with mock.patch.object(backend, "close", wraps=backend.close) as close:
+                if isinstance(failure, SystemExit):
+                    with self.assertRaises(SystemExit) as raised:
+                        controller.run_session_lobby()
+                    self.assertIs(raised.exception, failure)
+                else:
+                    self.assertEqual(controller.run_session_lobby(), 2)
+                close.assert_called_once_with()
+                with self.assertRaisesRegex(RuntimeError, "single-use"):
+                    controller.run_session_lobby()
+                close.assert_called_once_with()
+            if not after_body:
+                self.assertEqual(callbacks.prompts, [])
+            self.assertIsNone(controller._runner)
+
     def test_diagnostic_error_failure_preserves_status_output_and_cleanup(
         self,
     ) -> None:

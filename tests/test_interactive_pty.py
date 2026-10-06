@@ -776,81 +776,6 @@ raise SystemExit(int(state.get("antigravity_login_returncode", 0)))
 '''
 
 
-# Reuse the existing strict Lead/specialist response builders in an opt-in
-# executable. Ordinary PTY tests keep their original auth-only Agy stand-in.
-_AUTH_RECOVERY_AGY = r'''#!/usr/bin/env python3
-import fcntl
-import json
-import os
-import sys
-import time
-from pathlib import Path
-
-argv = sys.argv[1:]
-if "--help" in argv:
-    print("--agent --conversation --disable-slash-commands --effort "
-          "--input-format --json-schema --mode --model --new-project "
-          "--output-format --print --print-timeout --sandbox")
-    raise SystemExit(0)
-
-''' + "def nested_mapping_with" + _FAKE_CODEX.split(
-    "def nested_mapping_with", 1
-)[1].split("def compact_answer", 1)[0] + r'''
-if "--print" in argv:
-    def option(name):
-        return argv[argv.index(name) + 1] if name in argv else None
-
-    control_path = Path(os.environ["STORY_PTY_CODEX_CONTROL"])
-    control = json.loads(control_path.read_text())
-    auth_path = Path(os.environ["STORY_PTY_AUTH_STATE"])
-    agent = option("--agent")
-    payload_text = option("--print")
-    payload = json.loads(payload_text)
-    targets = control.get("auth_reject_agents", [])
-    marker = control_path.parent / ("auth-rejected-" + agent)
-    rejected = False
-    if agent in targets:
-        try:
-            descriptor = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        except FileExistsError:
-            pass
-        else:
-            os.close(descriptor)
-            rejected = True
-    record = {"event": "auth-model", "agent": agent, "pid": os.getpid(),
-              "payload_text": payload_text, "rejected": rejected,
-              "thread": option("--conversation")}
-    with Path(os.environ["STORY_PTY_CODEX_LOG"]).open("a") as log:
-        fcntl.flock(log, fcntl.LOCK_EX)
-        log.write(json.dumps(record) + "\n")
-        log.flush()
-    if rejected:
-        if control.get("auth_parallel"):
-            deadline = time.monotonic() + 5
-            while not all((control_path.parent / ("auth-rejected-" + name)).exists() for name in targets):
-                if time.monotonic() > deadline:
-                    raise SystemExit(91)
-                time.sleep(0.01)
-        state = json.loads(auth_path.read_text())
-        state["antigravity"] = control.get("auth_baseline", "unauthenticated")
-        staged = auth_path.with_name(auth_path.name + "." + str(os.getpid()))
-        staged.write_text(json.dumps(state))
-        os.replace(staged, auth_path)
-        print(json.dumps({"conversation_id": "", "status": "ERROR", "response": "",
-            "error": "authentication failed or timed out", "duration_seconds": 0,
-            "num_turns": 0, "usage": {"input_tokens": 0, "output_tokens": 0,
-            "thinking_tokens": 0, "cache_read_tokens": 0, "total_tokens": 0}}), flush=True)
-        raise SystemExit(1)
-    if agent == "lead_orchestrator":
-        answer = {"message": "AUTH631 exact request recovered.",
-            "authoring_scope": lead_scope(payload)}
-    else:
-        answer = lead_consultation_answer(payload, agent)
-    print(json.dumps({"conversation_id": option("--conversation") or ("auth-thread-" + agent),
-        "status": "SUCCESS", "json_schema": json.loads(option("--json-schema")),
-        "structured_output": json.loads(wire_response(json.dumps({"action": {"kind": "answer", "result": answer}}), payload["response_contract"]["result_contract_id"]))}), flush=True)
-    raise SystemExit(0)
-''' + _FAKE_AGY
 
 
 _REFERENCE_PROBE_PREAMBLE = r"""
@@ -1358,32 +1283,6 @@ class InteractiveCliPtyTests(unittest.TestCase):
             fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
             return [json.loads(line) for line in handle.read().splitlines() if line]
 
-    def _context_thread_records(
-        self,
-        session_id: str,
-        *,
-        agent_id: str | None = None,
-        subject_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """Read exact content-free contextual continuation records."""
-
-        directory = self.workspace.path(
-            f"{_SESSION_DIRECTORY}/.contextual/v1/{session_id}"
-        )
-        if not directory.exists():
-            return []
-        records = [
-            json.loads(path.read_text(encoding="utf-8"))
-            for path in sorted(directory.glob("*.json"))
-        ]
-        return [
-            record
-            for record in records
-            if (agent_id is None or record["key"]["scope"]["agent_id"] == agent_id)
-            and (
-                subject_id is None or record["key"]["scope"]["subject_id"] == subject_id
-            )
-        ]
 
     def _wait_for_provider_record(
         self,
@@ -1419,52 +1318,6 @@ class InteractiveCliPtyTests(unittest.TestCase):
                     f"captured={process.normalized_text!r}"
                 )
 
-    def _wait_for_live_reply(
-        self,
-        process: PtyCliProcess,
-        *,
-        after: int,
-        title: str,
-        content: str,
-        provider: str = "Codex",
-        details: bool = False,
-    ) -> str:
-        """Wait for and verify one live speaker-rail reply."""
-
-        process.wait_for_text(content, after=after)
-        rendered = process.text_after(after)
-        plain = _ANSI_SGR_BYTES.sub(
-            b"",
-            rendered.encode("utf-8"),
-        ).decode("utf-8")
-        compact_plain = " ".join(plain.split())
-        self.assertEqual(plain.count(f"{title} → You"), 1)
-        self.assertIn(f"│ {content}\n", plain)
-        if details:
-            self.assertIn(f"{title} → You\n", plain)
-            self.assertIn(
-                f"{provider} / provider default / provider default ·",
-                compact_plain,
-            )
-            self.assertRegex(
-                compact_plain,
-                (
-                    r"(?:resumed|reused|fresh(?: after provider switch)?|"
-                    r"not observed)"
-                ),
-            )
-            self.assertNotIn("Confirmation:", compact_plain)
-        else:
-            self.assertIn(f"{title} → You\n", plain)
-            for label in (
-                "Provider:",
-                "Model:",
-                "Effort:",
-                "Confirmation:",
-                "Thread:",
-            ):
-                self.assertNotIn(label, plain)
-        return rendered
 
     def _wait_for_auth_record(
         self,
@@ -1770,17 +1623,36 @@ class InteractiveCliPtyTests(unittest.TestCase):
 
 
     def _exercise_external_library_pty(self, *, edit_query: bool) -> None:
+        gate = self.temporary_root / ("viewer-ready-edited" if edit_query else "viewer-ready")
         source = r'''
 import json
+import os
 import sys
+import time
+from pathlib import Path
 from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
 from story_writing_agents.interactive_controller._exchange_viewer import prepare_agent_exchange_view
-from story_writing_agents.interactive_terminal import InteractiveExternalViewer, build_stream_terminal
+from story_writing_agents.interactive_terminal import InteractiveExternalViewer, InteractiveInputLifecycle, InteractiveSemanticOutput, Message, build_stream_terminal
 source = b"".join((json.dumps({"content": "개요 개요 " + str(i)}, ensure_ascii=False) + "\n").encode() for i in range(7))
 original = bytes(source)
 operation = prepare_agent_exchange_view(source, session_id="s", scope_kind=AgentExchangeScopeKind.CONVERSATION, scope_id="c", scope_subject="Subject", agent_id="lead_orchestrator")
-viewer = InteractiveExternalViewer(build_stream_terminal(input, sys.stdin, sys.stdout))
-viewer.open(operation, transient_only=True)
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+lifecycle = InteractiveInputLifecycle(terminal)
+with lifecycle.session():
+    assert terminal.read_main().text == "seed"
+    InteractiveSemanticOutput(terminal).write_accepted_input(Message("user", "LEGITIMATE_ACCEPTED_MESSAGE"))
+    print("INTER_READER_READY", flush=True)
+    deadline = time.monotonic() + 10
+    while not Path(os.environ["STORY_PTY_VIEWER_GATE"]).is_file():
+        if time.monotonic() > deadline:
+            raise RuntimeError("inter-reader barrier timed out")
+        time.sleep(0.01)
+    assert terminal.read_main().text.rstrip() == "/exchanges"
+    InteractiveExternalViewer(terminal).open(operation, transient_only=True)
+    print("VIEWER_CLOSED", flush=True)
+    with lifecycle.native_handoff():
+        print(f"NATIVE_VALUE={input('native> ')}", flush=True)
+    assert terminal.read_main().text == "after-native"
 assert source == original
 print("SOURCE_UNCHANGED=True")
 print(f"SHELL_VALUE={input('shell> ')}")
@@ -1788,8 +1660,22 @@ print(f"SHELL_VALUE={input('shell> ')}")
         before = _durable_tree(self.workspace.root)
         process = self._spawn_python(source, environment_overrides={
             "TERM": "xterm-256color",
+            "STORY_PTY_VIEWER_GATE": str(gate),
             "PYTHONPATH": os.pathsep.join((str(_SOURCE_ROOT), str(_REPOSITORY_ROOT / "vendor/jsonl-viewer/src"))),
         }, terminal_columns=120)
+        process.wait_for_text("story[lobby]> ")
+        process.send_line("seed")
+        process.wait_for_text("INTER_READER_READY")
+        assert termios is not None
+        flags = termios.tcgetattr(process.master_fd)[3]
+        self.assertFalse(flags & (termios.ECHO | termios.ECHONL))
+        self.assertTrue(flags & termios.ICANON)
+        mark = process.output_mark()
+        process.send_bytes(b"/exchanges\n\n")
+        select.select((process.master_fd,), (), (), 0.05)
+        process._read_available_terminal_bytes()
+        self.assertEqual(process.normalized_bytes[mark:], b"")
+        gate.touch()
         process.wait_for_text("Record 1/7")
         process.wait_for_text("? help • q close")
         assert termios is not None
@@ -1823,12 +1709,21 @@ print(f"SHELL_VALUE={input('shell> ')}")
         process.send_bytes(b"n")
         process.wait_for_text("3/14 occurrences • Search all text='개요'", after=mark)
         process.send_bytes(b"q")
+        process.wait_for_text("native> ")
+        self.assertEqual(termios.tcgetattr(process.master_fd), process.original_terminal_attributes)
+        mark = process.output_mark()
+        process.send_line("opaque-native-input")
+        process.wait_for_text("story[lobby]> ", after=mark)
+        self.assertFalse(termios.tcgetattr(process.master_fd)[3] & termios.ECHO)
+        process.send_line("after-native")
         process.wait_for_text("shell> ")
         self.assertTrue(termios.tcgetattr(process.master_fd)[3] & termios.ICANON)
         process.send_line("after-view")
         process.wait_for_text("SHELL_VALUE=after-view")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertIn("SOURCE_UNCHANGED=True", process.normalized_text)
+        self.assertEqual(process.normalized_text.count("LEGITIMATE_ACCEPTED_MESSAGE"), 1)
+        self.assertIn("NATIVE_VALUE=opaque-native-input", process.normalized_text)
         self.assertNotIn("U0015", process.normalized_text)
         self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 1)
         self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 1)
@@ -1868,73 +1763,9 @@ print(f"SHELL_VALUE={input('shell> ')}")
 
 
 
-    def _start_auth_recovery_case(self, *, parallel=False, baseline=False):
-        """Start the actual CLI with only disposable fake native executables."""
 
-        self.fake_antigravity_executable.write_text(
-            _AUTH_RECOVERY_AGY.replace("#!/usr/bin/env python3", f"#!{sys.executable}", 1),
-            encoding="utf-8",
-        )
-        defaults_path = self.workspace.path("config/system_defaults.json")
-        defaults = json.loads(defaults_path.read_text())
-        defaults["default_backend"] = "codex" if parallel else "antigravity"
-        defaults_path.write_text(json.dumps(defaults) + "\n")
-        targets = ["plot_architect", "character_custodian"] if parallel else ["lead_orchestrator"]
-        self._set_provider_control(
-            mode="lead_consultation" if parallel else "lead_answer",
-            specialists=targets,
-            auth_reject_agents=targets,
-            auth_parallel=parallel,
-            auth_baseline="authenticated" if baseline else "unauthenticated",
-        )
-        self._set_auth_state(antigravity="authenticated",
-            antigravity_login="wait_for_exit" if baseline else "code_then_stay")
-        args = ("chat",) + tuple(value for agent in targets for value in ("--backend", agent + "=antigravity")) if parallel else ()
-        process = self._spawn_cli(args, terminal_columns=120)
-        process.wait_for_text("story[lobby]> ")
-        process.send_line("/session create alpha")
-        # Git/session setup has its own bound; auth waits keep the normal deadline.
-        process.wait_for_text("story[alpha]> ", timeout=30.0)
-        conversation = self._create_conversation(process, subject="Synthetic auth recovery")
-        mark = process.output_mark()
-        process.send_line("AUTH631 preserve this exact request and its confirmation.")
-        if parallel:
-            process.wait_for_text("Lead proposal decision", after=mark)
-            self.assertEqual(self._auth_model_records(), [])
-            process.send_line("1")
-        process.wait_for_text("FAKE_AGY_AUTH_EXIT> " if baseline else "FAKE_AGY_AUTH_CODE> ", after=mark)
-        logins = [row for row in self._auth_records() if row["operation"] == "login"]
-        self.assertEqual(len(logins), 1)
-        login = logins[0]
-        self.assertEqual(login["provider"], "antigravity")
-        self.assertEqual(login["argv"], [])
-        self.assertEqual((login["stdin_tty"], login["stdout_tty"], login["stderr_tty"]), (True, True, True))
-        self.assertEqual(login["environment_marker"], "inherited-auth-environment")
-        self.assertEqual(Path(login["cwd"]).resolve(), self.workspace.root.resolve())
-        return process, conversation, mark, login
 
-    def _auth_model_records(self):
-        return [row for row in self._provider_records() if row.get("event") == "auth-model"]
 
-    def _assert_exact_auth_replays(self, targets):
-        records = self._auth_model_records()
-        self.assertEqual(len(records), 2 * len(targets))
-        for agent in targets:
-            calls = [row for row in records if row["agent"] == agent]
-            self.assertEqual([row["rejected"] for row in calls], [True, False])
-            self.assertEqual(calls[0]["payload_text"], calls[1]["payload_text"])
-            self.assertEqual(calls[0]["thread"], calls[1]["thread"])
-            self.assertNotEqual(calls[0]["pid"], calls[1]["pid"])
-        self.assertEqual(sum(row["operation"] == "login" for row in self._auth_records()), 1)
-
-    def _finish_auth_recovery_case(self, process, mark, *, parallel=False):
-        process.wait_for_text("The specialist confirms the proposed direction." if parallel
-                              else "AUTH631 exact request recovered.", after=mark)
-        process.wait_for_text("story[alpha]> ", after=mark)
-        process.send_line("/quit")
-        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        self.assertEqual(process.final_terminal_attributes, process.original_terminal_attributes)
-        self.assertNotIn("PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR", process.normalized_text)
 
 
 
@@ -1964,6 +1795,8 @@ print(f"SHELL_VALUE={input('shell> ')}")
         """Cover retained conversation management and main-input cleanup."""
         for edit_query in (False, True):
             self._exercise_external_library_pty(edit_query=edit_query)
+        for provider in ("codex", "antigravity"):
+            self._assert_auth_code_returns_to_story(provider)
 
         process = self._spawn_cli(())
         process.wait_for_text("story[lobby]> ")
@@ -2035,10 +1868,6 @@ print(f"SHELL_VALUE={input('shell> ')}")
 
 
 
-    def _retired_v1_test_vintr_during_large_local_history_stops_sequential_rendering(
-        self,
-    ) -> None:
-        """Document the removed schema-v1 bulk-history setup."""
 
 
 

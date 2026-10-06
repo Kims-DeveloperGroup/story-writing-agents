@@ -13,6 +13,7 @@ from .interactive_terminal import (
     Choice,
     ControlOutcomeKind,
     InteractiveAdvisoryProgress,
+    InteractiveInputLifecycle,
     InputPresentation,
     InteractivePickerInput,
     InteractiveStartupPresentation,
@@ -124,7 +125,7 @@ def select_default_provider(
 class InteractiveAuthCoordinator:
     """Coordinate one provider-neutral auth picker and native-login handoff."""
 
-    __slots__ = ("_auth", "_picker", "_presentation", "_progress")
+    __slots__ = ("_auth", "_input_lifecycle", "_picker", "_presentation", "_progress")
 
     def __init__(
         self,
@@ -143,6 +144,7 @@ class InteractiveAuthCoordinator:
         if not callable(sleeper):
             raise TypeError("sleeper must be callable")
         self._auth: _ProviderAuth = auth_service
+        self._input_lifecycle = InteractiveInputLifecycle(terminal)
         self._picker = InteractivePickerInput(terminal)
         self._progress = InteractiveAdvisoryProgress(terminal)
         self._presentation = InteractiveStartupPresentation(
@@ -368,10 +370,11 @@ class InteractiveAuthCoordinator:
                 state=ViewState.LOADING,
             )
         )
-        login_result = (
-            self._auth.login(provider, recovery=True)
-            if recovery else self._auth.login(provider)
-        )
+        with self._input_lifecycle.native_handoff():
+            login_result = (
+                self._auth.login(provider, recovery=True)
+                if recovery else self._auth.login(provider)
+            )
         if not isinstance(login_result, ProviderLoginResult):
             raise TypeError("auth service must return a ProviderLoginResult")
         if login_result.provider != provider:

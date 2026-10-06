@@ -9,6 +9,7 @@ from ._core import (  # noqa: F401
     InteractiveCompositionInput,
     InteractiveDebateProgress,
     InteractiveMainInput,
+    InteractiveInputLifecycle,
     InteractiveLiveComposer,
     InputPresentation,
     INTERACTIVE_ERROR_SPECS,

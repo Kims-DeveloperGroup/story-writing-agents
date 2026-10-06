@@ -181,9 +181,16 @@ occurrences through folded ancestors. ANSI uses readable inverse focus; plain
 output reserves an extra caret row. Story transports decoded physical text/keys
 and owns terminal
 modes, geometry, frame presentation, and restoration. Closing the view returns
-to the same shell scope. It cannot call or replay a provider. For `/exchanges`,
+to the same shell scope without retaining the command, picker, or viewer frames.
+Earlier accepted messages and results remain visible. It cannot call or replay a provider. For `/exchanges`,
 Story requires alternate-screen support. In line mode it shows a content-free
 notice instead of displaying exchange records in scrollback.
+
+On capable terminals, Story keeps input echo disabled across shell input
+transitions so buffered commands cannot be printed outside their transient
+frames. Native login temporarily receives the original terminal settings;
+leaving the shell restores them. Callback-only and line-fallback terminals
+retain their existing input behavior.
 
 Up/Down cycle records with first/last/only-record footer notices and reset the
 viewport/cursor. All `h/j/k/l` keys reveal adjacent pages at viewport edges.

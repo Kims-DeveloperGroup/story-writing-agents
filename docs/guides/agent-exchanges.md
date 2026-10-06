@@ -442,7 +442,9 @@ telemetry, and has no edit, export, replay, retry, live-tail, or persistence
 operation. Story's `RawTerminalDriver` remains the sole raw-mode, signal,
 geometry, input, output, alternate-screen, and restoration owner. Closing drops
 picker, mode, cursor, search, match, result-index, and help state and restores
-the shell. It does not securely erase workspace records or external copies.
+the shell without retaining the `/exchanges` command, picker, or viewer frames.
+Earlier messages and results remain visible. It does not securely erase workspace
+records or external copies.
 
 Common bounded failures are:
 
