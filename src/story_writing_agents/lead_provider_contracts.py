@@ -288,6 +288,10 @@ class LeadProviderConstraints:
             ),
             "offered_source_ids": None if self.source_ids is None else list(self.source_ids),
             "recommendation_source_membership": (
+                "Prior same-task revision drafts may be selected only as input material for a fresh "
+                "AUTHORING DRAFT/REVISE consultation preparation. Their event, owner, scope and digest "
+                "remain historical; they never satisfy current owner drafts, candidate review or Apply. "
+                "Artifact preparation still requires the exact current completed authoring source. "
                 "Recommendation source_ids select only the offered preparation recommendation sources"
                 + (" or evidence IDs from completed authorized READs. " if self.allow_read_sources else ". ")
                 + "These sources are not extra assignment inputs. To prepare a document from an approved historical draft, "

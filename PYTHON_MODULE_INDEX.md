@@ -72,7 +72,7 @@ depend on terminal presentation or concrete persistence.
 - `agents`, `models`, `errors`, `config`, `prompts`, `directives`, `artifact_proposals`
 - `specialist_routing`, `reply_trace`, `run_inputs`
 
-Primary access is the root facade. `specialist_routing` owns pure shared `AuthoringIntent`, independent of activity; conversation codecs preserve its immutable task lineage. `config` owns configuration loading. Scope-v3 contribution/dependency declarations and consistent per-specialist roles remain pure routing contracts; historical scope constructors retain default version 2.
+Primary access is the root facade. `specialist_routing` owns pure shared `AuthoringIntent`, independent of activity; conversation codecs preserve its immutable task lineage. `config` owns configuration loading. Scope-v3 contribution/dependency declarations and consistent per-specialist roles remain pure routing contracts; historical scope constructors retain default version 2. Historical drafting-input eligibility is pure routing policy; current execution proof remains host-owned.
 `prompts` owns captured policy bytes, stable fingerprints and runtime authority invariants; stages remain invocation data without provider execution.
 `models` carries optional diagnostics and keyword-only `AgentRequest.expected_reviewed_proposal` and `review_only` hints, without next-action authority.
 

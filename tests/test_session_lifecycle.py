@@ -600,11 +600,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         with (
             _fresh_literal_object_return_value(backend_module, '_provision_session_resources', resource) as provision,
             _fresh_literal_object_return_value(backend_module, '_require_ready_session_resources', resource) as verify,
-            mock.patch.object(
-                backend_module,
-                "SessionTransitionAssessor",
-                return_value=assessor,
-            ) as assessor_type,
+            _fresh_literal_object_return_value(backend_module, 'SessionTransitionAssessor', assessor) as assessor_type,
         ):
             self.assertIs(backend.provision_session_resources("session"), resource)
             observed = backend.assess_session_transition(

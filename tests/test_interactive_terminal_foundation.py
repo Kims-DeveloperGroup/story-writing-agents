@@ -189,6 +189,9 @@ MODEL_EXPORTS = (
 )
 
 
+def _fresh_literal_object_return_value_autospec(target, attribute, value):
+    return mock.patch.object(target, attribute, autospec=True, return_value=value)
+
 class ObservedStream:
     """Expose deterministic stream capabilities without real terminal I/O."""
 
@@ -1763,12 +1766,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             side_effect=lambda view, observed: render_input_prompt(view, observed)
         )
         view = _model.InputPromptView(context, prompt)
-        with mock.patch.object(
-            RawTerminalDriver,
-            "capabilities",
-            autospec=True,
-            return_value=line_capabilities,
-        ):
+        with _fresh_literal_object_return_value_autospec(RawTerminalDriver, 'capabilities', line_capabilities):
             self.assertEqual(
                 driver.read_prompt(view, renderer, transition_prompt_input),
                 ControlOutcome(ControlOutcomeKind.CANCEL),
@@ -1867,18 +1865,8 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             object(),
         )
         with (
-            mock.patch.object(
-                RawTerminalDriver,
-                "capabilities",
-                autospec=True,
-                return_value=capabilities,
-            ),
-            mock.patch.object(
-                RawTerminalDriver,
-                "_prepare_input",
-                autospec=True,
-                return_value=(capabilities, configuration),
-            ),
+            _fresh_literal_object_return_value_autospec(RawTerminalDriver, 'capabilities', capabilities),
+            _fresh_literal_object_return_value_autospec(RawTerminalDriver, '_prepare_input', (capabilities, configuration)),
             mock.patch.object(
                 RawTerminalDriver,
                 "_read_control_line",
@@ -1911,24 +1899,9 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         prefilled_frame = render_input_prompt(prefilled_view, capabilities)
         prefilled_renderer = mock.Mock(return_value=prefilled_frame)
         with (
-            mock.patch.object(
-                RawTerminalDriver,
-                "capabilities",
-                autospec=True,
-                return_value=capabilities,
-            ),
-            mock.patch.object(
-                RawTerminalDriver,
-                "_prepare_input",
-                autospec=True,
-                return_value=(capabilities, configuration),
-            ),
-            mock.patch.object(
-                RawTerminalDriver,
-                "_read_control_line",
-                autospec=True,
-                return_value="초기!",
-            ) as seeded_live,
+            _fresh_literal_object_return_value_autospec(RawTerminalDriver, 'capabilities', capabilities),
+            _fresh_literal_object_return_value_autospec(RawTerminalDriver, '_prepare_input', (capabilities, configuration)),
+            _fresh_literal_object_return_value_autospec(RawTerminalDriver, '_read_control_line', '초기!') as seeded_live,
         ):
             self.assertEqual(
                 driver.read_prompt(
@@ -1955,12 +1928,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                 operation()  # type: ignore[misc]
 
         bad_renderer = mock.Mock(return_value=object())
-        with mock.patch.object(
-            RawTerminalDriver,
-            "capabilities",
-            autospec=True,
-            return_value=capabilities,
-        ):
+        with _fresh_literal_object_return_value_autospec(RawTerminalDriver, 'capabilities', capabilities):
             with self.assertRaisesRegex(TypeError, "RenderedInputFrame"):
                 driver.read_prompt(view, bad_renderer, transition_prompt_input)
             with self.assertRaisesRegex(ValueError, "width"):
@@ -1998,12 +1966,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         for profile in (CapabilityProfile.PLAIN, CapabilityProfile.LINE):
             with self.subTest(profile=profile):
                 driver, output = self._progress_driver()
-                with mock.patch.object(
-                    RawTerminalDriver,
-                    "capabilities",
-                    autospec=True,
-                    return_value=capability(profile),
-                ):
+                with _fresh_literal_object_return_value_autospec(RawTerminalDriver, 'capabilities', capability(profile)):
                     result = asyncio.run(
                         driver.run_advisory_progress(
                             operation(), render_advisory_progress_frame
@@ -2053,12 +2016,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             return "done"
 
         with (
-            mock.patch.object(
-                RawTerminalDriver,
-                "capabilities",
-                autospec=True,
-                return_value=capability(CapabilityProfile.ANSI),
-            ),
+            _fresh_literal_object_return_value_autospec(RawTerminalDriver, 'capabilities', capability(CapabilityProfile.ANSI)),
             mock.patch.object(
                 _driver.asyncio,
                 "sleep",
@@ -2143,12 +2101,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         self,
     ) -> None:
         driver, _output = self._progress_driver()
-        capable = mock.patch.object(
-            RawTerminalDriver,
-            "capabilities",
-            autospec=True,
-            return_value=capability(CapabilityProfile.ANSI),
-        )
+        capable = _fresh_literal_object_return_value_autospec(RawTerminalDriver, 'capabilities', capability(CapabilityProfile.ANSI))
 
         async def operation_failure() -> str:
             raise ValueError("operation failed")

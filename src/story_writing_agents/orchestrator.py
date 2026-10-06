@@ -345,7 +345,7 @@ from .specialist_routing import (
     ReviewBasis,
     SpecialistAssignmentMode,
     artifact_domain,
-    required_authoring_domains,
+    required_authoring_domains, authoring_source_scope_is_eligible,
     required_authoring_specialists,
     required_drafting_specialists,
     assignment_mode_for_specialist,
@@ -3239,13 +3239,38 @@ class StoryRuntime:
                 '$.authoring_scope.task',
                 'recommendation revision cannot replace its authoring task',
             )
+        prior_events = tuple(
+            event for event in events
+            if event.event_id != source.event_id
+            and (not hasattr(source, "sequence") or event.sequence < source.sequence)
+        )
+        prior_scope = self._authoring_tasks(prior_events).get(scope.task_id)
+        fresh_pair = (
+            scope.task_id == source.step_id and scope.task_revision == 1
+            if prior_scope is None
+            else scope.task_revision == prior_scope.task_revision + 1
+        )
+        fresh_consultation = (
+            scope.schema_version == 3
+            and scope.intent is AuthoringIntent.AUTHORING
+            and scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
+            and action.kind is LeadRecommendationActionKind.PREPARE_CONSULTATION
+            and type(source.payload) is CollaborationLeadJudgmentPayload
+            and fresh_pair
+            and not any(
+                event.step_id == source.step_id
+                and type(event.payload) is CollaborationStepStatePayload
+                and event.payload.state is CollaborationStepState.RUNNING
+                for event in events
+            )
+        )
         by_id = {event.event_id: event for event in events}
         for draft in drafts:
             selected_event = source if draft.event_id == source.event_id else by_id.get(draft.event_id)
             selected_scope = None if selected_event is None else getattr(selected_event.payload, "authoring_scope", None)
-            if (selected_scope is not None and selected_scope.activity is not AuthoringActivity.WORKFLOW
-                and (selected_scope.task_id != scope.task_id
-                     or (scope.schema_version == 3 and selected_scope.task_revision != scope.task_revision))):
+            if (not authoring_source_scope_is_eligible(
+                selected_scope, scope, allow_prior_revision_input=fresh_consultation,
+            )):
                 raise validation_failure(
                     _LeadOutcomeValidationError(
                         'recommendation draft sources require their existing authoring task',
@@ -3295,7 +3320,16 @@ class StoryRuntime:
             source_proposal = projection.current_proposal
         lineage_spent = projection.physical_calls_spent
         source_rounds = projection.rounds_spent
-        if scope.schema_version == 3 and scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}:
+        if fresh_consultation:
+            lineage_spent = sum(
+                type(event.payload) is CollaborationProviderCallPayload
+                and event.payload.state is CollaborationProviderCallState.SUBMITTED
+                and event.step_id == source.step_id
+                for event in events
+            )
+            source_rounds = 0
+        if (scope.schema_version == 3 and not fresh_consultation
+                and scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}):
             preview = type(source.payload) is CollaborationLeadSynthesisPayload and projection.current_state is CollaborationStepState.RUNNING
             if preview:
                 if projection.current_proposal is None or (
@@ -3334,7 +3368,16 @@ class StoryRuntime:
         inherited_capture = ()
         preparation_cap = min(_CONTEXT_INVOCATION_CALL_LIMIT, remaining)
         if scope.schema_version == 3:
-            if scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}:
+            if fresh_consultation:
+                read = int(self._has_present_references(selected_inputs))
+                draft_floor = (len(action.specialist_ids) + 1) * (1 + read)
+                floor = self._future_authoring_floor(scope, selected_inputs) + draft_floor
+                if remaining < floor + 1 + read:
+                    raise _LeadOutcomeValidationError(
+                        "fresh drafting preparation and full review are infeasible; clarify and freshly propose"
+                    )
+                preparation_cap = min(preparation_cap, remaining - floor)
+            elif scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}:
                 if action.kind is not LeadRecommendationActionKind.PREPARE_ARTIFACT or source_proposal is None or source_attempt is None:
                     raise _LeadOutcomeValidationError("v3 authoring requires completed draft synthesis and artifact preparation; clarify or freshly propose")
                 if source_rounds != 1 or source_proposal.authoring_scope is None:
@@ -9542,6 +9585,19 @@ class StoryRuntime:
                 "artifact_objectives": artifact_objective_context(objective_projection),
                 "command": reference_operation.provider_text,
                 "input_aliases": input_aliases,
+"proposal_drafting_source_facts": [
+    {
+        "input_id": draft.event_id,
+        "source_conversation_id": draft.conversation_id,
+        "revision_digest": draft.content_digest,
+        "authoring_scope": (
+            None if getattr(event.payload, "authoring_scope", None) is None
+            else authoring_scope_to_dict(event.payload.authoring_scope)
+        ),
+    }
+    for draft in objective_projection.offered_draft_sources
+    for event in objective_events if event.event_id == draft.event_id
+],
 "authoring_tasks": [
                     {"task_id": key[0], "task_revision": key[1],
                      **({"current_scope": authoring_scope_to_dict(item)}
@@ -9754,7 +9810,11 @@ class StoryRuntime:
                     ),
                 )
                 authoring_scope = decoded.authoring_scope
-                if admission is not None and decoded.proposal is not None and (
+                admitted_authoring = decoded.proposal is not None or (
+                    decoded.recommended_action is not None
+                    and decoded.recommended_action.kind is LeadRecommendationActionKind.PREPARE_CONSULTATION
+                )
+                if admission is not None and admitted_authoring and (
                     authoring_scope is None
                     or PremiseAuthoringTaskRef(authoring_scope.task_id, authoring_scope.task_revision)
                     not in admission.offered_authoring_tasks

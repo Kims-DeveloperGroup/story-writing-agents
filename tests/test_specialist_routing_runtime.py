@@ -8,7 +8,7 @@ import subprocess
 from dataclasses import asdict, replace
 from unittest import mock
 
-from story_writing_agents import StoryRuntime, lead_exploration as exploration, lead_premise_decisions as premise
+from story_writing_agents import AgentBackend, StoryRuntime, lead_exploration as exploration, lead_premise_decisions as premise
 from story_writing_agents import conversations as c
 from story_writing_agents.agents import PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR
 from story_writing_agents.specialist_routing import AuthoringActivity, AuthoringIntent, AuthoringScope, ArtifactReviewDomain, SpecialistAssignmentMode, ReviewBasis
@@ -20,7 +20,7 @@ from tests.test_lead_orchestration import (
     _workflow_material, _live_scope, _specialist_outcome, _synthesis_outcome, _visible_outcome, _exploration_outcome, _adoption_selection,
 )
 from tests.provider_wire_fixture import answer as wire_answer, contract_id as wire_contract_id
-from tests.recommendation_fixture import action, recommendation, decision as recommendation_decision
+from tests.recommendation_fixture import DRAFT, action, recommendation, decision as recommendation_decision
 from story_writing_agents.conversations.events import shared_premises_to_dict
 from tests.test_artifact_proposal_orchestration import _artifact_outcome, _artifact_synthesis_outcome, _status_id
 
@@ -694,6 +694,81 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         rejected=await self.runtime.lead_turn(self.session_id,conversation,"Use the earlier draft for this revised candidate.")
         self.assertIsNone(rejected.recommendation_request, rejected)
         self._assert_continuation(rejected, 'artifact_proposal')
+
+        self.session_id = "historical_input_session"
+        backend = AgentBackend(self.control_workspace)
+        self.addCleanup(backend.close)
+        resources = backend.provision_session_resources(self.session_id)
+        self.workspace = type(self.workspace)(resources.identity.worktree_root).require_ready()
+        before = self.artifact_bytes()
+        prior = self.conversation("Historical drafting input remains separate from fresh review proof")
+        first, _ = await self.finish_draft(prior)
+        original_history = self.history(prior)
+        source = c.project_collaboration_history(original_history).offered_draft_sources[-1]
+        fresh_scope = replace(first.proposal.authoring_scope, task_revision=2)
+        suggested = await self.proposal_for(prior, recommendation(message=fresh_scope.interpretation, recommended_action=action(
+            kind="prepare_consultation", source_ids=(source.event_id,)), authoring_scope=c.authoring_scope_to_dict(fresh_scope)))
+        request = suggested.recommendation_request
+        self.assertIsNotNone(request, suggested)
+        self.assertEqual((request.authoring_scope, request.draft_sources), (fresh_scope, (source,)))
+        def prepare_historical(call, provider):
+            material = _workflow_material(call.payload)
+            self.assertEqual(material["structured_recommendation_execution"]["request"]["authoring_scope"], c.authoring_scope_to_dict(fresh_scope))
+            return wire_answer({"kind": "proposal", "message": request.purpose,
+                "authoring_scope": _compact_scope(c.authoring_scope_to_dict(fresh_scope)),
+                "proposal": {"shared_premises": [], "assignments": [{"agent_id": PLOT_ARCHITECT,
+                    "mode": "draft", "instruction": request.instruction,
+                    "input_ids": [item.input_id for item in request.basis.inputs]}]}}, wire_contract_id(call.payload))
+        self.backend.enqueue(prepare_historical)
+        prepared = await self.runtime.decide_lead_recommendation(recommendation_decision(suggested))
+        self.assertEqual(prepared.proposal.authoring_scope, fresh_scope)
+        self.assertEqual(prepared.proposal.budget.rounds_spent, 0)
+        self.assertFalse(any(event.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for event in self.history(prior)[len(original_history):]))
+        self.assertEqual(prepared.proposal.budget.physical_calls_spent, len(_submitted_calls(self.history(prior)[len(original_history):])))
+        historical_input = next(item for item in prepared.proposal.basis.inputs if item.kind is c.CollaborationInputKind.CONVERSATION_EVENT)
+        self.assertEqual((historical_input.locator, historical_input.revision_digest), ("conversation/" + source.event_id, source.content_digest))
+        self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome("drafted", "A fresh chronology follows the selected historical material."))
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
+        drafted = await self.runtime.decide_lead_step(_decision(prepared, c.CollaborationConfirmationDecision.CONFIRM))
+        self.assertIs(drafted.turn.state, c.CollaborationStepState.COMPLETED)
+        self.assertEqual(next(item["conversation_event"] for agent, call in reversed(self.backend.call_records) if agent == PLOT_ARCHITECT for item in _workflow_material(call.payload)["inputs"] if (item["input_id"], item["locator"], item["revision_digest"]) == (historical_input.input_id, historical_input.locator, historical_input.revision_digest)), json.loads(json.dumps(asdict(next(event.payload for event in original_history if event.event_id == source.event_id)))))
+        current = c.project_collaboration_history(self.history(prior)).offered_draft_sources[-1]
+        self.assertNotEqual(current.event_id, source.event_id)
+        self.assertEqual(self.history(prior)[:len(original_history)], original_history)
+        fresh_ready = await self.proposal_for(prior, recommendation(recommended_action=action(source_ids=(current.event_id,)), authoring_scope=c.authoring_scope_to_dict(fresh_scope)))
+        def integrate_fresh(call, provider):
+            value = json.loads(response(call, provider))
+            value["action"]["result"]["artifact_intent"]["operations"] = [{"kind": "replace", "evidence_id": _status_id(call, OUTLINE), "new_text": DRAFT}]
+            value["action"]["result"]["artifact_intent"]["objective_intent"] = {"action": "start", "target_paths": [OUTLINE], "next_step": "prepare"}
+            value["action"]["result"]["authoring_scope"] = _compact_scope(_workflow_material(call.payload)["structured_recommendation_execution"]["request"]["authoring_scope"])
+            return json.dumps(value)
+        self.backend.enqueue(integrate_fresh)
+        fresh_review = await self.runtime.decide_lead_recommendation(recommendation_decision(fresh_ready))
+        self.assertEqual(None if fresh_review.proposal is None else (fresh_review.proposal.participants, fresh_review.proposal.assignments[0].mode), ((PLOT_ARCHITECT,), SpecialistAssignmentMode.REVIEW), fresh_review)
+        self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome("supports"))
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _artifact_synthesis_outcome())
+        final = await self.runtime.decide_lead_step(_decision(fresh_review, c.CollaborationConfirmationDecision.CONFIRM))
+        self.assertIsNotNone(final.turn.artifact_proposal, final)
+        self.assertIs(final.turn.artifact_proposal.state, c.ArtifactProposalState.REVIEWED, final.turn)
+        self.assertEqual(self.artifact_bytes(), before)
+        await self.runtime.decide_artifact_application(_application_decision(final.turn, c.ArtifactApplicationDecisionKind.REJECT))
+        captured = self.history(prior)
+        from story_writing_agents.conversation_storage.archive import serialize_conversation_archive, deserialize_conversation_archive
+        from tests.conversation_archive_fixture import archive_conversation, archive_from_conversations
+        archive = archive_from_conversations(archive_conversation(session_id=self.session_id, conversation_id=prior, events=captured))
+        self.assertEqual(deserialize_conversation_archive(serialize_conversation_archive(archive)), archive)
+        from story_writing_agents.conversation_storage import ConversationStorageBackend, WorkspaceConversationStorageMutationCoordinator
+        from story_writing_agents.conversation_storage.migration import transfer_conversation_storage
+        from story_writing_agents.conversation_storage.sqlite import provision_sqlite_conversation_storage, compose_sqlite_conversation_storage
+        with WorkspaceConversationStorageMutationCoordinator(self.control_workspace).borrow(timeout_seconds=2.0) as lease:
+            provision_sqlite_conversation_storage(self.control_workspace, lease=lease)
+        transfer_conversation_storage(self.control_workspace, source_backend=ConversationStorageBackend.FILESYSTEM, destination_backend=ConversationStorageBackend.SQLITE)
+        restored = compose_sqlite_conversation_storage(self.control_workspace).event_store.read(self.session_id, prior)
+        self.assertEqual(restored, captured)
+        self.assertEqual(c.project_collaboration_history(restored), c.project_collaboration_history(captured))
+        restarted = StoryRuntime(self.control_workspace, backend=self.backend)
+        self.assertEqual(restarted.conversation_storage_services.event_store.read(self.session_id, prior), captured)
+
 
     async def test_legacy_pending_confirmation_requires_fresh_scoped_proposal_without_rewrite(self):
         from types import SimpleNamespace
