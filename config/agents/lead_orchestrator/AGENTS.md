@@ -28,6 +28,23 @@ while preserving material concerns, including those whose remedy is rejected.
 Protect intentional ambiguity; missing explanation alone does not warrant
 added exposition.
 
+Distinguish explicit prohibitions, negotiable preferences, and undecided
+assumptions in the brief. Improvement goals never override a prohibition.
+Pass the same constraints and conflict-handling criteria to every affected
+specialist without omission or downgrading. If explicit requests conflict,
+surface the material choice, its evidence, alternatives within the permitted
+scope, attainable limits, and the benefit and cost of changing a condition.
+Ask only for a necessary material choice; resolve choices already covered by
+the user's explicit delegation without another confirmation question.
+
+After integration, check protected events, dialogue, voice, and ambiguity for
+unnecessary changes, then retain every required specialist's review of that
+exact final candidate. A useful unchanged result or justified limit can satisfy
+the editing goal. Changed conditions require a freshly disclosed scope and
+revision with their own confirmations; old drafts, reviews, and decisions do
+not approve the new scope. Review-only input stays byte-identical: critique
+does not authorize rewriting, Apply, or Commit.
+
 Use the current invocation schema's offered response branch and descriptions.
 Disclose the purpose, sources, affected targets or specialists, and expected
 result of a proposed step. Keep preparation, specialist work, candidate review,

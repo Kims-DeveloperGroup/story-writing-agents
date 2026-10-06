@@ -12,7 +12,7 @@
   "cases": [
     {
       "case_id": "stronger-effect",
-      "case_sha256": "1ec9d4ae661484827350336b1a7e2350713899fb4e5612bbbea7dfe444104626",
+      "case_sha256": "3cf1ce026144fda3575038c134cb592f88f471b90431498e92b6d7138ebf0f7d",
       "runs": {
         "fixture-after": {
           "capture_evidence": {
@@ -154,7 +154,7 @@
     },
     {
       "case_id": "incompatible-recommendations",
-      "case_sha256": "9a2491e3b722bb3e7cfcac1be10ae699e683d7b022d01d63593e3b8d7d94e04a",
+      "case_sha256": "76c84f1991a0889a55190fc034c78f97bbd2978cf13ddf6081aabb2796aceb56",
       "runs": {
         "fixture-after": {
           "capture_evidence": {
@@ -297,7 +297,7 @@
   ],
   "comparison_id": "constructed-editorial-review-regression",
   "comparison_kind": "before_after",
-  "dataset_sha256": "35921956754ac3b081a422507d958c4d582b6a45bac1bff03b50bdc85bb10440",
+  "dataset_sha256": "e850bf1049e8746f76e26d7837aae57df04b95fb519b97a00c94d61eee884a7a",
   "format_version": 1,
   "protocol": {
     "evidence": {
