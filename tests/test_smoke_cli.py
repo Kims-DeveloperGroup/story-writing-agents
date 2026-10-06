@@ -117,10 +117,10 @@ def editorial_action(command, dataset, captures, *, packet=None, reviews=None, o
     return editorial_run(*arguments, "--out-dir", output)
 
 
-def editorial_fixture(case):
+def editorial_fixture(case, bundle="lead-editorial-offline-example"):
     dataset = Path(__file__).resolve().parents[1] / "docs" / "evaluations" / "lead-editorial-cases.json"
     scratch = Path(case.enterContext(tempfile.TemporaryDirectory()))
-    captures = shutil.copytree(dataset.parent / "lead-editorial-offline-example", scratch / "captures")
+    captures = shutil.copytree(dataset.parent / bundle, scratch / "captures")
     packet = scratch / "prepared"
     completed = editorial_action('prepare', dataset, captures / 'captures.json', output=packet)
     case.assertEqual(completed.returncode, 0, completed.stderr)
@@ -195,7 +195,20 @@ class SmokeHelpAndTemporaryTests(unittest.TestCase):
         self.assertEqual(packet["dataset_sha256"], hashlib.sha256(dataset.read_bytes()).hexdigest())
         self.assertEqual(packet["captures_sha256"], hashlib.sha256((captures / "captures.json").read_bytes()).hexdigest())
         self.assertEqual(set(path.name for path in packet_dir.iterdir()), {"review-packet.json", "review-packet.md", "blind-map.json"})
+        rubric = packet["rubric"]
+        self.assertEqual(rubric["score_range"], [0, 4])
+        self.assertEqual(set(rubric["dimensions"]), set(json.loads(dataset.read_bytes())["scoring_dimensions"]))
+        markdown = (packet_dir / "review-packet.md").read_text()
+        for anchors in rubric["dimensions"].values():
+            self.assertEqual(set(anchors), {"0", "2", "4"})
+        self.assertTrue(all(text and text in markdown for anchors in rubric["dimensions"].values() for text in anchors.values()))
+        self.assertTrue(rubric["instructions"])
+        self.assertTrue(all(instruction in markdown for instruction in rubric["instructions"]))
+        self.assertIs(packet["constructed_fixtures"], json.loads(dataset.read_bytes())["constructed_fixtures"])
+        self.assertIn("Dataset constructed fixtures: true", markdown)
+        self.assertIn("Case constructed fixture: true", markdown)
         for actual, source in zip(packet["cases"], cases):
+            self.assertIs(actual["constructed_fixture"], source["constructed_fixture"])
             self.assertEqual(actual["input"], {key: source[key] for key in ("sources", "user_prompts", "editorial_brief", "context_material", "workflow_steps")})
             self.assertEqual(actual["source_sha256"], {item["source_id"]: item["sha256"] for item in source["sources"]})
             self.assertNotIn("current_baseline", actual["input"])
@@ -259,6 +272,24 @@ class SmokeHelpAndTemporaryTests(unittest.TestCase):
             self.assertTrue(actual["unbacked_rating_fields"])
         self.assertTrue(case["disagreements"]["preferences"])
         self.assertEqual(case["disagreements"]["axes"], {axis: len({r["paired_deltas"][axis] for r in case["reviews"]}) > 1 for axis in axes})
+
+        bundle = Path(__file__).parent / "fixtures" / "lead_editorial_comparison"
+        dataset, captures, packet_dir = editorial_fixture(self, bundle)
+        compared = editorial_action(
+            "compare", dataset, captures / "captures.json", packet=packet_dir / "review-packet.json",
+            reviews=captures / "reviews.json", output=packet_dir.parent / "comparison")
+        self.assertEqual(compared.returncode, 0, compared.stderr)
+        constructed = json.loads((packet_dir.parent / "comparison" / "comparison-report.json").read_bytes())
+        for case_id, expected in {
+            "stronger-effect": ("matched", "PAIRED_EVIDENCE_AVAILABLE"),
+            "incompatible-recommendations": ("mismatched", "INCONCLUSIVE"),
+        }.items():
+            actual = next(case for case in constructed["cases"] if case["case_id"] == case_id)
+            self.assertEqual(actual["workflow"]["expected"], [])
+            self.assertEqual(actual["matched_conditions"]["status"], expected[0])
+            self.assertEqual(actual["evidence_status"], expected[1])
+            self.assertEqual(actual["matched_conditions"]["differences"], [] if expected[0] == "matched" else ["settings"])
+        self.assertEqual(constructed["quality_conclusion"], "INCONCLUSIVE")
 
 
 class SmokeExplicitWorkspaceTests(unittest.TestCase):

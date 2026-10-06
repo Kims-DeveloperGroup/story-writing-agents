@@ -103,7 +103,10 @@ mapping uses the low bit of the first SHA-256 byte of comparison ID, NUL, ASCII
 seed, NUL, and case ID. It is stable across platforms.
 
 The blinded packet contains exact source/input/output text and hashes, statuses,
-the rubric, and neutral author-visible interaction context. It excludes arm
+the rubric, and neutral author-visible interaction context. Its rubric includes
+all five dimensions, the documented 0/2/4 anchors, interpolation for 1/3,
+and instructions for missing evidence and independent scores. Dataset and case
+constructed-fixture labels remain visible without exposing the compared arms. It excludes arm
 labels, treatment, producer/model/commit/settings, provider-call/token costs,
 raw transcripts, and audit identities. It includes an opaque `captures_sha256`
 binding the **same raw manifest bytes that were parsed**, including hidden
@@ -147,7 +150,9 @@ capture backing, known matched controls, a backed predeclared protocol, complete
 distinct blinded human reviews in author-intent and reader/editor roles with
 backed interaction context, and no required workflow or call-limit gap. When
 these records exist, `PAIRED_EVIDENCE_AVAILABLE` describes availability only;
-it does not accept an editorial effect. The overall conclusion is inconclusive
+it does not accept an editorial effect. A declared empty workflow-audit requirement
+is complete; an absent plan remains an evidence gap. Matched settings preserve
+JSON types, so `true`, `1`, and `1.0` are distinct control values. The overall conclusion is inconclusive
 if any case is inconclusive. Improvement remains `NOT_ASSESSED`.
 
 Actual comparative execution and effect-acceptance criteria belong to

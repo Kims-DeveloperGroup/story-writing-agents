@@ -1,0 +1,312 @@
+{
+  "arms": [
+    {
+      "arm_id": "fixture-before",
+      "label": "Explicit synthetic fixture before"
+    },
+    {
+      "arm_id": "fixture-after",
+      "label": "Explicit synthetic fixture after"
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "stronger-effect",
+      "case_sha256": "1ec9d4ae661484827350336b1a7e2350713899fb4e5612bbbea7dfe444104626",
+      "runs": {
+        "fixture-after": {
+          "capture_evidence": {
+            "kind": "capture_record",
+            "path": "record.txt",
+            "sha256": "4dafb39cec8926ebdb9707162af4060af4f50e861380cc9427a7ac2c94f2e711"
+          },
+          "conditions": {
+            "call_ceiling": 1,
+            "evidence_access": "same constructed sources",
+            "model": "constructed-model-label",
+            "provider": "constructed-provider-label",
+            "repository_commit": "1c6a0f4d26a8a46bdb651d2895f4ec8c38e90e86",
+            "settings": {
+              "flag": true
+            },
+            "unknown_settings": [],
+            "user_decision_policy": "same constructed decisions"
+          },
+          "costs": {
+            "completion_tokens": 0,
+            "decisions": {
+              "apply": 0,
+              "clarifications": 0,
+              "commit": 0,
+              "confirmations": 0,
+              "rejections": 0,
+              "revisions": 0
+            },
+            "evidence": [
+              {
+                "kind": "accounting_record",
+                "path": "record.txt",
+                "sha256": "4dafb39cec8926ebdb9707162af4060af4f50e861380cc9427a7ac2c94f2e711"
+              }
+            ],
+            "instruction_utf8_bytes": 0,
+            "payload_utf8_bytes": 0,
+            "prompt_tokens": 0,
+            "schema_utf8_bytes": 0,
+            "submitted_calls": 0,
+            "wall_seconds": 0
+          },
+          "input_evidence": {
+            "kind": "input_record",
+            "path": "record.txt",
+            "sha256": "4dafb39cec8926ebdb9707162af4060af4f50e861380cc9427a7ac2c94f2e711"
+          },
+          "input_sha256": "2d66fdceb6e74e4ef2f5545c2aa1626b9d8d717e24c3a6d2af704eea337e980b",
+          "interaction_context": {
+            "evidence": [
+              {
+                "kind": "workflow_record",
+                "path": "record.txt",
+                "sha256": "4dafb39cec8926ebdb9707162af4060af4f50e861380cc9427a7ac2c94f2e711"
+              }
+            ],
+            "text": "Constructed neutral display for validation only; all six synthetic decision counts are zero and both sides use the same fixture text."
+          },
+          "output": {
+            "kind": "output",
+            "path": "stronger-effect.txt",
+            "sha256": "bdca2f1333c16d6921f00b3a6852e08609d7776fd72e58c0d643778a33e339fb"
+          },
+          "reason": "Constructed mechanics; provider/human claims are test-only fixtures, not actual runs",
+          "run_kind": "provider_capture",
+          "status": "captured",
+          "workflow_observations": []
+        },
+        "fixture-before": {
+          "capture_evidence": {
+            "kind": "capture_record",
+            "path": "record.txt",
+            "sha256": "4dafb39cec8926ebdb9707162af4060af4f50e861380cc9427a7ac2c94f2e711"
+          },
+          "conditions": {
+            "call_ceiling": 1,
+            "evidence_access": "same constructed sources",
+            "model": "constructed-model-label",
+            "provider": "constructed-provider-label",
+            "repository_commit": "1c6a0f4d26a8a46bdb651d2895f4ec8c38e90e86",
+            "settings": {
+              "flag": true
+            },
+            "unknown_settings": [],
+            "user_decision_policy": "same constructed decisions"
+          },
+          "costs": {
+            "completion_tokens": 0,
+            "decisions": {
+              "apply": 0,
+              "clarifications": 0,
+              "commit": 0,
+              "confirmations": 0,
+              "rejections": 0,
+              "revisions": 0
+            },
+            "evidence": [
+              {
+                "kind": "accounting_record",
+                "path": "record.txt",
+                "sha256": "4dafb39cec8926ebdb9707162af4060af4f50e861380cc9427a7ac2c94f2e711"
+              }
+            ],
+            "instruction_utf8_bytes": 0,
+            "payload_utf8_bytes": 0,
+            "prompt_tokens": 0,
+            "schema_utf8_bytes": 0,
+            "submitted_calls": 0,
+            "wall_seconds": 0
+          },
+          "input_evidence": {
+            "kind": "input_record",
+            "path": "record.txt",
+            "sha256": "4dafb39cec8926ebdb9707162af4060af4f50e861380cc9427a7ac2c94f2e711"
+          },
+          "input_sha256": "2d66fdceb6e74e4ef2f5545c2aa1626b9d8d717e24c3a6d2af704eea337e980b",
+          "interaction_context": {
+            "evidence": [
+              {
+                "kind": "workflow_record",
+                "path": "record.txt",
+                "sha256": "4dafb39cec8926ebdb9707162af4060af4f50e861380cc9427a7ac2c94f2e711"
+              }
+            ],
+            "text": "Constructed neutral display for validation only; all six synthetic decision counts are zero and both sides use the same fixture text."
+          },
+          "output": {
+            "kind": "output",
+            "path": "stronger-effect.txt",
+            "sha256": "bdca2f1333c16d6921f00b3a6852e08609d7776fd72e58c0d643778a33e339fb"
+          },
+          "reason": "Constructed mechanics; provider/human claims are test-only fixtures, not actual runs",
+          "run_kind": "provider_capture",
+          "status": "captured",
+          "workflow_observations": []
+        }
+      }
+    },
+    {
+      "case_id": "incompatible-recommendations",
+      "case_sha256": "9a2491e3b722bb3e7cfcac1be10ae699e683d7b022d01d63593e3b8d7d94e04a",
+      "runs": {
+        "fixture-after": {
+          "capture_evidence": {
+            "kind": "capture_record",
+            "path": "record.txt",
+            "sha256": "4dafb39cec8926ebdb9707162af4060af4f50e861380cc9427a7ac2c94f2e711"
+          },
+          "conditions": {
+            "call_ceiling": 1,
+            "evidence_access": "same constructed sources",
+            "model": "constructed-model-label",
+            "provider": "constructed-provider-label",
+            "repository_commit": "1c6a0f4d26a8a46bdb651d2895f4ec8c38e90e86",
+            "settings": {
+              "flag": true
+            },
+            "unknown_settings": [],
+            "user_decision_policy": "same constructed decisions"
+          },
+          "costs": {
+            "completion_tokens": 0,
+            "decisions": {
+              "apply": 0,
+              "clarifications": 0,
+              "commit": 0,
+              "confirmations": 0,
+              "rejections": 0,
+              "revisions": 0
+            },
+            "evidence": [
+              {
+                "kind": "accounting_record",
+                "path": "record.txt",
+                "sha256": "4dafb39cec8926ebdb9707162af4060af4f50e861380cc9427a7ac2c94f2e711"
+              }
+            ],
+            "instruction_utf8_bytes": 0,
+            "payload_utf8_bytes": 0,
+            "prompt_tokens": 0,
+            "schema_utf8_bytes": 0,
+            "submitted_calls": 0,
+            "wall_seconds": 0
+          },
+          "input_evidence": {
+            "kind": "input_record",
+            "path": "record.txt",
+            "sha256": "4dafb39cec8926ebdb9707162af4060af4f50e861380cc9427a7ac2c94f2e711"
+          },
+          "input_sha256": "acc5a0f7affa94540641b25df7d3a9868588b7926fae99eba3ab62d6a4548bc0",
+          "interaction_context": {
+            "evidence": [
+              {
+                "kind": "workflow_record",
+                "path": "record.txt",
+                "sha256": "4dafb39cec8926ebdb9707162af4060af4f50e861380cc9427a7ac2c94f2e711"
+              }
+            ],
+            "text": "Constructed neutral display for validation only; all six synthetic decision counts are zero and both sides use the same fixture text."
+          },
+          "output": {
+            "kind": "output",
+            "path": "incompatible-recommendations.txt",
+            "sha256": "e6a402e6cd9eb134f46d2b0c204533cafd1ed63f9a799dca155b8719be7be77b"
+          },
+          "reason": "Constructed mechanics; provider/human claims are test-only fixtures, not actual runs",
+          "run_kind": "provider_capture",
+          "status": "captured",
+          "workflow_observations": []
+        },
+        "fixture-before": {
+          "capture_evidence": {
+            "kind": "capture_record",
+            "path": "record.txt",
+            "sha256": "4dafb39cec8926ebdb9707162af4060af4f50e861380cc9427a7ac2c94f2e711"
+          },
+          "conditions": {
+            "call_ceiling": 1,
+            "evidence_access": "same constructed sources",
+            "model": "constructed-model-label",
+            "provider": "constructed-provider-label",
+            "repository_commit": "1c6a0f4d26a8a46bdb651d2895f4ec8c38e90e86",
+            "settings": {
+              "flag": 1
+            },
+            "unknown_settings": [],
+            "user_decision_policy": "same constructed decisions"
+          },
+          "costs": {
+            "completion_tokens": 0,
+            "decisions": {
+              "apply": 0,
+              "clarifications": 0,
+              "commit": 0,
+              "confirmations": 0,
+              "rejections": 0,
+              "revisions": 0
+            },
+            "evidence": [
+              {
+                "kind": "accounting_record",
+                "path": "record.txt",
+                "sha256": "4dafb39cec8926ebdb9707162af4060af4f50e861380cc9427a7ac2c94f2e711"
+              }
+            ],
+            "instruction_utf8_bytes": 0,
+            "payload_utf8_bytes": 0,
+            "prompt_tokens": 0,
+            "schema_utf8_bytes": 0,
+            "submitted_calls": 0,
+            "wall_seconds": 0
+          },
+          "input_evidence": {
+            "kind": "input_record",
+            "path": "record.txt",
+            "sha256": "4dafb39cec8926ebdb9707162af4060af4f50e861380cc9427a7ac2c94f2e711"
+          },
+          "input_sha256": "acc5a0f7affa94540641b25df7d3a9868588b7926fae99eba3ab62d6a4548bc0",
+          "interaction_context": {
+            "evidence": [
+              {
+                "kind": "workflow_record",
+                "path": "record.txt",
+                "sha256": "4dafb39cec8926ebdb9707162af4060af4f50e861380cc9427a7ac2c94f2e711"
+              }
+            ],
+            "text": "Constructed neutral display for validation only; all six synthetic decision counts are zero and both sides use the same fixture text."
+          },
+          "output": {
+            "kind": "output",
+            "path": "incompatible-recommendations.txt",
+            "sha256": "e6a402e6cd9eb134f46d2b0c204533cafd1ed63f9a799dca155b8719be7be77b"
+          },
+          "reason": "Constructed mechanics; provider/human claims are test-only fixtures, not actual runs",
+          "run_kind": "provider_capture",
+          "status": "captured",
+          "workflow_observations": []
+        }
+      }
+    }
+  ],
+  "comparison_id": "constructed-editorial-review-regression",
+  "comparison_kind": "before_after",
+  "dataset_sha256": "35921956754ac3b081a422507d958c4d582b6a45bac1bff03b50bdc85bb10440",
+  "format_version": 1,
+  "protocol": {
+    "evidence": {
+      "kind": "protocol_record",
+      "path": "record.txt",
+      "sha256": "4dafb39cec8926ebdb9707162af4060af4f50e861380cc9427a7ac2c94f2e711"
+    },
+    "status": "predeclared"
+  },
+  "seed": 791,
+  "treatment": "Constructed validation mechanics only; zero actual provider/human evaluation"
+}

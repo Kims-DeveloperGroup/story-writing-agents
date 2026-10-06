@@ -149,6 +149,58 @@ SCORING_NOTE = (
     'avoidability.'
 )
 
+RUBRIC = {
+    "score_range": [0, 4],
+    "dimensions": {
+        "intent_fulfillment": {
+            "0": "Misses or reverses the author's effect.",
+            "2": "Partly achieves it, with material compromise.",
+            "4": "Clearly achieves it within the brief.",
+        },
+        "voice_preservation": {
+            "0": "Replaces the intended voice or characterization.",
+            "2": "Preserves some distinctive qualities but flattens others.",
+            "4": "Retains the relevant voice while making the requested improvement.",
+        },
+        "important_error_avoidance": {
+            "0": "Introduces or hides a major source-bound error.",
+            "2": "Leaves a meaningful issue unresolved or poorly explained.",
+            "4": "Introduces no important error and handles material concerns accurately.",
+        },
+        "edit_restraint": {
+            "0": "Rewrites protected events, motives, or ambiguity without authority.",
+            "2": "Makes some unnecessary changes or gives weak reasons.",
+            "4": "Changes only what the brief allows; any necessary tradeoff is explicit.",
+        },
+        "approval_burden": {
+            "0": "Creates avoidable decisions or conceals required confirmation.",
+            "2": "Adds some avoidable clarification or review effort.",
+            "4": (
+                "Makes decisions easy to assess and asks only necessary questions while "
+                "retaining required confirmations."
+            ),
+        },
+    },
+    "instructions": [
+        (
+            "Score each dimension independently; higher is better. Retain rationale, "
+            "passages and important errors."
+        ),
+        "Scores 1 and 3 fall between adjacent anchors.",
+        "Use null when evidence is unobserved; do not infer scores from missing material.",
+        (
+            "Do not collapse the vector into one score or conceal a serious error or failed"
+            " authority check."
+        ),
+        (
+            "Constructed fixture labels describe synthetic input/intent, not provider "
+            "execution or a real writer preference."
+        ),
+        SCORING_NOTE,
+    ],
+}
+
+
 
 def _need(condition, message):
     if not condition:
@@ -312,12 +364,14 @@ def _load(dataset_path, captures_path):
         ),
         'wrong dataset/rubric',
     )
+    _need(type(dataset.get("constructed_fixtures")) is bool, "dataset fixture label required")
     cases = dataset["cases"]
     _need(type(cases) is list and len(cases) == 9, "nine baseline cases required")
     _unique([case["case_id"] for case in cases])
     _need({case["case_id"] for case in cases} == set(CASES), "wrong baseline cases")
     for case in cases:
         _need(case["scoring_dimensions"] == list(AXES), "wrong case rubric")
+        _need(type(case.get("constructed_fixture")) is bool, "case fixture label required")
         _unique([source["source_id"] for source in case["sources"]])
         for source in case["sources"]:
             _check(
@@ -436,6 +490,8 @@ def _prepare(data):
         'dataset_sha256': data['dataset_sha256'],
         'captures_sha256': data['captures_sha256'],
         'rubric_id': 'lead-editorial-rubric-v1',
+        'rubric': RUBRIC,
+        'constructed_fixtures': data['dataset']['constructed_fixtures'],
         'cases': [],
     }
     mapping = {}
@@ -459,6 +515,7 @@ def _prepare(data):
         packet['cases'].append(
             {
                 'case_id': case['case_id'],
+                'constructed_fixture': case['constructed_fixture'],
                 'case_sha256': _sha(_canonical(case)),
                 'input_sha256': _sha(_canonical(_input(case))),
                 'source_sha256': {source['source_id']: source['sha256'] for source in case['sources']},
@@ -539,7 +596,7 @@ def _compare(data, packet, mapping, reviews, reviews_sha):
                     unknown.append(key)
             elif any(value is None for value in values):
                 unknown.append(key)
-            elif values[0] != values[1]:
+            elif _canonical(values[0]) != _canonical(values[1]):
                 differences.append(key)
         controls = [
             key for key in differences
@@ -609,7 +666,7 @@ def _compare(data, packet, mapping, reviews, reviews_sha):
             limitations.append("Declared before/after repository difference is the treatment.")
         if condition_status != "matched":
             limitations.append("Comparison conditions missing or mismatched.")
-        if not expected or any(missing.values()) or violations:
+        if "expected_observations" not in case or any(missing.values()) or violations:
             limitations.append(
                 'Workflow plan/evidence incomplete or failed; reported audits are not certified.',
             )
@@ -642,7 +699,7 @@ def _compare(data, packet, mapping, reviews, reviews_sha):
             real
             and protocol
             and condition_status == 'matched'
-            and expected
+            and "expected_observations" in case
             and not any(missing.values())
             and not violations
             and not any(cost_missing.values())
@@ -727,9 +784,21 @@ def _markdown(value, blind):
     lines = ["# " + title, "", LIMITATION, ""]
     if not blind:
         lines.extend(['Conclusion: ' + value['quality_conclusion'], 'Improvement: NOT_ASSESSED', ''])
+    if blind:
+        lines.extend(["## Scoring rubric", "Score range: 0–4; higher is better.", ""])
+        for axis, anchors in value["rubric"]["dimensions"].items():
+            lines.extend(["### " + axis.replace("_", " "), ""])
+            for score, anchor in anchors.items():
+                lines.append("- " + score + ": " + anchor)
+            lines.append("")
+        lines.extend([*value["rubric"]["instructions"], ""])
+        fixture = value["constructed_fixtures"]
+        lines.extend(["Dataset constructed fixtures: " + str(fixture).lower(), ""])
     for case in value["cases"]:
         lines.extend(["## " + case["case_id"], ""])
         if blind:
+            fixture = case["constructed_fixture"]
+            lines.extend(["Case constructed fixture: " + str(fixture).lower(), ""])
             lines.extend(
                 [
                     '### Exact input',
