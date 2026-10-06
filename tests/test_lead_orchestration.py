@@ -122,7 +122,7 @@ _LIVE_CONTEXT = {}
 
 
 
-async def _confirmed_premise(case, conversation, *, reference=False):
+async def _confirmed_premise(case, conversation, *, reference=False, recommendation="knows"):
     literal = "Éither the narrator knows.\r\nThe reader learns later.  "
     agents = (PLOT_ARCHITECT, CHARACTER_CUSTODIAN)
     def front(call, provider):
@@ -165,7 +165,7 @@ async def _confirmed_premise(case, conversation, *, reference=False):
             {"option_key": "reader-first", "premise_text": "The reader knows first.\r\nThe narrator remains uncertain.  ",
              "rationale": "A contrasting provisional whole option.",
              "reply_dispositions": [{**item, "disposition": "modified", "reason": "Move knowledge to the reader."} for item in dispositions]}],
-            "recommended_option_key": "knows"}, wire_contract_id(call.payload))
+            "recommended_option_key": recommendation}, wire_contract_id(call.payload))
     case.backend.enqueue_for(LEAD_ORCHESTRATOR, summarize)
     finished = await case.runtime.decide_lead_step(_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
     turn = finished.turn

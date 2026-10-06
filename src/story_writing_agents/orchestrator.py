@@ -9755,10 +9755,16 @@ class StoryRuntime:
                 )
                 authoring_scope = decoded.authoring_scope
                 if admission is not None and decoded.proposal is not None and (
-                    authoring_scope is None or (authoring_scope.task_id, authoring_scope.task_revision) != (
-                        admission.offered_authoring_task_id, admission.offered_authoring_task_revision)
+                    authoring_scope is None
+                    or PremiseAuthoringTaskRef(authoring_scope.task_id, authoring_scope.task_revision)
+                    not in admission.offered_authoring_tasks
+                    or (
+                        admission.selected_authoring_task is not None
+                        and PremiseAuthoringTaskRef(authoring_scope.task_id, authoring_scope.task_revision)
+                        != admission.selected_authoring_task
+                    )
                 ):
-                    raise _LeadOutcomeValidationError("fresh-work proposal changed its prospectively admitted task")
+                    raise _LeadOutcomeValidationError("fresh-work proposal changed prospectively admitted task")
                 if authoring_scope is None:
                     raise validation_failure(
                         _LeadOutcomeValidationError(
@@ -12811,6 +12817,39 @@ class StoryRuntime:
             "Individual analysis and authoring limits remain separate; no prior calls are refunded.")
         combined = display + "\n\n" + notice
         display = combined if len(combined.encode("utf-8")) <= 32_768 else notice
+        control = events[-1] if events else None
+        control_evidence = None
+        if (
+            control is not None
+            and type(control.payload) is CollaborationPremiseDecisionPayload
+            and control.sender == _USER_ACTOR
+            and control.recipient == _LEAD_ACTOR
+            and (control.session_id, control.conversation_id, control.turn_id, control.step_id)
+            == (session_id, conversation_id, projection.current_turn_id, projection.current_step_id)
+            and control.payload.selection == projection.premise_decision
+            and control.payload.selection.action in {
+                PremiseDecisionAction.REJECT, PremiseDecisionAction.DEFER,
+            }
+            and (
+                control.payload.selection.source_conversation_id,
+                control.payload.selection.report_event_id,
+                control.payload.selection.report_digest,
+                control.payload.selection.question_id,
+            ) == (
+                conversation_id, projection.premise_report_event_id,
+                report.report_digest, report.spec.question_id,
+            )
+            and projection.current_proposal is None
+            and projection.current_state is None
+            and projection.next_safe_action is (
+                CollaborationNextAction.CONTINUE_WITH_LEAD
+                if control.payload.selection.action is PremiseDecisionAction.REJECT
+                else CollaborationNextAction.CHOOSE_PREMISE
+            )
+        ):
+            control_evidence = CollaborationLeadEvidence(
+                LeadOutcomeScope.WORKFLOW_META, LeadEvidenceStatus.NOT_APPLICABLE, (),
+            )
         return LeadTurnResult(
             session_id, conversation_id, cast(str, projection.current_turn_id),
             cast(str, projection.current_step_id), LeadOutcomeKind.RECOMMENDATION,
@@ -12818,7 +12857,8 @@ class StoryRuntime:
             projection.current_state if projection.current_state in {
                 CollaborationStepState.COMPLETED, CollaborationStepState.FAILED, CollaborationStepState.INTERRUPTED
             } else None, None,
-            projection.next_safe_action, premise_report=report,
+            projection.next_safe_action, evidence=control_evidence,
+            premise_report=report,
             premise_report_ref=PremiseReportRef(conversation_id,
                 cast(str, projection.premise_report_event_id), report.report_digest, report.spec.question_id),
             validation_details=validation_details,
@@ -12840,7 +12880,11 @@ class StoryRuntime:
                 raise ValueError("premise USER choice references unavailable or changed whole material")
             if selection.choice_policy is PremiseChoicePolicy.USER_CHOICE:
                 resolve_premise_choice(selection, report)
-        if projection.premise_selection is not None and selection.action is not PremiseDecisionAction.CHOOSE:
+        if (
+            projection.premise_selection is not None
+            and projection.premise_selection.selection.report_event_id == selection.report_event_id
+            and selection.action is not PremiseDecisionAction.CHOOSE
+        ):
             raise ValueError("reject/defer cannot revoke an already captured independent authoring choice")
         if projection.premise_decision is not None and projection.premise_decision.action is PremiseDecisionAction.REJECT:
             raise ValueError("a rejected premise report cannot be chosen")
@@ -12897,10 +12941,16 @@ class StoryRuntime:
         report_ref = None if report is None else PremiseReportRef(conversation_id,
             cast(str, projection.premise_report_event_id), report.report_digest, report.spec.question_id)
         source_ref = None
-        task_pair = (premise_capture.authoring_task_id, premise_capture.authoring_task_revision) if premise_capture is not None else next(iter(offered_tasks), (None, None))
+        offered_authoring_tasks = tuple(PremiseAuthoringTaskRef(*pair) for pair in offered_tasks)
+        selected_authoring_task = (
+            None if premise_capture is None else PremiseAuthoringTaskRef(
+                premise_capture.authoring_task_id, premise_capture.authoring_task_revision
+            )
+        )
         if premise_capture is None:
+            prior_task_pair = next(iter(offered_tasks), (None, None))
             current = self._authoring_tasks(self._session_authoring_events(session_id))
-            scope = current.get(task_pair[0])
+            scope = current.get(prior_task_pair[0])
             if scope is not None:
                 source, synthesis, _prefix = self._completed_authoring_source(scope, events)
                 steps = {source.step_id, *(event.step_id for event in events
@@ -12918,7 +12968,7 @@ class StoryRuntime:
                         source.proposal_revision, source.proposal_digest, synthesis.payload.execution_attempt_id))
         admission = PremiseFreshWorkAdmission(origin.event_id,
             "sha256:" + hashlib.sha256(encode_collaboration_event(origin)).hexdigest(),
-            step_id, invocation_id, 2, question_id, task_pair[0], task_pair[1],
+            step_id, invocation_id, 2, question_id, offered_authoring_tasks, selected_authoring_task,
             parent, report_ref, source_ref)
         draft = self._draft(session_id=session_id, conversation_id=conversation_id,
             turn_id=turn_id, step_id=step_id, kind=CollaborationEventKind.PREMISE_FRESH_WORK_ADMISSION,
@@ -15374,8 +15424,58 @@ class StoryRuntime:
     ) -> bool:
         """Detect any durable request lacking a later same-turn invocation marker."""
 
+        settled_origin_ids: set[str] = set()
+        settled_controls = {
+            event.event_id for event in events
+            if type(event.payload) is CollaborationPremiseDecisionPayload
+            and event.payload.selection.action in {PremiseDecisionAction.REJECT, PremiseDecisionAction.DEFER}
+            and event.sender == _USER_ACTOR and event.recipient == _LEAD_ACTOR
+        }
+        if settled_controls:
+            current_report_event = None
+            message_origins = {}
+            for event in events:
+                if (
+                    type(event.payload) is CollaborationLeadSynthesisPayload
+                    and event.payload.premise_report is not None
+                ):
+                    current_report_event = event
+                elif (
+                    type(event.payload) is CollaborationMessagePayload
+                    and event.sender == _USER_ACTOR and event.recipient == _LEAD_ACTOR
+                ):
+                    key = (
+                        event.session_id, event.conversation_id, event.turn_id, event.step_id, event.batch_id,
+                    )
+                    message_origins.setdefault(key, []).append(event)
+                elif event.event_id in settled_controls and current_report_event is not None:
+                    selection = event.payload.selection
+                    report = current_report_event.payload.premise_report
+                    origins = message_origins.get(
+                        (
+                            event.session_id, event.conversation_id, event.turn_id,
+                            event.step_id, event.batch_id,
+                        ), (),
+                    )
+                    if (
+                        len(origins) == 1
+                        and origins[0].sequence < event.sequence
+                        and (current_report_event.session_id, current_report_event.conversation_id)
+                        == (event.session_id, event.conversation_id)
+                        and report.source_conversation_id == event.conversation_id
+                        and (
+                            selection.source_conversation_id, selection.report_event_id,
+                            selection.report_digest, selection.question_id,
+                        ) == (
+                            event.conversation_id, current_report_event.event_id,
+                            report.report_digest, report.spec.question_id,
+                        )
+                    ):
+                        settled_origin_ids.add(origins[0].event_id)
         marked_turns: set[str] = set()
         for event in reversed(events):
+            if event.event_id in settled_origin_ids:
+                continue
             if (
                 (
                     type(event.payload) is CollaborationProviderCallPayload

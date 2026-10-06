@@ -407,6 +407,8 @@ current contract permits them. `required_input_source_ids` describes required
 coverage; it is separate from the list of available inputs. A SEARCH hit or an
 earlier draft's event ID does not itself become an assignment input.
 
+Each successful premise-analysis alternative must cite at least one offered input in `basis_input_ids`. An insufficient-evidence result may contain no alternatives. The fresh-work admission records the exact offered task/revision pairs in `offered_authoring_tasks`; `selected_authoring_task` separately pins an explicit same-turn USER premise capture when present. A proposal must belong to the recorded offer and match that explicit selection. `prior_authoring_source_ref` remains historical source and cost attribution, without selecting a future task.
+
 ### Explicit exploration result contract
 
 The host selects `lead-exploration-response-v1` only for the current user's

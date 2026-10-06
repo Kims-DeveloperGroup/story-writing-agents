@@ -225,3 +225,11 @@ class SpecialistRoutingTests(unittest.TestCase):
         self.assertEqual(premise.premise_analysis_from_dict(premise.premise_value_to_dict(analysis)), analysis)
         with self.assertRaises(ValueError):
             replace(analysis, assessment="drafted")
+        from story_writing_agents.lead_provider_contracts import PremiseDecisionConstraints
+        constraints = PremiseDecisionConstraints("grounded-question", input_ids=("user_input",))
+        value = premise.premise_value_to_dict(analysis)
+        self.assertEqual(constraints.validate_analysis(value), analysis)
+        self.assertEqual(constraints.analysis_schema()["properties"]["alternatives"]["items"]["properties"]["basis_input_ids"]["minItems"], 1)
+        value["alternatives"][0]["basis_input_ids"] = []
+        with self.assertRaises(ValueError):
+            constraints.validate_analysis(value)

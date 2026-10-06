@@ -364,6 +364,9 @@ if "STORY_FAKE_CODEX_USAGE" in os.environ:
 _TIMESTAMP = "2026-08-15T01:02:03+00:00"
 
 
+def _fresh_literal_object_side_effect(target, attribute, value):
+    return mock.patch.object(target, attribute, side_effect=value)
+
 def _rejected_response_artifact_patch():
     return mock.patch.object(
         WorkspaceProviderErrorArtifacts,
@@ -2873,9 +2876,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             "accounting"
         )
         with (
-            mock.patch.object(
-                backend, "_begin_legacy_agent_exchange", side_effect=begin
-            ),
+            _fresh_literal_object_side_effect(backend, '_begin_legacy_agent_exchange', begin),
             mock.patch.object(backend._codex_adapter, "invoke", side_effect=invoke),
             mock.patch.object(backend, "_store_thread", side_effect=store_thread),
         ):
@@ -2911,9 +2912,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             events.append("artifact")
 
         with (
-            mock.patch.object(
-                backend, "_begin_legacy_agent_exchange", side_effect=begin
-            ),
+            _fresh_literal_object_side_effect(backend, '_begin_legacy_agent_exchange', begin),
             mock.patch.object(backend._codex_adapter, "invoke", side_effect=invoke),
             mock.patch.object(
                 backend,
@@ -3206,11 +3205,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     selected_patch = (
                         mock.patch.object(selected, "bind", wraps=selected.bind)
                         if outcome == "success"
-                        else mock.patch.object(
-                            selected,
-                            "bind",
-                            side_effect=failure,
-                        )
+                        else _fresh_literal_object_side_effect(selected, 'bind', failure)
                     )
                     with (
                         selected_patch as selected_bind,
@@ -3637,11 +3632,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         captured_stderr = io.StringIO()
         with (
             mock.patch.dict(os.environ, {"STORY_FAKE_CODEX_MODE": "nonzero"}),
-            mock.patch.object(
-                WorkspaceDebugLog,
-                "error",
-                side_effect=SystemExit("diagnostic failure"),
-            ) as debug_error,
+            _fresh_literal_object_side_effect(WorkspaceDebugLog, 'error', SystemExit('diagnostic failure')) as debug_error,
             contextlib.redirect_stderr(captured_stderr),
             self.assertRaises(BackendProtocolError) as caught,
         ):
@@ -4074,11 +4065,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
                 with (
                     provider_patch,
-                    mock.patch.object(
-                        WorkspaceDebugLog,
-                        "error",
-                        side_effect=sink_failure,
-                    ) as debug_error,
+                    _fresh_literal_object_side_effect(WorkspaceDebugLog, 'error', sink_failure) as debug_error,
                     self.assertRaises(application_type) as raised,
                 ):
                     if operation == "invoke":
@@ -6901,21 +6888,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
         handler = _RecordingRetrievalHandler()
         with (
-            mock.patch.object(
-                backend,
-                "_converse_with_retrieval_codex",
-                side_effect=retrieval_call,
-            ),
-            mock.patch.object(
-                backend,
-                "_converse_codex",
-                side_effect=conversation_call,
-            ),
-            mock.patch.object(
-                backend,
-                "_invoke_codex",
-                side_effect=invoke_call,
-            ),
+            _fresh_literal_object_side_effect(backend, '_converse_with_retrieval_codex', retrieval_call),
+            _fresh_literal_object_side_effect(backend, '_converse_codex', conversation_call),
+            _fresh_literal_object_side_effect(backend, '_invoke_codex', invoke_call),
         ):
             retrieval_task = asyncio.create_task(
                 retrieval_bound.converse_with_retrieval(
@@ -8039,11 +8014,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
                     try:
                         with (
-                            mock.patch.object(
-                                backend,
-                                "_adapter_for",
-                                side_effect=resolve_adapter,
-                            ) as adapter_for,
+                            _fresh_literal_object_side_effect(backend, '_adapter_for', resolve_adapter) as adapter_for,
                             self.assertRaises(ConfigurationError) as raised,
                         ):
                             if operation == "conversation":
@@ -8694,11 +8665,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     )
                 ),
             ),
-            mock.patch.object(
-                backend,
-                "_store_thread",
-                side_effect=persistence_failure,
-            ),
+            _fresh_literal_object_side_effect(backend, '_store_thread', persistence_failure),
             _rejected_response_artifact_patch() as record,
             self.assertRaises(OSError) as caught,
         ):

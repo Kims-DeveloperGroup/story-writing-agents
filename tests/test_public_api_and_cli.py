@@ -1403,11 +1403,7 @@ class CliTests(unittest.TestCase):
             stderr = io.StringIO()
             failure = WorkspaceFormatError("initialization failed")
             with (
-                mock.patch.object(
-                    cli_module,
-                    "initialize_workspace",
-                    side_effect=failure,
-                ) as initialize,
+                _fresh_cli_effect_patch('initialize_workspace', failure) as initialize,
                 contextlib.redirect_stderr(stderr),
             ):
                 self.assertEqual(main(["init", str(target)]), 2)
@@ -1860,36 +1856,18 @@ class CliTests(unittest.TestCase):
             _fresh_stream_terminal_failure_patch(lambda *args: (
                     events.append(("terminal", None)) or terminal
                 )),
-            mock.patch.object(
-                cli_module,
-                "ProviderAuthService",
-                side_effect=lambda *args, **kwargs: (
-                    events.append(("auth_service", args[0])) or auth_service
-                ),
+            _fresh_cli_effect_patch(
+                'ProviderAuthService',
+                lambda *args, **kwargs: events.append(('auth_service', args[0])) or auth_service,
             ),
-            mock.patch.object(
-                cli_module,
-                "ProviderCatalogService",
-                side_effect=lambda *args, **kwargs: (
-                    self.assertEqual(args, (workspace.root,))
-                    or self.assertEqual(
-                        kwargs,
-                        {"antigravity_executable": "agy"},
-                    )
-                    or events.append(("catalog_service", args[0]))
-                    or catalog_service
-                ),
-            ),
-            mock.patch.object(
-                cli_module,
-                "InteractiveAuthCoordinator",
-                side_effect=lambda service, current_terminal: (
-                    self.assertIs(service, auth_service)
-                    or self.assertIs(current_terminal, terminal)
-                    or events.append(("auth_coordinator", None))
-                    or coordinator
-                ),
-            ),
+            _fresh_cli_effect_patch('ProviderCatalogService', lambda *args, **kwargs: (
+                self.assertEqual(args, (workspace.root,)) or self.assertEqual(kwargs, {'antigravity_executable': 'agy'})
+                or events.append(('catalog_service', args[0])) or catalog_service
+            )),
+            _fresh_cli_effect_patch('InteractiveAuthCoordinator', lambda service, current_terminal: (
+                self.assertIs(service, auth_service) or self.assertIs(current_terminal, terminal)
+                or events.append(('auth_coordinator', None)) or coordinator
+            )),
             _fresh_cli_effect_patch('select_default_provider', select_default),
             mock.patch.object(
                 cli_module.ConfigManager,
@@ -1900,12 +1878,9 @@ class CliTests(unittest.TestCase):
             _fresh_default_backend_attempt_patch(establish_default),
             _fresh_cli_effect_patch('_effective_interactive_providers', routes),
             _fresh_recording_cli_context_patch(events),
-            mock.patch.object(
-                cli_module,
-                "AgentBackend",
-                side_effect=lambda *args, **kwargs: (
-                    events.append(("backend", None)) or backend
-                ),
+            _fresh_cli_effect_patch(
+                'AgentBackend',
+                lambda *args, **kwargs: events.append(('backend', None)) or backend,
             ),
             _fresh_cli_effect_patch('InteractiveController', controller_factory),
         ):
@@ -2126,11 +2101,7 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(sys, "stdout", stdout),
                     mock.patch.object(sys, "stderr", stderr),
                     _resolved_workspace_patch(workspace),
-                    mock.patch.object(
-                        cli_module,
-                        "_run_interactive_startup_progress",
-                        side_effect=run_progress,
-                    ),
+                    _fresh_cli_effect_patch('_run_interactive_startup_progress', run_progress),
                     mock.patch.object(cli_module, "load_cli_context") as context,
                     mock.patch.object(cli_module, "AgentBackend") as backend,
                     _fresh_construction_seam_patch(cli_module, 'InteractiveController') as controller,
@@ -2571,12 +2542,9 @@ class CliTests(unittest.TestCase):
             _fresh_cli_value_patch('InteractiveAuthCoordinator', coordinator),
             mock.patch.object(cli_module, "establish_default_backend") as establish,
             _fresh_recording_cli_context_patch(events),
-            mock.patch.object(
-                cli_module,
-                "AgentBackend",
-                side_effect=lambda *args, **kwargs: (
-                    events.append(("backend", None)) or mock.Mock()
-                ),
+            _fresh_cli_effect_patch(
+                'AgentBackend',
+                lambda *args, **kwargs: events.append(('backend', None)) or mock.Mock(),
             ),
             _fresh_cli_value_patch('InteractiveController', controller),
         ):

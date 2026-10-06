@@ -6333,9 +6333,13 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             return await operation  # type: ignore[misc]
 
     class _Picker:
-        def __init__(self, *outcomes: ControlOutcome) -> None: self.outcomes = list(outcomes)
+        def __init__(self, *outcomes: ControlOutcome) -> None:
+            self.outcomes = list(outcomes)
+            self.calls = []
 
-        def read_picker(self, *_args: object, **_kwargs: object) -> ControlOutcome: return self.outcomes.pop(0)
+        def read_picker(self, *_args: object, **_kwargs: object) -> ControlOutcome:
+            self.calls.append(_args)
+            return self.outcomes.pop(0)
 
     class _Prompt:
         def __init__(self, *outcomes: ControlOutcome) -> None: self.outcomes = list(outcomes)
@@ -6524,16 +6528,29 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             selected = latest.premise_report.options[1]
             output = self._Output()
             current[:] = [self._terminal_turn(CollaborationStepState.COMPLETED)]
-            adapter = lead_policy_module.InteractiveLeadAdapter(session, runner, self._Progress(), self._Picker(self._commit("choose"), self._commit(selected.option_id), self._commit("user_choice")), self._Prompt(self._commit("core_documents/global_outline.md")), output, read_events=lambda current_conversation: history)
+            adapter = lead_policy_module.InteractiveLeadAdapter(session, runner, self._Progress(), self._Picker(self._commit("choose"), self._commit(selected.option_id), self._commit("user_choice")), self._Prompt(self._commit("core_documents/global_outline.md"), self._commit("core_documents/character_sheets.md"), self._commit("")), output, read_events=lambda current_conversation: history)
             self.assertFalse(adapter.premise(conversation))
             selection = forwarded[-1]["premise_selection"]
             self.assertEqual((selection.report_event_id, selection.option_id, selection.material_digest), (latest.premise_report_ref.report_event_id, selected.option_id, selected.material_digest))
             self.assertIs(selection.choice_policy, premise.PremiseChoicePolicy.USER_CHOICE)
+            self.assertEqual(selection.target_paths, ("core_documents/global_outline.md", "core_documents/character_sheets.md"))
+            self.assertEqual(tuple(item.identity for item in adapter._picker.calls[0][1]), ("choose", "reject", "defer"))
+            self.assertEqual(tuple(item.identity for item in adapter._picker.calls[2][1]), ("user_choice",))
             self.assertTrue(any(component.title == "Retained USER choice (reference)" for component in output.components if isinstance(component, terminal_module.Panel)))
             before_cancel = tuple(forwarded)
             adapter._picker = self._Picker(ControlOutcome(ControlOutcomeKind.CANCEL))
             self.assertFalse(adapter.premise(conversation))
             self.assertEqual(tuple(forwarded), before_cancel)
+            conversation = fixture.conversation()
+            _, unranked = runner.run(_confirmed_premise(fixture, conversation, recommendation=None))
+            history = fixture.history(conversation)
+            self.assertIsNone(unranked.premise_report.recommended_option_id)
+            option = unranked.premise_report.options[0]
+            adapter._picker = self._Picker(self._commit("choose"), self._commit(option.option_id), self._commit("user_choice"))
+            adapter._prompt = self._Prompt(self._commit("core_documents/global_outline.md"), self._commit(""))
+            self.assertFalse(adapter.premise(conversation))
+            self.assertEqual(tuple(item.identity for item in adapter._picker.calls[2][1]), ("user_choice",))
+            self.assertEqual(forwarded[-1]["premise_selection"].report_event_id, unranked.premise_report_ref.report_event_id)
 
     def test_ordinary_lead_progress_sink_finishes_before_lead_and_elapsed_output(self) -> None:
         session = RuntimeSession.__new__(RuntimeSession); runner = asyncio.Runner(); self.addCleanup(runner.close)

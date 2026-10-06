@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..lead_premise_decisions import (
+    PremiseAuthoringTaskRef,
     PremiseDecisionReport, PremiseDecisionSelection, PremiseSelectionCapture,
     PremiseFreshWorkAdmission, PremiseDecisionAction, PremiseChoicePolicy, PremiseDecisionCost, PremiseReportRef, PremiseAdmissionRef,
     premise_digest, premise_value_to_dict, resolve_premise_choice,
@@ -3130,6 +3131,21 @@ def _validate_premise_history(events):
                     raise ValueError("fresh-work prior analysis report changed")
             if item.prior_authoring_source_ref is not None:
                 _premise_source_cost(item.prior_authoring_source_ref, past)
+            same_turn_captures = tuple(
+                old.payload.capture for old in captures
+                if (old.turn_id, old.step_id) == (event.turn_id, event.step_id)
+            )
+            if item.selected_authoring_task is None:
+                if same_turn_captures:
+                    raise ValueError("fresh-work admission omitted its exact selected premise task")
+            elif (
+                len(same_turn_captures) != 1
+                or item.selected_authoring_task != PremiseAuthoringTaskRef(
+                    same_turn_captures[0].authoring_task_id,
+                    same_turn_captures[0].authoring_task_revision,
+                )
+            ):
+                raise ValueError("fresh-work selected task lacks its exact current USER capture")
             admissions[item.provider_invocation_id] = event
             admission_steps[event.step_id] = event
             latest_admission = event
@@ -3268,8 +3284,15 @@ def _validate_premise_history(events):
             scope = payload.authoring_scope
             admitted = next((old.payload.admission for old in reversed(past)
                 if type(old.payload) is CollaborationPremiseFreshWorkAdmissionPayload and old.step_id == event.step_id), None)
-            if admitted is not None and (scope.task_id, scope.task_revision) != (
-                admitted.offered_authoring_task_id, admitted.offered_authoring_task_revision):
+            if admitted is not None and (
+                PremiseAuthoringTaskRef(scope.task_id, scope.task_revision)
+                not in admitted.offered_authoring_tasks
+                or (
+                    admitted.selected_authoring_task is not None
+                    and PremiseAuthoringTaskRef(scope.task_id, scope.task_revision)
+                    != admitted.selected_authoring_task
+                )
+            ):
                 raise ValueError("fresh-work proposal changed its prospectively admitted task")
             if admitted is not None and (scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
                     or scope.intent is not AuthoringIntent.AUTHORING or payload.budget.rounds_spent):
@@ -4279,6 +4302,18 @@ def _project_validated_collaboration_history(
             if unmatched_submitted_lead
             else CollaborationNextAction.RETRY_LEAD_TURN
             if current_lead_outcome_failed
+            else CollaborationNextAction.CONTINUE_WITH_LEAD
+            if (
+                premise_state[0] is not None
+                and premise_state[2] is not None
+                and type(events[-1].payload) is CollaborationPremiseDecisionPayload
+                and events[-1].sender.kind.value == "user"
+                and events[-1].payload.selection == premise_state[2]
+                and events[-1].payload.selection.report_event_id == premise_state[1]
+                and premise_state[2].action is PremiseDecisionAction.REJECT
+                and current_proposal is None
+                and state is None
+            )
             else CollaborationNextAction.CHOOSE_PREMISE
             if premise_state[0] is not None
             and (

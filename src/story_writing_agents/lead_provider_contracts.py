@@ -744,7 +744,7 @@ class PremiseDecisionConstraints:
         alternative = closed_object({
             "alternative_key": nonempty_text_schema(), "premise_text": nonempty_text_schema(),
             "rationale": nonempty_text_schema(), "tradeoffs": string_array(maximum=4),
-            "basis_input_ids": string_array(self.input_ids, maximum=64),
+            "basis_input_ids": string_array(self.input_ids, minimum=1, maximum=64),
         })
         result = closed_object({
             "assessment": {"type": "string", "enum": ["alternatives_assessed", "conflict", "insufficient_evidence"]},

@@ -286,6 +286,24 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(self.history(conversation)[:len(previous)], previous)
         self.assertEqual(self.workspace.path(path).read_bytes(), b"The selected knowledge remains intentionally uncertain.\n")
         self.assertLessEqual(len(_submitted_calls(self.history(conversation)[len(previous):])), 12)
+        for decision in (premise.PremiseDecisionAction.REJECT, premise.PremiseDecisionAction.DEFER):
+            retained_choice = c.project_collaboration_history(self.history(conversation)).premise_selection
+            _, later = await _confirmed_premise(self, conversation)
+            ref = later.premise_report_ref
+            selection = premise.PremiseDecisionSelection(
+                "later-" + decision.value, decision, ref.source_conversation_id,
+                ref.report_event_id, ref.report_digest, ref.question_id)
+            prefix, call_count = self.history(conversation), len(self.backend.call_records)
+            controlled = await self.runtime.lead_turn(self.session_id, conversation, "Keep this choice unresolved.",
+                                                      premise_selection=selection)
+            projection = c.project_collaboration_history(self.history(conversation))
+            self.assertEqual(projection.premise_decision, selection)
+            self.assertEqual(projection.premise_selection, retained_choice)
+            self.assertEqual(len(self.backend.call_records), call_count)
+            self.assertEqual(self.history(conversation)[:len(prefix)], prefix)
+            self.assertIsNone(controlled.proposal)
+            self.assertIsNone(controlled.artifact_application_request)
+            self.assertIsNone(controlled.story_commit_request)
 
     async def test_declared_substantive_direct_outcomes_fail_closed(self):
         for kind in ("answer", "recommendation", "critique"):
@@ -605,6 +623,67 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             value["authoring_scope"]["task_revision"]=2
         invalid=await self.proposal_for(self.conversation(),scoped_proposal(PLOT_ARCHITECT,mutate=cross_product))
         self._assert_continuation(invalid, 'proposal')
+        multiple = self.conversation()
+        before_multiple = self.artifact_bytes()
+        multi_path = "manuscript/part-01/nonfirst-successor.md"
+        first_draft, _ = await self.finish_draft(multiple, response=scoped_proposal(
+            *ROSTER, domains=("character_world", "tone_execution"), mutate=two_owners))
+        first_source = c.project_collaboration_history(self.history(multiple)).offered_draft_sources[-1].event_id
+        def second_task(call, provider):
+            fresh = next(t for t in _workflow_material(call.payload)["authoring_tasks"] if t.get("current_scope") is None)
+            return scoped_proposal(*ROSTER, domains=("character_world", "tone_execution"),
+                                   selected=fresh["task_id"], mutate=two_owners)(call, provider)
+        second_draft, _ = await self.finish_draft(multiple, response=second_task)
+        first_ready = await self.proposal_for(multiple, recommendation(recommended_action=action(
+            source_ids=(first_source,), target_paths=(multi_path,), specialist_ids=ROSTER),
+            authoring_scope=c.authoring_scope_to_dict(first_draft.proposal.authoring_scope)))
+        self.assertIsNotNone(first_ready.recommendation_request, first_ready)
+        first_response = _artifact_outcome(operations=[{"kind": "create", "suggested_path": multi_path, "new_text": "Synthetic chronology remains explicit.\n"}],
+            evidence_status="incomplete", evidence_ids=lambda call, material: [call.payload["core_document_statuses"][0]["evidence_id"]])
+        def integrate_multiple(call, provider):
+            value = json.loads(first_response(call, provider))
+            scope = c.authoring_scope_to_dict(first_draft.proposal.authoring_scope)
+            value["action"]["result"]["artifact_intent"]["objective_intent"] = {"action": "start", "target_paths": [multi_path], "next_step": "prepare"}
+            value["action"]["result"]["authoring_scope"] = _compact_scope(scope)
+            return json.dumps(value)
+        self.backend.enqueue(integrate_multiple)
+        first_review = await self.runtime.decide_lead_recommendation(recommendation_decision(first_ready))
+        self.assertIsNotNone(first_review.proposal, first_review)
+        self.assertEqual(first_review.proposal.participants, ROSTER)
+        for assignment in first_review.proposal.assignments:
+            self.backend.enqueue_for(assignment.specialist_id, _specialist_outcome("supports", "The candidate preserves the first_reviewed chronology and motivation."))
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _artifact_synthesis_outcome())
+        first_reviewed = await self.runtime.decide_lead_step(_decision(first_review, c.CollaborationConfirmationDecision.CONFIRM))
+        multi_review_frames = [_workflow_material(call.payload) for actor, call in self.backend.call_records if actor in ROSTER][-len(ROSTER):]
+        multi_review_candidates = [next(item["artifact_candidate"] for item in frame["inputs"] if item["input_id"] == frame["assignment"]["review_basis"]["candidate_input_ids"][0]) for frame in multi_review_frames]
+        self.assertEqual(multi_review_candidates, [multi_review_candidates[0]] * len(ROSTER))
+        await self.runtime.decide_artifact_application(_application_decision(first_reviewed.turn, c.ArtifactApplicationDecisionKind.REJECT))
+        self.assertEqual(self.artifact_bytes(), before_multiple)
+        multi_prefix = self.history(multiple)
+        multi_completed = c.project_collaboration_history(multi_prefix)
+        self.assertIs(multi_completed.current_artifact_application_result.outcome, c.ArtifactApplicationOutcomeKind.REJECTED)
+        self.assertEqual(multi_completed.rounds_spent, 2)
+        self.assertLess(12 - multi_completed.physical_calls_spent, len(first_review.proposal.participants) + 2)
+        expected = [(item.proposal.authoring_scope.task_id, 2) for item in (first_draft, second_draft)]
+        chosen = []
+        def nonfirst(call, provider):
+            offers = [(t["task_id"], t["task_revision"]) for t in _workflow_material(call.payload)["authoring_tasks"]]
+            self.assertCountEqual(offers, expected)
+            chosen.append(offers[1])
+            return scoped_proposal(*ROSTER, selected=offers[1][0], revision=offers[1][1],
+                                   domains=("character_world", "tone_execution"), mutate=two_owners)(call, provider)
+        admitted = await self.proposal_for(multiple, nonfirst)
+        self.assertIs(admitted.kind, c.LeadOutcomeKind.PROPOSAL, admitted)
+        self.assertEqual((admitted.proposal.authoring_scope.task_id, admitted.proposal.authoring_scope.task_revision), chosen[0])
+        suffix = self.history(multiple)[len(multi_prefix):]
+        admission = next(e.payload.admission for e in suffix if type(e.payload) is c.CollaborationPremiseFreshWorkAdmissionPayload)
+        self.assertCountEqual([(t.task_id, t.task_revision) for t in admission.offered_authoring_tasks], expected)
+        self.assertIsNone(admission.selected_authoring_task)
+        self.assertEqual(admission.front_physical_call_limit, 2)
+        self.assertEqual(len(_submitted_calls(suffix)), 1)
+        self.assertFalse(any(e.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for e in suffix))
+        self.assertEqual(self.history(multiple)[:len(multi_prefix)], multi_prefix)
+        self.assertEqual(self.artifact_bytes(), before_multiple)
         self.workspace.path(OUTLINE).unlink()
         def stale(call, provider):
             self.assertIn(old_source, _workflow_material(call.payload)["available_proposal_drafting_source_ids"])

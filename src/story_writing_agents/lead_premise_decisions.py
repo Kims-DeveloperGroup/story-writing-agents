@@ -215,8 +215,8 @@ class PremiseFreshWorkAdmission:
     provider_invocation_id: str
     front_physical_call_limit: int
     offered_question_id: str | None
-    offered_authoring_task_id: str | None
-    offered_authoring_task_revision: int | None
+    offered_authoring_tasks: tuple[PremiseAuthoringTaskRef, ...]
+    selected_authoring_task: PremiseAuthoringTaskRef | None
     prior_admission_ref: PremiseAdmissionRef | None = None
     prior_analysis_report_ref: PremiseReportRef | None = None
     prior_authoring_source_ref: PremiseAuthoringSourceRef | None = None
@@ -231,12 +231,18 @@ class PremiseFreshWorkAdmission:
         _integer(self.front_physical_call_limit, 1, 2)
         if self.offered_question_id is not None:
             _identifier(self.offered_question_id)
-        if self.offered_authoring_task_id is not None:
-            _identifier(self.offered_authoring_task_id)
-            _integer(self.offered_authoring_task_revision, 1)
-        elif self.offered_authoring_task_revision is not None:
-            raise ValueError("premise admission task pair is incomplete")
-        if self.offered_question_id is None and self.offered_authoring_task_id is None:
+        if type(self.offered_authoring_tasks) is not tuple or any(
+            type(item) is not PremiseAuthoringTaskRef
+            for item in self.offered_authoring_tasks
+        ):
+            raise TypeError("premise admission offers must be exact task references")
+        _unique(self.offered_authoring_tasks)
+        if self.selected_authoring_task is not None:
+            if type(self.selected_authoring_task) is not PremiseAuthoringTaskRef:
+                raise TypeError("selected premise admission task is invalid")
+            if self.offered_authoring_tasks != (self.selected_authoring_task,):
+                raise ValueError("selected premise admission requires its exact singleton offer")
+        if self.offered_question_id is None and not self.offered_authoring_tasks:
             raise ValueError("premise admission offers no fresh work")
         for value, cls in ((self.prior_admission_ref, PremiseAdmissionRef),
                            (self.prior_analysis_report_ref, PremiseReportRef),
@@ -300,7 +306,7 @@ class PremiseAlternative:
     def __post_init__(self) -> None:
         _identifier(self.alternative_key)
         _tuple(self.tradeoffs, str, 4)
-        _tuple(self.basis_input_ids, str, 64)
+        _tuple(self.basis_input_ids, str, 64, minimum=1)
         for value in self.basis_input_ids:
             _identifier(value)
         _unique(self.basis_input_ids)
@@ -681,6 +687,8 @@ def premise_admission_from_dict(value: object) -> PremiseFreshWorkAdmission:
         return _decode(PremiseAuthoringSourceRef, item, {
             "task": lambda raw: _decode(PremiseAuthoringTaskRef, raw), "cost": premise_cost_from_dict})
     return _decode(PremiseFreshWorkAdmission, value, {
+        "offered_authoring_tasks": _array(lambda item: _decode(PremiseAuthoringTaskRef, item)),
+        "selected_authoring_task": lambda item: _decode(PremiseAuthoringTaskRef, item),
         "prior_admission_ref": lambda item: _decode(PremiseAdmissionRef, item),
         "prior_analysis_report_ref": lambda item: _decode(PremiseReportRef, item),
         "prior_authoring_source_ref": source})

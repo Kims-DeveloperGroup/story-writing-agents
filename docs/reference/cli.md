@@ -412,6 +412,8 @@ Pending Apply/Commit, running work, and uncertain outcomes retain priority.
 
 See [premise states and costs](../guides/lead-agent.md#choosing-an-unresolved-premise).
 
+Target paths are collected one at a time; submit an empty entry to finish. An empty first entry requests targetless work. Cancel and EOF leave the collection unsubmitted. The shell offers minor delegation only when the chosen whole option is the report recommendation. A retained selection from an earlier report does not restrict Reject or Defer for the current report.
+
 ### Explicit exploration controls
 
 With an attached session and focused active conversation, `/explore TEXT`

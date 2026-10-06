@@ -719,6 +719,8 @@ artifact mutation. Unknown prepared outcomes keep recovery priority.
 These guards establish provenance, workflow, and accounting. Alternative quality and semantic
 fidelity of drafts still require genuine author-intent and reader/editor evaluation in #806.
 
+A retained selection belongs to its report. A later independent report still allows Reject or Defer; those controls do not revoke the earlier capture. When fresh work offers several completed-task successors, the provider may choose any exact offered pair. An explicit premise selection instead pins its one disclosed pair. The durable offer limits task admission, while earlier source and cost receipts retain their separate provenance.
+
 ## How a lead judgment is grounded
 
 For ordinary outcomes, the provider declares one semantic scope and one evidence

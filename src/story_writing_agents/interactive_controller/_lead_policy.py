@@ -225,7 +225,11 @@ class InteractiveLeadAdapter:
             self._semantic_output.write_component(Notice("No terminal premise report is available here.", label="Premise decision", role=SemanticRole.INFO))
             return False
         known = projection.premise_selection
-        reuse = known is not None and projection.next_safe_action in {
+        known_current_report = (
+            known is not None
+            and known.selection.report_event_id == projection.premise_report_event_id
+        )
+        reuse = known_current_report and projection.next_safe_action in {
             CollaborationNextAction.CONTINUE_WITH_LEAD, CollaborationNextAction.RETRY_LEAD_TURN}
         if projection.next_safe_action is not CollaborationNextAction.CHOOSE_PREMISE and not reuse:
             self._semantic_output.write_component(Notice("Resolve the current workflow control first: " + projection.next_safe_action.value,
@@ -237,7 +241,7 @@ class InteractiveLeadAdapter:
             Field("Analysis rounds", str(report.cost.rounds_spent)),
         )))
         control = self._picker.read_picker(Prompt("Premise decision", instruction="A choice starts a separate authoring proposal; Confirm is still required."), tuple(
-            Choice(action.value, action.value.title()) for action in ((PremiseDecisionAction.CHOOSE,) if known is not None else tuple(PremiseDecisionAction))))
+            Choice(action.value, action.value.title()) for action in ((PremiseDecisionAction.CHOOSE,) if known_current_report else tuple(PremiseDecisionAction))))
         if control.kind is ControlOutcomeKind.EOF:
             return True
         if control.kind is not ControlOutcomeKind.COMMIT or control.text is None:
@@ -261,21 +265,29 @@ class InteractiveLeadAdapter:
             if selected.kind is not ControlOutcomeKind.COMMIT or selected.text is None:
                 return False
             option = next(item for item in report.options if item.option_id == selected.text)
-            policy = self._picker.read_picker(Prompt("Choice authority", instruction="Delegation may select only the report recommendation inside this exact one-option allowlist."), (
-                Choice(PremiseChoicePolicy.USER_CHOICE.value, "Choose this whole option"),
-                Choice(PremiseChoicePolicy.DELEGATED_MINOR.value, "Delegate the bounded minor choice")))
+            authority_choices = (Choice(PremiseChoicePolicy.USER_CHOICE.value, "Choose whole option"),)
+            if report.recommended_option_id == option.option_id:
+                authority_choices += (
+                    Choice(PremiseChoicePolicy.DELEGATED_MINOR.value, "Delegate bounded minor choice"),
+                )
+            policy = self._picker.read_picker(Prompt("Choice authority", instruction="Delegation may only use the report recommendation inside this exact one-option allowlist."), authority_choices)
             if policy.kind is ControlOutcomeKind.EOF:
                 return True
             if policy.kind is not ControlOutcomeKind.COMMIT or policy.text is None:
                 return False
             choice_policy = PremiseChoicePolicy(policy.text)
-            targets = self._prompt.read_prompt(Prompt("Target paths", instruction="One canonical artifact path per line; leave empty for targetless authoring."))
-            if targets.kind is ControlOutcomeKind.EOF:
-                return True
-            if targets.kind is not ControlOutcomeKind.COMMIT or targets.text is None:
-                return False
-            fields = {"choice_policy": choice_policy,
-                "target_paths": tuple(line.strip() for line in targets.text.splitlines() if line.strip())}
+            target_paths = []
+            while True:
+                target = self._prompt.read_prompt(Prompt("Target paths", instruction="Enter one canonical artifact path. Leave empty to finish; an empty list is targetless authoring."))
+                if target.kind is ControlOutcomeKind.EOF:
+                    return True
+                if target.kind is not ControlOutcomeKind.COMMIT or target.text is None:
+                    return False
+                path = target.text.strip()
+                if not path:
+                    break
+                target_paths.append(path)
+            fields = {"choice_policy": choice_policy, "target_paths": tuple(target_paths)}
             if choice_policy is PremiseChoicePolicy.USER_CHOICE:
                 fields.update(option_id=option.option_id, material_digest=option.material_digest)
             else:
