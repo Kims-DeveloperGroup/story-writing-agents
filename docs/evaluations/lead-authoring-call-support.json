@@ -1,0 +1,773 @@
+{
+  "schema_version": 1,
+  "issue": 808,
+  "scope": "Current-runtime deterministic public API observations; no external model or human evaluation.",
+  "source": {
+    "repository": "Kims-DeveloperGroup/story-writing-agents",
+    "head": "e9a1978645bf2b1eed873ef2282935b7e519acd2",
+    "tree": "0f86b2fd638ad6018de291c5d90e8f74edb7eac9",
+    "python": "CPython 3.11.16",
+    "tracked_input_entries": 520,
+    "tracked_input_bytes_unchanged": true,
+    "canonical_test_source_characters": 142472,
+    "canonical_test_source_cap": 142474,
+    "canonical_ids": 2527,
+    "test_methods_added": 0,
+    "runtime_test_configuration_edits": false
+  },
+  "accounting": {
+    "unit": "unique durable provider_call_accounting events in SUBMITTED state by (invocation_id, call_id)",
+    "host_fixture_prelude": "Canonical fake backend performs actual read-only reference acquisition but emits no separate provider-call accounting for that prelude. Actual SUBMITTED counts below do not price those host observations as real provider exchanges.",
+    "real_provider_tokens_latency_cost_quality": null,
+    "reservation_is_estimate": true,
+    "correction_submissions_observed": 0,
+    "read_search_submissions_in_successful_observations": 0
+  },
+  "read_path_matrix": [
+    {
+      "document": "new_target_with_present_reference",
+      "required_domains": 1,
+      "read_variant": "retained_qualified_boundary",
+      "repair_variant": "normal",
+      "basis": "All affected assignments select the PRESENT artifact reference; no historical text is substituted for current evidence.",
+      "reserved_after_front_calls": 12,
+      "front_calls": "F>=1; actual READ/SEARCH/correction submissions must be measured",
+      "expected_current_result": "UNSUPPORTED_BEFORE_CONFIRM",
+      "reason": "Current structural drafting plus full future preparation/review reservation exceeds12 after any front submission; source/read variant does not remove PRESENT-reference reservation.",
+      "measured_calls": null,
+      "measurement_status": "source_prediction_not_executed",
+      "observed_submitted_count": null
+    },
+    {
+      "document": "new_target_with_present_reference",
+      "required_domains": 1,
+      "read_variant": "retained_qualified_boundary",
+      "repair_variant": "one_extra_provider_submission",
+      "basis": "All affected assignments select the PRESENT artifact reference; no historical text is substituted for current evidence.",
+      "reserved_after_front_calls": 12,
+      "front_calls": "F>=1; actual READ/SEARCH/correction submissions must be measured",
+      "expected_current_result": "UNSUPPORTED_BEFORE_CONFIRM",
+      "reason": "Current structural drafting plus full future preparation/review reservation exceeds12 after any front submission; source/read variant does not remove PRESENT-reference reservation.",
+      "measured_calls": null,
+      "measurement_status": "source_prediction_not_executed",
+      "observed_submitted_count": null
+    },
+    {
+      "document": "new_target_with_present_reference",
+      "required_domains": 1,
+      "read_variant": "fresh_current_read",
+      "repair_variant": "normal",
+      "basis": "All affected assignments select the PRESENT artifact reference; no historical text is substituted for current evidence.",
+      "reserved_after_front_calls": 12,
+      "front_calls": "F>=1; actual READ/SEARCH/correction submissions must be measured",
+      "expected_current_result": "UNSUPPORTED_BEFORE_CONFIRM",
+      "reason": "Current structural drafting plus full future preparation/review reservation exceeds12 after any front submission; source/read variant does not remove PRESENT-reference reservation.",
+      "measured_calls": null,
+      "measurement_status": "source_prediction_not_executed",
+      "observed_submitted_count": null
+    },
+    {
+      "document": "new_target_with_present_reference",
+      "required_domains": 1,
+      "read_variant": "fresh_current_read",
+      "repair_variant": "one_extra_provider_submission",
+      "basis": "All affected assignments select the PRESENT artifact reference; no historical text is substituted for current evidence.",
+      "reserved_after_front_calls": 12,
+      "front_calls": "F>=1; actual READ/SEARCH/correction submissions must be measured",
+      "expected_current_result": "UNSUPPORTED_BEFORE_CONFIRM",
+      "reason": "Current structural drafting plus full future preparation/review reservation exceeds12 after any front submission; source/read variant does not remove PRESENT-reference reservation.",
+      "measured_calls": null,
+      "measurement_status": "source_prediction_not_executed",
+      "observed_submitted_count": null
+    },
+    {
+      "document": "new_target_with_present_reference",
+      "required_domains": 3,
+      "read_variant": "retained_qualified_boundary",
+      "repair_variant": "normal",
+      "basis": "All affected assignments select the PRESENT artifact reference; no historical text is substituted for current evidence.",
+      "reserved_after_front_calls": 20,
+      "front_calls": "F>=1; actual READ/SEARCH/correction submissions must be measured",
+      "expected_current_result": "UNSUPPORTED_BEFORE_CONFIRM",
+      "reason": "Current structural drafting plus full future preparation/review reservation exceeds12 after any front submission; source/read variant does not remove PRESENT-reference reservation.",
+      "measured_calls": null,
+      "measurement_status": "source_prediction_not_executed",
+      "observed_submitted_count": null
+    },
+    {
+      "document": "new_target_with_present_reference",
+      "required_domains": 3,
+      "read_variant": "retained_qualified_boundary",
+      "repair_variant": "one_extra_provider_submission",
+      "basis": "All affected assignments select the PRESENT artifact reference; no historical text is substituted for current evidence.",
+      "reserved_after_front_calls": 20,
+      "front_calls": "F>=1; actual READ/SEARCH/correction submissions must be measured",
+      "expected_current_result": "UNSUPPORTED_BEFORE_CONFIRM",
+      "reason": "Current structural drafting plus full future preparation/review reservation exceeds12 after any front submission; source/read variant does not remove PRESENT-reference reservation.",
+      "measured_calls": null,
+      "measurement_status": "source_prediction_not_executed",
+      "observed_submitted_count": null
+    },
+    {
+      "document": "new_target_with_present_reference",
+      "required_domains": 3,
+      "read_variant": "fresh_current_read",
+      "repair_variant": "normal",
+      "basis": "All affected assignments select the PRESENT artifact reference; no historical text is substituted for current evidence.",
+      "reserved_after_front_calls": 20,
+      "front_calls": "F>=1; actual READ/SEARCH/correction submissions must be measured",
+      "expected_current_result": "UNSUPPORTED_BEFORE_CONFIRM",
+      "reason": "Current structural drafting plus full future preparation/review reservation exceeds12 after any front submission; source/read variant does not remove PRESENT-reference reservation.",
+      "measured_calls": null,
+      "measurement_status": "source_prediction_not_executed",
+      "observed_submitted_count": null
+    },
+    {
+      "document": "new_target_with_present_reference",
+      "required_domains": 3,
+      "read_variant": "fresh_current_read",
+      "repair_variant": "one_extra_provider_submission",
+      "basis": "All affected assignments select the PRESENT artifact reference; no historical text is substituted for current evidence.",
+      "reserved_after_front_calls": 20,
+      "front_calls": "F>=1; actual READ/SEARCH/correction submissions must be measured",
+      "expected_current_result": "UNSUPPORTED_BEFORE_CONFIRM",
+      "reason": "Current structural drafting plus full future preparation/review reservation exceeds12 after any front submission; source/read variant does not remove PRESENT-reference reservation.",
+      "measured_calls": null,
+      "measurement_status": "source_prediction_not_executed",
+      "observed_submitted_count": null
+    },
+    {
+      "document": "existing_nonempty_target",
+      "required_domains": 1,
+      "read_variant": "retained_qualified_boundary",
+      "repair_variant": "normal",
+      "basis": "All affected assignments select the PRESENT artifact reference; no historical text is substituted for current evidence.",
+      "reserved_after_front_calls": 12,
+      "front_calls": "F>=1; actual READ/SEARCH/correction submissions must be measured",
+      "expected_current_result": "UNSUPPORTED_BEFORE_CONFIRM",
+      "reason": "Current structural drafting plus full future preparation/review reservation exceeds12 after any front submission; source/read variant does not remove PRESENT-reference reservation.",
+      "measured_calls": null,
+      "measurement_status": "source_prediction_not_executed",
+      "observed_submitted_count": null
+    },
+    {
+      "document": "existing_nonempty_target",
+      "required_domains": 1,
+      "read_variant": "retained_qualified_boundary",
+      "repair_variant": "one_extra_provider_submission",
+      "basis": "All affected assignments select the PRESENT artifact reference; no historical text is substituted for current evidence.",
+      "reserved_after_front_calls": 12,
+      "front_calls": "F>=1; actual READ/SEARCH/correction submissions must be measured",
+      "expected_current_result": "UNSUPPORTED_BEFORE_CONFIRM",
+      "reason": "Current structural drafting plus full future preparation/review reservation exceeds12 after any front submission; source/read variant does not remove PRESENT-reference reservation.",
+      "measured_calls": null,
+      "measurement_status": "source_prediction_not_executed",
+      "observed_submitted_count": null
+    },
+    {
+      "document": "existing_nonempty_target",
+      "required_domains": 1,
+      "read_variant": "fresh_current_read",
+      "repair_variant": "normal",
+      "basis": "All affected assignments select the PRESENT artifact reference; no historical text is substituted for current evidence.",
+      "reserved_after_front_calls": 12,
+      "front_calls": "F>=1; actual READ/SEARCH/correction submissions must be measured",
+      "expected_current_result": "UNSUPPORTED_BEFORE_CONFIRM",
+      "reason": "Current structural drafting plus full future preparation/review reservation exceeds12 after any front submission; source/read variant does not remove PRESENT-reference reservation.",
+      "measured_calls": null,
+      "measurement_status": "source_prediction_not_executed",
+      "observed_submitted_count": null
+    },
+    {
+      "document": "existing_nonempty_target",
+      "required_domains": 1,
+      "read_variant": "fresh_current_read",
+      "repair_variant": "one_extra_provider_submission",
+      "basis": "All affected assignments select the PRESENT artifact reference; no historical text is substituted for current evidence.",
+      "reserved_after_front_calls": 12,
+      "front_calls": "F>=1; actual READ/SEARCH/correction submissions must be measured",
+      "expected_current_result": "UNSUPPORTED_BEFORE_CONFIRM",
+      "reason": "Current structural drafting plus full future preparation/review reservation exceeds12 after any front submission; source/read variant does not remove PRESENT-reference reservation.",
+      "measured_calls": null,
+      "measurement_status": "source_prediction_not_executed",
+      "observed_submitted_count": null
+    },
+    {
+      "document": "existing_nonempty_target",
+      "required_domains": 3,
+      "read_variant": "retained_qualified_boundary",
+      "repair_variant": "normal",
+      "basis": "All affected assignments select the PRESENT artifact reference; no historical text is substituted for current evidence.",
+      "reserved_after_front_calls": 20,
+      "front_calls": "F>=1; actual READ/SEARCH/correction submissions must be measured",
+      "expected_current_result": "UNSUPPORTED_BEFORE_CONFIRM",
+      "reason": "Current structural drafting plus full future preparation/review reservation exceeds12 after any front submission; source/read variant does not remove PRESENT-reference reservation.",
+      "measured_calls": null,
+      "measurement_status": "source_prediction_not_executed",
+      "observed_submitted_count": null
+    },
+    {
+      "document": "existing_nonempty_target",
+      "required_domains": 3,
+      "read_variant": "retained_qualified_boundary",
+      "repair_variant": "one_extra_provider_submission",
+      "basis": "All affected assignments select the PRESENT artifact reference; no historical text is substituted for current evidence.",
+      "reserved_after_front_calls": 20,
+      "front_calls": "F>=1; actual READ/SEARCH/correction submissions must be measured",
+      "expected_current_result": "UNSUPPORTED_BEFORE_CONFIRM",
+      "reason": "Current structural drafting plus full future preparation/review reservation exceeds12 after any front submission; source/read variant does not remove PRESENT-reference reservation.",
+      "measured_calls": null,
+      "measurement_status": "source_prediction_not_executed",
+      "observed_submitted_count": null
+    },
+    {
+      "document": "existing_nonempty_target",
+      "required_domains": 3,
+      "read_variant": "fresh_current_read",
+      "repair_variant": "normal",
+      "basis": "All affected assignments select the PRESENT artifact reference; no historical text is substituted for current evidence.",
+      "reserved_after_front_calls": 20,
+      "front_calls": "F>=1; actual READ/SEARCH/correction submissions must be measured",
+      "expected_current_result": "UNSUPPORTED_BEFORE_CONFIRM",
+      "reason": "Current structural drafting plus full future preparation/review reservation exceeds12 after any front submission; source/read variant does not remove PRESENT-reference reservation.",
+      "measured_calls": null,
+      "measurement_status": "public_api_refusal_observed_synthetic_fixture",
+      "observed_submitted_count": 1,
+      "measurement_id": "uc1-02"
+    },
+    {
+      "document": "existing_nonempty_target",
+      "required_domains": 3,
+      "read_variant": "fresh_current_read",
+      "repair_variant": "one_extra_provider_submission",
+      "basis": "All affected assignments select the PRESENT artifact reference; no historical text is substituted for current evidence.",
+      "reserved_after_front_calls": 20,
+      "front_calls": "F>=1; actual READ/SEARCH/correction submissions must be measured",
+      "expected_current_result": "UNSUPPORTED_BEFORE_CONFIRM",
+      "reason": "Current structural drafting plus full future preparation/review reservation exceeds12 after any front submission; source/read variant does not remove PRESENT-reference reservation.",
+      "measured_calls": null,
+      "measurement_status": "source_prediction_not_executed",
+      "observed_submitted_count": null
+    }
+  ],
+  "observations": [
+    {
+      "id": "uc1-02",
+      "request": "Revise a nonempty existing manuscript with all three current authoring owner domains and PRESENT outline/character/manuscript references.",
+      "outcome": "UNSUPPORTED_BEFORE_CONFIRM",
+      "validation_details": [
+        "declared preparation and full final-review floor exceeds the remaining budget"
+      ],
+      "actual_unique_submitted": 1,
+      "static_reserved_calls": 21,
+      "static_reserved_calls_basis": "F=1 plus all-PRESENT three-domain preparation and final-review floor20; this number was not returned by the API.",
+      "specialist_dispatch": false,
+      "artifact_write": false,
+      "apply_commit_control": false,
+      "submitted_ledger": [
+        {
+          "event_id": "e_3901b71468444797aaced20b953f2ab0",
+          "sequence": 3,
+          "turn_id": "t_88595b21134d446b8df3ca25dae77821",
+          "step_id": "s_918346065395408597ca9afae1a09d45",
+          "invocation_id": "inv_04d2be78ed9b45e6974ecd665ccc011d",
+          "call_id": "context_attempt_0a3165aeb2cd6759aa8aee12c46a5813_call_1",
+          "ordinal": 1,
+          "role": "lead_orchestrator",
+          "invocation_kind": "lead",
+          "call_kind": "initial",
+          "state": "submitted",
+          "validation_details": []
+        }
+      ],
+      "driver_sha256": "78cb2ff6137a1422ebf3dbb0c7a4aacac90bf7db74b97cb2765b4c48948ebb34",
+      "raw_capture_sha256": {
+        "measurement.json": "600fce5a358ae3835f0bed7deb57e182d91c76e5c8a003d730fd5fdeadf37636",
+        "durable-events.jsonl": "13607833234cbe452a3f84b089adb592c9d7ef670f63688bd1150ed86a7b4bb5",
+        "provider-requests.json": "849adce3d0426da5ca9bd7e2fd70a4caeba7f1ceaba901bdddf4f10276782c4d",
+        "mandatory-reference-observations.json": "0cda1f204bf626206906c9043d8f2f54c3859ce3782b11dccde00f7a68ae7c91"
+      }
+    },
+    {
+      "id": "fresh-revision-new-output-01",
+      "request": "Create a new missing working-output artifact, using exact historical draft material in a host-offered same-task successor revision; all three current owners and final reviewers retained.",
+      "classification": "SUPPORTED_BOUNDED_NEW_OUTPUT_EXAMPLE_NOT_UC1",
+      "original_request_activity": "draft",
+      "fresh_scope": {
+        "activity": "draft",
+        "target_paths": [
+          "manuscript/part-01/measured-working-output.md"
+        ],
+        "domains": [
+          "plot_structure",
+          "character_world",
+          "tone_execution"
+        ],
+        "interpretation": "The scoped work requires its disclosed specialists.",
+        "task_id": "s_2354d2097e684c2c82377868bd811429",
+        "task_revision": 2,
+        "schema_version": 3,
+        "intent": "authoring",
+        "contributions": [
+          {
+            "domain": "plot_structure",
+            "role": "draft_owner"
+          },
+          {
+            "domain": "character_world",
+            "role": "draft_owner"
+          },
+          {
+            "domain": "tone_execution",
+            "role": "draft_owner"
+          }
+        ],
+        "dependency_slots": []
+      },
+      "host_offered_successor": {
+        "current_scope": {
+          "activity": "draft",
+          "contributions": [
+            {
+              "domain": "plot_structure",
+              "role": "draft_owner"
+            },
+            {
+              "domain": "character_world",
+              "role": "draft_owner"
+            },
+            {
+              "domain": "tone_execution",
+              "role": "draft_owner"
+            }
+          ],
+          "dependency_slots": [],
+          "domains": [
+            "plot_structure",
+            "character_world",
+            "tone_execution"
+          ],
+          "intent": "authoring",
+          "interpretation": "The scoped work requires its disclosed specialists.",
+          "schema_version": 3,
+          "target_paths": [
+            "manuscript/part-01/measured-working-output.md"
+          ],
+          "task_id": "s_2354d2097e684c2c82377868bd811429",
+          "task_revision": 1
+        },
+        "purpose": "Fresh task revision: propose and confirm new current-revision work; earlier drafts do not prove this revision.",
+        "task_id": "s_2354d2097e684c2c82377868bd811429",
+        "task_revision": 2
+      },
+      "historical_source": {
+        "conversation_id": "c_287213c7b157404bbde2be81577107e8",
+        "event_id": "e_99a188dafa0ad42cf30d800b384f70e3",
+        "content_digest": "sha256:e8127ab438824ad80f891f651ae3971b8e1f4d14be01e3f946050475cbe669c5"
+      },
+      "old_prefix_unique_submitted": 5,
+      "old_prefix_unchanged": true,
+      "fresh_unique_submitted": 11,
+      "all_conversation_unique_submitted": 16,
+      "fresh_phase_kind_counts": {
+        "lead": 3,
+        "specialist_assignment": 6,
+        "lead_synthesis": 2
+      },
+      "stages": [
+        {
+          "phase": "initial_draft_proposal",
+          "event_count": 6,
+          "rounds_spent": 0,
+          "physical_calls_spent": 1,
+          "current_state": "awaiting_confirmation",
+          "current_artifact_state": null
+        },
+        {
+          "phase": "initial_draft_confirm",
+          "event_count": 31,
+          "rounds_spent": 1,
+          "physical_calls_spent": 5,
+          "current_state": "completed",
+          "current_artifact_state": null
+        },
+        {
+          "phase": "fresh_revision_recommendation",
+          "event_count": 36,
+          "rounds_spent": 0,
+          "physical_calls_spent": 1,
+          "current_state": null,
+          "current_artifact_state": null
+        },
+        {
+          "phase": "fresh_consultation_preparation_confirm",
+          "event_count": 44,
+          "rounds_spent": 0,
+          "physical_calls_spent": 2,
+          "current_state": "awaiting_confirmation",
+          "current_artifact_state": null
+        },
+        {
+          "phase": "fresh_draft_confirm",
+          "event_count": 69,
+          "rounds_spent": 1,
+          "physical_calls_spent": 6,
+          "current_state": null,
+          "current_artifact_state": null
+        },
+        {
+          "phase": "artifact_preparation_confirm",
+          "event_count": 80,
+          "rounds_spent": 1,
+          "physical_calls_spent": 7,
+          "current_state": "awaiting_confirmation",
+          "current_artifact_state": "awaiting_consultation_confirmation"
+        },
+        {
+          "phase": "all_domain_final_review_confirm",
+          "event_count": 110,
+          "rounds_spent": 2,
+          "physical_calls_spent": 11,
+          "current_state": "completed",
+          "current_artifact_state": "reviewed"
+        },
+        {
+          "phase": "apply_reject",
+          "event_count": 112,
+          "rounds_spent": 2,
+          "physical_calls_spent": 11,
+          "current_state": "completed",
+          "current_artifact_state": "reviewed"
+        }
+      ],
+      "artifact_kind_baseline_mandatory_specialist_ids": [
+        "execution_specialist"
+      ],
+      "disclosed_final_review_specialist_ids": [
+        "plot_architect",
+        "character_custodian",
+        "execution_specialist"
+      ],
+      "reviews": [
+        {
+          "specialist_id": "plot_architect",
+          "assignment_id": "a_0c82e92a0ffa4cd8bfa8637b9c7df406",
+          "reply_event_id": "e_348923865e00962e89aea2fc23076043",
+          "assessment": "supports"
+        },
+        {
+          "specialist_id": "character_custodian",
+          "assignment_id": "a_7a934d27c6224fd4bf0d81d46ef90789",
+          "reply_event_id": "e_10daee4b68cde2156cb13533ca6eb4d5",
+          "assessment": "supports"
+        },
+        {
+          "specialist_id": "execution_specialist",
+          "assignment_id": "a_02682919fe5e426daad8e79c2e22e3a3",
+          "reply_event_id": "e_2c037986731fad7b549235cd6299915e",
+          "assessment": "supports"
+        }
+      ],
+      "candidate_identity": {
+        "candidate_id": "ac_0a03f0ab127898195ab485fb758c987e",
+        "candidate_revision": 1
+      },
+      "candidate_identity_digest": {
+        "candidate_digest": "sha256:3f3a8fb51714ac02080c9f3a85c9fed2d7dced622f613721ccf2def78812682b"
+      },
+      "reviewed_proposal_digest": "sha256:15262b21ef7c6cb98ea51f8646d0dfef9b6f4e05b578516223926a3f12e8d5cb",
+      "synthesis_event_id": "e_8363a220d315489cf5ad9071b0e4e0e8",
+      "artifact_state": "reviewed",
+      "application_outcome": "rejected",
+      "target": "manuscript/part-01/measured-working-output.md",
+      "target_existed_before": false,
+      "target_exists_after": false,
+      "artifact_state_unchanged": true,
+      "historical_input_is_current_artifact_READ_or_review_proof": false,
+      "old_submitted_ledger": [
+        {
+          "event_id": "e_74fb0971910846448eb627b682ef5fe9",
+          "sequence": 3,
+          "turn_id": "t_6500a708389f47668590cc0646841576",
+          "step_id": "s_2354d2097e684c2c82377868bd811429",
+          "invocation_id": "inv_dd7197b01f744626a8d202402c047c6c",
+          "call_id": "context_attempt_942fd88971537d849b310c32d920eb79_call_1",
+          "ordinal": 1,
+          "role": "lead_orchestrator",
+          "invocation_kind": "lead",
+          "call_kind": "initial",
+          "state": "submitted",
+          "validation_details": []
+        },
+        {
+          "event_id": "e_8a32dae9ef444afd9ccc7ac812f1c937",
+          "sequence": 14,
+          "turn_id": "t_14f367a8d01eedfbec3e32d516e08871",
+          "step_id": "s_2354d2097e684c2c82377868bd811429",
+          "invocation_id": "inv_a259018e4944f846cfb67ec41fc7f689",
+          "call_id": "context_attempt_59d95f3591365110aac45070f9f8be62_call_1",
+          "ordinal": 1,
+          "role": "plot_architect",
+          "invocation_kind": "specialist_assignment",
+          "call_kind": "initial",
+          "state": "submitted",
+          "validation_details": []
+        },
+        {
+          "event_id": "e_5c97215de3ae4015a2a1098a38a370d7",
+          "sequence": 16,
+          "turn_id": "t_14f367a8d01eedfbec3e32d516e08871",
+          "step_id": "s_2354d2097e684c2c82377868bd811429",
+          "invocation_id": "inv_a1bdeb848f64ff2878ba7d5d30739042",
+          "call_id": "context_attempt_8092400f51df4c2792e26cba61b37c01_call_1",
+          "ordinal": 1,
+          "role": "character_custodian",
+          "invocation_kind": "specialist_assignment",
+          "call_kind": "initial",
+          "state": "submitted",
+          "validation_details": []
+        },
+        {
+          "event_id": "e_35eab1b85a9b4c7890c396067763e3d4",
+          "sequence": 18,
+          "turn_id": "t_14f367a8d01eedfbec3e32d516e08871",
+          "step_id": "s_2354d2097e684c2c82377868bd811429",
+          "invocation_id": "inv_cedf617517d80220cbf5ca44bcc89760",
+          "call_id": "context_attempt_43b49e76d40e502c5b2db6eabe02002e_call_1",
+          "ordinal": 1,
+          "role": "execution_specialist",
+          "invocation_kind": "specialist_assignment",
+          "call_kind": "initial",
+          "state": "submitted",
+          "validation_details": []
+        },
+        {
+          "event_id": "e_9723d55ed8f9461d80d5c41fb838d07e",
+          "sequence": 20,
+          "turn_id": "t_14f367a8d01eedfbec3e32d516e08871",
+          "step_id": "s_2354d2097e684c2c82377868bd811429",
+          "invocation_id": "inv_c08227e19f780a798d7df67c782182d7",
+          "call_id": "context_attempt_083ddf4f50afc2fdb24bbc336bf09077_call_1",
+          "ordinal": 1,
+          "role": "lead_orchestrator",
+          "invocation_kind": "lead_synthesis",
+          "call_kind": "initial",
+          "state": "submitted",
+          "validation_details": []
+        }
+      ],
+      "fresh_submitted_ledger": [
+        {
+          "event_id": "e_e250cd568678423bbbfb2451ba503189",
+          "sequence": 34,
+          "turn_id": "t_8fdea65947d344ee82312cbfb86573bf",
+          "step_id": "s_bd370244cc4f4cc2b6f1f594a0e4821b",
+          "invocation_id": "inv_df9632f657444a72956469607473e128",
+          "call_id": "context_attempt_cef363e719e924c8f6db654314f9bf4a_call_1",
+          "ordinal": 1,
+          "role": "lead_orchestrator",
+          "invocation_kind": "lead",
+          "call_kind": "initial",
+          "state": "submitted",
+          "validation_details": []
+        },
+        {
+          "event_id": "e_51c604e4a10949b2a4030f021a4199a6",
+          "sequence": 40,
+          "turn_id": "t_40e8c730ca1c474ab75c5a0b04f5b3eb",
+          "step_id": "s_bd370244cc4f4cc2b6f1f594a0e4821b",
+          "invocation_id": "inv_1ebc90d46b7f42bebd3a36e0430efc21",
+          "call_id": "context_attempt_82e2c282da1b35d14c4bff5e5cbc3be8_call_1",
+          "ordinal": 1,
+          "role": "lead_orchestrator",
+          "invocation_kind": "lead",
+          "call_kind": "initial",
+          "state": "submitted",
+          "validation_details": []
+        },
+        {
+          "event_id": "e_a37a1043fda5465e83fe5acb2dcf3c5e",
+          "sequence": 52,
+          "turn_id": "t_82d3e71280bd07c9f362ba11b65e4335",
+          "step_id": "s_bd370244cc4f4cc2b6f1f594a0e4821b",
+          "invocation_id": "inv_c9e777aa97bc15ce1e6bd9d79493a629",
+          "call_id": "context_attempt_52812c796d7ae0bdff85996c91358d76_call_1",
+          "ordinal": 1,
+          "role": "plot_architect",
+          "invocation_kind": "specialist_assignment",
+          "call_kind": "initial",
+          "state": "submitted",
+          "validation_details": []
+        },
+        {
+          "event_id": "e_b97410ebf7ab41bf9401cbfc8081ddf1",
+          "sequence": 54,
+          "turn_id": "t_82d3e71280bd07c9f362ba11b65e4335",
+          "step_id": "s_bd370244cc4f4cc2b6f1f594a0e4821b",
+          "invocation_id": "inv_44339ef388760fe986e73eea8de272e5",
+          "call_id": "context_attempt_9c7a49700d89258a39e19459bb979e63_call_1",
+          "ordinal": 1,
+          "role": "character_custodian",
+          "invocation_kind": "specialist_assignment",
+          "call_kind": "initial",
+          "state": "submitted",
+          "validation_details": []
+        },
+        {
+          "event_id": "e_451928bce68f468e8e70c98e3ab980bc",
+          "sequence": 56,
+          "turn_id": "t_82d3e71280bd07c9f362ba11b65e4335",
+          "step_id": "s_bd370244cc4f4cc2b6f1f594a0e4821b",
+          "invocation_id": "inv_041455c3a4e844a79ddd62c901b1d57a",
+          "call_id": "context_attempt_c65ad738786ebe920e0e06cc2039b9e8_call_1",
+          "ordinal": 1,
+          "role": "execution_specialist",
+          "invocation_kind": "specialist_assignment",
+          "call_kind": "initial",
+          "state": "submitted",
+          "validation_details": []
+        },
+        {
+          "event_id": "e_3883228bb8bf4d82921499932ca46049",
+          "sequence": 58,
+          "turn_id": "t_82d3e71280bd07c9f362ba11b65e4335",
+          "step_id": "s_bd370244cc4f4cc2b6f1f594a0e4821b",
+          "invocation_id": "inv_3e3073b61769c55f2372ece545cd78ee",
+          "call_id": "context_attempt_51674491bc598a0b1f3f85455e59ea9c_call_1",
+          "ordinal": 1,
+          "role": "lead_orchestrator",
+          "invocation_kind": "lead_synthesis",
+          "call_kind": "initial",
+          "state": "submitted",
+          "validation_details": []
+        },
+        {
+          "event_id": "e_815f4a537469486e88429ac2b49d545f",
+          "sequence": 73,
+          "turn_id": "t_fc7655451fa94ba9aae450d77dbf09fd",
+          "step_id": "s_fa386422723876681f3f3fee66f6106a",
+          "invocation_id": "inv_240f2e1dbef04a269e373cdb6e6c6104",
+          "call_id": "context_attempt_d55e8ff0795c59d9277c4f8a31bd923c_call_1",
+          "ordinal": 1,
+          "role": "lead_orchestrator",
+          "invocation_kind": "lead",
+          "call_kind": "initial",
+          "state": "submitted",
+          "validation_details": []
+        },
+        {
+          "event_id": "e_77215b75589c4429af05bec0d5675f4a",
+          "sequence": 89,
+          "turn_id": "t_36d939a5cd9cdafe2aba849723cf62b8",
+          "step_id": "s_fa386422723876681f3f3fee66f6106a",
+          "invocation_id": "inv_ab0eaf499112006a2219f94b1a50c8be",
+          "call_id": "context_attempt_d4d442d4dd217edff956c74b390185e5_call_1",
+          "ordinal": 1,
+          "role": "plot_architect",
+          "invocation_kind": "specialist_assignment",
+          "call_kind": "initial",
+          "state": "submitted",
+          "validation_details": []
+        },
+        {
+          "event_id": "e_3b063048aba0436995581c4ed998fcd8",
+          "sequence": 91,
+          "turn_id": "t_36d939a5cd9cdafe2aba849723cf62b8",
+          "step_id": "s_fa386422723876681f3f3fee66f6106a",
+          "invocation_id": "inv_3b9ffaaafee22ddd7b68b0f730514156",
+          "call_id": "context_attempt_d2b8d95178d9ff88f38a3c421848f217_call_1",
+          "ordinal": 1,
+          "role": "character_custodian",
+          "invocation_kind": "specialist_assignment",
+          "call_kind": "initial",
+          "state": "submitted",
+          "validation_details": []
+        },
+        {
+          "event_id": "e_924631a686e944428c11bea6103a2625",
+          "sequence": 93,
+          "turn_id": "t_36d939a5cd9cdafe2aba849723cf62b8",
+          "step_id": "s_fa386422723876681f3f3fee66f6106a",
+          "invocation_id": "inv_07d3476d2b4ffa6a9343dffb352a2e32",
+          "call_id": "context_attempt_73bf87e462805a4fbb67111c36e1da4c_call_1",
+          "ordinal": 1,
+          "role": "execution_specialist",
+          "invocation_kind": "specialist_assignment",
+          "call_kind": "initial",
+          "state": "submitted",
+          "validation_details": []
+        },
+        {
+          "event_id": "e_dc5230c29c0d4ab29af3ac89a553868c",
+          "sequence": 95,
+          "turn_id": "t_36d939a5cd9cdafe2aba849723cf62b8",
+          "step_id": "s_fa386422723876681f3f3fee66f6106a",
+          "invocation_id": "inv_b7756c16e7d2b16d026abf152290830f",
+          "call_id": "context_attempt_8ca02982a54b2dca2fa061c850749115_call_1",
+          "ordinal": 1,
+          "role": "lead_orchestrator",
+          "invocation_kind": "lead_synthesis",
+          "call_kind": "initial",
+          "state": "submitted",
+          "validation_details": []
+        }
+      ],
+      "driver_sha256": "dbc0916aa3b547ed4a00247687bd28c7c097e90be9d698b79cc0313998fa8a0c",
+      "raw_capture_sha256": {
+        "measurement.json": "1bad9c8ede1eba362b425008f659a4c80742f46dd62d86277c15ef59c35466da",
+        "durable-events.jsonl": "ea79a7fcd541b93b6e4261ea629e9e1f36ccff888e86458cfee782e8431ff68b",
+        "provider-requests.json": "5400a7798bf45a95fe96b1be390c9858b30770f357cf1f7562ae9c18e8881e8c",
+        "stage-returns.json": "e41e92863e0b43f9ac795c0ed13165e85b3208b6709e4ce0e221a432d4b90835",
+        "historical-source.json": "76d9e8fea41c6a903486cf13f9134abb41f79978624bc2d396b491bee4638df0",
+        "offered-successor.json": "2c0c6788ad1b19a6953105e6f82261796e2feaf1fbbd481718ac848ca713eed5"
+      }
+    }
+  ],
+  "failed_attempts": [
+    {
+      "id": "uc1-01",
+      "outcome": "ReferenceOperationFailure.workflow_failure after optional INITIAL/SEARCH; lower failure cause unestablished.",
+      "actual_submitted": 1,
+      "actual_host_body_READ_succeeded": true,
+      "revision_producer_reached": false,
+      "budget_support_verdict": null,
+      "driver_sha256": "8d681a7e33c48be9ab190a465b0ce15af309a02286e3fab18a027fe3a687e757",
+      "raw_measurement_sha256": "03cdd19c4b57a2480d653b70856dd42e88b6fda9b29f4c98762595253a16200f"
+    }
+  ],
+  "reproduction": {
+    "public_api_steps": [
+      "RuntimeSession.lead_turn",
+      "Runtime.decide_lead_step(CONFIRM)",
+      "Runtime.decide_lead_recommendation(CONFIRM)",
+      "Runtime.decide_artifact_application(REJECT)"
+    ],
+    "fixture_helpers": "LeadOrchestrationTestCase setUp/doCleanups; typed existing provider-wire fixtures. No canonical test method was executed by these drivers.",
+    "fixture_helper_sha256": {
+      "tests/test_lead_orchestration.py": "024a79bbe8999bd3fc622024eadfd8574018481dd9fcdba6d4b4eaa65a4c751e",
+      "tests/test_specialist_routing_runtime.py": "21ac0e3d5d919a422734c7f14f92d35a3c323eabd44a8bdb7ed9b938dd2a81cb",
+      "tests/recommendation_fixture.py": "660ad891d1b03a33d519be050964719849146a2d2c846d31da98052f952913b6",
+      "tests/provider_wire_fixture.py": "8cb8e46ea3efa4383589e95d0f90ab5aa2cf357a2a85c8e74c83c27db7fde979",
+      "tests/test_artifact_proposal_orchestration.py": "b316c7cc2f6efa69f5ae0b5fa2dda961dae5ba52b970da93c007b2932e2cb085",
+      "tests/test_lead_artifact_application.py": "b66c0f352c01558a2fee538c6d1271edaafe5ebed529f7f2a4822a9a6050bfa8"
+    },
+    "private_driver_and_capture_location": "Root-owned local evidence directory; raw transcripts and executable private drivers are not published as canonical tests. Retained hashes and submitted ledger permit identity/accounting audit, not standalone real-provider reproduction.",
+    "canonical_supporting_evidence": "Issue819 PR824 local full CI: same runtime/test tree before these docs; 2527 completed,2506 passed,21 live-provider skips. This is prior-source evidence, not a new full-CI run on the docs commit."
+  },
+  "limits": [
+    "Only one representative PRESENT-READ matrix row was executed; the other15 rows are static predictions.",
+    "No READ reuse or repair variant was empirically validated by these observations.",
+    "The successful historical-source/new-output request has different evidence needs from existing-manuscript UC1 and preserves old costs; it does not establish general multi-domain revision completion.",
+    "Immutable per-invocation caps and unknown READ/SEARCH/repair costs can still make a later operation incomplete.",
+    "No external provider/model comparison, token/cost benchmark, fiction-quality judgment or human evaluation was performed."
+  ],
+  "related_issues": [
+    797,
+    798,
+    799,
+    800,
+    806,
+    807,
+    819
+  ]
+}
