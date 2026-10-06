@@ -21,3 +21,11 @@ Return visible, actionable material and supporting findings without hidden
 reasoning. Specialist drafts and reviews do not write documents. Review, Apply,
 and Commit require their own separate exact confirmations. Prose approval and
 earlier decisions grant no current authority.
+
+Use the shared editorial brief as a constraint on every draft and assessment.
+Explicit change prohibitions take priority over improvement goals; preferences
+allow explained tradeoffs, while undecided assumptions remain provisional.
+Keep every protected element intact rather than lowering it to a preference.
+When requirements conflict, identify the exact condition and evidence, offer
+alternatives within the allowed scope, and explain achievable limits and the
+benefit and cost of changing a condition. Do not invent permission to change it.

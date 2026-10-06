@@ -258,7 +258,8 @@
         "status": "proposed",
         "description": "Establish an effect-led brief, using a material clarification only when the available intent leaves a meaningful choice unresolved.",
         "delivery_issues": [
-          795
+          795,
+          809
         ]
       },
       "expected_observations": [
@@ -273,6 +274,12 @@
           "category": "editorial",
           "expectation": "Do not substitute a fight, death, or betrayal for intensity.",
           "evidence_required": "Source/output diff and important-error assessment"
+        },
+        {
+          "observation_id": "effect-prohibition-and-limit",
+          "category": "editorial",
+          "expectation": "Explicit prohibitions on violence and a new betrayal outrank intensity. Improve only within permitted changes, or explain a grounded attainable limit with alternatives and the benefit/cost of changing a condition. Distinguish preferences and provisional assumptions; ask only a material choice not already answered or delegated.",
+          "evidence_required": "Original/output diff, preserved brief, questions and rationale, plus independent blinded human scores and separately recorded protection breaches or important fact errors"
         }
       ],
       "scoring_dimensions": [
@@ -462,7 +469,8 @@
         "description": "Accept, modify, defer, or reject incompatible suggestions against the shared brief and explain the cost of the chosen direction.",
         "delivery_issues": [
           795,
-          797
+          797,
+          809
         ]
       },
       "expected_observations": [
@@ -477,6 +485,18 @@
           "category": "editorial",
           "expectation": "Explain which advice was used and the loss or cost of rejecting another direction.",
           "evidence_required": "Recommendation dispositions and human assessment"
+        },
+        {
+          "observation_id": "incompatible-protection-priority",
+          "category": "editorial",
+          "expectation": "Treat the no-allegiance-reveal condition as a prohibition rather than a preference: reject or modify the conflicting reveal advice, explain its source-bound conflict and cost, and recheck protected events, dialogue, voice and ambiguity. An unchanged ending or justified limit may be valid.",
+          "evidence_required": "Specialist brief and recommendation dispositions, protected source/output diff and independent human assessment"
+        },
+        {
+          "observation_id": "incompatible-fresh-scope",
+          "category": "workflow",
+          "expectation": "Changing a protected condition requires a newly disclosed scope/task revision and matching confirmation. All affected domains must review the exact final candidate before Apply; an old confirmation or candidate cannot authorize changed conditions. When the condition is unchanged, record that fact and audit exact-candidate review without manufacturing an additional approval.",
+          "evidence_required": "Exact proposal/task/revision, confirmation, final-candidate/reviewer and Apply event references with workflow-auditor rationale; report not_observed when those records are unavailable"
         }
       ],
       "scoring_dimensions": [

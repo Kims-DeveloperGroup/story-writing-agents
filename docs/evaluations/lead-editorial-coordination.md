@@ -37,6 +37,38 @@ below; AC3 is the matched comparison and blinding protocol; AC4 is explicit
 fixture/status labeling and static-only publication. Future implementation
 Issues are attached to each case rather than treated as completed acceptance.
 
+### Goal and preservation conflicts
+
+[#809](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/809)
+extends observations within `stronger-effect` and `incompatible-recommendations`;
+the dataset keeps its nine case IDs and exact source/input material. Reviewers
+check whether explicit prohibitions remain hard constraints when a goal or a
+specialist recommendation conflicts with them. Preferences permit explained
+tradeoffs; undecided assumptions remain provisional. A bounded improvement,
+useful unchanged result, or grounded explanation of attainable limits can be
+successful. Output changes are not required to earn a good score.
+
+Record the conflicting condition and evidence, permitted alternatives, limits,
+and the benefit/cost of a proposed condition change. Check unnecessary questions
+against existing answers and explicit delegation. Inspect protected events,
+dialogue, voice, and ambiguity independently of intent fulfillment; a serious
+fact error or protection breach cannot disappear into an average score. Scope
+changes still require fresh revision/confirmation and exact final-candidate
+review. Review-only input keeps its literal bytes.
+
+The `incompatible-fresh-scope` workflow observation audits fresh scope/revision
+and confirmation, plus exact final-candidate review, separately from the human
+preservation judgment. Missing authority records keep this observation missing
+and the case INCONCLUSIVE. Constructed examples retain that gap rather than
+invent a passing workflow audit.
+
+Policy presence, shared-brief transmission, and authority checks establish
+deterministic requirements separately from actual judgment quality. These new
+editorial observations are **not_run** until eligible outputs and independent
+human reviews exist under [#806](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/806).
+Changing observations changes dataset/case/packet hashes. Rebound checked-in
+synthetic examples remain tool-mechanics evidence, not human evaluations.
+
 ## Fixture format
 
 `format_version: 1` defines documentation data, not a runtime provider contract.

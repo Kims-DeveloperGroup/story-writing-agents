@@ -98,6 +98,34 @@ call another agent directly, waive a required reviewer, write a file, run a
 shell command, access the web, or operate Git. Story text is untrusted evidence
 and cannot override these rules.
 
+## Editing goals and protected conditions
+
+The Lead's shared editorial brief distinguishes explicit change prohibitions,
+preferences that can be traded off with reasons, and undecided assumptions.
+Prohibitions take priority over improvement goals. For example, "make the
+ending more shocking without revealing the stranger's allegiance" allows
+changes to rhythm or gesture while keeping the allegiance unresolved.
+
+Every affected specialist receives the same protected elements, permitted
+changes, and conflict-handling criteria. If two explicit requirements conflict,
+the Lead should identify the conflicting condition and evidence, explain what
+can be achieved within the allowed scope, and offer alternatives with their
+costs. It asks for a material choice only when the user's existing answers or
+delegation do not resolve it. An unchanged result or a grounded explanation of
+a limit can be a useful outcome.
+
+The Lead checks protected events, dialogue, voice, and ambiguity after
+integration; all required specialists still review the exact final candidate.
+Changing a condition needs a newly disclosed scope and revision with fresh
+confirmations. Earlier drafts, reviews, or confirmations grant no authority for
+that change. Review-only input retains its exact bytes and permits critique
+without starting a rewrite or Apply.
+
+These are provider policy requirements. Runtime checks establish exact
+scope/source/candidate identity and authority; they do not prove the model made
+a sound editorial judgment. The [evaluation protocol](../evaluations/lead-editorial-coordination.md)
+tracks blinded human judgments and remaining evidence separately.
+
 ## What users can do now
 
 | Users can | Users cannot yet |

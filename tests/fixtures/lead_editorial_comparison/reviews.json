@@ -1,7 +1,7 @@
 {
   "comparison_id": "constructed-editorial-review-regression",
   "format_version": 1,
-  "review_packet_sha256": "b13bb1779c3ef1581502c6cebf972b87fa52e28191fb4f8dc45f0db145e2557f",
+  "review_packet_sha256": "747f2b6f62375cfef968410f89bcfcfc02c71b49b4648ede137b98bd5cfa3b67",
   "reviews": [
     {
       "case_id": "stronger-effect",

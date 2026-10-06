@@ -281,11 +281,13 @@ class SmokeHelpAndTemporaryTests(unittest.TestCase):
         self.assertEqual(compared.returncode, 0, compared.stderr)
         constructed = json.loads((packet_dir.parent / "comparison" / "comparison-report.json").read_bytes())
         for case_id, expected in {
-            "stronger-effect": ("matched", "PAIRED_EVIDENCE_AVAILABLE"),
-            "incompatible-recommendations": ("mismatched", "INCONCLUSIVE"),
+            "stronger-effect": ("matched", "PAIRED_EVIDENCE_AVAILABLE", []),
+            "incompatible-recommendations": ("mismatched", "INCONCLUSIVE", ["incompatible-fresh-scope"]),
         }.items():
             actual = next(case for case in constructed["cases"] if case["case_id"] == case_id)
-            self.assertEqual(actual["workflow"]["expected"], [])
+            self.assertEqual(actual["workflow"]["expected"], expected[2])
+            for arm in actual["runs"]:
+                self.assertEqual(actual["workflow"]["missing_or_nonpassing"][arm], expected[2])
             self.assertEqual(actual["matched_conditions"]["status"], expected[0])
             self.assertEqual(actual["evidence_status"], expected[1])
             self.assertEqual(actual["matched_conditions"]["differences"], [] if expected[0] == "matched" else ["settings"])
