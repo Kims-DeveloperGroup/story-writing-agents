@@ -8455,7 +8455,6 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     )
                     storage_failure = storage_type(f"PRIVATE_STORAGE_{suffix}")
                     caught_exception = None
-                    caught_traceback = None
                     with (
                         mock.patch.object(backend._codex_adapter, "invoke", invoke),
                         mock.patch.object(

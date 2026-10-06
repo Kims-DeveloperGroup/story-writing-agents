@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.conversation_archive_fixture import one_conversation_archive
+from tests.test_collaboration_events import editorial_history
 import json
 import os
 import threading
@@ -237,6 +239,12 @@ class FilesystemConversationArchiveRoundTripTests(unittest.TestCase):
         retry = _import(workspace, payload)
         self.assertIs(retry.status, ConversationArchiveImportStatus.UNCHANGED)
         self.assertEqual(_export(workspace), payload)
+
+        memory = one_conversation_archive(events=editorial_history())
+        other = initialized_workspace(self)
+        self.assertIs(_import(other, memory).status, ConversationArchiveImportStatus.IMPORTED)
+        self.assertEqual(_export(other), memory)
+        self.assertEqual(event_images(_export(other)), event_images(memory))
 
     def test_unrelated_complete_records_and_private_lock_state_are_preserved(
         self,

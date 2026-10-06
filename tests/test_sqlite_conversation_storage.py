@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.conversation_archive_fixture import one_conversation_archive
+from tests.test_collaboration_events import editorial_history
 import ast
 import multiprocessing
 import os
@@ -751,6 +753,13 @@ class SQLiteArchiveTests(unittest.TestCase):
         unchanged = self.import_payload(target, payload)
         self.assertIs(unchanged.status, ConversationArchiveImportStatus.UNCHANGED)
         self.assertEqual(storage_snapshot(target), before)
+
+        memory = one_conversation_archive(events=editorial_history())
+        other = initialized_workspace(self)
+        provision(other)
+        self.assertIs(self.import_payload(other, memory).status, ConversationArchiveImportStatus.IMPORTED)
+        self.assertEqual(self.export_payload(other), memory)
+        self.assertEqual(event_images(self.export_payload(other)), event_images(memory))
 
     def test_import_is_one_transaction_for_metadata_events_and_all_batches(
         self,

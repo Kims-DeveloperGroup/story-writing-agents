@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+from story_writing_agents.conversations import project_editorial_state, encode_collaboration_event
+from tests.test_collaboration_events import editorial, editorial_history, editorial_append
+import hashlib
 import dataclasses
 import inspect
 import unittest
@@ -263,6 +267,37 @@ class CollaborationTransitionTests(unittest.TestCase):
                 "current_recommendation_state",
             ),
         )
+
+        for kind in (editorial.EditorialRecordKind.DIRECTION, editorial.EditorialRecordKind.PROTECTED_AMBIGUITY, editorial.EditorialRecordKind.SETUP_OBLIGATION):
+            memory = editorial_history(kind)
+            selected = memory[-1].payload.record
+            self.assertEqual(project_editorial_state(SESSION_ID, memory).selected_records, (selected,))
+            self.assertIs(selected.draft.kind, kind)
+            rejected = editorial_append(memory, editorial.EditorialRecordRequest("reject_memory", editorial.EditorialAction.REJECT, "Discard explicitly.", expected_ref=selected.ref))
+            self.assertEqual(project_editorial_state(SESSION_ID, rejected).selected_records, ())
+            with self.assertRaises(ValueError):
+                editorial_append(rejected, editorial.EditorialRecordRequest("revive_by_select", editorial.EditorialAction.SELECT, "Must not revive.", expected_ref=rejected[-1].payload.record.ref))
+            revised = editorial_append(rejected, editorial.EditorialRecordRequest("revise_memory", editorial.EditorialAction.REVISE, "Fresh USER choice.", expected_ref=rejected[-1].payload.record.ref, draft=replace(selected.draft, text="Fresh explicit revision."), revision_approval=editorial.EditorialApprovalState.SELECTED))
+            state = project_editorial_state(SESSION_ID, revised)
+            self.assertIs(state.effective_approval(selected.ref), editorial.EditorialApprovalState.SUPERSEDED)
+            self.assertEqual((state.current_records[0].revision, state.current_records[0].draft.text), (3, "Fresh explicit revision."))
+            self.assertEqual(revised[:len(memory)], memory)
+            with self.assertRaises(editorial.EditorialStateIntegrityError):
+                editorial.EditorialStateProjection(SESSION_ID, state.revisions[1:])
+        source = store_batch((), make_batch((), "citation_batch", replace(make_draft("citation", CollaborationEventKind.MESSAGE, USER, LEAD, CollaborationMessagePayload("Exact optional source.")), conversation_id="citation_conversation")))
+        provenance = editorial.EditorialProvenanceRef(SESSION_ID, "citation_conversation", "citation", hashlib.sha256(encode_collaboration_event(source[0])).hexdigest())
+        memory = editorial_history(provenance_refs=(provenance,))
+        self.assertEqual(project_editorial_state(SESSION_ID, source + memory).provenance_gaps, ())
+        missing = project_editorial_state(SESSION_ID, memory)
+        self.assertEqual(missing.provenance_gaps, ((memory[-1].payload.record.ref, provenance),))
+        self.assertEqual(missing.selected_records, (memory[-1].payload.record,))
+
+        limited = editorial.bounded_editorial_view(missing, 512)
+        self.assertLessEqual(len(json.dumps(limited, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()), 512)
+        self.assertEqual((limited["records"], limited["selected_refs"], limited["omitted_record_count"]), ([], [], 1))
+        self.assertEqual(limited["omitted_provenance_gap_count"], 1)
+        with self.assertRaises(ValueError):
+            editorial.bounded_editorial_view(missing, 1)
 
 
 class CollaborationBudgetAndOutcomeTests(unittest.TestCase):
@@ -1272,7 +1307,8 @@ class CollaborationReadableProjectionTests(unittest.TestCase):
             ),
         )
         all_records += project_collaboration_readable_history(failure_history)
-        observed_keys = {field.key for record in all_records for field in record.fields}
+        memory = project_collaboration_readable_history(editorial_history())[0]
+        observed_keys = {field.key for record in all_records + (memory,) for field in record.fields}
         artifact_keys = {
             CollaborationReadableFieldKey.LEAD_RECOMMENDATION_PURPOSE,
             CollaborationReadableFieldKey.LEAD_RECOMMENDATION_INSTRUCTION,
@@ -1300,6 +1336,9 @@ class CollaborationReadableProjectionTests(unittest.TestCase):
             tuple(item.value for item in CollaborationReadableFieldKey),
             (
                 "message.content",
+                "editorial.text",
+                "editorial.reason",
+                "editorial.transition_reason",
                 "lead_judgment.kind",
                 "lead_judgment.message",
                 "lead_evidence.scope",
@@ -1358,6 +1397,9 @@ class CollaborationReadableProjectionTests(unittest.TestCase):
             "revision_digest",
         ):
             self.assertNotIn(forbidden, searchable_names)
+
+        self.assertEqual({field.key.value: field.text for field in memory.fields},
+                         {"editorial.text": memory.payload.record.draft.text, "editorial.reason": memory.payload.record.draft.reason, "editorial.transition_reason": memory.payload.record.request.transition_reason})
 
     def test_default_context_is_content_free_and_selection_is_bounded_additive(
         self,

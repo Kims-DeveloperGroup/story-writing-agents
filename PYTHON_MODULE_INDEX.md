@@ -99,7 +99,7 @@ fields to provider wire paths. This package-internal boundary owns no provider s
 persistence, or authority and is not a public facade.
 `provider_wire` is a stateless stdlib leaf for vocabulary, projections, schemas, diagnostics, and invocation
 guidance derived from current schema choices; semantic owners retain domain APIs, storage, and state.
-`lead_exploration` is a stdlib-only report/adoption leaf; consumers own workflow authority.
+`lead_exploration` and `editorial_state` are stdlib-only report/adoption and USER editorial-record leaves; consumers own workflow authority, while editorial history and cited projection use the existing conversation store.
 `lead_provider_contracts` owns immutable Lead choice snapshots shared by schema projections,
 prompt facts, and closed validation rules. It depends on domain contracts; orchestration
 retains confirmation, current-source membership, READ receipt, and lifecycle authority.

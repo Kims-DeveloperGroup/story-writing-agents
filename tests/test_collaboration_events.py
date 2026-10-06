@@ -19,6 +19,7 @@ import story_writing_agents
 import story_writing_agents.conversations as conversations
 import story_writing_agents.conversations.context as context_owner
 import story_writing_agents.conversations.events as events_owner
+from story_writing_agents import editorial_state as editorial
 from story_writing_agents import lead_exploration as exploration
 from story_writing_agents.agents import (
     CHARACTER_CUSTODIAN,
@@ -121,6 +122,41 @@ from tests.collaboration_contract_fixture import (
     running_history,
 )
 from tests.test_artifact_proposals import _combined_candidate
+from tests.collaboration_contract_fixture import CONVERSATION_ID, SESSION_ID, make_batch, store_batch
+
+
+EDITORIAL_TEXT = "선택한 방향\r\nProtect intentional ambiguity.\t "
+EDITORIAL_REASON = "Explicit USER choice; keep the narrator's allegiance unresolved."
+
+
+def editorial_request(request_id, *, kind=editorial.EditorialRecordKind.DIRECTION,
+                      action=editorial.EditorialAction.DIRECTIVE, provenance_refs=()):
+    draft = editorial.EditorialRecordDraft(
+        kind, EDITORIAL_TEXT, EDITORIAL_REASON,
+        alternatives=(editorial.EditorialAlternative(
+            "discarded", "Resolve the allegiance now.", "USER rejected this explanation.",
+            editorial.EditorialApprovalState.REJECTED),), provenance_refs=provenance_refs)
+    return editorial.EditorialRecordRequest(request_id, action, EDITORIAL_REASON, draft=draft)
+
+
+def editorial_history(kind=editorial.EditorialRecordKind.DIRECTION, provenance_refs=()):
+    record = editorial.build_editorial_revision(editorial_request("memory_fixture", kind=kind, provenance_refs=provenance_refs),
+        session_id=SESSION_ID, conversation_id=CONVERSATION_ID, event_id="memory_record",
+        record_id="editorial_direction", previous=None)
+    draft = make_draft("memory_record", CollaborationEventKind.EDITORIAL_RECORD, USER, LEAD,
+                      events_owner.CollaborationEditorialRecordPayload(record))
+    return store_batch((), make_batch((), "memory_batch", draft))
+
+
+def editorial_append(history, request):
+    previous = history[-1].payload.record
+    event_id = f"memory_revision_{len(history) + 1}"
+    record = editorial.build_editorial_revision(request, session_id=SESSION_ID,
+        conversation_id=CONVERSATION_ID, event_id=event_id,
+        record_id=previous.record_id, previous=previous)
+    draft = make_draft(event_id, CollaborationEventKind.EDITORIAL_RECORD, USER, LEAD,
+                      events_owner.CollaborationEditorialRecordPayload(record))
+    return store_batch(history, make_batch(history, event_id + "_batch", draft))
 
 
 def _canonical_json(value: object) -> bytes:
@@ -198,6 +234,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                 'lead_exploration_request',
                 'lead_exploration_result',
                 'exploration_adoption',
+                "editorial_record",
                 "message",
                 "assignment_dispatch",
                 "specialist_reply",
@@ -387,6 +424,14 @@ class CollaborationValueContractTests(unittest.TestCase):
             with self.subTest(enum=enum_type.__name__):
                 self.assertEqual(tuple(item.value for item in enum_type), values)
 
+        for enum, expected in (
+            (editorial.EditorialAction, ("directive", "propose", "select", "reject", "revise", "supersede")),
+            (editorial.EditorialApprovalState, ("proposed", "selected", "rejected", "superseded")),
+            (editorial.EditorialRecordKind, ("direction", "alternative", "protected_ambiguity", "setup_obligation", "unresolved_concern")),
+            (editorial.EditorialRecordStatus, ("recorded", "unchanged", "stale_reference", "pending_control_required", "invalid_provenance")),
+        ):
+            self.assertEqual(tuple(member.value for member in enum), expected)
+
     def test_all_schema_values_have_exact_fields_frozen_slots_and_nested_tuples(
         self,
     ) -> None:
@@ -512,6 +557,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                     "evidence",
                     "schema_version",
                     "shared_premises",
+                    "editorial_refs",
                 ),
             ),
             (
@@ -717,6 +763,21 @@ class CollaborationValueContractTests(unittest.TestCase):
         ):
             self.assertIs(type(nested), tuple)
 
+        request = editorial_request("typed_memory")
+        self.assertEqual(tuple(field.name for field in dataclasses.fields(request)),
+                         ("request_id", "action", "transition_reason", "expected_ref", "draft", "revision_approval"))
+        self.assertEqual(request.draft.text, EDITORIAL_TEXT)
+        self.assertIs(request.draft.alternatives[0].disposition, editorial.EditorialApprovalState.REJECTED)
+        self.assertFalse(hasattr(request.draft, "__dict__"))
+        with self.assertRaises(FrozenInstanceError):
+            request.draft.reason = "Provider replacement."
+        self.assertEqual(len(replace(request.draft, text="é" * 16384).text.encode()), 32768)
+        for invalid in ("é" * 16385, "\ud800", ""):
+            with self.assertRaises((ValueError, UnicodeError)):
+                replace(request.draft, text=invalid)
+        with self.assertRaises(ValueError):
+            editorial.EditorialRecordRequest("bad_select", editorial.EditorialAction.SELECT, "USER reason")
+
     def test_actor_direction_matrix_is_closed_and_exact(self) -> None:
         advisory = make_proposal(step_kind=CollaborationStepKind.SPECIALIST_ADVISORY)
         running, _ = running_history(advisory)
@@ -873,6 +934,11 @@ class CollaborationValueContractTests(unittest.TestCase):
                                     recipient,
                                     payload,
                                 )
+
+        payload = editorial_history()[0].payload
+        for sender, recipient in ((LEAD, USER), (RUNTIME, USER), (PLOT, LEAD)):
+            with self.assertRaises(ValueError):
+                make_draft("provider_memory", CollaborationEventKind.EDITORIAL_RECORD, sender, recipient, payload)
 
     def test_proposal_closure_budget_and_advisory_invariants_fail_closed(self) -> None:
         proposal = make_proposal()
@@ -1462,17 +1528,28 @@ class CollaborationWireContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             replace(explicit, activity=AuthoringActivity.DRAFT)
 
+        request = editorial_request("memory_unicode")
+        encoded = editorial.editorial_request_to_dict(request)
+        self.assertEqual(editorial.editorial_request_from_dict(encoded), request)
+        self.assertEqual(encoded["draft"]["text"].encode(), EDITORIAL_TEXT.encode())
+        with self.assertRaises(ValueError):
+            editorial.editorial_request_from_dict({**encoded, "provider_selected": True})
+        record = editorial_history()[0].payload.record
+        with self.assertRaises(ValueError):
+            editorial.editorial_ref_from_dict({**editorial.editorial_ref_to_dict(record.ref), "revision": 0})
+
 
 class CollaborationPackageBoundaryTests(unittest.TestCase):
     def test_leaf_and_facade_exports_identity_metadata_pickle_and_root_omission(
         self,
     ) -> None:
         exploration_names = ('CollaborationLeadExplorationRequestPayload', 'CollaborationLeadExplorationResultPayload', 'CollaborationExplorationAdoptionPayload')
+        exploration_names += ("CollaborationEditorialRecordPayload",)
         expected_event_exports = COLLABORATION_EVENT_EXPORTS
         expected_context_exports = COLLABORATION_CONTEXT_EXPORTS
         self.assertEqual(tuple(events_owner.__all__), expected_event_exports)
         self.assertEqual(tuple(context_owner.__all__), expected_context_exports)
-        self.assertEqual(len(conversations.__all__), 162)
+        self.assertEqual(len(conversations.__all__), 165)
         self.assertNotIn("__getattr__", vars(events_owner))
         self.assertNotIn("__getattr__", vars(context_owner))
         self.assertNotIn("__getattr__", vars(conversations))
@@ -1481,7 +1558,7 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
             for name in conversations.__all__
             if name.startswith("Collaboration") or name.startswith("COLLABORATION_")
         }
-        self.assertEqual(len(collaboration_names), 66)
+        self.assertEqual(len(collaboration_names), 67)
         for owner in (events_owner, context_owner):
             for name in (n for n in owner.__all__ if n not in exploration_names):
                 if name.startswith("Collaboration") or name.startswith(
@@ -1532,6 +1609,10 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
             pickle.loads(pickle.dumps(CollaborationProposal)),
             CollaborationProposal,
         )
+
+        for name in ("project_editorial_state", "editorial_provenance_available"):
+            self.assertIs(getattr(context_owner, name), getattr(conversations, name))
+            self.assertNotIn(name, story_writing_agents.__all__)
 
     def test_append_receipt_error_and_public_signatures_are_exact(self) -> None:
         receipt = CollaborationAppendReceipt(
@@ -1596,9 +1677,9 @@ import story_writing_agents
 import story_writing_agents.conversations as facade
 import story_writing_agents.conversations.context as context
 import story_writing_agents.conversations.events as events
-assert len(facade.__all__) == 162
-assert len(events.__all__) == 123
-assert len(context.__all__) == 31
+assert len(facade.__all__) == 165
+assert len(events.__all__) == 124
+assert len(context.__all__) == 33
 assert facade.CollaborationProposal is events.CollaborationProposal
 assert facade.CollaborationEventStore is context.CollaborationEventStore
 assert not hasattr(story_writing_agents, "CollaborationProposal")

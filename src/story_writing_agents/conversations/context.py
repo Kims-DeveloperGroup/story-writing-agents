@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from ..editorial_state import (
+    EditorialStateProjection, EditorialRecordRevision, EditorialApprovalState,
+    EditorialAppliedFact, EditorialProvenanceRef, EditorialStateIntegrityError,
+)
+from .events import CollaborationEditorialRecordPayload, encode_collaboration_event, CollaborationEvidenceAcquisition
+
 from ..lead_exploration import LeadInteractionMode, LeadExplorationReport
 from .events import (CollaborationLeadExplorationRequestPayload,
     CollaborationLeadExplorationResultPayload, CollaborationExplorationAdoptionPayload)
@@ -1393,6 +1399,9 @@ class CollaborationReadableFieldKey(StrEnum):
     """Closed searchable fields derived from one public collaboration payload."""
 
     MESSAGE_CONTENT = "message.content"
+    EDITORIAL_TEXT = "editorial.text"
+    EDITORIAL_REASON = "editorial.reason"
+    EDITORIAL_TRANSITION_REASON = "editorial.transition_reason"
     LEAD_JUDGMENT_KIND = "lead_judgment.kind"
     LEAD_JUDGMENT_MESSAGE = "lead_judgment.message"
     LEAD_EVIDENCE_SCOPE = "lead_evidence.scope"
@@ -2979,6 +2988,15 @@ def _validate_exploration_history(events: tuple[CollaborationEventV2, ...]) -> N
 def _project_validated_collaboration_history(
     events: tuple[CollaborationEventV2, ...],
 ) -> CollaborationHistoryProjection:
+    _validate_editorial_event_headers(events)
+    workflow_events = tuple(event for event in events if type(event.payload) is not CollaborationEditorialRecordPayload)
+    if len(workflow_events) != len(events):
+        # USER memory is retained at the real tail, but cannot select/reset a
+        # workflow step, budget, confirmation, objective, Apply or Commit.
+        projection = (_project_validated_collaboration_history(workflow_events) if workflow_events
+                      else project_collaboration_history(()))
+        return replace(projection, session_id=events[0].session_id, conversation_id=events[0].conversation_id,
+                       last_sequence=events[-1].sequence)
     _validate_exploration_history(events)
     artifact_candidates, artifact_states, artifact_reviewed = (
         _project_artifact_review_history(events)
@@ -4763,6 +4781,13 @@ def _collaboration_readable_fields(
 ) -> tuple[CollaborationReadableField, ...]:
     """Project the closed searchable field set for one typed public payload."""
 
+    if type(payload) is CollaborationEditorialRecordPayload:
+        return (
+            CollaborationReadableField(key=CollaborationReadableFieldKey.EDITORIAL_TEXT, text=payload.record.draft.text),
+            CollaborationReadableField(key=CollaborationReadableFieldKey.EDITORIAL_REASON, text=payload.record.draft.reason),
+            CollaborationReadableField(key=CollaborationReadableFieldKey.EDITORIAL_TRANSITION_REASON, text=payload.record.request.transition_reason),
+        )
+
     if type(payload) in {ArtifactObjectivePayload, ArtifactObjectivePayloadV2}:
         return (
             CollaborationReadableField(
@@ -5073,7 +5098,100 @@ def _validate_identifier(value: str, *, label: str) -> str:
     return value
 
 
+
+def _validate_editorial_event_headers(events: tuple[CollaborationEventV2, ...]) -> None:
+    requests = set()
+    for event in events:
+        if type(event.payload) is not CollaborationEditorialRecordPayload:
+            continue
+        record = event.payload.record
+        if event.batch_size != 1:
+            raise EditorialStateIntegrityError("USER editorial intake cannot co-batch workflow authority")
+        if (record.session_id, record.conversation_id, record.event_id) != (event.session_id, event.conversation_id, event.event_id):
+            raise EditorialStateIntegrityError("editorial record does not match its exact USER event")
+        if record.request.request_id in requests:
+            raise EditorialStateIntegrityError("editorial request identity repeats")
+        requests.add(record.request.request_id)
+
+
+def editorial_provenance_available(source: EditorialProvenanceRef, events: tuple[CollaborationEventV2, ...]) -> bool:
+    matches = tuple(event for event in events if (event.session_id, event.conversation_id, event.event_id) ==
+                    (source.session_id, source.conversation_id, source.event_id))
+    if len(matches) != 1 or hashlib.sha256(encode_collaboration_event(matches[0])).hexdigest() != source.event_digest:
+        return False
+    if source.member_id is None:
+        return True
+    payload = matches[0].payload
+    if type(payload) is CollaborationLeadExplorationResultPayload:
+        return any(item.idea_id == source.member_id for item in payload.report.ideas)
+    evidence = payload.evidence if type(payload) is CollaborationLeadJudgmentPayload else None
+    return evidence is not None and any(receipt.evidence_id == source.member_id and
+        receipt.acquisition is CollaborationEvidenceAcquisition.READ for receipt in evidence.receipts)
+
+
+def project_editorial_state(session_id: str, events: tuple[CollaborationEventV2, ...]) -> EditorialStateProjection:
+    """Derive exact USER chains and historical Apply associations across a session."""
+    if any(event.session_id != session_id for event in events):
+        raise EditorialStateIntegrityError("editorial source history crosses sessions")
+    if not any(type(event.payload) is CollaborationEditorialRecordPayload for event in events):
+        if any(type(event.payload) in {CollaborationProposal, LeadRecommendationRequestPayload} and event.payload.basis.editorial_refs for event in events):
+            raise EditorialStateIntegrityError("editorial workflow capture has no USER history")
+        return EditorialStateProjection(session_id, ())
+    groups = {}
+    for event in events:
+        groups.setdefault(event.conversation_id, []).append(event)
+    for group in groups.values():
+        project_collaboration_history(tuple(group))
+    records = tuple(event.payload.record for event in events if type(event.payload) is CollaborationEditorialRecordPayload)
+    state = EditorialStateProjection(session_id, records)
+    by_ref = {record.ref: record for record in records}
+    requests = [record.request.request_id for record in records]
+    if len(set(requests)) != len(requests):
+        raise EditorialStateIntegrityError("editorial request repeats across conversations")
+    gaps = tuple((record.ref, source) for record in records for source in record.draft.provenance_refs
+                 if not editorial_provenance_available(source, events))
+    for event in events:
+        if type(event.payload) not in {CollaborationProposal, LeadRecommendationRequestPayload}:
+            continue
+        for ref in event.payload.basis.editorial_refs:
+            if ref not in by_ref or by_ref[ref].approval_state is not EditorialApprovalState.SELECTED:
+                raise EditorialStateIntegrityError("workflow cites no exact selected USER editorial revision")
+    facts = []
+    for event in sorted(events, key=lambda item: (item.conversation_id, item.sequence)):
+        result = event.payload
+        if type(result) is not ArtifactApplicationResultPayload or result.outcome not in {
+            ArtifactApplicationOutcomeKind.APPLIED, ArtifactApplicationOutcomeKind.UNCHANGED}:
+            continue
+        local = groups[event.conversation_id]
+        reviewed = tuple(item.payload for item in local if type(item.payload) is ArtifactReviewedProposal
+                         and item.payload.proposal_id == result.reviewed_proposal_id
+                         and item.payload.proposal_digest == result.reviewed_proposal_digest)
+        if len(reviewed) != 1:
+            raise EditorialStateIntegrityError("editorial association has no exact reviewed proposal")
+        reviewed = reviewed[0]
+        consultations = tuple(item.payload for item in local if type(item.payload) is CollaborationProposal
+            and (item.payload.proposal_id, item.payload.proposal_revision, item.payload.proposal_digest) ==
+            (reviewed.consultation_proposal_id, reviewed.consultation_proposal_revision, reviewed.consultation_proposal_digest))
+        if len(consultations) != 1:
+            raise EditorialStateIntegrityError("editorial association has no exact reviewed consultation")
+        consultation = consultations[0]
+        if not consultation.basis.editorial_refs:
+            continue
+        scope = consultation.authoring_scope
+        if scope is None or result.result is None:
+            raise EditorialStateIntegrityError("editorial application lacks exact task or application facts")
+        application_ref = EditorialProvenanceRef(event.session_id, event.conversation_id, event.event_id,
+                                                hashlib.sha256(encode_collaboration_event(event)).hexdigest())
+        for ref in consultation.basis.editorial_refs:
+            facts.append(EditorialAppliedFact(ref, scope.task_id, scope.task_revision, reviewed.proposal_id,
+                reviewed.proposal_digest, reviewed.candidate.candidate_id, reviewed.candidate.candidate_digest,
+                application_ref, result.application_id, result.application_request_digest, result.outcome.value,
+                tuple(result.result.affected_paths)))
+    return EditorialStateProjection(session_id, records, tuple(facts), gaps)
+
 __all__ = [
+    "project_editorial_state",
+    "editorial_provenance_available",
     "ArtifactObjective",
     "artifact_objective_context",
     "COLLABORATION_READABLE_CONTEXT_POLICY",

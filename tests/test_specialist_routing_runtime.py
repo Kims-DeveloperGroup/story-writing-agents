@@ -1,4 +1,5 @@
 """Runtime routing accepts typed task facts and keeps draft/review authority separate."""
+from tests.test_collaboration_events import editorial, editorial_request
 import asyncio
 import json
 import subprocess
@@ -122,6 +123,10 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         completed = c.project_collaboration_history(prefix)
         self.assertIs(completed.current_artifact_application_result.outcome, c.ArtifactApplicationOutcomeKind.REJECTED)
         self.assertEqual(completed.rounds_spent, 2)
+        memory = await self.runtime.record_editorial_decision(self.session_id, conversation, editorial_request("completed_task_memory"))
+        self.assertIs(memory.status, editorial.EditorialRecordStatus.RECORDED)
+        unchanged = c.project_collaboration_history(self.history(conversation))
+        self.assertEqual((unchanged.rounds_spent, unchanged.physical_calls_spent), (completed.rounds_spent, completed.physical_calls_spent))
         self.assertGreaterEqual(12 - completed.physical_calls_spent, 4)
         self.assertEqual(self.artifact_bytes(), before)
         def successor(value, material):

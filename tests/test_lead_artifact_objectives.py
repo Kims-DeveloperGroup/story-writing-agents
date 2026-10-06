@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+from tests.test_collaboration_events import editorial, editorial_request
 import asyncio
 import json
 from dataclasses import replace
@@ -28,10 +30,12 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         text = "# 승인된 초안\r\nThe bridge collapsed at 09:00. At 21:00 Mina claims she crossed it; her account is deliberately unreliable.\r\n" + objectives.DRAFT
         brief = "Reader effect: unease. Goal: restrained tension. Protect unreliable narration and unresolved allegiance; change only rhythm and gestures; exclude exposition and new crossings. Success: preserve ambiguity while exposing factual uncertainty."
         account = "Fact: the bridge collapsed. Interpretation: Mina may be unreliable. Adopt Character: preserve ambiguity. Modify Plot: strengthen hesitation without revealing allegiance. Reject an invented crossing; no source supports it. Defer Execution’s literal-crossing concern pending evidence, retaining every concern ID. Cost: the physical route remains unknown. A gesture is a provisional idea. Reviewed does not mean unanimous support, publication, or a fulfilled document request."
+        conversation_id = self.conversation("Editorial authoring")
+        memory = await self.runtime.record_editorial_decision(self.session_id, conversation_id, editorial_request("authoring_memory"))
         pristine = self.snapshots()
         original_result = lead._live_result
         with mock.patch.object(lead, "_live_result", side_effect=lambda call, value: original_result(call, {**value, "message": brief} if value.get("kind") == "proposal" else value)):
-            conversation_id, _ = await self.start(message=text, target_path=None, specialist_ids=ROSTER)
+            conversation_id, _ = await self.start(conversation_id, message=text, target_path=None, specialist_ids=ROSTER)
         source = self.projection(conversation_id).offered_draft_sources[-1]
         scope = next(e.payload.authoring_scope for e in self.history(conversation_id) if e.event_id == source.event_id)
         self.assertEqual(scope.target_paths, ())
@@ -44,6 +48,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
             "Approve the previous draft and prepare it as a new document.")
         self.assertIs(offered.kind, c.LeadOutcomeKind.RECOMMENDATION, offered)
         request = offered.recommendation_request
+        self.assertEqual(request.basis.editorial_refs, (memory.record_ref,))
         self.assertIsNone(request.objective_id)
         self.assertEqual(self.projection(conversation_id).artifact_objectives, ())
         self.assertEqual(request.draft_sources, (source,))
@@ -56,6 +61,10 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual(len(self.backend.calls), calls + 1)
         self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL, prepared)
         self.assertEqual(prepared.proposal.participants, ROSTER)
+        self.assertEqual(prepared.proposal.basis.editorial_refs, request.basis.editorial_refs)
+        from tests.collaboration_contract_fixture import replace_proposal
+        self.assertNotEqual(prepared.proposal.proposal_digest, replace_proposal(prepared.proposal, authoring_scope=prepared.proposal.authoring_scope, basis=replace(prepared.proposal.basis, editorial_refs=())).proposal_digest)
+        self.assertNotIn(memory.record.event_id, {item.input_id for item in prepared.proposal.basis.inputs})
         self.assertEqual(prepared.proposal.authoring_scope, replace(request.authoring_scope, activity=lead.AuthoringActivity.REVIEW))
         self.assertEqual(request.authoring_scope.interpretation, brief)
         historical = next(item for item in prepared.proposal.basis.inputs if item.input_id == source.event_id)
@@ -93,6 +102,7 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         for is_review, expected_scope in ((False, scope), (True, replace(request.authoring_scope, activity=lead.AuthoringActivity.REVIEW))):
             phase = [item for item in materials if ("assignment" in item or "replies" in item) and (item.get("assignment", {}).get("mode") == "review" or "artifact_candidate" in item) == is_review]
             self.assertEqual(len(phase), len(ROSTER) + 1)
+            self.assertTrue(all(item["editorial_state"]["selected_refs"] == [editorial.editorial_ref_to_dict(memory.record_ref)] for item in phase))
             self.assertTrue(all(item["authoring_scope"] == c.authoring_scope_to_dict(expected_scope) for item in phase))
             self.assertTrue(all(item["inputs"] == phase[0]["inputs"] for item in phase))
         self.assertEqual(next(item for item in phase[0]["inputs"] if item["input_id"] == source.event_id)["revision_digest"], source.content_digest)
@@ -117,6 +127,22 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertIsNotNone(applied.commit_request)
         rejected = await self.runtime.decide_story_commit(commit._commit_decision(applied, commit.StoryCommitDecision.REJECT))
         self.assertIs(rejected.outcome.outcome, commit.StoryCommitOutcomeKind.REJECTED)
+        facts = self.runtime.inspect_editorial_state(self.session_id).applied_facts
+        self.assertEqual(len(facts), 1)
+        fact = facts[0]
+        self.assertEqual((fact.record_ref, fact.task_id, fact.task_revision, fact.candidate_digest, fact.application_event.event_id, fact.application_id, fact.affected_paths),
+                         (memory.record_ref, scope.task_id, scope.task_revision, review.candidate.candidate_digest, satisfied.event_id, satisfied.payload.application_id, (path,)))
+        self.assertEqual(fact.application_event.event_digest, hashlib.sha256(c.encode_collaboration_event(satisfied)).hexdigest())
+        superseded_memory = await self.runtime.record_editorial_decision(self.session_id, conversation_id, editorial.EditorialRecordRequest("supersede_after_apply", editorial.EditorialAction.SUPERSEDE, "Later explicit USER choice.", expected_ref=memory.record_ref))
+        self.assertIs(superseded_memory.record.approval_state, editorial.EditorialApprovalState.SUPERSEDED)
+        self.assertEqual(self.runtime.inspect_editorial_state(self.session_id).applied_facts, facts)
+        self.assertEqual(self.runtime.inspect_editorial_state(self.session_id).selected_records, ())
+        origin_draft = replace(memory.record.draft, origin_task_id=scope.task_id, origin_task_revision=scope.task_revision)
+        origin = await self.runtime.record_editorial_decision(self.session_id, conversation_id, editorial.EditorialRecordRequest("known_task_origin", editorial.EditorialAction.PROPOSE, "Retain the actual completed task.", draft=origin_draft))
+        self.assertEqual((origin.record.draft.origin_task_id, origin.record.draft.origin_task_revision), (scope.task_id, scope.task_revision))
+        invalid_request = replace(origin.record.request, request_id="unknown_task_origin", draft=replace(origin_draft, origin_task_id="missing_task"))
+        invalid = await self.runtime.record_editorial_decision(self.session_id, conversation_id, invalid_request)
+        self.assertIs(invalid.status, editorial.EditorialRecordStatus.INVALID_PROVENANCE)
         self.assertEqual(self.snapshots()[1:], pristine[1:])
         self.assertEqual({type(e.payload) for e in self.history(conversation_id)
                           if e.kind is c.CollaborationEventKind.ARTIFACT_OBJECTIVE}, {c.ArtifactObjectivePayloadV2})

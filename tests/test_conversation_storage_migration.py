@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.conversation_archive_fixture import one_conversation_archive
+from tests.test_collaboration_events import editorial_history
 import ast
 import contextlib
 import json
@@ -705,6 +707,15 @@ class ConversationStorageTransferExecutionTests(unittest.TestCase):
                 )
                 self.assertEqual(verified.parity, ConversationStorageParity.VERIFIED)
                 self.assertEqual(checkpoint.read_bytes(), checkpoint_before)
+
+        memory = one_conversation_archive(events=editorial_history())
+        for source in ConversationStorageBackend:
+            current = transfer_workspace(self, active_backend=source)
+            import_backend(current, source, memory)
+            report = _transfer(current, source)
+            self.assertEqual((report.outcome, report.source_events), (ConversationStorageTransferOutcome.COMPLETED, 1))
+            self.assertEqual(export_backend(current, _other_backend(source)), memory)
+            self.assertEqual(export_backend(current, source), memory)
 
     def test_filesystem_to_sqlite_operational_failure_rolls_back_one_transaction(
         self,

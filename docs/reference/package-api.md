@@ -14,7 +14,7 @@ The stable inventories in this revision are:
 | Import boundary | Exports | Purpose |
 | --- | ---: | --- |
 | `story_writing_agents` | 106 | Management runtime, workspace/catalog, backend/session, generic models, reply traces, retrieval contracts, parser, and errors |
-| `story_writing_agents.conversations` | 162 | Catalog plus schema-v2 events, projection, evidence-grounded lead/specialist/artifact-review values, readable context, and pure validation |
+| `story_writing_agents.conversations` | 165 | Catalog plus schema-v2 events, projection, evidence-grounded lead/specialist/artifact-review values, readable context, and pure validation |
 | `story_writing_agents.conversation_search` | 18 | Schema-v2 search, exact citations, paging, and history service |
 | `story_writing_agents.conversation_retrieval` | 24 | Low-level provider search/read-history/answer contracts |
 | `story_writing_agents.conversation_storage` | 63 | Storage composition, provenance, activation, archive, and transfer contracts |
@@ -24,11 +24,11 @@ The stable inventories in this revision are:
 | `story_writing_agents.writing_artifacts` | 76 | Canonical artifact/reference values plus pure exact change-set, relationship-policy, and artifact-application contracts |
 | `story_writing_agents.artifact_proposals` | 16 | Direct-only pure intent, evidence, exact candidate, reviewer-map, and strict candidate-codec contracts |
 
-The production graph has 151 modules and 642 runtime dependency edges, with
+The production graph has 152 modules and 646 runtime dependency edges, with
 no runtime cycles. The package root has 106 exports. The conversations facade
-contributes 123 event exports and 31 context exports; its bindings are identical
-to the owner bindings. Exploration adds one pure contract leaf and five
-consumer-to-leaf edges without a new storage or execution owner.
+contributes 124 event exports and 33 context exports; its bindings are identical
+to the owner bindings. Editorial records add one pure contract leaf and four
+consumer-to-leaf edges, using the existing conversation store.
 
 Import the management facade explicitly:
 
@@ -58,6 +58,14 @@ idea/report/read-observation values, and exact whole-idea adoption selection
 and capture values. Both runtime facades accept the mode and adoption controls
 as keyword arguments. These values grant no provider, draft, confirmation or
 mutation authority. See [exploration and adoption](runtime-api.md#explicit-interaction-mode-and-adoption).
+
+Editorial memory value contracts live at `story_writing_agents.editorial_state`,
+including typed requests, drafts, exact revision references and state inspection values.
+The runtime and session facades provide explicit recording and inspection; the existing
+conversation facade owns the typed USER event and history codecs. These boundaries
+retain reasons and rejected alternatives while separating current user intent from
+historical artifact-application association. See the
+[editorial memory methods](runtime-api.md#editorial-memory-methods).
 
 <a id="safe-git-boundary"></a>
 

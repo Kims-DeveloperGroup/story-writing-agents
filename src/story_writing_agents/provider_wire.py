@@ -882,6 +882,16 @@ def field_description(name: str) -> str:
         raise ValueError(f"provider wire catalog has no field: {name}") from None
 
 
+_catalog("editorial_state editorial_record", "Cited retained USER editorial intent. Only exact typed USER intake changes approval; this is not artifact READ evidence or workflow permission.")
+_catalog("editorial_refs selected_refs record_ref previous_ref superseded_by", "Exact host-pinned editorial revision receipts, including session/conversation/event/digest. Preserve these identities; a provider cannot mint or change approval or history lineage.")
+_catalog("record_id record_digest event_digest projection_digest", "Exact retained editorial record or qualified source identity/digest; historical identity never proves current artifact bytes.")
+_catalog("approval_state effective_approval_state revision_approval transition_reason", "Explicit USER editorial approval and its retained reason. Proposed/rejected/superseded material cannot become selected through interpretation.")
+_catalog("origin_task_id origin_task_revision origin_user_event_id origin_conversation_id", "Immutable original USER/task ownership, independent of the conversation presenting a later revision.")
+_catalog("provenance_refs member_id application_event source_ref", "Qualified exact retained event/member citations. Missing or stale provenance is a gap; only actual qualified artifact READ receipts ground current artifact observations.")
+_catalog("applied_facts", "Historical exact task/revision/reviewed-candidate/path Apply association. It implies neither editorial approval, semantic fulfillment nor current artifact bytes.")
+_catalog("provenance_gaps omitted_record_count omitted_application_count omitted_provenance_gap_count", "Explicit unavailable, stale or budget-omitted editorial context. Do not fill gaps with claims or grant authority from absent records.")
+_catalog("alternative_id alternatives disposition", "Retained literal alternatives and exact USER dispositions/reasons. Rejected alternatives remain discarded until an explicit USER revision.")
+
 ENUM_MEANINGS = {
     "plot_structure": "plot, causality, chronology, pacing, and story structure",
     "character_world": "character motivations, relationships, world facts, and continuity",
@@ -948,6 +958,23 @@ ENUM_MEANINGS = {
 for _domain, _wire in SOURCE_TYPES.items():
     ENUM_MEANINGS[_wire] = {"writing_artifact": "canonical story documents in the active authorized workspace", "conversation": "authorized story-conversation records", "active_debate": "the current consensus run's state and messages", "own_agent_state": "this agent's own prior work outcomes", "runtime_input": "the current runtime-issued assignment", "agent_definition": "the bound role and behavior instructions"}[_domain]
 
+
+for _editorial_value, _editorial_meaning in {
+    "directive": "an explicit typed USER editorial directive, never provider approval",
+    "direction": "a retained editorial direction with exact USER approval state",
+    "alternative": "a provisional or explicitly rejected editorial alternative",
+    "protected_ambiguity": "USER-protected intentional ambiguity; do not automatically explain it",
+    "setup_obligation": "a retained setup obligation; Apply does not infer semantic fulfillment",
+    "unresolved_concern": "a retained concern until an explicit USER editorial revision",
+    "selected": "exact USER-selected editorial intent in its enclosing record; no artifact or workflow permission",
+    "superseded": "a historical editorial revision replaced by an exact USER operation; it is not current selected intent",
+    "recorded": "an exact USER editorial operation was durably recorded",
+    "stale_reference": "the supplied editorial revision receipt is no longer current",
+    "pending_control_required": "resolve existing exact workflow controls before editorial intake",
+    "invalid_provenance": "a cited retained source does not match its qualified identity",
+    "unavailable_or_stale": "cited editorial provenance is unavailable or changed; do not invent it",
+}.items():
+    ENUM_MEANINGS.setdefault(_editorial_value, _editorial_meaning)
 
 def describe_schema(schema: Mapping) -> dict:
     """Preserve owner prose and reject undescribed built-in contract choices."""
@@ -1101,6 +1128,20 @@ ENUM_MEANINGS.update({
     "answer_validation_failed": "The preceding task result failed domain validation; correct the reported property or cross-field constraint while preserving confirmed scope and evidence",
 })
 
+
+STRUCTURED_INPUT_FIELDS = STRUCTURED_INPUT_FIELDS | frozenset({
+    "editorial_state", "editorial_record", "editorial_refs", "record_ref", "previous_ref", "superseded_by",
+    "selected_refs", "draft", "alternatives", "provenance_refs", "applied_facts", "application_event",
+    "provenance_gaps", "source_ref",
+})
+INPUT_ENUM_FIELDS = INPUT_ENUM_FIELDS | frozenset({"approval_state", "effective_approval_state", "revision_approval", "disposition"})
+_catalog("schema", "Runtime-issued context-view format identifier, not provider authority or a response choice.")
+_catalog("kind", "Literal classification in the enclosing supplied record. Editorial kinds distinguish direction, alternative, protected ambiguity, setup obligation and concern; they grant no workflow authority.")
+_catalog("action", "Exact historical USER editorial intake operation in the enclosing request; it cannot be selected or replayed by a provider.")
+_catalog("expected_ref", "Exact current editorial revision receipt named by the USER operation; changed identities require a fresh explicit decision.")
+STRUCTURED_INPUT_FIELDS = STRUCTURED_INPUT_FIELDS | frozenset({"expected_ref"})
+_catalog("draft", "Literal USER editorial record text, reason and alternative declarations in the enclosing editorial record; no artifact evidence or workflow permission.")
+_catalog("authority", "Runtime-owned limit on what the enclosing cited facts establish; never manufacture additional permission.")
 
 def _schema_response_rules(schema: Mapping) -> list[str]:
     """Summarize offered discriminators without copying schema descriptions."""

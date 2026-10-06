@@ -11,9 +11,15 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 
 from .catalog import ConversationMetadata
+from ..editorial_state import (
+    EditorialStateProjection, EditorialRecordRef, bounded_editorial_view,
+    editorial_ref_from_dict, editorial_revision_to_dict,
+)
+from .context import project_editorial_state
+from .events import CollaborationEditorialRecordPayload
 from .context import (
     CollaborationReadableRecord, artifact_objective_context,
     project_collaboration_history,
@@ -96,6 +102,8 @@ def _operations(operations: tuple[object, ...]) -> list[dict[str, object]]:
 
 
 def _visible_details(payload: object) -> dict[str, object]:
+    if type(payload) is CollaborationEditorialRecordPayload:
+        return {"editorial_record": editorial_revision_to_dict(payload.record), "authority": "Exact USER editorial intake; current approval comes only from the validated revision chain."}
     """Session-only visible facts omitted by the bounded search field contract."""
 
     if type(payload) in {
@@ -415,10 +423,8 @@ class SessionConversationHistory:
         }
         return "sha256:" + hashlib.sha256(_encoded(accepted)).hexdigest()
 
-    def objective_context(self) -> dict[str, object]:
-        """Derive current objective facts even when delivery contains no new records."""
-
-        events = tuple(CollaborationEvent(
+    def _events(self) -> tuple[CollaborationEvent, ...]:
+        return tuple(CollaborationEvent(
             schema_version=record.schema_version,
             session_id=record.session_id, conversation_id=record.conversation_id,
             turn_id=record.turn_id, step_id=record.step_id, event_id=record.event_id,
@@ -428,7 +434,10 @@ class SessionConversationHistory:
             sender=record.sender, recipient=record.recipient,
             kind=record.kind, payload=record.payload,
         ) for record in self.records)
-        return artifact_objective_context(project_collaboration_history(events))
+
+    def objective_context(self) -> dict[str, object]:
+        """Derive current objective facts even when delivery contains no new records."""
+        return artifact_objective_context(project_collaboration_history(self._events()))
 
 
 @dataclass(frozen=True, slots=True)
@@ -437,6 +446,7 @@ class SessionHistorySnapshot:
 
     session_id: str
     conversations: tuple[SessionConversationHistory, ...] = field(repr=False)
+    _editorial_capture: bytes | None = field(default=None, kw_only=True, repr=False)
 
     def __post_init__(self) -> None:
         if type(self.session_id) is not str or not self.session_id:
@@ -463,6 +473,51 @@ class SessionHistorySnapshot:
             for item in self.conversations
         )
 
+    def events(self) -> tuple[CollaborationEvent, ...]:
+        """Return the exact typed events of this immutable captured prefix."""
+        return tuple(event for history in self.conversations for event in history._events())
+
+    def editorial_state(self) -> EditorialStateProjection:
+        return project_editorial_state(self.session_id, self.events())
+
+    def with_editorial_capture(self, previous: SessionHistorySnapshot) -> SessionHistorySnapshot:
+        """Refresh raw prefixes while retaining this invocation's exact memory selection."""
+        if type(previous) is not SessionHistorySnapshot or previous.session_id != self.session_id:
+            raise ValueError("editorial capture crosses sessions")
+        view = previous.editorial_view()
+        if view is None:
+            if self.editorial_state().revisions:
+                raise SessionContextHistoryChangedError()
+            return self
+        if self.editorial_state().projection_digest != view["projection_digest"]:
+            raise SessionContextHistoryChangedError()
+        return replace(self, _editorial_capture=_encoded(view))
+
+    def editorial_view(self) -> dict[str, object] | None:
+        state = self.editorial_state()
+        if self._editorial_capture is not None:
+            if type(self._editorial_capture) is not bytes:
+                raise TypeError("editorial capture must be immutable canonical bytes")
+            view = json.loads(self._editorial_capture)
+            if (type(view) is not dict or view.get("projection_digest") != state.projection_digest
+                    or _encoded(view) != self._editorial_capture
+                    or bounded_editorial_view(state, len(self._editorial_capture)) != view):
+                raise SessionContextHistoryChangedError()
+            return view
+        if not state.revisions:
+            return None
+        # The complete prefix fixes selection for both full and native delta delivery.
+        raw = self.delivery(_include_editorial=False)
+        remaining = MAX_SESSION_CONTEXT_UTF8_BYTES - len(_encoded(raw)) - len(b',"editorial_state":')
+        try:
+            return bounded_editorial_view(state, remaining)
+        except ValueError as failure:
+            raise SessionContextCapacityError() from failure
+
+    def editorial_refs(self) -> tuple[EditorialRecordRef, ...]:
+        view = self.editorial_view()
+        return () if view is None else tuple(editorial_ref_from_dict(item) for item in view["selected_refs"])
+
     def delivery(
         self,
         previous: tuple[tuple[str, int, str], ...] = (),
@@ -470,6 +525,7 @@ class SessionHistorySnapshot:
         known_native_operation_id: str | None = None,
         native_agent_id: str | None = None,
         included_fields: Mapping[str, frozenset[str]] | None = None,
+        _include_editorial: bool = True,
     ) -> dict[str, object]:
         """Project unseen facts; callers alone establish native-thread continuity."""
         prior = {item[0]: (item[1], item[2]) for item in previous}
@@ -531,6 +587,10 @@ class SessionHistorySnapshot:
                 conversation["artifact_objectives"] = objectives
             conversations.append(conversation)
         value: dict[str, object] = {"conversations": conversations}
+        if _include_editorial:
+            editorial = self.editorial_view()
+            if editorial is not None:
+                value["editorial_state"] = editorial
         if len(_encoded(value)) > MAX_SESSION_CONTEXT_UTF8_BYTES:
             raise SessionContextCapacityError()
         return value

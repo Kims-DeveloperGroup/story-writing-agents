@@ -158,6 +158,40 @@ new proposal confirmation. Adoption grants no draft, review, Apply or Commit
 authority. Stale, foreign or modified selections are rejected; partial-range
 adoption is outside this interface.
 
+## Editorial decisions
+
+Use `record_editorial_decision()` to retain a story direction, alternative, protected
+ambiguity, setup obligation or unresolved concern as an explicit user decision. Each
+record keeps its exact text, reason, alternatives and source references. Inspect the
+current view with `inspect_editorial_state()`; the Lead also receives a bounded cited
+view across conversations and restart.
+
+| User action | Recorded effect |
+| --- | --- |
+| DIRECTIVE | Create a selected record. |
+| PROPOSE | Retain an idea as proposed. |
+| SELECT, REJECT or SUPERSEDE | Record a new approval revision against the exact current receipt. |
+| REVISE | Replace the record's content with an explicit proposed or selected revision. |
+
+Revisions retain the original conversation, user event and task provenance. A later
+revision can be recorded in another conversation of the same session without changing
+that origin. Stale or foreign receipts cannot overwrite the current revision. Rejected
+alternatives remain rejected, and selected ambiguity or setup remains selected until
+an explicit user revision changes it. Ordinary prose and provider assertions cannot
+perform these controls. Pending workflow controls retain priority.
+
+SELECT accepts a current proposed record. Use an explicit REVISE operation to restore
+a rejected or superseded record to selected intent.
+
+Consultation proposals pin the exact selected records delivered to the Lead. Confirm
+checks that those revisions remain current, and final candidate review inherits the
+same references. A matching Apply result records historical use of the exact task and
+candidate. It does not resolve ambiguity, prove a setup paid off or establish current
+artifact contents. Current artifact claims still require the existing READ receipts.
+
+See the [editorial memory API](../reference/runtime-api.md#editorial-memory-methods)
+for typed intake and inspection.
+
 ## The normal workflow
 
 ```text

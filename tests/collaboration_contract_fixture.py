@@ -149,6 +149,7 @@ COLLABORATION_EVENT_EXPORTS = (
     "CollaborationLeadExplorationResultPayload",
     "CollaborationExplorationAdoptionPayload",
     "CollaborationMessagePayload",
+    "CollaborationEditorialRecordPayload",
     "CollaborationPayload",
     "CollaborationProposal",
     "CollaborationProposalBasis",
@@ -198,6 +199,8 @@ COLLABORATION_EVENT_EXPORTS = (
 )
 
 COLLABORATION_CONTEXT_EXPORTS = (
+    "project_editorial_state",
+    "editorial_provenance_available",
     "ArtifactObjective",
     "artifact_objective_context",
     "COLLABORATION_READABLE_CONTEXT_POLICY",
@@ -334,6 +337,7 @@ CONVERSATION_FACADE_EXPORTS = (
     "CollaborationLeadExplorationRequestPayload",
     "CollaborationLeadExplorationResultPayload",
     "CollaborationExplorationAdoptionPayload",
+    "CollaborationEditorialRecordPayload",
     "CollaborationMessagePayload",
     "CollaborationNextAction",
     "CollaborationPayload",
@@ -388,6 +392,8 @@ CONVERSATION_FACADE_EXPORTS = (
     "encode_collaboration_proposal",
     "normalize_conversation_subject",
     "project_collaboration_history",
+    "project_editorial_state",
+    "editorial_provenance_available",
     "project_collaboration_readable_history",
     "select_bounded_collaboration_context",
     "select_bounded_conversation_context",

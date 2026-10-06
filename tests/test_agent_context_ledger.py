@@ -2252,7 +2252,9 @@ class LedgerConcurrencyTests(LedgerTestCase):
                 mutated = True
                 target = os.open(path, os.O_RDWR)
                 try:
+                    st = os.fstat(target)
                     os.pwrite(target, b" ", path.stat().st_size - 1)
+                    os.utime(target, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
                     os.fsync(target)
                 finally:
                     os.close(target)

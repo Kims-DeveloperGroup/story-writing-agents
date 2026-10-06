@@ -1782,15 +1782,7 @@ class CompletionDriverTests(unittest.TestCase):
                 def write_failure(kind: ReferenceInputFailureKind) -> None:
                     failure_records.append((kind, len(output.records)))
 
-                with mock.patch.object(
-                    _driver._select,
-                    "select",
-                    side_effect=lambda readable, writable, exceptional, _timeout: (
-                        readable,
-                        writable,
-                        exceptional,
-                    ),
-                ):
+                with _ready_reference_select_patch():
                     with self.assertRaises(KeyboardInterrupt):
                         _core.read_main_command_line(
                             driver,
@@ -2617,11 +2609,7 @@ class CompletionDriverTests(unittest.TestCase):
                 driver, _input, output, fallback, _termios, _os = make_driver(
                     sequence + "\n"
                 )
-                with mock.patch.object(
-                    _driver._select,
-                    "select",
-                    side_effect=lambda r, w, x, _t: (r, w, x),
-                ) as readiness:
+                with _ready_select_patch() as readiness:
                     self.assertEqual(self.read(driver), "")
                 readiness.assert_called_once_with((7,), (), (), 0.05)
                 fallback.assert_not_called()
@@ -2653,11 +2641,7 @@ class CompletionDriverTests(unittest.TestCase):
                         make_driver(characters)
                     )
                     driver._history_state = MainInputHistoryState(("/prior",))
-                    with mock.patch.object(
-                        _driver._select,
-                        "select",
-                        side_effect=lambda r, w, x, _t: (r, w, x),
-                    ) as readiness:
+                    with _ready_select_patch() as readiness:
                         self.assertEqual(self.read(driver), expected)
                     self.assertEqual(
                         readiness.call_count,
@@ -2676,11 +2660,7 @@ class CompletionDriverTests(unittest.TestCase):
         driver, _input, output, fallback, _termios, _os = make_driver(
             "\x1b[Z\x1b[999~\n"
         )
-        with mock.patch.object(
-            _driver._select,
-            "select",
-            side_effect=lambda r, w, x, _t: (r, w, x),
-        ):
+        with _ready_select_patch():
             self.assertEqual(self.read(driver), "")
         fallback.assert_not_called()
         self.assertEqual(len(output.records), 2)
@@ -2787,15 +2767,7 @@ class CompletionDriverTests(unittest.TestCase):
             ),
         )
         provider = mock.Mock(return_value=picker)
-        with mock.patch.object(
-            _driver._select,
-            "select",
-            side_effect=lambda readable, writable, exceptional, _timeout: (
-                readable,
-                writable,
-                exceptional,
-            ),
-        ):
+        with _ready_reference_select_patch():
             self.assertEqual(
                 _core.read_main_command_line(
                     driver,
