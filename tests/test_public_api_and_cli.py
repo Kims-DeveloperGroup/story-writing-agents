@@ -93,8 +93,149 @@ from tests.helpers import (
 from tests.sqlite_conversation_storage_fixture import database_path, provision
 
 
+from tests.test_smoke_cli import editorial_action, editorial_fixture
+
 def _resolved_workspace_patch(workspace):
     return mock.patch.object(cli_module, "resolve_workspace", return_value=workspace)
+
+
+def _fresh_auth_coordinator_patch(coordinator):
+    return mock.patch.object(
+        cli_module,
+        "InteractiveAuthCoordinator",
+        return_value=coordinator,
+    )
+
+def _fresh_terminal_builder_patch(terminal):
+    return mock.patch.object(
+        cli_module,
+        "build_stream_terminal",
+        return_value=terminal,
+    )
+
+def _fresh_controller_patch(controller):
+    return mock.patch.object(
+        cli_module,
+        "InteractiveController",
+        return_value=controller,
+    )
+
+def _fresh_logger_failure_patch(control_type):
+    return mock.patch.object(
+        cli_module,
+        "WorkspaceDebugLog",
+        side_effect=control_type("logger acquisition"),
+    )
+
+def _fresh_controller_constructor_patch():
+    return mock.patch.object(
+        cli_module,
+        "InteractiveController",
+    )
+
+def _fresh_auth_service_patch():
+    return mock.patch.object(
+        cli_module,
+        "ProviderAuthService",
+        return_value=object(),
+    )
+
+def _fresh_empty_terminal_patch():
+    return mock.patch.object(
+        cli_module,
+        "build_stream_terminal",
+        return_value=InteractiveTerminal(lambda _prompt: "", lambda _text: None),
+    )
+
+def _fresh_empty_cli_context_patch():
+    return mock.patch.object(
+        cli_module,
+        "load_cli_context",
+        return_value=CliContext(),
+    )
+
+def _fresh_backend_value_patch(backend_value):
+    return mock.patch.object(
+        cli_module,
+        "AgentBackend",
+        return_value=backend_value,
+    )
+
+def _fresh_backend_patch(backend):
+    return mock.patch.object(
+        cli_module,
+        "AgentBackend",
+        return_value=backend,
+    )
+
+def _fresh_cli_context_failure_patch(failure):
+    return mock.patch.object(
+        cli_module,
+        "load_cli_context",
+        side_effect=failure,
+    )
+
+def _fresh_initialization_operations_patch():
+    return mock.patch.object(
+        workspace_initialization_module,
+        "_require_initialization_operations",
+    )
+
+def _fresh_recording_cli_context_patch(events):
+    return mock.patch.object(
+        cli_module,
+        "load_cli_context",
+        side_effect=lambda current: (
+            events.append(("context", None)) or CliContext()
+        ),
+    )
+
+def _fresh_default_backend_attempt_patch(argument):
+    return mock.patch.object(
+        cli_module,
+        'establish_default_backend',
+        side_effect=argument,
+    )
+
+def _fresh_workspace_resolution_failure_patch(argument):
+    return mock.patch.object(
+        cli_module,
+        'resolve_workspace',
+        side_effect=argument,
+    )
+
+def _fresh_captured_cli_context_patch(argument):
+    return mock.patch.object(
+        cli_module,
+        'load_cli_context',
+        return_value=argument,
+    )
+
+def _fresh_cli_context_rejection_patch(argument):
+    return mock.patch.object(
+        cli_module,
+        'load_cli_context',
+        side_effect=argument,
+    )
+
+def _fresh_workspace_mkdir_callback_patch(argument):
+    return mock.patch.object(
+        workspace_module.os,
+        'mkdir',
+        side_effect=argument,
+    )
+
+def _fresh_stream_terminal_failure_patch(argument):
+    return mock.patch.object(
+        cli_module,
+        "build_stream_terminal",
+        side_effect=argument,
+    )
+
+def _fresh_cli_output_streams():
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    return stdout, stderr
 
 
 class TtyStringIO(io.StringIO):
@@ -959,6 +1100,46 @@ class PersistenceValidationTests(unittest.TestCase):
                 ):
                     workspace.read_debate_messages("session_a", "debate_a")
 
+        dataset, captures, packet_dir = editorial_fixture(self)
+        raw = (captures / "captures.json").read_bytes()
+        mutations = (
+            lambda data: data.update(format_version=True),
+            lambda data: data.update(seed=-1),
+            lambda data: data.update(treatment="é" * 2049),
+            lambda data: data.update(unknown_field=0),
+            lambda data: data["arms"].append(data["arms"][0]),
+            lambda data: data.update(dataset_sha256="0" * 64),
+            lambda data: data["cases"][0]["runs"]["fixture-before"]["output"].update(path="../output-a.txt"),
+            lambda data: data["cases"][0]["runs"]["fixture-before"]["output"].update(sha256="0" * 64),
+            lambda data: data["cases"][0]["runs"]["fixture-before"]["costs"].update(submitted_calls=True),
+        )
+        for index, mutate in enumerate(mutations):
+            data = json.loads(raw)
+            mutate(data)
+            changed = captures / "changed.json"
+            changed.write_text(json.dumps(data), encoding="utf-8")
+            output = packet_dir.parent / f"invalid-{index}"
+            invalid = editorial_action('prepare', dataset, changed, output=output)
+            self.assertEqual(invalid.returncode, 2, invalid.stderr)
+            self.assertFalse(output.exists())
+        binding_mutations = (
+            lambda data: data.update(seed=data["seed"] + 1),
+            lambda data: data["cases"][0]["runs"]["fixture-before"]["conditions"].update(provider="Hidden metadata mutation"),
+            lambda data: None,
+        )
+        for index, mutate in enumerate(binding_mutations):
+            data = json.loads(raw)
+            mutate(data)
+            changed.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            stale = editorial_action('compare', dataset, changed, packet=packet_dir / 'review-packet.json', reviews=captures / 'reviews.json', output=packet_dir.parent / f'stale-{index}')
+            self.assertEqual(stale.returncode, 2, stale.stderr)
+        reviews = json.loads((captures / "reviews.json").read_bytes())
+        reviews["reviews"][0]["evidence_kind"] = "human_blinded"
+        changed_reviews = captures / "human-without-context.json"
+        changed_reviews.write_text(json.dumps(reviews), encoding="utf-8")
+        unsupported = editorial_action('compare', dataset, captures / 'captures.json', packet=packet_dir / 'review-packet.json', reviews=changed_reviews, output=packet_dir.parent / 'unbacked-human')
+        self.assertEqual(unsupported.returncode, 2, unsupported.stderr)
+
 
 class CliTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -1203,25 +1384,14 @@ class CliTests(unittest.TestCase):
                         "_parse_backend_overrides",
                         side_effect=AssertionError("parsed overrides before TTY"),
                     ) as parse_overrides,
-                    mock.patch.object(
-                        cli_module,
-                        "resolve_workspace",
-                        side_effect=AssertionError("resolved workspace before TTY"),
-                    ) as resolve_workspace,
-                    mock.patch.object(
-                        cli_module,
-                        "load_cli_context",
-                        side_effect=AssertionError("loaded context before TTY"),
-                    ) as load_context,
+                    _fresh_workspace_resolution_failure_patch(AssertionError("resolved workspace before TTY")) as resolve_workspace,
+                    _fresh_cli_context_rejection_patch(AssertionError("loaded context before TTY")) as load_context,
                     mock.patch.object(cli_module, "AgentBackend") as backend,
                     mock.patch.object(
                         cli_module,
                         "build_stream_terminal",
                     ) as terminal_factory,
-                    mock.patch.object(
-                        cli_module,
-                        "InteractiveController",
-                    ) as controller,
+                    _fresh_controller_constructor_patch() as controller,
                 ):
                     exit_code = main(arguments)
                 self.assertEqual(exit_code, 2)
@@ -1347,18 +1517,10 @@ class CliTests(unittest.TestCase):
                     dir_fd=dir_fd,
                 )
 
-            stdout = io.StringIO()
-            stderr = io.StringIO()
+            stdout, stderr = _fresh_cli_output_streams()
             with (
-                mock.patch.object(
-                    workspace_initialization_module,
-                    "_require_initialization_operations",
-                ),
-                mock.patch.object(
-                    workspace_module.os,
-                    "mkdir",
-                    side_effect=substitute_final_root,
-                ),
+                _fresh_initialization_operations_patch(),
+                _fresh_workspace_mkdir_callback_patch(substitute_final_root),
                 contextlib.redirect_stdout(stdout),
                 contextlib.redirect_stderr(stderr),
             ):
@@ -1413,18 +1575,10 @@ class CliTests(unittest.TestCase):
                         raise failure
                     real_mkdir(path, mode, dir_fd=dir_fd)
 
-                stdout = io.StringIO()
-                stderr = io.StringIO()
+                stdout, stderr = _fresh_cli_output_streams()
                 with (
-                    mock.patch.object(
-                        workspace_initialization_module,
-                        "_require_initialization_operations",
-                    ),
-                    mock.patch.object(
-                        workspace_module.os,
-                        "mkdir",
-                        side_effect=fail_final_creation,
-                    ),
+                    _fresh_initialization_operations_patch(),
+                    _fresh_workspace_mkdir_callback_patch(fail_final_creation),
                     contextlib.redirect_stdout(stdout),
                     contextlib.redirect_stderr(stderr),
                 ):
@@ -1575,16 +1729,8 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(sys, "stdout", stdout),
                     mock.patch.object(sys, "stderr", stderr),
                     _resolved_workspace_patch(workspace) as resolve_workspace,
-                    mock.patch.object(
-                        cli_module,
-                        "load_cli_context",
-                        return_value=cli_context,
-                    ) as load_context,
-                    mock.patch.object(
-                        cli_module,
-                        "AgentBackend",
-                        return_value=backend_value,
-                    ) as backend_factory,
+                    _fresh_captured_cli_context_patch(cli_context) as load_context,
+                    _fresh_backend_value_patch(backend_value) as backend_factory,
                     mock.patch.object(
                         cli_module,
                         "ProviderCatalogService",
@@ -1757,25 +1903,17 @@ class CliTests(unittest.TestCase):
                 "_validate_antigravity_executable",
                 side_effect=validate_executable,
             ),
-            mock.patch.object(
-                cli_module,
-                "resolve_workspace",
-                side_effect=lambda option: (
+            _fresh_workspace_resolution_failure_patch(lambda option: (
                     events.append(("workspace", option)) or workspace
-                ),
-            ),
+                )),
             mock.patch.object(
                 cli_module,
                 "activate_configured_conversation_storage",
                 side_effect=activate,
             ),
-            mock.patch.object(
-                cli_module,
-                "build_stream_terminal",
-                side_effect=lambda *args: (
+            _fresh_stream_terminal_failure_patch(lambda *args: (
                     events.append(("terminal", None)) or terminal
-                ),
-            ),
+                )),
             mock.patch.object(
                 cli_module,
                 "ProviderAuthService",
@@ -1817,23 +1955,13 @@ class CliTests(unittest.TestCase):
                 autospec=True,
                 side_effect=load_snapshot,
             ),
-            mock.patch.object(
-                cli_module,
-                "establish_default_backend",
-                side_effect=establish_default,
-            ),
+            _fresh_default_backend_attempt_patch(establish_default),
             mock.patch.object(
                 cli_module,
                 "_effective_interactive_providers",
                 side_effect=routes,
             ),
-            mock.patch.object(
-                cli_module,
-                "load_cli_context",
-                side_effect=lambda current: (
-                    events.append(("context", None)) or CliContext()
-                ),
-            ),
+            _fresh_recording_cli_context_patch(events),
             mock.patch.object(
                 cli_module,
                 "AgentBackend",
@@ -1989,17 +2117,10 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(sys, "stderr", stderr),
                     _resolved_workspace_patch(workspace),
                     runtime_probe_context as runtime_probe,
-                    mock.patch.object(
-                        cli_module,
-                        "build_stream_terminal",
-                        return_value=terminal,
-                    ) as terminal_factory,
+                    _fresh_terminal_builder_patch(terminal) as terminal_factory,
                     mock.patch.object(cli_module, "load_cli_context") as context,
                     mock.patch.object(cli_module, "AgentBackend") as backend,
-                    mock.patch.object(
-                        cli_module,
-                        "InteractiveController",
-                    ) as controller,
+                    _fresh_controller_constructor_patch() as controller,
                 ):
                     self.assertEqual(
                         main(["chat", "--workspace", str(workspace.root)]),
@@ -2078,10 +2199,7 @@ class CliTests(unittest.TestCase):
                     ),
                     mock.patch.object(cli_module, "load_cli_context") as context,
                     mock.patch.object(cli_module, "AgentBackend") as backend,
-                    mock.patch.object(
-                        cli_module,
-                        "InteractiveController",
-                    ) as controller,
+                    _fresh_controller_constructor_patch() as controller,
                 ):
                     self.assertEqual(main(["chat"]), 2)
 
@@ -2163,27 +2281,12 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(sys, "stdout", stdout),
                     mock.patch.object(sys, "stderr", stderr),
                     _resolved_workspace_patch(workspace),
-                    mock.patch.object(
-                        cli_module,
-                        "build_stream_terminal",
-                        return_value=terminal,
-                    ),
-                    mock.patch.object(
-                        cli_module,
-                        "ProviderAuthService",
-                        return_value=object(),
-                    ),
-                    mock.patch.object(
-                        cli_module,
-                        "InteractiveAuthCoordinator",
-                        return_value=coordinator,
-                    ),
+                    _fresh_terminal_builder_patch(terminal),
+                    _fresh_auth_service_patch(),
+                    _fresh_auth_coordinator_patch(coordinator),
                     mock.patch.object(cli_module, "load_cli_context") as context,
                     mock.patch.object(cli_module, "AgentBackend") as backend,
-                    mock.patch.object(
-                        cli_module,
-                        "InteractiveController",
-                    ) as controller,
+                    _fresh_controller_constructor_patch() as controller,
                 ):
                     self.assertEqual((main(["chat"]), stderr.getvalue()), (0, ""))
                 context.assert_not_called()
@@ -2240,32 +2343,16 @@ class CliTests(unittest.TestCase):
             mock.patch.object(sys, "stdout", stdout),
             mock.patch.object(sys, "stderr", stderr),
             mock.patch.object(cli_module, "resolve_workspace", return_value=workspace),
-            mock.patch.object(
-                cli_module,
-                "build_stream_terminal",
-                return_value=terminal,
-            ),
+            _fresh_terminal_builder_patch(terminal),
             mock.patch.object(cli_module, "ProviderAuthService", return_value=object()),
-            mock.patch.object(
-                cli_module,
-                "InteractiveAuthCoordinator",
-                return_value=coordinator,
-            ),
+            _fresh_auth_coordinator_patch(coordinator),
             mock.patch.object(
                 cli_module,
                 "establish_default_backend",
                 wraps=cli_module.establish_default_backend,
             ) as establish,
-            mock.patch.object(
-                cli_module,
-                "AgentBackend",
-                return_value=backend,
-            ) as backend_factory,
-            mock.patch.object(
-                cli_module,
-                "InteractiveController",
-                return_value=controller,
-            ),
+            _fresh_backend_patch(backend) as backend_factory,
+            _fresh_controller_patch(controller),
         ):
             self.assertEqual(main(["chat", "--workspace", str(workspace.root)]), 0)
 
@@ -2313,33 +2400,17 @@ class CliTests(unittest.TestCase):
             mock.patch.object(sys, "stdout", TtyStringIO(is_terminal=True)),
             mock.patch.object(sys, "stderr", io.StringIO()),
             mock.patch.object(cli_module, "resolve_workspace", return_value=workspace),
-            mock.patch.object(
-                cli_module,
-                "build_stream_terminal",
-                return_value=terminal,
-            ),
+            _fresh_terminal_builder_patch(terminal),
             mock.patch.object(cli_module, "ProviderAuthService", return_value=object()),
-            mock.patch.object(
-                cli_module,
-                "InteractiveAuthCoordinator",
-                return_value=coordinator,
-            ),
-            mock.patch.object(
-                cli_module,
-                "establish_default_backend",
-                side_effect=concurrent_winner,
-            ) as establish,
+            _fresh_auth_coordinator_patch(coordinator),
+            _fresh_default_backend_attempt_patch(concurrent_winner) as establish,
             mock.patch.object(
                 cli_module,
                 "_effective_interactive_providers",
                 wraps=cli_module._effective_interactive_providers,
             ) as routes,
             mock.patch.object(cli_module, "AgentBackend", return_value=mock.Mock()) as backend,
-            mock.patch.object(
-                cli_module,
-                "InteractiveController",
-                return_value=controller,
-            ),
+            _fresh_controller_patch(controller),
         ):
             self.assertEqual(main(["chat", "--workspace", str(workspace.root)]), 0)
 
@@ -2376,24 +2447,9 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(sys, "stdout", TtyStringIO(is_terminal=True)),
                     mock.patch.object(sys, "stderr", io.StringIO()),
                     _resolved_workspace_patch(workspace),
-                    mock.patch.object(
-                        cli_module,
-                        "build_stream_terminal",
-                        return_value=InteractiveTerminal(
-                            lambda _prompt: "",
-                            lambda _text: None,
-                        ),
-                    ),
-                    mock.patch.object(
-                        cli_module,
-                        "ProviderAuthService",
-                        return_value=object(),
-                    ),
-                    mock.patch.object(
-                        cli_module,
-                        "InteractiveAuthCoordinator",
-                        return_value=coordinator,
-                    ),
+                    _fresh_empty_terminal_patch(),
+                    _fresh_auth_service_patch(),
+                    _fresh_auth_coordinator_patch(coordinator),
                     mock.patch.object(cli_module, "establish_default_backend") as establish,
                     mock.patch.object(cli_module, "load_cli_context") as context,
                     mock.patch.object(cli_module, "AgentBackend") as backend,
@@ -2422,22 +2478,10 @@ class CliTests(unittest.TestCase):
             mock.patch.object(sys, "stdout", TtyStringIO(is_terminal=True)),
             mock.patch.object(sys, "stderr", stderr),
             mock.patch.object(cli_module, "resolve_workspace", return_value=workspace),
-            mock.patch.object(
-                cli_module,
-                "build_stream_terminal",
-                return_value=InteractiveTerminal(lambda _prompt: "", lambda _text: None),
-            ),
+            _fresh_empty_terminal_patch(),
             mock.patch.object(cli_module, "ProviderAuthService", return_value=object()),
-            mock.patch.object(
-                cli_module,
-                "InteractiveAuthCoordinator",
-                return_value=coordinator,
-            ),
-            mock.patch.object(
-                cli_module,
-                "establish_default_backend",
-                side_effect=OSError("persistence-secret"),
-            ),
+            _fresh_auth_coordinator_patch(coordinator),
+            _fresh_default_backend_attempt_patch(OSError("persistence-secret")),
             mock.patch.object(cli_module, "load_cli_context") as context,
             mock.patch.object(cli_module, "AgentBackend") as backend,
             mock.patch.object(cli_module, "InteractiveController") as controller,
@@ -2473,22 +2517,10 @@ class CliTests(unittest.TestCase):
             mock.patch.object(sys, "stdout", TtyStringIO(is_terminal=True)),
             mock.patch.object(sys, "stderr", stderr),
             mock.patch.object(cli_module, "resolve_workspace", return_value=workspace),
-            mock.patch.object(
-                cli_module,
-                "build_stream_terminal",
-                return_value=InteractiveTerminal(lambda _prompt: "", lambda _text: None),
-            ),
+            _fresh_empty_terminal_patch(),
             mock.patch.object(cli_module, "ProviderAuthService", return_value=object()),
-            mock.patch.object(
-                cli_module,
-                "InteractiveAuthCoordinator",
-                return_value=coordinator,
-            ),
-            mock.patch.object(
-                cli_module,
-                "establish_default_backend",
-                side_effect=SettingsError(SettingsErrorKind.CONFLICT),
-            ),
+            _fresh_auth_coordinator_patch(coordinator),
+            _fresh_default_backend_attempt_patch(SettingsError(SettingsErrorKind.CONFLICT)),
             mock.patch.object(cli_module, "load_cli_context") as context,
             mock.patch.object(cli_module, "AgentBackend") as backend,
             mock.patch.object(cli_module, "InteractiveController") as controller,
@@ -2553,21 +2585,9 @@ class CliTests(unittest.TestCase):
             mock.patch.object(sys, "stdout", stdout),
             mock.patch.object(sys, "stderr", stderr),
             _resolved_workspace_patch(workspace),
-            mock.patch.object(
-                cli_module,
-                "build_stream_terminal",
-                return_value=terminal,
-            ),
-            mock.patch.object(
-                cli_module,
-                "ProviderAuthService",
-                return_value=object(),
-            ),
-            mock.patch.object(
-                cli_module,
-                "InteractiveAuthCoordinator",
-                return_value=coordinator,
-            ),
+            _fresh_terminal_builder_patch(terminal),
+            _fresh_auth_service_patch(),
+            _fresh_auth_coordinator_patch(coordinator),
             mock.patch.object(cli_module, "AgentBackend") as backend,
             mock.patch.object(cli_module, "InteractiveController") as controller,
         ):
@@ -2612,25 +2632,11 @@ class CliTests(unittest.TestCase):
             mock.patch.object(sys, "stdin", stdin),
             mock.patch.object(sys, "stdout", stdout),
             mock.patch.object(cli_module, "resolve_workspace", return_value=workspace),
-            mock.patch.object(
-                cli_module,
-                "build_stream_terminal",
-                return_value=terminal,
-            ),
+            _fresh_terminal_builder_patch(terminal),
             mock.patch.object(cli_module, "ProviderAuthService", return_value=object()),
-            mock.patch.object(
-                cli_module,
-                "InteractiveAuthCoordinator",
-                return_value=coordinator,
-            ),
+            _fresh_auth_coordinator_patch(coordinator),
             mock.patch.object(cli_module, "establish_default_backend") as establish,
-            mock.patch.object(
-                cli_module,
-                "load_cli_context",
-                side_effect=lambda current: (
-                    events.append(("context", None)) or CliContext()
-                ),
-            ),
+            _fresh_recording_cli_context_patch(events),
             mock.patch.object(
                 cli_module,
                 "AgentBackend",
@@ -2638,11 +2644,7 @@ class CliTests(unittest.TestCase):
                     events.append(("backend", None)) or mock.Mock()
                 ),
             ),
-            mock.patch.object(
-                cli_module,
-                "InteractiveController",
-                return_value=controller,
-            ),
+            _fresh_controller_patch(controller),
         ):
             self.assertEqual(main(["chat", "--workspace", str(workspace.root)]), 0)
         self.assertEqual(
@@ -2720,16 +2722,8 @@ class CliTests(unittest.TestCase):
                 mock.patch.object(sys, "stdout", stdout),
                 mock.patch.object(sys, "stderr", stderr),
                 _resolved_workspace_patch(workspace),
-                mock.patch.object(
-                    cli_module,
-                    "load_cli_context",
-                    return_value=context,
-                ),
-                mock.patch.object(
-                    cli_module,
-                    "AgentBackend",
-                    return_value=backend_value,
-                ),
+                _fresh_captured_cli_context_patch(context),
+                _fresh_backend_value_patch(backend_value),
                 mock.patch.object(
                     cli_module,
                     "InteractiveController",
@@ -2802,11 +2796,7 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(sys, "stdin", stdin),
                     mock.patch.object(sys, "stdout", stdout),
                     mock.patch.object(sys, "stderr", stderr),
-                    mock.patch.object(
-                        cli_module,
-                        "resolve_workspace",
-                        side_effect=failure,
-                    ),
+                    _fresh_workspace_resolution_failure_patch(failure),
                 ):
                     self.assertEqual(main(["chat"]), 2)
                 self.assertEqual(
@@ -2835,11 +2825,7 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(sys, "stdout", stdout),
                     mock.patch.object(sys, "stderr", stderr),
                     _resolved_workspace_patch(workspace),
-                    mock.patch.object(
-                        cli_module,
-                        "load_cli_context",
-                        side_effect=failure_type("context-secret"),
-                    ),
+                    _fresh_cli_context_rejection_patch(failure_type("context-secret")),
                 ):
                     self.assertEqual(main(["chat"]), 2)
                 self.assertEqual(
@@ -2857,16 +2843,8 @@ class CliTests(unittest.TestCase):
             mock.patch.object(sys, "stdout", stdout),
             mock.patch.object(sys, "stderr", stderr),
             _resolved_workspace_patch(workspace),
-            mock.patch.object(
-                cli_module,
-                "load_cli_context",
-                return_value=CliContext(),
-            ),
-            mock.patch.object(
-                cli_module,
-                "build_stream_terminal",
-                side_effect=RuntimeError("terminal-constructor-secret"),
-            ),
+            _fresh_empty_cli_context_patch(),
+            _fresh_stream_terminal_failure_patch(RuntimeError("terminal-constructor-secret")),
             mock.patch.object(cli_module, "AgentBackend") as backend,
         ):
             self.assertEqual(main(["chat"]), 2)
@@ -2897,11 +2875,7 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(sys, "stdout", stdout),
                     mock.patch.object(sys, "stderr", stderr),
                     _resolved_workspace_patch(workspace),
-                    mock.patch.object(
-                        cli_module,
-                        "load_cli_context",
-                        return_value=CliContext(),
-                    ),
+                    _fresh_empty_cli_context_patch(),
                     mock.patch.object(
                         cli_module,
                         "AgentBackend",
@@ -2984,31 +2958,11 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(sys, "stdout", stdout),
                     mock.patch.object(sys, "stderr", stderr),
                     _resolved_workspace_patch(workspace),
-                    mock.patch.object(
-                        cli_module,
-                        "WorkspaceDebugLog",
-                        side_effect=control_type("logger acquisition"),
-                    ) as logger,
-                    mock.patch.object(
-                        cli_module,
-                        "load_cli_context",
-                        return_value=CliContext(),
-                    ) as load_context,
-                    mock.patch.object(
-                        cli_module,
-                        "build_stream_terminal",
-                        return_value=terminal,
-                    ) as build_terminal,
-                    mock.patch.object(
-                        cli_module,
-                        "AgentBackend",
-                        return_value=backend,
-                    ) as backend_factory,
-                    mock.patch.object(
-                        cli_module,
-                        "InteractiveController",
-                        return_value=controller,
-                    ) as controller_factory,
+                    _fresh_logger_failure_patch(control_type) as logger,
+                    _fresh_empty_cli_context_patch() as load_context,
+                    _fresh_terminal_builder_patch(terminal) as build_terminal,
+                    _fresh_backend_patch(backend) as backend_factory,
+                    _fresh_controller_patch(controller) as controller_factory,
                 ):
                     exit_code = main(["chat"])
 
@@ -3039,16 +2993,8 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(sys, "stdout", stdout),
                     mock.patch.object(sys, "stderr", stderr),
                     _resolved_workspace_patch(workspace),
-                    mock.patch.object(
-                        cli_module,
-                        "WorkspaceDebugLog",
-                        side_effect=control_type("logger acquisition"),
-                    ) as logger,
-                    mock.patch.object(
-                        cli_module,
-                        "load_cli_context",
-                        side_effect=failure,
-                    ) as load_context,
+                    _fresh_logger_failure_patch(control_type) as logger,
+                    _fresh_cli_context_failure_patch(failure) as load_context,
                     mock.patch.object(cli_module, "AgentBackend") as backend,
                 ):
                     exit_code = main(["chat"])
@@ -3075,8 +3021,7 @@ class CliTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "workspace"
-            stdout = io.StringIO()
-            stderr = io.StringIO()
+            stdout, stderr = _fresh_cli_output_streams()
             with (
                 mock.patch.object(cli_module, "WorkspaceDebugLog") as logger,
                 contextlib.redirect_stdout(stdout),
@@ -3101,8 +3046,7 @@ class CliTests(unittest.TestCase):
         for control_type in (KeyboardInterrupt, SystemExit):
             with self.subTest(control=control_type.__name__, outcome="success"):
                 workspace = initialized_workspace(self)
-                stdout = io.StringIO()
-                stderr = io.StringIO()
+                stdout, stderr = _fresh_cli_output_streams()
                 expected = {
                     "debates": [],
                     "overrides": {"agents": {}, "language": None},
@@ -3110,11 +3054,7 @@ class CliTests(unittest.TestCase):
                 }
                 with (
                     _resolved_workspace_patch(workspace),
-                    mock.patch.object(
-                        cli_module,
-                        "WorkspaceDebugLog",
-                        side_effect=control_type("logger acquisition"),
-                    ) as logger,
+                    _fresh_logger_failure_patch(control_type) as logger,
                     contextlib.redirect_stdout(stdout),
                     contextlib.redirect_stderr(stderr),
                 ):
@@ -3147,21 +3087,12 @@ class CliTests(unittest.TestCase):
 
             with self.subTest(control=control_type.__name__, outcome="failure"):
                 workspace = initialized_workspace(self)
-                stdout = io.StringIO()
-                stderr = io.StringIO()
+                stdout, stderr = _fresh_cli_output_streams()
                 failure = ConfigurationError("PRIVATE_POST_WORKSPACE_FAILURE")
                 with (
                     _resolved_workspace_patch(workspace),
-                    mock.patch.object(
-                        cli_module,
-                        "WorkspaceDebugLog",
-                        side_effect=control_type("logger acquisition"),
-                    ) as logger,
-                    mock.patch.object(
-                        cli_module,
-                        "load_cli_context",
-                        side_effect=failure,
-                    ) as load_context,
+                    _fresh_logger_failure_patch(control_type) as logger,
+                    _fresh_cli_context_failure_patch(failure) as load_context,
                     mock.patch.object(cli_module, "StoryRuntime") as runtime,
                     contextlib.redirect_stdout(stdout),
                     contextlib.redirect_stderr(stderr),
@@ -3231,8 +3162,7 @@ class CliTests(unittest.TestCase):
         """Keep a valid read-only command independent of its trace sink."""
 
         workspace = initialized_workspace(self)
-        stdout = io.StringIO()
-        stderr = io.StringIO()
+        stdout, stderr = _fresh_cli_output_streams()
         with (
             _resolved_workspace_patch(workspace),
             mock.patch.object(
@@ -3271,8 +3201,7 @@ class CliTests(unittest.TestCase):
         """Persist the exact post-workspace CLI and inspection correlation flow."""
 
         workspace = initialized_workspace(self)
-        stdout = io.StringIO()
-        stderr = io.StringIO()
+        stdout, stderr = _fresh_cli_output_streams()
         with (
             _resolved_workspace_patch(workspace),
             contextlib.redirect_stdout(stdout),

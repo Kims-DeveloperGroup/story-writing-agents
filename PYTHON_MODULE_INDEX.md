@@ -57,11 +57,10 @@ CLI / interactive shell
 
 ### Public facade, entry points, and operational commands
 
-Responsibility: expose the supported Python API, dispatch installed commands, build CLI
-context, and provide provider-free smoke verification. The CLI is a top-level adapter and
-may depend on runtime, storage, interactive, and workspace facades; none may depend on it.
-
-- `__init__`, `__main__`, `cli`, `cli_context`, `smoke`
+Responsibility: expose APIs and CLI context through `__init__`, `__main__`, `cli`, `cli_context`, and provider-free `smoke`.
+CLI adapters compose runtime, storage, interactive, and workspace facades; those owners never depend on CLI adapters.
+Standalone stdlib-only `tools/evaluate_lead_editorial.py` owns bounded offline capture validation, deterministic blinding,
+and descriptive paired reports without runtime imports, provider execution, or workflow authority.
 
 ### Core agent and runtime contracts
 

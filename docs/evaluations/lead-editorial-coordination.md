@@ -197,3 +197,12 @@ dataset, all five dimensions, and explicit constructed/proposed/not-run flags.
 Check local links and required document sections, then run the current static
 steps from [PR validation](../../.github/workflows/pr-validation.yml) and review
 the final diff. No runtime contract or canonical test is introduced here.
+
+## Offline tooling
+
+Use the [offline comparison protocol](lead-editorial-offline.md) to validate supplied
+captures, prepare reproducible blinded packets and render separate five-axis
+reports. The [constructed example](lead-editorial-offline-example/comparison/comparison-report.md)
+is INCONCLUSIVE about editorial quality; no live provider or human evaluation
+was performed. See the [delivery audit](lead-editorial-delivery-audit.md) for
+integrated software safeguards and separate effect/integration follow-ups.
