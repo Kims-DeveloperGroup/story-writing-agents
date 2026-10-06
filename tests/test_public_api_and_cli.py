@@ -1898,11 +1898,7 @@ class CliTests(unittest.TestCase):
                 side_effect=load_snapshot,
             ),
             _fresh_default_backend_attempt_patch(establish_default),
-            mock.patch.object(
-                cli_module,
-                "_effective_interactive_providers",
-                side_effect=routes,
-            ),
+            _fresh_cli_effect_patch('_effective_interactive_providers', routes),
             _fresh_recording_cli_context_patch(events),
             mock.patch.object(
                 cli_module,
@@ -1911,11 +1907,7 @@ class CliTests(unittest.TestCase):
                     events.append(("backend", None)) or backend
                 ),
             ),
-            mock.patch.object(
-                cli_module,
-                "InteractiveController",
-                side_effect=controller_factory,
-            ),
+            _fresh_cli_effect_patch('InteractiveController', controller_factory),
         ):
             self.assertEqual(
                 main(

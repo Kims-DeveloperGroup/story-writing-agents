@@ -1304,7 +1304,6 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         )
         self.assertEqual(issues, (
             '$.response_type: expected one of ["answer", "clarification_question", "critique", "proposal_drafting_recommendation", "specialist_consultation_proposal", "artifact_change_proposal"], got string',
-            "$.writing_task_scope: required property is missing",
             "$.response_text: expected string, got integer",
         ))
 
@@ -1326,7 +1325,6 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         )
         self.assertEqual(issues, (
             '$.response_type: expected one of ["answer", "clarification_question", "critique", "proposal_drafting_recommendation", "specialist_consultation_proposal", "artifact_change_proposal"], got object',
-            "$.writing_task_scope: required property is missing",
             "$.response_text: expected string, got integer",
         ))
         self.assertNotIn(secret, repr(issues))
@@ -2088,7 +2086,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         for field, value, requirement in (
             ("instruction", "", "expected nonempty text"),
             ("input_ids", ["user_input", "user_input"], "expected unique array items"),
-            ("mode", "PRIVATE_mode", 'expected one of ["draft", "review", "constraint_assessment"]; got string'),
+            ("mode", "PRIVATE_mode", 'expected one of ["draft", "review", "constraint_assessment", "premise_analysis"]; got string'),
         ):
             rejected({**story, "proposal": {"shared_premises": [], "assignments": [{**assignment, field: value}]}},
                      ".proposal.assignments[0]." + field, requirement)

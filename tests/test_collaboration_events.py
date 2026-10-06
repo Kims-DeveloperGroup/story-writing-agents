@@ -1060,6 +1060,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                 "basis",
                 "proposal_digest",
                 "authoring_scope",
+                "premise_decision",
             },
         )
         wire = encode_collaboration_proposal(proposal)
@@ -1684,8 +1685,8 @@ import story_writing_agents
 import story_writing_agents.conversations as facade
 import story_writing_agents.conversations.context as context
 import story_writing_agents.conversations.events as events
-assert len(facade.__all__) == 165
-assert len(events.__all__) == 124
+assert len(facade.__all__) == 168
+assert len(events.__all__) == 127
 assert len(context.__all__) == 33
 assert facade.CollaborationProposal is events.CollaborationProposal
 assert facade.CollaborationEventStore is context.CollaborationEventStore

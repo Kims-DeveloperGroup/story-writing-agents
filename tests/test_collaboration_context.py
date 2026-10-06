@@ -279,6 +279,12 @@ class CollaborationTransitionTests(unittest.TestCase):
                 "current_recommendation_start",
                 "current_recommendation_result",
                 "current_recommendation_state",
+                "premise_report",
+                "premise_report_event_id",
+                "premise_decision",
+                "premise_selection",
+                "premise_admission",
+                "premise_admission_event_id",
             ),
         )
 
