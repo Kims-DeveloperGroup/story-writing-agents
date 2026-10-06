@@ -211,6 +211,14 @@ ordinary input, without a new provider call or history append. Resolve that
 control first. Known terminal outcomes allow a new cycle with fresh requests;
 unknown or recovery outcomes remain blocked.
 
+A draft from an earlier revision of the same task can be selected as input to a
+fresh drafting or revision consultation. Its original message, digest, source
+revision, and owning conversation remain visible. The new consultation needs its
+own confirmation, owner drafts, and review of the exact final candidate. Earlier
+drafts, reviews, or confirmations do not complete the new revision or authorize
+Apply or Commit. Preparing a completed draft for artifact review still requires
+the exact completed source for the current revision.
+
 ### Compose the next request while confirmed work runs
 
 The interactive controller uses the live-composer boundary. On a capable

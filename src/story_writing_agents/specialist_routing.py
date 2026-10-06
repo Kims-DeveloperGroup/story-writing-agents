@@ -96,6 +96,38 @@ _CORE_DOMAIN_BY_PATH = {
 }
 
 
+def authoring_source_scope_is_eligible(
+    source_scope: AuthoringScope | None,
+    requested_scope: AuthoringScope,
+    *,
+    allow_prior_revision_input: bool = False,
+) -> bool:
+    """Separate exact current source identity from historical drafting input."""
+    if type(requested_scope) is not AuthoringScope or type(allow_prior_revision_input) is not bool:
+        raise TypeError("authoring source eligibility requires canonical scope and host policy")
+    if source_scope is None:
+        return True
+    if type(source_scope) is not AuthoringScope:
+        raise TypeError("authoring source scope must be canonical")
+    if source_scope.activity is AuthoringActivity.WORKFLOW:
+        return True
+    if source_scope.task_id != requested_scope.task_id:
+        return False
+    if requested_scope.schema_version < 3:
+        return True
+    if source_scope.task_revision == requested_scope.task_revision:
+        return True
+    return (
+        allow_prior_revision_input
+        and requested_scope.schema_version == 3
+        and requested_scope.intent is AuthoringIntent.AUTHORING
+        and requested_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
+        and source_scope.intent is AuthoringIntent.AUTHORING
+        and source_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
+        and source_scope.task_revision < requested_scope.task_revision
+    )
+
+
 def artifact_domain(path: str) -> ArtifactReviewDomain | None:
     """Classify an artifact identity without inspecting its existence or content.
 

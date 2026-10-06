@@ -193,6 +193,9 @@ _UNIQUE_C = "c_fedcba9876" + ("c" * 22)
 
 
 
+def _fresh_literal_object_none(target, attribute):
+    return mock.patch.object(target, attribute)
+
 def _message_visibility_controller_fixture(case, workspace):
     return case.make_controller(
         workspace,
@@ -3480,10 +3483,7 @@ class ControllerSettingsTests(ControllerTestCase):
             return updated
 
         with (
-            mock.patch.object(
-                controller_core_module,
-                "prepare_settings_save",
-            ) as prepare,
+            _fresh_literal_object_none(controller_core_module, 'prepare_settings_save') as prepare,
             _storage_selection_patch_fixture() as select_storage,
         ):
             state = exercise_picker(
@@ -4688,26 +4688,11 @@ class ControllerSettingsTests(ControllerTestCase):
                 side_effect=commit,
             ) as committed_save,
             _settings_routes_authentication_patch() as authenticate,
-            mock.patch.object(
-                backend,
-                "execution_profiles",
-            ) as execution_profiles,
-            mock.patch.object(
-                backend,
-                "stage_runtime_configuration",
-            ) as stage_backend,
-            mock.patch.object(
-                backend,
-                "validate_runtime_configuration_candidate",
-            ) as validate_backend,
-            mock.patch.object(
-                backend,
-                "discard_runtime_configuration",
-            ) as discard_backend,
-            mock.patch.object(
-                backend,
-                "record_runtime_configuration_recovery_required",
-            ) as recovery_backend,
+            _fresh_literal_object_none(backend, 'execution_profiles') as execution_profiles,
+            _fresh_literal_object_none(backend, 'stage_runtime_configuration') as stage_backend,
+            _fresh_literal_object_none(backend, 'validate_runtime_configuration_candidate') as validate_backend,
+            _fresh_literal_object_none(backend, 'discard_runtime_configuration') as discard_backend,
+            _fresh_literal_object_none(backend, 'record_runtime_configuration_recovery_required') as recovery_backend,
             mock.patch.object(
                 controller._runtime,
                 "prepare_runtime_configuration",
@@ -4853,10 +4838,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 "_settings_change_is_message_details_only",
                 autospec=True,
             ) as classification,
-            mock.patch.object(
-                controller_core_module,
-                "prepare_settings_save",
-            ) as prepare,
+            _fresh_literal_object_none(controller_core_module, 'prepare_settings_save') as prepare,
             _prepared_settings_commit_patch() as commit,
             _settings_routes_authentication_patch() as authenticate,
         ):
@@ -5259,10 +5241,7 @@ class ControllerSettingsTests(ControllerTestCase):
             ) as confirmation,
             _settings_routes_authentication_patch() as authenticate,
             _storage_selection_patch_fixture() as save,
-            mock.patch.object(
-                InteractiveController,
-                "_settings_panel",
-            ) as panel,
+            _fresh_literal_object_none(InteractiveController, '_settings_panel') as panel,
             mock.patch.object(
                 type(controller._semantic_output),
                 "write_component",

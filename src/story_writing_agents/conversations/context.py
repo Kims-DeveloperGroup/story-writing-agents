@@ -34,7 +34,10 @@ from typing import Mapping, Protocol
 from ..errors import SessionIdError
 from ..reply_trace import ReplyTrace
 from ..structured_output_validation import validate_details
-from ..specialist_routing import AuthoringActivity, AuthoringIntent, SpecialistAssignmentMode
+from ..specialist_routing import (
+    AuthoringActivity, AuthoringIntent, SpecialistAssignmentMode, authoring_source_scope_is_eligible,
+    required_authoring_specialists,
+)
 from .events import (
     confirmed_authoring_proposals,
     validate_authoring_capture_pin,
@@ -2560,6 +2563,54 @@ def _recommendation_origin(
     return request, decision, start
 
 
+def _is_fresh_drafting_preparation(request, source, events) -> bool:
+    scope = request.authoring_scope
+    if (
+        scope is None or scope.schema_version != 3
+        or scope.intent is not AuthoringIntent.AUTHORING
+        or scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
+        or request.kind is not LeadRecommendationActionKind.PREPARE_CONSULTATION
+        or type(source.payload) is not CollaborationLeadJudgmentPayload
+        or request.source_execution_attempt_id is not None
+    ):
+        return False
+    previous = None
+    prior = tuple(event for event in events if event.sequence < source.sequence)
+    for event in prior:
+        if type(event.payload) not in {
+            CollaborationProposal, CollaborationLeadJudgmentPayload, LeadRecommendationRequestPayload,
+        }:
+            continue
+        candidate = event.payload.authoring_scope
+        if (candidate is not None and candidate.activity is not AuthoringActivity.WORKFLOW
+                and candidate.task_id == scope.task_id
+                and (previous is None or candidate.task_revision >= previous.task_revision)):
+            previous = candidate
+    reviewed = {event.payload.proposal_id: event.payload for event in prior
+                if type(event.payload) is ArtifactReviewedProposal}
+    proposals = {event.payload.proposal_id: event.payload for event in prior
+                 if type(event.payload) is CollaborationProposal}
+    for event in prior:
+        result = event.payload
+        if type(result) is not ArtifactApplicationResultPayload or result.outcome not in {
+            ArtifactApplicationOutcomeKind.APPLIED, ArtifactApplicationOutcomeKind.UNCHANGED,
+        }:
+            continue
+        review = reviewed.get(result.reviewed_proposal_id)
+        proposal = None if review is None else proposals.get(review.consultation_proposal_id)
+        if (previous is not None and review is not None
+                and review.proposal_digest == result.reviewed_proposal_digest
+                and proposal is not None and proposal.authoring_scope is not None
+                and (proposal.authoring_scope.task_id, proposal.authoring_scope.task_revision)
+                == (previous.task_id, previous.task_revision)):
+            previous = None
+    return (
+        scope.task_id == source.step_id and scope.task_revision == 1
+        if previous is None
+        else scope.task_revision == previous.task_revision + 1
+    )
+
+
 def _project_lead_recommendation_history(
     events: tuple[CollaborationEventV2, ...],
 ) -> tuple[
@@ -2626,6 +2677,7 @@ def _project_lead_recommendation_history(
                         or not set(prior_scope.domains).issubset(scope.domains)
                         or not set(prior_scope.target_paths).issubset(scope.target_paths)):
                         raise ValueError("recommendation revision must retain its authoring task and obligations")
+            fresh_consultation = _is_fresh_drafting_preparation(payload, source, tuple(by_id.values()))
             source_proposal = (payload.source_proposal_id, payload.source_proposal_revision,
                                payload.source_proposal_digest)
             if type(source.payload) is CollaborationLeadSynthesisPayload:
@@ -2645,9 +2697,9 @@ def _project_lead_recommendation_history(
                 expected_source = (None, None, None) if not revisions else (
                     revisions[0].payload.proposal_id, revisions[0].payload.proposal_revision,
                     revisions[0].payload.proposal_digest)
-                if payload.authoring_scope is not None and payload.authoring_scope.schema_version == 3 and payload.authoring_scope.activity in {
+                if not fresh_consultation and (payload.authoring_scope is not None and payload.authoring_scope.schema_version == 3 and payload.authoring_scope.activity in {
                     AuthoringActivity.DRAFT, AuthoringActivity.REVISE,
-                } and not revisions:
+                } and not revisions):
                     prior_proposal = next((prior.payload for prior in by_id.values()
                                            if type(prior.payload) is CollaborationProposal and (
                                                prior.payload.proposal_id, prior.payload.proposal_revision, prior.payload.proposal_digest
@@ -2713,10 +2765,9 @@ def _project_lead_recommendation_history(
                 selected_scope = getattr(offered.payload, "authoring_scope", None)
                 scope = payload.authoring_scope
                 if (
-                    scope is not None and scope.schema_version == 3
-                    and selected_scope is not None
-                    and selected_scope.activity is not AuthoringActivity.WORKFLOW
-                    and (selected_scope.task_id, selected_scope.task_revision) != (scope.task_id, scope.task_revision)
+                    scope is not None and scope.schema_version == 3 and not authoring_source_scope_is_eligible(
+                    selected_scope, scope, allow_prior_revision_input=fresh_consultation,
+                )
                 ):
                     raise ValueError("recommendation draft source belongs to another task or revision")
             if type(source.payload) is CollaborationLeadSynthesisPayload and not any(
@@ -3102,7 +3153,7 @@ def _validate_premise_history(events):
         needs_past = type(payload) in {
             CollaborationPremiseFreshWorkAdmissionPayload, CollaborationPremiseDecisionPayload,
             CollaborationPremiseSelectionPayload,
-        } or (type(payload) is CollaborationProposal and (
+        LeadRecommendationRequestPayload, } or (type(payload) is CollaborationProposal and (
             payload.premise_decision is not None or event.step_id in admission_steps
             or (payload.authoring_scope is not None and any(
                 old.payload.capture.authoring_task_id == payload.authoring_scope.task_id for old in captures)))) or (type(payload) is CollaborationLeadSynthesisPayload and payload.premise_report is not None) or (type(payload) is CollaborationSpecialistReplyPayload and payload.premise_conflicts)
@@ -3280,6 +3331,18 @@ def _validate_premise_history(events):
             elif not same or max(item.task_revision for item in same) != capture.selection.expected_authoring_task_revision:
                 raise ValueError("premise successor choice has a stale task revision")
             captures.append(event)
+        if type(payload) is LeadRecommendationRequestPayload and payload.authoring_scope is not None:
+            admitted_event = admission_steps.get(event.step_id)
+            if admitted_event is not None:
+                admitted = admitted_event.payload.admission
+                scope = payload.authoring_scope
+                pair = PremiseAuthoringTaskRef(scope.task_id, scope.task_revision)
+                source = prior.get(payload.source_recommendation_event_id)
+                if (source is None or not _is_fresh_drafting_preparation(payload, source, past)
+                        or pair not in admitted.offered_authoring_tasks
+                        or (admitted.selected_authoring_task is not None
+                            and pair != admitted.selected_authoring_task)):
+                    raise ValueError("fresh-work recommendation changed its exact prospectively admitted task")
         if type(payload) is CollaborationProposal and payload.authoring_scope is not None:
             scope = payload.authoring_scope
             admitted = next((old.payload.admission for old in reversed(past)
@@ -3494,12 +3557,15 @@ def _project_validated_collaboration_history(
 
             if type(payload) is LeadRecommendationRequestPayload:
                 source = event_by_id[payload.source_recommendation_event_id]
+                fresh_consultation = _is_fresh_drafting_preparation(
+                    payload, source, tuple(event_by_id.values()),
+                )
                 source_spent = spent_calls.get(source.step_id, 0)
                 inherited_rounds = None
                 scope = payload.authoring_scope
-                if scope is not None and scope.schema_version == 3 and scope.activity in {
+                if not fresh_consultation and (scope is not None and scope.schema_version == 3 and scope.activity in {
                     AuthoringActivity.DRAFT, AuthoringActivity.REVISE,
-                }:
+                }):
                     source_proposal = next((item for item in proposals.values() if (
                         item.proposal_id, item.proposal_revision, item.proposal_digest
                     ) == (payload.source_proposal_id, payload.source_proposal_revision, payload.source_proposal_digest)), None)
@@ -3545,6 +3611,19 @@ def _project_validated_collaboration_history(
                     )
                 if payload.physical_calls_spent != source_spent:
                     raise ValueError("recommendation cannot reset source-lineage call accounting")
+                if fresh_consultation:
+                    if running_attempts.get(event.step_id, 0) != 0:
+                        raise ValueError("fresh drafting preparation requires its own round-zero call accounting")
+                    read = any(item.state is CollaborationInputState.PRESENT and item.kind in {
+                        CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.MANUSCRIPT,
+                        CollaborationInputKind.WRITING_ARTIFACT,
+                    } for item in payload.basis.inputs)
+                    floor = (
+                    len(payload.specialist_ids) + len(required_authoring_specialists(scope)) + 4
+                ) * (1 + int(read))
+                    if (source_spent + payload.max_preparation_physical_calls + floor
+                            > COLLABORATION_PHYSICAL_CALL_LIMIT):
+                        raise ValueError("fresh preparation must reserve all current drafting and final-review calls")
                 if event.step_id != source.step_id:
                     if event.step_id in spent_calls or event.step_id in proposals:
                         raise ValueError("recommendation preparation step must be fresh")

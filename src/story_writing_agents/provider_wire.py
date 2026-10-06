@@ -880,6 +880,14 @@ _catalog("existing_task_call_limit", "Remaining ordinary-front cap that preserve
 _catalog("existing_task_call_limit_reason", "The finite existing-task constraint also bounds fresh alternatives in this invocation.")
 
 
+_catalog(
+    "proposal_drafting_source_facts",
+    "Host-qualified offered draft input identities: exact event alias, owner conversation, original "
+    "authoring scope and content digest. A prior same-task revision is material only for fresh "
+    "drafting-consultation preparation, never current execution proof or artifact authority.",
+)
+
+
 def field_description(name: str) -> str:
     try:
         return FIELD_CATALOG[name]
@@ -1433,7 +1441,7 @@ ENUM_MEANINGS.update({
     "premise_analysis": "candidate-free alternatives analysis", "premise_decision": "exact USER premise control",
     "premise_selection": "exact whole selected premise capture", "premise_fresh_work_admission": "authority-free call attribution",
 })
-STRUCTURED_INPUT_FIELDS = STRUCTURED_INPUT_FIELDS | frozenset("premise_decision premise_analysis alternatives options reply_dispositions premise_report premise_selection fresh_work_admission admission_ref prior_admission_ref prior_analysis_report_ref prior_authoring_source_ref allowed_choices cost cost_link analysis prior_authoring prior_authoring_cost source_authoring_task source_reply_refs spec summary intent task premise_conflicts offered_authoring_tasks selected_authoring_task".split())
+STRUCTURED_INPUT_FIELDS = STRUCTURED_INPUT_FIELDS | frozenset('premise_decision premise_analysis alternatives options reply_dispositions premise_report premise_selection fresh_work_admission admission_ref prior_admission_ref prior_analysis_report_ref prior_authoring_source_ref allowed_choices cost cost_link analysis prior_authoring prior_authoring_cost source_authoring_task source_reply_refs spec summary intent task premise_conflicts offered_authoring_tasks selected_authoring_task proposal_drafting_source_facts'.split())
 DYNAMIC_CHOICE_FIELDS = DYNAMIC_CHOICE_FIELDS | frozenset({"question_id", "reply_event_id", "alternative_keys", "option_id", "capture_digest"})
 _catalog("authoring_task_id authoring_task_revision expected_authoring_task_revision", "Exact host-offered fresh authoring task/revision or USER-selected current-task successor. No prior draft proof, calls or rounds are reused.")
 _catalog("report_event_id report_digest proposal_digest", "Exact durable source identity/digest in the enclosing report or receipt. A historical cost reference grants no current execution, candidate, Apply or Commit authority.")
