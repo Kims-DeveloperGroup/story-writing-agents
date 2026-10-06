@@ -56,6 +56,12 @@ fact error or protection breach cannot disappear into an average score. Scope
 changes still require fresh revision/confirmation and exact final-candidate
 review. Review-only input keeps its literal bytes.
 
+The `incompatible-fresh-scope` workflow observation audits fresh scope/revision
+and confirmation, plus exact final-candidate review, separately from the human
+preservation judgment. Missing authority records keep this observation missing
+and the case INCONCLUSIVE. Constructed examples retain that gap rather than
+invent a passing workflow audit.
+
 Policy presence, shared-brief transmission, and authority checks establish
 deterministic requirements separately from actual judgment quality. These new
 editorial observations are **not_run** until eligible outputs and independent

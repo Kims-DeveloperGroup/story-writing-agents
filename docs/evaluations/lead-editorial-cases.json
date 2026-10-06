@@ -489,8 +489,14 @@
         {
           "observation_id": "incompatible-protection-priority",
           "category": "editorial",
-          "expectation": "Treat the no-allegiance-reveal condition as a prohibition rather than a preference: reject or modify the conflicting reveal advice, explain its source-bound conflict and cost, and recheck protected events, dialogue, voice and ambiguity. An unchanged ending or justified limit may be valid; any changed condition needs fresh scope/revision/confirmation and exact final-candidate review.",
-          "evidence_required": "Specialist brief and recommendation dispositions, exact candidate/review/authority records, source/output diff and independent human assessment"
+          "expectation": "Treat the no-allegiance-reveal condition as a prohibition rather than a preference: reject or modify the conflicting reveal advice, explain its source-bound conflict and cost, and recheck protected events, dialogue, voice and ambiguity. An unchanged ending or justified limit may be valid.",
+          "evidence_required": "Specialist brief and recommendation dispositions, protected source/output diff and independent human assessment"
+        },
+        {
+          "observation_id": "incompatible-fresh-scope",
+          "category": "workflow",
+          "expectation": "Changing a protected condition requires a newly disclosed scope/task revision and matching confirmation. All affected domains must review the exact final candidate before Apply; an old confirmation or candidate cannot authorize changed conditions. When the condition is unchanged, record that fact and audit exact-candidate review without manufacturing an additional approval.",
+          "evidence_required": "Exact proposal/task/revision, confirmation, final-candidate/reviewer and Apply event references with workflow-auditor rationale; report not_observed when those records are unavailable"
         }
       ],
       "scoring_dimensions": [

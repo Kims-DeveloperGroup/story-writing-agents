@@ -154,7 +154,7 @@
     },
     {
       "case_id": "incompatible-recommendations",
-      "case_sha256": "76c84f1991a0889a55190fc034c78f97bbd2978cf13ddf6081aabb2796aceb56",
+      "case_sha256": "ae9f31200bf6dacaad2fc8677bcf82c8c0fa33b430ceeb8cc5fa3fb52cf7a59c",
       "runs": {
         "fixture-after": {
           "capture_evidence": {
@@ -297,7 +297,7 @@
   ],
   "comparison_id": "constructed-editorial-review-regression",
   "comparison_kind": "before_after",
-  "dataset_sha256": "e850bf1049e8746f76e26d7837aae57df04b95fb519b97a00c94d61eee884a7a",
+  "dataset_sha256": "7311dde6bf7159cb6a5893b4292f7eaf1076be0ceee84fa10e9807d9f8155029",
   "format_version": 1,
   "protocol": {
     "evidence": {
