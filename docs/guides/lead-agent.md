@@ -572,8 +572,11 @@ review cannot replace final candidate review.
 
 ### Contribution roles and confirmed shared premises
 
-Current Lead proposals explicitly use scope version 3. Fresh invocations use `lead-response-v7`;
-explicit legacy scope1/2 bindings retain `lead-response-v6`. `contributions` declares
+Current Lead proposals explicitly use scope version 3. Eligible ordinary new-step user fronts
+offer `lead-response-v8`, including the separate premise-analysis branch. Preparation,
+continuation, exploration/adoption, and selected-premise authoring intake do not offer that
+branch; their bound `lead-response-v7` or `lead-response-v6` contracts remain selected.
+`contributions` declares
 one `draft_owner` or `constraint_assessor` for each affected domain. Domains
 mapping to one specialist must agree on its role; the runtime never drops a
 required specialist to resolve a conflict or fit a budget. Draft/revise work
@@ -616,22 +619,131 @@ including required READs and corrections. Fresh alternatives in that invocation
 share this finite allowance. The separate advisory-consultation API accepts
 historical scope1/2 only; scope3 uses the confirmed Lead flow.
 
+### Choosing an unresolved premise
+
+An already selected premise uses the authoring route above. For a material unresolved
+question, the Lead can propose a separate premise-analysis consultation. Affected analysts
+examine alternatives; the Lead returns provisional whole options with evidence, tradeoffs,
+and a reasoned disposition of each actual reply, including residual costs and minority
+concerns. This report is advice about a choice, with no drafting or approval authority.
+
+These state names describe the user experience, rather than additional public methods.
+
+| State or event | Meaning and next permitted action |
+| --- | --- |
+| Unresolved question | Disclose the question, sources, affected analysts, and bounded proposal. Reuse an already selected premise without another analysis. |
+| Analysis awaiting confirmation | Confirm the exact consultation to start it, or reject it without analyst execution. Ordinary text does not confirm. |
+| Revise before analysis Confirm | Return provider-free clarification while keeping that exact proposal pending. To change the question or sources, Reject and request a fresh proposal; already resolved premises can use the direct authoring route. |
+| Analysis running | Retain actual calls and interruption state. Settle pending or uncertain outcomes before advancing a choice. |
+| Options available | Show provisional whole options, recommendation, reply dispositions, residual costs, and actual spend. Dependent drafting does not start automatically. |
+| Clarification needed | Insufficient evidence remains unresolved; missing material is not a selected premise. |
+| Choice deferred | Keep the report unresolved for a later exact choice, including after restart. |
+| Choice rejected | Close that report's selection path. A later genuine question requires new work. |
+| Choice selected | Record exact report, option text/digest, user control, owning conversation, and task/revision. Disclose a fresh authoring proposal with its own confirmation. |
+| Known front failure after selection | Retain the genuine choice and actual spend. Only the exact validated user/capture origin pair can allow safe closure; any execution authority or uncertain outcome still requires recovery. |
+| Authoring running | All dependent writers receive the same captured premise. Analysis does not satisfy draft-owner obligations. |
+| Draft premise conflict | Hold the draft and show its typed slot/capture conflict. A specialist cannot declare a user direction change. |
+| User changes direction | Use the next explicit task revision, fresh confirmation, owner drafts, and final review. Old candidates and approvals grant no new authority. |
+| Budget exhausted or recovery required | Preserve submitted calls and uncertainty. Resolve recovery first; permitted fresh work links earlier costs and discloses its own bounds. |
+
+The Python entry point accepts a typed `premise_selection`; `/premise` exposes the same
+choices in the shell. Selection binds the exact report in the current owning conversation.
+An identical request-identifier retry returns its recorded result without repeating calls or
+captures; changed text or selection arguments with that identifier are refused. Foreign-conversation and partial
+adoption use their own workflow.
+
+A report-bearing `LeadTurnResult` pairs `premise_report` with `premise_report_ref`. The latter
+supplies the exact conversation, event, digest, and question pins. Let `chosen` be the whole
+option the user selected from `result.premise_report.options`:
+
+```python
+from uuid import uuid4
+from story_writing_agents.lead_premise_decisions import (
+    PremiseChoicePolicy, PremiseDecisionAction, PremiseDecisionSelection,
+)
+
+ref = result.premise_report_ref
+assert ref is not None
+selection = PremiseDecisionSelection(
+    request_id=uuid4().hex,
+    action=PremiseDecisionAction.CHOOSE,
+    source_conversation_id=ref.source_conversation_id,
+    report_event_id=ref.report_event_id,
+    report_digest=ref.report_digest,
+    question_id=ref.question_id,
+    choice_policy=PremiseChoicePolicy.USER_CHOICE,
+    option_id=chosen.option_id,
+    material_digest=chosen.material_digest,
+)
+proposal = await session.lead_turn(
+    conversation_id, "Draft using this chosen premise.", premise_selection=selection,
+)
+```
+
+Keep that same selection object for an identical retry. Use a new identifier for new intent.
+This example requests targetless writing in a fresh task; its proposal still needs Confirm.
+Supplying artifact targets or an exact current task/revision pair changes the disclosed fresh
+authoring scope, with the same separate confirmation and final-review requirements.
+
+Important choices default to the user. Delegated minor choices require a user-authored
+allowlist of exact report options and material digests. The host may select only the supplied
+recommendation when it belongs to that allowlist. Missing or out-of-set recommendations refuse
+selection without a provider call. A general Confirm, provider suggestion, or first-turn policy
+label does not grant delegation. Reject and defer never establish a premise.
+
+A new task starts at revision 1. Continuing a known authoring task requires both its identifier
+and exact current revision; the successor uses current revision + 1. Partial, stale, foreign, or
+unresolved task references are refused. The selected source does not authorize Apply or Commit.
+An explicit new request can reuse the same terminal report for either transition without
+reopening analysis. If the earlier chosen-premise front failed before admitting a task, a
+fresh request can disclose a new task while retaining that earlier choice and spend.
+Targetless writing remains possible without artifact authority; artifact targets need complete
+affected-domain coverage and current source pins.
+
+Analysis ends after its analyst round and Lead synthesis. Fresh authoring separately uses the
+existing draft/constraint round and exact-candidate final-review round. Their actual costs remain
+distinct and visible together, without calling the total a single three-round/twelve-call job.
+Count unique actual submitted call identities, including failed fronts, without double counting
+shared cost references. Provider usage can remain unknown even when a submitted call is known.
+Later reports cite their actual earlier terminal analysis report. Intervening failed ordinary
+fronts retain their own steps and are shown separately; a prior-report link does not reduce an
+ordinary READ-heavy request to the narrow two-call admission limit.
+
+For exhausted-source fresh work, an authority-free front admission pins the exact new user
+origin, invocation, offered identities, prior cost heads, and front-call limit before the first
+call. Initial, READ/recovery, and structured correction calls share a conservative two-call cap;
+renewing a delegate does not reset it. Invalid or unsupported submissions still consume calls.
+The receipt does not reopen a closed question or authorize old preparation, continuation, or
+artifact mutation. Unknown prepared outcomes keep recovery priority.
+
+These guards establish provenance, workflow, and accounting. Alternative quality and semantic
+fidelity of drafts still require genuine author-intent and reader/editor evaluation in #806.
+
 ## How a lead judgment is grounded
 
-The provider declares one semantic scope and one evidence status. Runtime does
-not use NLP to relabel either value. Ambiguous story/workflow requests are a
-prompt rule for the lead: classify them as story-specific and ask a grounded
-question. The evidence layer accepts only these combinations; authoring routing applies
-in addition, so evidence alone never permits substantive direct story work:
+For ordinary outcomes, the provider declares one semantic scope and one evidence
+status. Runtime does not use NLP to relabel either value. Ambiguous story/workflow
+requests are a prompt rule for the Lead: classify them as story-specific and ask a
+grounded question. The separate typed premise-analysis intent derives its own host
+scope. Evidence and authoring routing remain separate from execution authority:
 
 | Declared scope and status | Minimum current evidence | Allowed visible kinds |
 | --- | --- | --- |
 | `workflow_meta` / `not_applicable` | No receipts | `answer`, `question`, `critique`, `recommendation` |
+| `premise_analysis` / `not_applicable` | No receipts; exact typed analysis Spec in the same batch, with no AuthoringScope | Candidate-free `proposal` only |
 | `story_specific` / `verified` | One nonempty attached reference or completed READ | All five kinds |
 | `story_specific` / `missing` | An absent canonical-core status, or a complete non-truncated zero-hit SEARCH whose authorized scope includes writing artifacts | `question`, `recommendation`, `proposal` |
 | `story_specific` / `empty` | A zero-byte canonical-core status or a zero-byte whole attached reference | `question`, `recommendation`, `proposal` |
 | `story_specific` / `incomplete` | At least one current content or canonical-core status receipt | `question`, `critique`, `recommendation`, `proposal` |
 | `story_specific` / `conflicting` | At least two distinct, nonempty current content receipts | `question`, `critique`, `recommendation`, `proposal` |
+
+The `premise_analysis` scope is host-derived after strict validation of the
+offered question and analyst assignments; a provider cannot select it. A typed
+analysis proposal retains any genuine qualified READ/attached receipts and their
+corresponding current-evidence requirements above. These receipts ground the
+available inputs; the report options remain provisional. Context validation
+requires the exact analysis Spec in the same batch and forbids an AuthoringScope.
+It never grants drafting, candidate review, Apply or Commit authority.
 
 Every other combination fails closed. Evidence IDs are invocation-local and
 must be unique and in runtime order: attached references, four core statuses,

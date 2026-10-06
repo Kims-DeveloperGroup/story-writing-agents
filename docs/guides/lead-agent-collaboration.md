@@ -470,6 +470,20 @@ less consistent.
 
 ## Shared premises and contribution roles
 
+For an unresolved motivation, the Lead can first propose a separate analyst consultation.
+Its terminal report presents provisional whole options, the recommendation, each actual
+reply's disposition and residual cost. Choose, reject, or defer the exact report through
+the shell's `/premise` action. A choice supplies a captured source for a fresh authoring
+proposal; it does not confirm that proposal or authorize Apply/Commit. Important choices
+remain yours. A delegated minor choice must use your exact report-bound option allowlist.
+
+Analysis and authoring retain separate limits and actual costs. Failed front attempts remain
+visible; a fresh proposal cannot reset earlier spend. A draft that declares a conflict with
+its captured premise is held, while your direction change starts a fresh explicit revision.
+See [the complete premise state table](lead-agent.md#choosing-an-unresolved-premise) for
+clarification, rejection, deferral, restart, budget exhaustion, and recovery behavior.
+
+
 For dialogue polishing, the Lead can assign Execution to draft the prose and
 Character to assess characterization constraints. Character need not rewrite
 the dialogue. Both still review the same final candidate before any Apply.

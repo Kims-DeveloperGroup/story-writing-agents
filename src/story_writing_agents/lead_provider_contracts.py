@@ -17,6 +17,10 @@ from .specialist_routing import (
     required_authoring_specialists, required_authoring_domains, assignment_mode_for_specialist,
     AuthoringContributionRole,
 )
+from .lead_premise_decisions import (
+    PremiseAnalysis, PremiseDecisionSummary, premise_question_intent_from_dict,
+    premise_analysis_from_dict, premise_summary_from_dict,
+)
 from .structured_output_validation import DomainValidationRule, validation_failure
 
 
@@ -233,6 +237,7 @@ class LeadProviderConstraints:
     preparation_specialists: tuple[str, ...] = ()
     recommendation_only: bool = False
     continuation: bool = False
+    premise_question_id: str | None = None
 
     def __post_init__(self) -> None:
         for values in (self.input_ids, self.task_revisions, self.reviewer_inputs,
@@ -247,6 +252,9 @@ class LeadProviderConstraints:
 
     def prompt_facts(self) -> dict[str, object]:
         return {
+            **({"offered_premise_question_id": self.premise_question_id,
+                "premise_analysis_rule": "Only an undecided question needs target-free alternatives analysis. Reuse disclosed resolved inputs. Analysis requires its own Confirm and cannot draft, review a candidate, select a premise, or update an objective."}
+               if self.premise_question_id is not None else {}),
             "offered_assignment_input_ids": list(self.input_ids),
             "required_input_ids": [item for item in self.input_ids
                                    if not self.preparation_kind or item not in PREPARATION_INPUT_IDS],
@@ -493,6 +501,11 @@ class LeadProviderConstraints:
 
     def rules(self, value: object, *, read_ids: tuple[str, ...] = (),
                  read_reviewers: tuple[tuple[str, str], ...] = ()) -> tuple[DomainValidationRule, ...]:
+        if type(value) is dict and type(value.get("proposal")) is dict and "premise_decision" in value["proposal"]:
+            if self.premise_question_id is None:
+                return (DomainValidationRule.LEAD_OUTCOME_REJECTED,)
+            return PremiseDecisionConstraints(self.premise_question_id, self.input_ids,
+                allow_read_sources=self.allow_read_sources).front_rules(value, read_ids=read_ids)
         if not self.allow_read_sources:
             read_ids = ()
             read_reviewers = ()
@@ -656,3 +669,129 @@ class LeadProviderConstraints:
             }
             rules = [continuation_rules.get(rule, rule) for rule in rules]
         return tuple(dict.fromkeys(rules))
+
+
+@dataclass(frozen=True, slots=True)
+class PremiseDecisionConstraints:
+    """Invocation-only question, selected sources and actual analyst choices."""
+
+    question_id: str
+    input_ids: tuple[str, ...] = ()
+    reply_alternatives: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    unavailable_reply_ids: tuple[str, ...] = ()
+    allow_read_sources: bool = False
+
+    def question_schema(self) -> dict[str, object]:
+        return closed_object({
+            "question_id": {"type": "string", "enum": [self.question_id]},
+            "slot_id": nonempty_text_schema(),
+            "question": nonempty_text_schema(),
+            "dependent_domains": string_array(tuple(item.value for item in ArtifactReviewDomain), minimum=1, maximum=3),
+        })
+
+    def front_schema(self) -> dict[str, object]:
+        assignment = closed_object({
+            "agent_id": {"type": "string", "enum": list(SPECIALIST_IDS)},
+            "instruction": nonempty_text_schema(),
+            "input_ids": string_array(None if self.allow_read_sources else self.input_ids, minimum=1, maximum=64),
+            "mode": {"type": "string", "enum": ["premise_analysis"]},
+        })
+        result = closed_object({
+            "kind": {"type": "string", "enum": ["proposal"]},
+            "message": nonempty_text_schema(),
+            "authoring_scope": {"type": "null"},
+            "proposal": closed_object({
+                "assignments": {"type": "array", "items": assignment, "minItems": 1, "maxItems": 3},
+                "premise_decision": self.question_schema(),
+            }),
+        })
+        result["description"] = "Propose candidate-free analysis of the offered unresolved premise. No drafting, review, artifact or objective authority."
+        return result
+
+    def front_rules(self, value: dict[str, object], *, read_ids: tuple[str, ...] = ()) -> tuple[DomainValidationRule, ...]:
+        try:
+            if set(value) != {"kind", "message", "authoring_scope", "proposal"} or value["kind"] != "proposal" or value["authoring_scope"] is not None or not visible_text(value["message"]):
+                raise ValueError("premise proposal is not candidate-free")
+            proposal = value["proposal"]
+            if type(proposal) is not dict or set(proposal) != {"assignments", "premise_decision"}:
+                raise ValueError("premise proposal fields are not closed")
+            intent = premise_question_intent_from_dict(proposal["premise_decision"])
+            if intent.question_id != self.question_id:
+                raise ValueError("premise question was not offered")
+            assignments = proposal["assignments"]
+            if type(assignments) is not list:
+                raise TypeError("premise assignments must be an array")
+            from_ids = tuple(item["agent_id"] for item in canonical_assignments(assignments))
+            expected = tuple(SPECIALIST_IDS[index] for index, domain in enumerate(ArtifactReviewDomain)
+                             if domain in intent.dependent_domains)
+            if from_ids != expected:
+                raise ValueError("premise analysis omits an affected domain")
+            allowed = set(self.input_ids) | (set(read_ids) if self.allow_read_sources else set())
+            selected = set()
+            for item in assignments:
+                if set(item) != {"agent_id", "instruction", "input_ids", "mode"} or item["mode"] != "premise_analysis" or not visible_text(item["instruction"]):
+                    raise ValueError("premise assignment is not an analysis")
+                if type(item["input_ids"]) is not list or not item["input_ids"] or len(set(item["input_ids"])) != len(item["input_ids"]) or not set(item["input_ids"]) <= allowed:
+                    raise ValueError("premise assignment selected unavailable inputs")
+                selected.update(item["input_ids"])
+            if not set(self.input_ids) <= selected:
+                raise ValueError("premise proposal omits required inputs")
+        except (KeyError, TypeError, ValueError):
+            return (DomainValidationRule.LEAD_OUTCOME_REJECTED,)
+        return ()
+
+    def analysis_schema(self) -> dict[str, object]:
+        alternative = closed_object({
+            "alternative_key": nonempty_text_schema(), "premise_text": nonempty_text_schema(),
+            "rationale": nonempty_text_schema(), "tradeoffs": string_array(maximum=4),
+            "basis_input_ids": string_array(self.input_ids, maximum=64),
+        })
+        result = closed_object({
+            "assessment": {"type": "string", "enum": ["alternatives_assessed", "conflict", "insufficient_evidence"]},
+            "message": nonempty_text_schema(),
+            "alternatives": {"type": "array", "items": alternative, "minItems": 0, "maxItems": 4},
+        })
+        result["description"] = "Return provisional alternatives grounded in the selected actual inputs; separate tradeoffs and unknowns without drafting a candidate."
+        return result
+
+    def validate_analysis(self, value: object) -> PremiseAnalysis:
+        result = premise_analysis_from_dict(value)
+        if any(not set(item.basis_input_ids) <= set(self.input_ids) for item in result.alternatives):
+            raise ValueError("premise analysis cites an unavailable selected input")
+        return result
+
+    def summary_schema(self) -> dict[str, object]:
+        disposition = closed_object({
+            "reply_event_id": {"type": "string", "enum": [item[0] for item in self.reply_alternatives]},
+            "alternative_keys": string_array(maximum=4),
+            "disposition": {"type": "string", "enum": ["used", "modified", "deferred", "rejected", "unavailable"]},
+            "reason": nonempty_text_schema(), "residual_cost": nonempty_text_schema(),
+        })
+        option = closed_object({
+            "option_key": nonempty_text_schema(), "premise_text": nonempty_text_schema(),
+            "rationale": nonempty_text_schema(),
+            "reply_dispositions": {"type": "array", "items": disposition,
+                "minItems": len(self.reply_alternatives), "maxItems": len(self.reply_alternatives)},
+        })
+        result = closed_object({
+            "status": {"type": "string", "enum": ["options", "clarification"]},
+            "message": nonempty_text_schema(),
+            "options": {"type": "array", "items": option, "minItems": 0, "maxItems": 6},
+            "recommended_option_key": {"anyOf": [nonempty_text_schema(), {"type": "null", "description": "No recommendation is available; retain USER choice authority."}]},
+        })
+        result["description"] = "Integrate actual ordered analyst replies into whole provisional options. Disclose every reply disposition, reason and residual cost; USER choice remains separate."
+        return result
+
+    def validate_summary(self, value: object) -> PremiseDecisionSummary:
+        result = premise_summary_from_dict(value)
+        ids = tuple(item[0] for item in self.reply_alternatives)
+        actual = dict(self.reply_alternatives)
+        for option in result.options:
+            if tuple(item.reply_event_id for item in option.reply_dispositions) != ids:
+                raise ValueError("premise option must retain every ordered analyst reply")
+            for item in option.reply_dispositions:
+                if not set(item.alternative_keys) <= set(actual[item.reply_event_id]):
+                    raise ValueError("premise disposition invents an alternative")
+                if item.disposition == "unavailable" and item.reply_event_id not in self.unavailable_reply_ids:
+                    raise ValueError("premise disposition hides available analysis")
+        return result

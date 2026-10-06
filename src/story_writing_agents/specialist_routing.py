@@ -52,6 +52,7 @@ class SpecialistAssignmentMode(StrEnum):
     DRAFT = "draft"
     REVIEW = "review"
     CONSTRAINT_ASSESSMENT = "constraint_assessment"
+    PREMISE_ANALYSIS = "premise_analysis"
 
 
 class AuthoringContributionRole(StrEnum):
@@ -377,7 +378,7 @@ def validate_specialist_assignment(
             'assignment mode must be a SpecialistAssignmentMode',
         )
     validation_call("$.input_ids", _input_ids, input_ids)
-    if mode in {SpecialistAssignmentMode.DRAFT, SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT}:
+    if mode in {SpecialistAssignmentMode.DRAFT, SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT, SpecialistAssignmentMode.PREMISE_ANALYSIS}:
         if review_basis is not None:
             raise validation_failure(
                 ValueError('draft assignment cannot carry a review basis'),

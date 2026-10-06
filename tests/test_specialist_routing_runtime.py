@@ -1,4 +1,6 @@
 """Runtime routing accepts typed task facts and keeps draft/review authority separate."""
+
+from functools import partial
 from tests.test_collaboration_events import editorial, editorial_request
 import asyncio
 import json
@@ -6,17 +8,18 @@ import subprocess
 from dataclasses import asdict, replace
 from unittest import mock
 
-from story_writing_agents import StoryRuntime, lead_exploration as exploration
+from story_writing_agents import StoryRuntime, lead_exploration as exploration, lead_premise_decisions as premise
 from story_writing_agents import conversations as c
 from story_writing_agents.agents import PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR
 from story_writing_agents.specialist_routing import AuthoringActivity, AuthoringIntent, AuthoringScope, ArtifactReviewDomain, SpecialistAssignmentMode, ReviewBasis
 from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
 from story_writing_agents.interactive_terminal import _collaboration_view as view
-from tests.test_lead_orchestration import _SubmittedFailure
+from tests.test_lead_orchestration import _SubmittedFailure, _confirmed_premise, _premise_choice, _selected_premise_proposal, _search_history, _read_history_hit
 from tests.test_lead_orchestration import (
     LeadOrchestrationTestCase, _LeadBackend, _submitted_calls, _compact_scope, _decision, _provider_envelope,
     _workflow_material, _live_scope, _specialist_outcome, _synthesis_outcome, _visible_outcome, _exploration_outcome, _adoption_selection,
 )
+from tests.provider_wire_fixture import answer as wire_answer, contract_id as wire_contract_id
 from tests.recommendation_fixture import action, recommendation, decision as recommendation_decision
 from story_writing_agents.conversations.events import shared_premises_to_dict
 from tests.test_artifact_proposal_orchestration import _artifact_outcome, _artifact_synthesis_outcome, _status_id
@@ -138,6 +141,16 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertFalse(any(e.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for e in self.history(conversation)[len(prefix):]))
         self.assertEqual(self.history(conversation)[:len(prefix)], prefix)
 
+
+        prefix = self.history(conversation)
+        self.backend.enqueue(partial(_search_history, text="The synthetic brief"), _read_history_hit, _visible_outcome("answer", "This third submission must not be invoked."))
+        bounded = await self.runtime.lead_turn(self.session_id, conversation, "Inspect context before offering fresh work.")
+        calls = _submitted_calls(self.history(conversation)[len(prefix):])
+        self.assertEqual(len(calls), 2)
+        self.assertIsNone(bounded.proposal)
+        self.assertFalse(any(event.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for event in self.history(conversation)[len(prefix):]))
+        self.assertEqual(self.history(conversation)[:len(prefix)], prefix)
+
     async def test_empty_inventory_does_not_add_unaffected_owners_and_mixed_scope_does(self):
         for path in (OUTLINE, CHARACTER, "core_documents/narrative_rules.md", "core_documents/part_outlines.md"):
             self.workspace.path(path).write_bytes(b"")
@@ -147,6 +160,132 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(mixed.proposal.participants, ROSTER)
         self.assertEqual(mixed.proposal.authoring_scope.domains, tuple(ArtifactReviewDomain))
         self.assertTrue(all(agent == LEAD_ORCHESTRATOR for agent, _ in self.backend.call_records))
+
+
+        from tests.test_lead_artifact_application import _application_decision
+        from tests.test_lead_story_commit import _commit_decision
+        subprocess.run(['git', 'add', '--', 'core_documents', 'manuscript'], cwd=self.workspace.root, check=True)
+        subprocess.run(['git', 'commit', '-m', 'Seed lead commit test fixtures'], cwd=self.workspace.root, check=True, stdout=subprocess.DEVNULL)
+        conversation = self.conversation()
+        before = self.artifact_bytes()
+        analysis_proposal, reported = await _confirmed_premise(self, conversation)
+        judgment = next(event.payload for event in self.history(conversation) if type(event.payload) is c.CollaborationLeadJudgmentPayload and event.step_id == analysis_proposal.step_id)
+        with self.assertRaisesRegex(ValueError, "premise analysis evidence requires a proposal"):
+            replace(judgment, kind=c.LeadOutcomeKind.ANSWER)
+        with self.assertRaisesRegex(ValueError, "cannot carry authoring scope"):
+            replace(judgment, authoring_scope=single.proposal.authoring_scope)
+        with self.assertRaisesRegex(ValueError, "explicit assignment modes require"):
+            replace(analysis_proposal.proposal, premise_decision=None)
+        report, ref = reported.premise_report, reported.premise_report_ref
+        option = report.options[0]
+        self.assertEqual(self.artifact_bytes(), before)
+        self.assertEqual(len(option.reply_dispositions), len(analysis_proposal.proposal.assignments))
+        selection = _premise_choice(reported, ("manuscript/part-01/knowledge.md",))
+        delegated = replace(selection, choice_policy=premise.PremiseChoicePolicy.DELEGATED_MINOR, option_id=None, material_digest=None, allowed_choices=(premise.PremiseAllowedChoice(option.option_id, option.material_digest),))
+        self.assertEqual(premise.resolve_premise_choice(delegated, report), option)
+        with self.assertRaises(ValueError):
+            premise.resolve_premise_choice(replace(delegated, allowed_choices=(premise.PremiseAllowedChoice(option.option_id, "f" * 64),)), report)
+        prefix = self.history(conversation)
+        with self.assertRaises(ValueError):
+            await self.runtime.lead_turn(self.session_id, conversation, "Write from the selected whole premise.", premise_selection=replace(selection, material_digest="f" * 64))
+        self.assertEqual(self.history(conversation), prefix)
+
+        text = "Write from the selected whole premise."
+        path = selection.target_paths[0]
+        self.backend.enqueue(_selected_premise_proposal(selection))
+        drafted = await self.runtime.lead_turn(self.session_id, conversation, text, premise_selection=selection)
+        self.assertIs(drafted.kind, c.LeadOutcomeKind.PROPOSAL, drafted)
+        chosen_prefix = self.history(conversation)
+        calls_before_retry = len(self.backend.call_records)
+        await self.runtime.lead_turn(self.session_id, conversation, text, premise_selection=selection)
+        restarted = type(self.runtime)(self.control_workspace, self.backend)
+        await restarted.lead_turn(self.session_id, conversation, text, premise_selection=selection)
+        foreign = self.conversation()
+        with self.assertRaises(ValueError):
+            await self.runtime.lead_turn(self.session_id, foreign, text, premise_selection=selection)
+        self.assertEqual(self.history(foreign), ())
+        with self.assertRaises(ValueError):
+            await self.runtime.lead_turn(self.session_id, conversation, text + " Changed.", premise_selection=selection)
+        self.assertEqual((self.history(conversation), len(self.backend.call_records)), (chosen_prefix, calls_before_retry))
+        self.assertEqual(drafted.proposal.authoring_scope.task_revision, 1)
+        self.assertEqual(drafted.proposal.basis.shared_premises[0].selected_premise, option.premise_text)
+        for assignment in drafted.proposal.assignments:
+            if assignment.mode is SpecialistAssignmentMode.DRAFT:
+                self.backend.enqueue_for(assignment.specialist_id, lambda call, provider: wire_answer({"assessment": "drafted", "message": "The selected knowledge remains intentionally uncertain.", "premise_conflicts": []}, wire_contract_id(call.payload)))
+            else:
+                self.backend.enqueue_for(assignment.specialist_id, _specialist_outcome("constraints_assessed"))
+        def recommend(call, provider):
+            reply = next(item["reply_event_id"] for item in _workflow_material(call.payload)["replies"] if item["mode"] == "draft")
+            return _synthesis_outcome(recommended_action=action(target_paths=(path,), source_ids=("user_input", "selected_premise", reply)))(call, provider)
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, recommend)
+        finished = await self.runtime.decide_lead_step(_decision(drafted, c.CollaborationConfirmationDecision.CONFIRM))
+        self.assertIsNotNone(finished.turn.recommendation_request, finished)
+        frames = [_workflow_material(call.payload) for agent, call in self.backend.call_records if wire_contract_id(call.payload) == "specialist-assignment-response-v5"]
+        self.assertEqual([(frame["premise_selection"]["selected_text"], frame["shared_premises"][0]["selected_premise"]) for frame in frames], [(option.premise_text, option.premise_text)] * 2)
+        response = _artifact_outcome(operations=[{"kind": "create", "suggested_path": path, "new_text": "The selected knowledge remains intentionally uncertain.\n"}], evidence_status="incomplete", evidence_ids=lambda call, material: [call.payload["core_document_statuses"][0]["evidence_id"]])
+        def integrate(call, provider):
+            value = json.loads(response(call, provider))
+            value["action"]["result"]["authoring_scope"] = _compact_scope(c.authoring_scope_to_dict(drafted.proposal.authoring_scope))
+            value["action"]["result"]["artifact_intent"]["objective_intent"] = {"action": "start", "target_paths": [path], "next_step": "prepare"}
+            return json.dumps(value)
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, integrate)
+        review = await self.runtime.decide_lead_recommendation(recommendation_decision(finished.turn))
+        self.assertEqual(review.proposal.participants, ROSTER)
+        self.assertEqual(self.artifact_bytes(), before)
+        for assignment in review.proposal.assignments:
+            self.backend.enqueue_for(assignment.specialist_id, _specialist_outcome("supports"))
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _artifact_synthesis_outcome())
+        reviewed = await self.runtime.decide_lead_step(_decision(review, c.CollaborationConfirmationDecision.CONFIRM))
+        frames = [_workflow_material(call.payload) for agent, call in self.backend.call_records if agent in ROSTER][-3:]
+        candidates = [next(item["artifact_candidate"] for item in frame["inputs"] if item["kind"] == "artifact_candidate") for frame in frames]
+        self.assertEqual(candidates, [candidates[0]] * len(ROSTER))
+        self.assertEqual([frame["shared_premises"] for frame in frames], [shared_premises_to_dict(drafted.proposal.basis.shared_premises)] * len(ROSTER))
+        self.assertEqual(self.artifact_bytes(), before)
+        applied = await self.runtime.decide_artifact_application(_application_decision(reviewed.turn, c.ArtifactApplicationDecisionKind.APPLY))
+        self.assertEqual(self.workspace.path(path).read_bytes(), b"The selected knowledge remains intentionally uncertain.\n")
+        self.assertEqual(self.history(conversation)[:len(prefix)], prefix)
+        self.assertEqual(len(set(report.cost.submitted_call_ids)), report.cost.physical_calls_spent)
+        authoring_calls = _submitted_calls(self.history(conversation)[len(prefix):])
+        self.assertTrue(set(report.cost.submitted_call_ids).isdisjoint(item.call_id for item in authoring_calls))
+        self.assertLessEqual(len(authoring_calls), 12)
+
+
+        async def complete_selected(proposed, premise_text):
+            for assignment in proposed.proposal.assignments:
+                if assignment.mode is SpecialistAssignmentMode.DRAFT:
+                    self.backend.enqueue_for(assignment.specialist_id, lambda call, provider: wire_answer({"assessment": "drafted", "message": premise_text, "premise_conflicts": []}, wire_contract_id(call.payload)))
+                else:
+                    self.backend.enqueue_for(assignment.specialist_id, _specialist_outcome("constraints_assessed"))
+            self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
+            return await self.runtime.decide_lead_step(_decision(proposed, c.CollaborationConfirmationDecision.CONFIRM))
+
+        reused_selection = replace(selection, request_id="reuse-report-after-apply")
+        boundary = await self.runtime.lead_turn(self.session_id, conversation, "Draft changed whole premise freshly.", premise_selection=reused_selection)
+        commit = applied.commit_request or await self.runtime.reprepare_story_commit(boundary.story_commit_preparation_request)
+        await self.runtime.decide_story_commit(_commit_decision(replace(applied, commit_request=commit), c.StoryCommitDecision.REJECT))
+        self.backend.enqueue(_selected_premise_proposal(reused_selection))
+        reused = await self.runtime.lead_turn(self.session_id, conversation, "Draft changed whole premise freshly.", premise_selection=reused_selection)
+        self.assertIs(reused.kind, c.LeadOutcomeKind.PROPOSAL, reused)
+        self.assertEqual(reused.proposal.authoring_scope.task_revision, 1)
+        self.assertNotEqual(reused.proposal.authoring_scope.task_id, drafted.proposal.authoring_scope.task_id)
+        reuse_completed = await complete_selected(reused, option.premise_text)
+        self.assertIs(reuse_completed.turn.state, c.CollaborationStepState.COMPLETED)
+        previous = self.history(conversation)
+        changed_option = report.options[1]
+        successor = replace(selection, request_id="change-whole-direction", option_id=changed_option.option_id, material_digest=changed_option.material_digest, authoring_task_id=reused.proposal.authoring_scope.task_id, expected_authoring_task_revision=reused.proposal.authoring_scope.task_revision)
+        self.backend.enqueue(_selected_premise_proposal(successor))
+        changed = await self.runtime.lead_turn(self.session_id, conversation, "Draft changed whole premise freshly.", premise_selection=successor)
+        self.assertIs(changed.kind, c.LeadOutcomeKind.PROPOSAL, changed)
+        self.assertEqual((changed.proposal.authoring_scope.task_id, changed.proposal.authoring_scope.task_revision), (reused.proposal.authoring_scope.task_id, 2))
+        self.assertEqual(changed.proposal.basis.shared_premises[0].selected_premise, changed_option.premise_text)
+        self.assertNotEqual(changed.proposal.basis.shared_premises, drafted.proposal.basis.shared_premises)
+        confirmed = await complete_selected(changed, changed_option.premise_text)
+        self.assertIs(confirmed.turn.state, c.CollaborationStepState.COMPLETED)
+        new_frames = [_workflow_material(call.payload) for agent, call in self.backend.call_records if wire_contract_id(call.payload) == "specialist-assignment-response-v5"][-2:]
+        self.assertEqual([frame["premise_selection"]["selected_text"] for frame in new_frames], [changed_option.premise_text] * 2)
+        self.assertEqual(self.history(conversation)[:len(previous)], previous)
+        self.assertEqual(self.workspace.path(path).read_bytes(), b"The selected knowledge remains intentionally uncertain.\n")
+        self.assertLessEqual(len(_submitted_calls(self.history(conversation)[len(previous):])), 12)
 
     async def test_declared_substantive_direct_outcomes_fail_closed(self):
         for kind in ("answer", "recommendation", "critique"):

@@ -19,7 +19,9 @@ from ..editorial_state import (
     editorial_ref_from_dict, editorial_revision_to_dict,
 )
 from .context import project_editorial_state
-from .events import CollaborationEditorialRecordPayload
+from ..lead_premise_decisions import premise_value_to_dict
+from .events import (CollaborationEditorialRecordPayload, CollaborationPremiseDecisionPayload,
+    CollaborationPremiseSelectionPayload, CollaborationPremiseFreshWorkAdmissionPayload)
 from .context import (
     CollaborationReadableRecord, artifact_objective_context,
     project_collaboration_history,
@@ -102,6 +104,12 @@ def _operations(operations: tuple[object, ...]) -> list[dict[str, object]]:
 
 
 def _visible_details(payload: object) -> dict[str, object]:
+    if type(payload) is CollaborationPremiseDecisionPayload:
+        return {"premise_decision": premise_value_to_dict(payload.selection), "authority": "Exact USER control; generic Confirm is not a choice."}
+    if type(payload) is CollaborationPremiseSelectionPayload:
+        return {"premise_selection": premise_value_to_dict(payload.capture), "authority": "Exact whole USER-selected material, not a draft or artifact READ."}
+    if type(payload) is CollaborationPremiseFreshWorkAdmissionPayload:
+        return {"fresh_work_admission": premise_value_to_dict(payload.admission), "authority": "Cost attribution only; no execution authority."}
     if type(payload) is CollaborationEditorialRecordPayload:
         return {"editorial_record": editorial_revision_to_dict(payload.record), "authority": "Exact USER editorial intake; current approval comes only from the validated revision chain."}
     """Session-only visible facts omitted by the bounded search field contract."""
@@ -134,6 +142,17 @@ def _visible_details(payload: object) -> dict[str, object]:
         ]
     if type(payload) is CollaborationSpecialistReplyPayload and payload.mode is not None:
         details["mode"] = payload.mode.value
+    if type(payload) is CollaborationProposal and payload.premise_decision is not None:
+        details["premise_decision"] = premise_value_to_dict(payload.premise_decision)
+        details["provisional"] = True
+    if type(payload) is CollaborationSpecialistReplyPayload and payload.premise_analysis is not None:
+        details["premise_analysis"] = premise_value_to_dict(payload.premise_analysis)
+        details["provisional"] = True
+    if type(payload) is CollaborationSpecialistReplyPayload and payload.premise_conflicts:
+        details["premise_conflicts"] = premise_value_to_dict(payload.premise_conflicts)
+    if type(payload) is CollaborationLeadSynthesisPayload and payload.premise_report is not None:
+        details["premise_report"] = premise_value_to_dict(payload.premise_report)
+        details["provisional"] = True
     return details
 
 

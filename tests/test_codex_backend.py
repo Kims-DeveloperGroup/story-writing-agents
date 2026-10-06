@@ -1,7 +1,7 @@
 """Concrete Codex CLI backend tests with no credentials or network access."""
 
 from __future__ import annotations
-from tests.test_lead_orchestration import _exploration_native_contract, _exploration_outcome
+from tests.test_lead_orchestration import _exploration_native_contract, _exploration_outcome, _premise_native_contract
 
 import asyncio
 import contextlib
@@ -363,6 +363,26 @@ if "STORY_FAKE_CODEX_USAGE" in os.environ:
 
 _TIMESTAMP = "2026-08-15T01:02:03+00:00"
 
+
+def _rejected_response_artifact_patch():
+    return mock.patch.object(
+        WorkspaceProviderErrorArtifacts,
+        "record_rejected_response",
+    )
+
+def _wrapped_thread_taint_patch(backend, wrapped):
+    return mock.patch.object(
+        backend,
+        "_taint_thread",
+        wraps=wrapped,
+    )
+
+def _wrapped_thread_store_patch(backend, wrapped):
+    return mock.patch.object(
+        backend,
+        "_store_thread",
+        wraps=wrapped,
+    )
 
 def _conversation_pair(
     turn_id: str,
@@ -4424,6 +4444,20 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((invocations[0].schema, invocations[0].payload_json), (schema, canonical_provider_json(payload)))
         self.assertEqual((explored.response_text, explored.accounting.state), (response, ProviderCallState.SUBMITTED))
 
+
+        for summary in (False, True):
+            schema, payload, response = _premise_native_contract(summary)
+            native_calls = []
+            async def premise_invoke(binding, invocation):
+                native_calls.append(invocation)
+                return ProviderResult("native-premise-" + str(summary), response, usage=ProviderUsage(input_tokens=1, output_tokens=1), actual_transport_utf8_bytes=len(invocation.payload_json))
+            scope = ContextScope("workspace-context", session_id, ContextSubjectKind.CONVERSATION, "native-premise-" + str(summary), LEAD_ORCHESTRATOR)
+            with mock.patch.object(backend._codex_adapter, "invoke", new=premise_invoke):
+                async with provider.invocation(scope, "sha256:" + "5" * 64):
+                    returned = await provider.invoke_context(ContextProviderCallRequest(scope, "sha256:" + "5" * 64, "native-premise-call-" + str(summary), ProviderCallKind.COLLABORATION_INITIAL, schema, payload))
+            self.assertEqual((native_calls[0].schema, native_calls[0].payload_json), (schema, canonical_provider_json(payload)))
+            self.assertEqual((returned.response_text, returned.accounting.state), (response, ProviderCallState.SUBMITTED))
+
     async def test_conversation_request_snapshots_derived_event_content(self) -> None:
         validated = "VALIDATED_CONTEXT_CONTENT"
         unvalidated = "UNVALIDATED_PROVIDER_CONTENT"
@@ -5208,21 +5242,13 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
                 with (
                     mock.patch.object(backend._codex_adapter, "invoke", invoke),
-                    mock.patch.object(
-                        backend,
-                        "_taint_thread",
-                        wraps=backend._taint_thread,
-                    ) as taint,
+                    _wrapped_thread_taint_patch(backend, backend._taint_thread) as taint,
                     mock.patch.object(
                         backend,
                         "_write_manifest",
                         wraps=backend._write_manifest,
                     ) as write_manifest,
-                    mock.patch.object(
-                        backend,
-                        "_store_thread",
-                        wraps=backend._store_thread,
-                    ) as store_thread,
+                    _wrapped_thread_store_patch(backend, backend._store_thread) as store_thread,
                 ):
                     with self.assertRaises(BackendProtocolError) as caught:
                         await backend._invoke_provider_structured(
@@ -5298,21 +5324,13 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 decode = mock.Mock()
                 with (
                     mock.patch.object(backend._codex_adapter, "invoke", invoke),
-                    mock.patch.object(
-                        backend,
-                        "_taint_thread",
-                        wraps=backend._taint_thread,
-                    ) as taint,
+                    _wrapped_thread_taint_patch(backend, backend._taint_thread) as taint,
                     mock.patch.object(
                         backend,
                         "_write_manifest",
                         wraps=backend._write_manifest,
                     ) as write_manifest,
-                    mock.patch.object(
-                        backend,
-                        "_store_thread",
-                        wraps=backend._store_thread,
-                    ) as store_thread,
+                    _wrapped_thread_store_patch(backend, backend._store_thread) as store_thread,
                 ):
                     with self.assertRaises(BackendProtocolError) as caught:
                         await backend._invoke_provider_structured(
@@ -8462,16 +8480,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                             "record_rejected_response",
                             side_effect=storage_failure,
                         ) as record,
-                        mock.patch.object(
-                            backend,
-                            "_taint_thread",
-                            wraps=backend._taint_thread,
-                        ) as taint,
-                        mock.patch.object(
-                            backend,
-                            "_store_thread",
-                            wraps=backend._store_thread,
-                        ) as store,
+                        _wrapped_thread_taint_patch(backend, backend._taint_thread) as taint,
+                        _wrapped_thread_store_patch(backend, backend._store_thread) as store,
                     ):
                         try:
                             await backend._invoke_provider_structured(
@@ -8548,10 +8558,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     )
                 ),
             ),
-            mock.patch.object(
-                WorkspaceProviderErrorArtifacts,
-                "record_rejected_response",
-            ) as record,
+            _rejected_response_artifact_patch() as record,
         ):
             actual = await backend._invoke_provider_structured(
                 bound,
@@ -8595,10 +8602,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
                 with (
                     mock.patch.object(backend._codex_adapter, "invoke", invoke),
-                    mock.patch.object(
-                        WorkspaceProviderErrorArtifacts,
-                        "record_rejected_response",
-                    ) as record,
+                    _rejected_response_artifact_patch() as record,
                     self.assertRaises(type(failure)) as caught,
                 ):
                     await backend._invoke_provider_structured(
@@ -8629,10 +8633,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 "invoke",
                 mock.AsyncMock(side_effect=provider_failure),
             ),
-            mock.patch.object(
-                WorkspaceProviderErrorArtifacts,
-                "record_rejected_response",
-            ) as record,
+            _rejected_response_artifact_patch() as record,
             self.assertRaises(BackendProtocolError) as caught,
         ):
             await backend._invoke_provider_structured(
@@ -8660,10 +8661,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 "invoke",
                 mock.AsyncMock(side_effect=adapter_cancel),
             ),
-            mock.patch.object(
-                WorkspaceProviderErrorArtifacts,
-                "record_rejected_response",
-            ) as record,
+            _rejected_response_artifact_patch() as record,
             self.assertRaises(asyncio.CancelledError) as caught,
         ):
             await backend._invoke_provider_structured(
@@ -8701,10 +8699,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 "_store_thread",
                 side_effect=persistence_failure,
             ),
-            mock.patch.object(
-                WorkspaceProviderErrorArtifacts,
-                "record_rejected_response",
-            ) as record,
+            _rejected_response_artifact_patch() as record,
             self.assertRaises(OSError) as caught,
         ):
             await backend._invoke_provider_structured(
@@ -8723,10 +8718,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     async def test_pre_result_stream_stderr_timeout_and_cancellation_do_not_capture(
         self,
     ) -> None:
-        with mock.patch.object(
-            WorkspaceProviderErrorArtifacts,
-            "record_rejected_response",
-        ) as record:
+        with _rejected_response_artifact_patch() as record:
             for index, mode in enumerate(
                 ("nonzero", "missing_output", "invalid_event_utf8")
             ):

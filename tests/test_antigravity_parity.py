@@ -1,7 +1,7 @@
 """End-to-end Antigravity parity tests with a deterministic fake CLI."""
 
 from __future__ import annotations
-from tests.test_lead_orchestration import _exploration_native_contract, _exploration_outcome
+from tests.test_lead_orchestration import _exploration_native_contract, _exploration_outcome, _premise_native_contract
 
 import asyncio
 import hashlib
@@ -89,6 +89,20 @@ _PROCESS_TERMINATE_GRACE_SECONDS = 0.5
 _PROCESS_KILL_GRACE_SECONDS = 1.0
 _PROCESS_POLL_INTERVAL_SECONDS = 0.01
 
+
+def _seed_draft_request_fixture(case, session_id):
+    return case.request(
+        session_id=session_id,
+        debate_id="seed",
+        phase=Phase.DRAFT,
+    )
+
+def _wrapped_thread_taint_patch(backend, wrapped):
+    return mock.patch.object(
+        backend,
+        "_taint_thread",
+        wraps=wrapped,
+    )
 
 def _provider_error_records(workspace: object) -> list[dict[str, object]]:
     """Read complete rejected-response artifacts, excluding guard leaves."""
@@ -1208,6 +1222,20 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((invocations[-1].schema, invocations[-1].payload_json), (schema, canonical_provider_json(payload)))
         self.assertEqual((explored.response_text, explored.accounting.state), (response, ProviderCallState.SUBMITTED))
 
+
+        for summary in (False, True):
+            schema, payload, response = _premise_native_contract(summary)
+            native_calls = []
+            async def premise_invoke(binding, invocation):
+                native_calls.append(invocation)
+                return ProviderResult("native-premise-" + str(summary), response, usage=ProviderUsage(input_tokens=1, output_tokens=1), actual_transport_utf8_bytes=len(invocation.payload_json))
+            scope = ContextScope("workspace-context", session_id, ContextSubjectKind.CONVERSATION, "native-premise-" + str(summary), LEAD_ORCHESTRATOR)
+            with mock.patch.object(backend._antigravity_adapter, "invoke", new=premise_invoke):
+                async with provider.invocation(scope, policy):
+                    returned = await provider.invoke_context(ContextProviderCallRequest(scope, policy, "native-premise-call-" + str(summary), ProviderCallKind.COLLABORATION_INITIAL, schema, payload))
+            self.assertEqual((native_calls[0].schema, native_calls[0].payload_json), (schema, canonical_provider_json(payload)))
+            self.assertEqual((returned.response_text, returned.accounting.state), (response, ProviderCallState.SUBMITTED))
+
     @staticmethod
     def _process_is_running(pid: int) -> bool:
         """Return whether one exact PID is still active on this platform."""
@@ -1716,11 +1744,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         for session_id in sessions:
             self.ready_session(backend, session_id)
             await bound.invoke(
-                self.request(
-                    session_id=session_id,
-                    debate_id="seed",
-                    phase=Phase.DRAFT,
-                )
+                _seed_draft_request_fixture(self, session_id)
             )
 
         await bound.invoke(
@@ -2128,11 +2152,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
             with (
-                mock.patch.object(
-                    backend,
-                    "_taint_thread",
-                    wraps=backend._taint_thread,
-                ) as taint,
+                _wrapped_thread_taint_patch(backend, backend._taint_thread) as taint,
             ):
                 rejected_reply = await bound.invoke(
                     self.request(
@@ -2387,11 +2407,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         definition = self.definition()
         bound = await backend.bind(definition)
         await bound.invoke(
-            self.request(
-                session_id=session_id,
-                debate_id="seed",
-                phase=Phase.DRAFT,
-            )
+            _seed_draft_request_fixture(self, session_id)
         )
         request = ConversationRequest(
             session_id=session_id,
@@ -2402,11 +2418,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             context=_empty_context(),
         )
         with (
-            mock.patch.object(
-                backend,
-                "_taint_thread",
-                wraps=backend._taint_thread,
-            ) as taint,
+            _wrapped_thread_taint_patch(backend, backend._taint_thread) as taint,
             mock.patch.dict(
                 os.environ,
                 {"STORY_FAKE_AGY_MODE": "empty_required_string"},
@@ -2521,19 +2533,11 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 self.ready_session(backend, session_id)
                 before = len(self.provider_invocations())
                 await bound.invoke(
-                    self.request(
-                        session_id=session_id,
-                        debate_id="seed",
-                        phase=Phase.DRAFT,
-                    )
+                    _seed_draft_request_fixture(self, session_id)
                 )
                 seeded = self.antigravity_thread(self.manifest(session_id))
                 with (
-                    mock.patch.object(
-                        backend,
-                        "_taint_thread",
-                        wraps=backend._taint_thread,
-                    ) as taint,
+                    _wrapped_thread_taint_patch(backend, backend._taint_thread) as taint,
                     mock.patch.object(
                         backend,
                         "_write_manifest",
@@ -2637,11 +2641,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         self.ready_session(first, session_id)
         definition = self.definition()
         await (await first.bind(definition)).invoke(
-            self.request(
-                session_id=session_id,
-                debate_id="seed",
-                phase=Phase.DRAFT,
-            )
+            _seed_draft_request_fixture(self, session_id)
         )
         retained = self.antigravity_thread(self.manifest(session_id))
         first.close()
@@ -2739,11 +2739,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 definition = self.definition()
                 bound = await backend.bind(definition)
                 await bound.invoke(
-                    self.request(
-                        session_id=session_id,
-                        debate_id="seed",
-                        phase=Phase.DRAFT,
-                    )
+                    _seed_draft_request_fixture(self, session_id)
                 )
                 ready_count = len(self.provider_invocations()) + 1
 
@@ -2839,11 +2835,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         self.ready_session(backend, session_id)
         bound = await backend.bind(self.definition())
         await bound.invoke(
-            self.request(
-                session_id=session_id,
-                debate_id="seed",
-                phase=Phase.DRAFT,
-            )
+            _seed_draft_request_fixture(self, session_id)
         )
         ready_count = len(self.provider_invocations()) + 1
         real_wait_for = asyncio.wait_for

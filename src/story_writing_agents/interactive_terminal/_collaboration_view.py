@@ -4,11 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from enum import StrEnum
+from ..lead_premise_decisions import PremiseDecisionReport, PremiseReportRef, premise_value_to_dict
 
 from ..conversations import (
     CollaborationLeadExplorationRequestPayload,
     CollaborationLeadExplorationResultPayload,
     CollaborationExplorationAdoptionPayload,
+    CollaborationPremiseDecisionPayload,
+    CollaborationPremiseSelectionPayload,
+    CollaborationPremiseFreshWorkAdmissionPayload,
     ArtifactObjectivePayload,
     ArtifactObjectivePayloadV2,
     LeadRecommendationRequestPayload,
@@ -147,6 +151,36 @@ def project_collaboration_event(
     )
 
 
+def _premise_report_items(report: PremiseDecisionReport, ref: PremiseReportRef | None = None, *, show_message=True) -> tuple:
+    items = [Notice("Whole provisional options require explicit USER choice; no candidate or artifact authority.", label="Premise analysis (provisional)"),
+        Field("Question", report.spec.question_id), Field("Dependency slot", report.spec.slot_id),
+        _message("Unresolved premise", report.spec.question),
+        Field("Analysis status", report.summary.status), Field("Report digest", report.report_digest),
+        Field("Submitted analysis calls", str(report.cost.physical_calls_spent)),
+        Field("Analysis call identities", _joined(report.cost.submitted_call_ids)),
+        Field("Analysis rounds", str(report.cost.rounds_spent))]
+    if show_message:
+        items.append(_message("Exact terminal premise report", report.summary.message))
+    if ref is not None:
+        items.extend((Field("Source conversation", ref.source_conversation_id), Field("Report event", ref.report_event_id)))
+    if report.prior_authoring_cost is not None:
+        items.extend((Field("Prior authoring calls", str(report.prior_authoring_cost.physical_calls_spent)),
+            Field("Prior authoring call identities", _joined(report.prior_authoring_cost.submitted_call_ids)),
+            Field("Prior authoring rounds", str(report.prior_authoring_cost.rounds_spent))))
+    if report.prior_analysis_report_ref is not None:
+        items.append(Field("Earlier analysis cost receipt", report.prior_analysis_report_ref.report_event_id + " / " + report.prior_analysis_report_ref.report_digest))
+    if report.prior_admission_ref is not None:
+        items.append(Field("Earlier admitted front cost head", report.prior_admission_ref.event_id + " / " + report.prior_admission_ref.digest))
+    items.extend((ListView("Whole options", tuple(Record(option.option_id, title=option.option_key,
+        fields=(Field("Material SHA-256", option.material_digest), Field("Rationale", option.rationale),
+            Field("Every analyst disposition", "\n".join(
+                f"{item.reply_event_id}: {item.disposition}; alternatives: {_joined(item.alternative_keys)}; reason: {item.reason}; residual cost: {item.residual_cost}"
+                for item in option.reply_dispositions))), content=option.premise_text) for option in report.options)),
+        Field("Provisional recommended option", report.recommended_option_id or "none"),
+        Notice("Costs remain on distinct lineages. Earlier report/admission receipts and other failed fronts remain in history; fresh authoring needs new Confirm. Use /premise to choose, reject or defer.", label="next action")))
+    return tuple(items)
+
+
 def project_lead_turn_result(result: LeadTurnResult) -> Panel:
     """Project one runtime-validated visible lead result without side effects."""
 
@@ -169,6 +203,10 @@ def project_lead_turn_result(result: LeadTurnResult) -> Panel:
     )
     if result.exploration is not None:
         items.extend(_exploration_items(result.exploration))
+    if result.premise_report is not None:
+        items.extend(_premise_report_items(result.premise_report, result.premise_report_ref,
+            show_message=not (result.message == result.premise_report.summary.message
+                or result.message.startswith(result.premise_report.summary.message + "\n\nRuntime cost receipt:"))))
     if result.proposal is not None:
         items.extend(_proposal_items(result.proposal, session_id=result.session_id))
     if result.evidence is not None:
@@ -482,6 +520,30 @@ def _payload_items(
     *,
     session_id: str | None = None,
 ) -> tuple[Section | Field | Notice | Message | Record | ListView, ...]:
+    if type(payload) is CollaborationPremiseDecisionPayload:
+        choice = payload.selection
+        return (Field("USER premise decision", choice.action.value), Field("Request", choice.request_id),
+            Field("Source report", choice.report_event_id), Field("Report digest", choice.report_digest),
+            Field("Question", choice.question_id), Field("Choice authority", "none" if choice.choice_policy is None else choice.choice_policy.value),
+            Field("Whole option", choice.option_id or "none"), Field("Material SHA-256", choice.material_digest or "none"),
+            Field("Allowed whole options", "\n".join(f"{item.option_id}: {item.material_digest}" for item in choice.allowed_choices) or "none"),
+            Field("Target paths", "\n".join(choice.target_paths) or "targetless authoring"),
+            Notice("This USER choice is separate from proposal Confirm, candidate review, Apply and Commit.", label="authority"))
+    if type(payload) is CollaborationPremiseSelectionPayload:
+        capture = payload.capture
+        return (Field("Whole premise option", capture.option_id), Field("Material SHA-256", capture.material_digest),
+            Field("Capture digest", capture.capture_digest), _message("Exact USER-selected premise", capture.selected_text),
+            Field("Fresh task", f"{capture.authoring_task_id}@{capture.authoring_task_revision}"),
+            Field("Dependency slot", capture.slot_id), Field("Affected domains", _values(capture.dependent_domains)),
+            Field("Original analysis calls", str(capture.cost_link.analysis.physical_calls_spent)),
+            Notice("A fresh proposal and Confirm remain required; no old drafting proof or budget is reused.", label="authority"))
+    if type(payload) is CollaborationPremiseFreshWorkAdmissionPayload:
+        admission = payload.admission
+        return (Field("Fresh-work front cap", str(admission.front_physical_call_limit)),
+            Field("Exact USER origin", admission.source_user_event_id), Field("Invocation", admission.provider_invocation_id),
+            Field("Prior admission cost head", "none" if admission.prior_admission_ref is None else admission.prior_admission_ref.event_id),
+            Field("Prior analysis cost head", "none" if admission.prior_analysis_report_ref is None else admission.prior_analysis_report_ref.report_event_id),
+            Notice("Original, READ, recovery and correction submissions share this cap. The receipt grants no execution authority and refunds no prior calls.", label="costs"))
     if type(payload) is CollaborationLeadExplorationRequestPayload:
         return (Field("Interaction mode", "exploration"), Notice("Explicit user-selected one-turn exploration.", label="Exploration (provisional)"))
     if type(payload) is CollaborationLeadExplorationResultPayload:
@@ -589,9 +651,19 @@ def _payload_items(
                     ),
                 )
             )
+        if payload.premise_analysis is not None:
+            items.extend((Notice("Candidate-free provisional analysis; not a draft or approval.", label="authority"),
+                ListView("Analyst alternatives", tuple(Record(item.alternative_key,
+                    fields=(Field("Rationale", item.rationale), Field("Tradeoffs", "\n".join(item.tradeoffs)),
+                            Field("Basis inputs", _joined(item.basis_input_ids))), content=item.premise_text)
+                    for item in payload.premise_analysis.alternatives))))
+        if payload.premise_conflicts:
+            items.extend(Notice(f"{item.slot_id} / {item.capture_digest}: {item.reason}",
+                label="Premise conflict — drafting proof held", role=SemanticRole.WARNING) for item in payload.premise_conflicts)
         return tuple(items)
     if type(payload) is CollaborationLeadSynthesisPayload:
         return (
+            *(() if payload.premise_report is None else _premise_report_items(payload.premise_report)),
             *_authoring_scope_items(payload.authoring_scope),
             *_proposal_identity(payload),
             Field("Attempt", payload.execution_attempt_id),
@@ -934,6 +1006,13 @@ def _proposal_items(
     )
     budget = payload.budget
     return (
+        *(() if payload.premise_decision is None else (
+            Notice("One terminal candidate-free premise analysis round; no drafting or automatic continuation.", label="Provisional premise analysis"),
+            Field("Question identity", payload.premise_decision.question_id),
+            Field("Dependency slot", payload.premise_decision.slot_id),
+            Field("Affected domains", _values(payload.premise_decision.dependent_domains)),
+            _message("Unresolved premise", payload.premise_decision.question),
+        )),
         *_authoring_scope_items(payload.authoring_scope),
         *_shared_premise_items(payload, session_id=session_id),
         Field("Proposal", payload.proposal_id),

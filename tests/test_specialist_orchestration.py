@@ -65,6 +65,30 @@ from tests.test_lead_orchestration import (
 _SYNCHRONIZATION_TIMEOUT_SECONDS = 60
 
 
+def _three_way_proposal_fixture(case, conversation_id):
+    return case.proposal(
+        conversation_id,
+        assignments=_assignments(
+            PLOT_ARCHITECT,
+            CHARACTER_CUSTODIAN,
+            EXECUTION_SPECIALIST,
+        ),
+    )
+
+def _confirmed_execution_task_fixture(runtime, proposed):
+    return asyncio.create_task(
+        runtime.decide_lead_step(
+            _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+        )
+    )
+
+def _stop_after_durable_result_patch(runtime):
+    return mock.patch.object(
+        runtime,
+        "_finalize_known_result_locked",
+        side_effect=RuntimeError("test stopped after durable execution result"),
+    )
+
 def _assignments(*agent_ids: str) -> list[dict[str, object]]:
     return [
         {
@@ -152,14 +176,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         conversation_id = self.conversation("Three-way parallel consultation")
-        proposed = await self.proposal(
-            conversation_id,
-            assignments=_assignments(
-                PLOT_ARCHITECT,
-                CHARACTER_CUSTODIAN,
-                EXECUTION_SPECIALIST,
-            ),
-        )
+        proposed = await _three_way_proposal_fixture(self, conversation_id)
         self.assertEqual(
             tuple(item.max_physical_calls for item in proposed.proposal.assignments),
             (4, 3, 3),
@@ -222,11 +239,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             "open_ready_resources",
             tracked_open,
         ):
-            task = asyncio.create_task(
-                self.runtime.decide_lead_step(
-                    _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-                )
-            )
+            task = _confirmed_execution_task_fixture(self.runtime, proposed)
             await asyncio.wait_for(
                 all_entered.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
             )
@@ -332,14 +345,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
 
     async def test_assignment_failure_joins_siblings_and_skips_synthesis(self) -> None:
         conversation_id = self.conversation("Partial specialist failure")
-        proposed = await self.proposal(
-            conversation_id,
-            assignments=_assignments(
-                PLOT_ARCHITECT,
-                CHARACTER_CUSTODIAN,
-                EXECUTION_SPECIALIST,
-            ),
-        )
+        proposed = await _three_way_proposal_fixture(self, conversation_id)
         sibling_started = asyncio.Event()
         sibling_release = asyncio.Event()
         sibling_finishes = 0
@@ -360,11 +366,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.backend.enqueue_for(CHARACTER_CUSTODIAN, sibling)
         self.backend.enqueue_for(EXECUTION_SPECIALIST, sibling)
         with _fast_prevalidated_session_binding(self.runtime, self.session_id):
-            task = asyncio.create_task(
-                self.runtime.decide_lead_step(
-                    _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-                )
-            )
+            task = _confirmed_execution_task_fixture(self.runtime, proposed)
             await asyncio.wait_for(
                 sibling_started.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
             )
@@ -421,11 +423,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
 
         self.backend.enqueue_for(PLOT_ARCHITECT, blocked)
         self.backend.enqueue_for(CHARACTER_CUSTODIAN, blocked)
-        task = asyncio.create_task(
-            self.runtime.decide_lead_step(
-                _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-            )
-        )
+        task = _confirmed_execution_task_fixture(self.runtime, proposed)
         await asyncio.wait_for(
             both_started.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
         )
@@ -500,14 +498,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 for agent_id in specialist_ids:
                     self.backend.enqueue_for(agent_id, overlapping)
                 self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
-                task = asyncio.create_task(
-                    self.runtime.decide_lead_step(
-                        _decision(
-                            proposed,
-                            CollaborationConfirmationDecision.CONFIRM,
-                        )
-                    )
-                )
+                task = _confirmed_execution_task_fixture(self.runtime, proposed)
                 await asyncio.wait_for(
                     ready.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
                 )
@@ -734,10 +725,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         )
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
-        with mock.patch.object(
-            self.runtime, "_finalize_known_result_locked",
-            side_effect=RuntimeError("test stopped after durable execution result"),
-        ):
+        with _stop_after_durable_result_patch(self.runtime):
             with self.assertRaisesRegex(RuntimeError, "durable execution result"):
                 await self.runtime.decide_lead_step(
                     _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
@@ -794,10 +782,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 self.backend.enqueue_for(
                     LEAD_ORCHESTRATOR, _synthesis_outcome(),
                 )
-                with mock.patch.object(
-                    self.runtime, "_finalize_known_result_locked",
-                    side_effect=RuntimeError("test stopped after durable execution result"),
-                ):
+                with _stop_after_durable_result_patch(self.runtime):
                     with self.assertRaisesRegex(RuntimeError, "durable execution result"):
                         await self.runtime.decide_lead_step(
                             _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
@@ -838,12 +823,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         conversation_id = self.conversation("Concurrent diagnostic correlation")
-        proposed = await self.proposal(
-            conversation_id,
-            assignments=_assignments(
-                PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST,
-            ),
-        )
+        proposed = await _three_way_proposal_fixture(self, conversation_id)
         for role in (PLOT_ARCHITECT, CHARACTER_CUSTODIAN):
             self.backend.enqueue_for(role, _specialist_outcome(message=""))
             self.backend.enqueue_for(role, _specialist_outcome())
@@ -854,10 +834,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.backend.enqueue_for(EXECUTION_SPECIALIST, _specialist_outcome())
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
 
-        with mock.patch.object(
-            self.runtime, "_finalize_known_result_locked",
-            side_effect=RuntimeError("test stopped after durable execution result"),
-        ):
+        with _stop_after_durable_result_patch(self.runtime):
             with self.assertRaisesRegex(RuntimeError, "durable execution result"):
                 await self.runtime.decide_lead_step(
                     _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
@@ -929,10 +906,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
 
         with (
             mock.patch.object(self.runtime, "_append_validation_messages", fail_once),
-            mock.patch.object(
-                self.runtime, "_finalize_known_result_locked",
-                side_effect=RuntimeError("test stopped after durable execution result"),
-            ),
+            _stop_after_durable_result_patch(self.runtime),
         ):
             with self.assertRaisesRegex(RuntimeError, "durable execution result"):
                 await self.runtime.decide_lead_step(

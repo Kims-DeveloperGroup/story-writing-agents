@@ -337,7 +337,11 @@ as a string.
 
 | Contract | Response types and content |
 | --- | --- |
-| `lead-response-v7` (fresh scope3; legacy scope1/2 uses v6) | `answer`, `clarification_question`, `critique`, `proposal_drafting_recommendation`, `specialist_consultation_proposal`, or `artifact_change_proposal`; always includes `response_text` and `writing_task_scope`. |
+| `lead-response-v7` (bound scope3; legacy scope1/2 uses v6) | `answer`, `clarification_question`, `critique`, `proposal_drafting_recommendation`, `specialist_consultation_proposal`, or `artifact_change_proposal`; always includes `response_text` and `writing_task_scope`. |
+| `lead-response-v8` | Eligible ordinary new-step fronts offer normal branches plus a separate candidate-free premise-analysis consultation for the host-offered question. |
+| `premise-analysis-response-v1` | Provisional analyst alternatives, rationale, tradeoffs, and actual offered input aliases; never a draft or candidate-review receipt. |
+| `premise-decision-summary-v1` | Terminal whole options or clarification, preserving a disposition/reason/residual cost for every actual current analyst reply. No automatic next intent. |
+| `specialist-assignment-response-v5` | Dependent drafting bound to an actual captured premise, with a matching draft or typed slot/capture conflict. Other drafts and constraint assessments keep their selected v3/v4 families. |
 | `lead-exploration-response-v1` | Host-selected provisional `lead_exploration`; `status` is `ideas` or `clarification`; no proposal or mutation fields. |
 | `specialist-assignment-response-v3` | `specialist_assignment_result`, `assignment_status`, and `response_text`. |
 | `specialist-assignment-response-v4` | Constraint assignment result with `constraints_assessed`, `concerns_found`, `conflicts_found`, or `insufficient_evidence`; no draft or final-review support. |

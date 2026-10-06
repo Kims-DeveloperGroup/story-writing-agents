@@ -2060,7 +2060,7 @@ class InteractiveController:
 
         if action.kind is ActionKind.IGNORED:
             return False
-        if action.kind in {ActionKind.LEAD_INPUT, ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT}:
+        if action.kind in {ActionKind.LEAD_INPUT, ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT, ActionKind.PREMISE_DECISION}:
             if self._attached_session_id is None:
                 self._write_error(
                     InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
@@ -2075,7 +2075,7 @@ class InteractiveController:
                 raise _ControllerAbort(
                     InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
                 )
-            if action.kind is not ActionKind.LEAD_ADOPT:
+            if action.kind not in {ActionKind.LEAD_ADOPT, ActionKind.PREMISE_DECISION}:
                 assert action.text is not None
             adapter = InteractiveLeadAdapter(
                 self._runtime.session(self._attached_session_id),
@@ -2096,6 +2096,8 @@ class InteractiveController:
             )
             if action.kind is ActionKind.LEAD_ADOPT:
                 return adapter.adopt(self._focused_conversation.conversation_id)
+            if action.kind is ActionKind.PREMISE_DECISION:
+                return adapter.premise(self._focused_conversation.conversation_id)
             return adapter.submit(
                 self._focused_conversation.conversation_id,
                 action.text,

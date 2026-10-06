@@ -44,6 +44,7 @@ from tests.test_lead_orchestration import (
     LeadOrchestrationTestCase,
     _LeadBackend,
     _LeadContextProvider,
+    _confirmed_premise,
     _decision,
     _live_scope,
     _provider_envelope,
@@ -212,7 +213,7 @@ class DurableLeadEvidenceMatrixTests(unittest.TestCase):
         }
         accepted = 0
         rejected = 0
-        for scope in LeadOutcomeScope:
+        for scope in (LeadOutcomeScope.STORY_SPECIFIC, LeadOutcomeScope.WORKFLOW_META):
             for status in LeadEvidenceStatus:
                 evidence = _evidence_for(scope, status)
                 for kind in normal_kinds:
@@ -420,6 +421,31 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                     is CollaborationEvidenceAcquisition.ZERO_HIT_SEARCH
                 )
                 self.assertEqual(len(zero_hits), 1)
+
+        conversation = self.conversation("Premise with exact range evidence")
+        proposed, reported = await _confirmed_premise(self, conversation, reference=True)
+        receipt, = proposed.evidence.receipts
+        self.assertEqual((proposed.evidence.scope, proposed.evidence.status, receipt.acquisition),
+                         (LeadOutcomeScope.PREMISE_ANALYSIS, LeadEvidenceStatus.VERIFIED, CollaborationEvidenceAcquisition.ATTACHED_REFERENCE))
+        self.assertEqual((receipt.start_line, receipt.end_line, receipt.boundary_start, receipt.boundary_end), (1, 2, 1, 2))
+        self.assertEqual(receipt.content_digest, "sha256:" + hashlib.sha256(b"Outline first line.\nOutline second line.\n").hexdigest())
+        self.assertEqual(receipt.locator, "${core_documents/global_outline.md}#L1-L2")
+        with self.assertRaises(ValueError):
+            CollaborationLeadJudgmentPayload(LeadOutcomeKind.PROPOSAL, "Forged USER-only evidence.", replace(proposed.evidence, status=LeadEvidenceStatus.NOT_APPLICABLE))
+        history = self.history(conversation)
+        disclosure = next(event for event in history if event.payload == proposed.proposal)
+        batch_events = tuple(event for event in history if event.batch_id == disclosure.batch_id)
+        prefix = history[:batch_events[0].sequence - 1]
+        drafts = tuple(
+            replace(make_draft(event.event_id, event.kind, event.sender, event.recipient, event.payload,
+                               step_id=event.step_id, turn_id=event.turn_id),
+                    session_id=event.session_id, conversation_id=event.conversation_id)
+            for event in batch_events)
+        self.assertEqual(validate_collaboration_candidate_batch(prefix, make_batch(prefix, "valid_analysis", *drafts)).current_proposal, proposed.proposal)
+        forged = tuple(replace(event, payload=replace(event.payload, evidence=replace(event.payload.evidence, scope=LeadOutcomeScope.STORY_SPECIFIC)))
+                       if type(event.payload) is CollaborationLeadJudgmentPayload else event for event in drafts)
+        with self.assertRaises(CollaborationAppendError):
+            validate_collaboration_candidate_batch(prefix, make_batch(prefix, "forged_analysis_scope", *forged))
 
     async def test_durable_zero_hit_history_contains_no_search_or_source_content(
         self,

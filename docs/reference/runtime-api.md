@@ -475,6 +475,7 @@ await StoryRuntime.lead_turn(
     action_progress_sink: ContextActionProgressSink | None = None,
     interaction_mode: LeadInteractionMode = LeadInteractionMode.ORCHESTRATION,
     adoption: ExplorationAdoptionSelection | None = None,
+    premise_selection: PremiseDecisionSelection | None = None,
 ) -> LeadTurnResult
 
 await StoryRuntime.propose_specialist_advisory(
@@ -563,6 +564,21 @@ used as previous draft or confirmation proof. Pending decisions and recovery
 take priority without starting another provider call.
 See [exploration and adoption](../guides/lead-agent.md#exploration-and-adoption).
 
+### Explicit premise choices
+
+Import the current values from `story_writing_agents.lead_premise_decisions`.
+Both `lead_turn()` facades accept keyword-only `premise_selection`. A terminal analyst
+report is provisional; its paired `premise_report_ref` supplies the exact conversation,
+event, digest and question pins. A USER choice copies that reference and one whole option's
+ID/material digest. Delegated minor choices instead use an exact USER allowlist and may
+resolve only the report's eligible recommendation. Reject/defer grant no authoring authority.
+
+Selection creates a fresh authoring proposal and separate Confirm. An exact current
+authoring-task/revision pair requests current + 1; both absent create a new task at 1.
+Same-request retries retain the exact original text and selection arguments and create
+no duplicate capture, task or provider calls. Pending/unknown outcomes keep priority.
+See [the state table and Python example](../guides/lead-agent.md#choosing-an-unresolved-premise).
+
 ### `LeadTurnResult`
 
 ```python
@@ -588,6 +604,8 @@ LeadTurnResult(
     *,
     interaction_mode: LeadInteractionMode = LeadInteractionMode.ORCHESTRATION,
     exploration: LeadExplorationReport | None = None,
+    premise_report: PremiseDecisionReport | None = None,
+    premise_report_ref: PremiseReportRef | None = None,
 )
 ```
 
@@ -1397,6 +1415,7 @@ await RuntimeSession.lead_turn(
     action_progress_sink: ContextActionProgressSink | None = None,
     interaction_mode: LeadInteractionMode = LeadInteractionMode.ORCHESTRATION,
     adoption: ExplorationAdoptionSelection | None = None,
+    premise_selection: PremiseDecisionSelection | None = None,
 ) -> LeadTurnResult
 await RuntimeSession.propose_specialist_advisory(
     conversation_id: str,

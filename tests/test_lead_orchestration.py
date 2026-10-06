@@ -3,10 +3,11 @@
 from __future__ import annotations
 from tests.test_collaboration_events import editorial, editorial_request
 from story_writing_agents.provider_wire import project_result_schema
-from story_writing_agents.lead_provider_contracts import LeadExplorationConstraints
+from story_writing_agents.lead_provider_contracts import PremiseDecisionConstraints, LeadExplorationConstraints
 from story_writing_agents.agent_context.service import ContextJsonObjectResultContract
 
 import asyncio
+from story_writing_agents import lead_premise_decisions as premise
 import copy
 import inspect
 import json
@@ -14,6 +15,8 @@ import pickle
 import shutil
 import tempfile
 import unittest
+from story_writing_agents.conversations import CollaborationConfirmationPayload
+from story_writing_agents.specialist_routing import SpecialistAssignmentMode
 from collections.abc import Mapping
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, replace
@@ -118,9 +121,122 @@ _Response = (
 _LIVE_CONTEXT = {}
 
 
+
+async def _confirmed_premise(case, conversation, *, reference=False):
+    literal = "Éither the narrator knows.\r\nThe reader learns later.  "
+    agents = (PLOT_ARCHITECT, CHARACTER_CUSTODIAN)
+    def front(call, provider):
+        facts = _workflow_material(call.payload)["provider_constraints"]
+        spec = {"question_id": facts["offered_premise_question_id"], "slot_id": "knowledge",
+                "question": "Who knows the concealed motive?", "dependent_domains": ["plot_structure", "character_world"]}
+        assignments = [{"agent_id": agent, "instruction": "Compare alternatives and their residual costs.",
+                        "input_ids": list(facts["available_assignment_input_source_ids"]), "mode": "premise_analysis"} for agent in agents]
+        return wire_answer({"kind": "proposal", "message": "Assess the unresolved knowledge choice.",
+                            "authoring_scope": None, "proposal": {"assignments": assignments, "premise_decision": spec}}, wire_contract_id(call.payload))
+    case.backend.enqueue(front)
+    request = "Compare knowledge alternatives without drafting."
+    if reference:
+        request += " ${core_documents/global_outline.md}#L1-L2"
+    proposed = await case.runtime.lead_turn(case.session_id, conversation, request)
+    case.assertIs(proposed.kind, LeadOutcomeKind.PROPOSAL, proposed)
+    case.assertIsNone(proposed.proposal.authoring_scope)
+    case.assertIs(proposed.evidence.scope, LeadOutcomeScope.PREMISE_ANALYSIS)
+    if not reference:
+        case.assertEqual(proposed.evidence, orchestrator_module.CollaborationLeadEvidence(LeadOutcomeScope.PREMISE_ANALYSIS, orchestrator_module.LeadEvidenceStatus.NOT_APPLICABLE, ()))
+    case.assertTrue(all(item.mode is SpecialistAssignmentMode.PREMISE_ANALYSIS for item in proposed.proposal.assignments))
+    pending_history, pending_calls = case.history(conversation), len(case.backend.call_records)
+    await case.runtime.decide_lead_step(_decision(proposed, CollaborationConfirmationDecision.REVISE))
+    pending = project_collaboration_history(case.history(conversation))
+    case.assertEqual((pending.current_proposal, pending.confirmation_request_id), (proposed.proposal, proposed.confirmation_request_id))
+    case.assertEqual(len(case.backend.call_records), pending_calls)
+    case.assertFalse(any(type(event.payload) is CollaborationConfirmationPayload and event.payload.decision is CollaborationConfirmationDecision.REVISE for event in case.history(conversation)[len(pending_history):]))
+    analysis = {"assessment": "alternatives_assessed", "message": "The choice remains provisional.",
+                "alternatives": [{"alternative_key": "knows", "premise_text": literal, "rationale": "Preserve deliberate ambiguity.",
+                                  "tradeoffs": ["Reader certainty remains limited."], "basis_input_ids": ["user_input"]}]}
+    for agent in agents:
+        case.backend.enqueue_for(agent, lambda call, provider: wire_answer(analysis, wire_contract_id(call.payload)))
+    def summarize(call, provider):
+        replies = _workflow_material(call.payload)["replies"]
+        dispositions = [{"reply_event_id": item["reply_event_id"], "alternative_keys": ["knows"],
+                         "disposition": "used", "reason": "Retain the actual alternative.", "residual_cost": "Reader certainty remains limited."} for item in replies]
+        return wire_answer({"status": "options", "message": "Only USER can select this whole premise.",
+                            "options": [{"option_key": "knows", "premise_text": literal, "rationale": "The uncertainty is intentional.",
+                                         "reply_dispositions": dispositions},
+            {"option_key": "reader-first", "premise_text": "The reader knows first.\r\nThe narrator remains uncertain.  ",
+             "rationale": "A contrasting provisional whole option.",
+             "reply_dispositions": [{**item, "disposition": "modified", "reason": "Move knowledge to the reader."} for item in dispositions]}],
+            "recommended_option_key": "knows"}, wire_contract_id(call.payload))
+    case.backend.enqueue_for(LEAD_ORCHESTRATOR, summarize)
+    finished = await case.runtime.decide_lead_step(_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
+    turn = finished.turn
+    case.assertEqual(turn.premise_report.options[0].premise_text, literal)
+    case.assertEqual(turn.premise_report_ref.report_digest, turn.premise_report.report_digest)
+    case.assertIsNone(turn.recommendation_request)
+    case.assertIsNone(turn.artifact_application_request)
+    case.assertIsNone(turn.story_commit_request)
+    calls = _submitted_calls(tuple(event for event in case.history(conversation) if event.step_id == proposed.proposal.step_id))
+    case.assertEqual(turn.premise_report.cost.submitted_call_ids, tuple(item.call_id for item in calls))
+    return proposed, turn
+
+def _premise_choice(turn, targets, *, request_id="choose-knowledge"):
+    ref, option = turn.premise_report_ref, turn.premise_report.options[0]
+    return premise.PremiseDecisionSelection(
+        request_id, premise.PremiseDecisionAction.CHOOSE, ref.source_conversation_id,
+        ref.report_event_id, ref.report_digest, ref.question_id,
+        choice_policy=premise.PremiseChoicePolicy.USER_CHOICE,
+        option_id=option.option_id, material_digest=option.material_digest, target_paths=targets)
+
+def _premise_native_contract(summary=False):
+    constraints = PremiseDecisionConstraints(
+        "native-question",
+        input_ids=("user_input",),
+        reply_alternatives=(("native-reply", ("native-alternative",)),),
+    )
+    family = "premise-decision-summary-v1" if summary else "premise-analysis-response-v1"
+    schema = constraints.summary_schema() if summary else constraints.analysis_schema()
+    contract = ContextJsonObjectResultContract(family, project_result_schema(schema, family))
+    payload = {"workflow": "premise_decision_summary" if summary else "premise_analysis", "provisional": True,
+               "premise_decision": {"question_id": "native-question", "slot_id": "knowledge", "question": "Who knows?", "dependent_domains": ["plot_structure"]}, "inputs": []}
+    payload["inputs"] = [{"input_id": "user_input", "kind": "user_input", "selected_text": "Who knows?"}]
+    if summary:
+        alternative = premise.PremiseAlternative(
+            "native-alternative",
+            "The narrator knows.",
+            "Native offered rationale.",
+            ("Reader uncertainty remains.",),
+            ("user_input",),
+        )
+        analysis = premise.PremiseAnalysis("alternatives_assessed", "Native offered result.", (alternative,))
+        payload["replies"] = [{
+            "reply_event_id": "native-reply",
+            "agent_id": PLOT_ARCHITECT,
+            "premise_analysis": premise.premise_value_to_dict(analysis),
+        }]
+    value = {"status": "clarification", "message": "The knowledge choice remains unresolved.", "options": [], "recommended_option_key": None} if summary else {"assessment": "insufficient_evidence", "message": "No candidate was evaluated.", "alternatives": []}
+    return contract.schema_value(), payload, wire_answer(value, family)
+
 def _history_validation_details(history):
     return tuple(detail for event in history if type(event.payload) is CollaborationMessagePayload for detail in event.payload.validation_details)
 
+
+
+def _selected_premise_proposal(selection):
+    from tests.test_specialist_routing_runtime import scoped_proposal
+
+    def captured_scope(value, material):
+        captured = material["premise_selection"]
+        scope = value["authoring_scope"]
+        scope["contributions"] = [{"domain": domain, "role": "constraint_assessor" if domain == "tone_execution" else "draft_owner"} for domain in ("plot_structure", "character_world", "tone_execution")]
+        scope["dependency_slots"] = [{"slot_id": captured["slot_id"], "dependent_domains": ["plot_structure", "character_world"]}]
+        value["proposal"]["shared_premises"] = [{"slot_id": captured["slot_id"], "selected_premise": captured["selected_text"], "basis_input_ids": ["selected_premise"]}]
+        for assignment in value["proposal"]["assignments"]:
+            assignment["input_ids"].append("selected_premise")
+            assignment["mode"] = "constraint_assessment" if assignment["agent_id"] == EXECUTION_SPECIALIST else "draft"
+
+    revision = None if selection.expected_authoring_task_revision is None else selection.expected_authoring_task_revision + 1
+    return scoped_proposal(PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST, selected=selection.authoring_task_id,
+                          domains=("plot_structure", "character_world", "tone_execution"),
+                          revision=revision, paths=selection.target_paths, mutate=captured_scope)
 
 class _Finalizer:
     """Minimal synchronous provider terminal seam."""
@@ -734,7 +850,7 @@ def _workflow_material(value: object) -> dict[str, object]:
             value = scenario_input(value)
         workflow = value.get("workflow")
         if type(workflow) is str and workflow in {
-            "lead_front_channel", "lead_synthesis", "lead_specialist_consultation",
+            "lead_front_channel", "premise_analysis", "premise_decision_summary", "lead_synthesis", "lead_specialist_consultation",
             "specialist_advisory", "artifact_mutation", "git_operation",
         }:
             return value
@@ -810,6 +926,7 @@ def _synthesis_outcome(
 def _search_history(
     call: ContextProviderCallRequest,
     _provider: _LeadContextProvider,
+    *, text: str = "visible lead response",
 ) -> str:
     return json.dumps(
         {
@@ -817,7 +934,7 @@ def _search_history(
                 "kind": "search",
                 "queries": [
                     {
-                        "text": "visible lead response",
+                        "text": text,
                         "source_kinds": ["conversation"],
                     }
                 ],
@@ -1246,7 +1363,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     self.assertEqual(set(node["required"]), set(node["properties"]))
                     self.assertIs(node["additionalProperties"], False)
                 for key, value in node.items():
-                    assert_strict(value, allow_null if key in ("anyOf", "type") else key == "selected_premise")
+                    premise_properties = node.get("specialist_consultation_proposal", {}).get("properties", {})
+                    nullable = key == "selected_premise" or (
+                        key == "writing_task_scope" and "premise_decision" in premise_properties)
+                    assert_strict(value, allow_null if key in ("anyOf", "type") else nullable)
             elif type(node) in (list, tuple):
                 for value in node:
                     assert_strict(value, allow_null)
@@ -1261,7 +1381,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             describe_schema({"type": "object", "description": "Return the runtime-owned response.", "properties": {"unknown_runtime_wire_field": {"type": "string"}}})
         with self.assertRaisesRegex(ValueError, "no enum meaning"):
             describe_schema({"type": "string", "description": "Choose the runtime-owned value.", "enum": ["unknown_static_wire_choice"]})
-        self.assertEqual(call.payload["response_contract"]["result_contract_id"], "lead-response-v7")
+        self.assertEqual(call.payload["response_contract"]["result_contract_id"], "lead-response-v8")
         draft_contract = orchestrator_module._specialist_result_contract(type("Assignment", (), {"mode": orchestrator_module.SpecialistAssignmentMode.DRAFT})())
         description = draft_contract.schema["description"]
         self.assertIn("draft_completed", description); self.assertIn("do not write documents", description)
@@ -2342,6 +2462,58 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertEqual(result.message, "First response accepted.")
         self.assertEqual(len(backend.calls), 1)
         self.assertEqual(backend.finalizers[0].calls, [("accepted", None)])
+
+
+        for failure in (_SubmittedFailure(RuntimeError("known selected-premise failure")), _SubmittedFailure(asyncio.CancelledError("selected-premise cancellation"))):
+            conversation = self.conversation()
+            _, reported = await _confirmed_premise(self, conversation)
+            selection = _premise_choice(reported, ("core_documents/global_outline.md",))
+            prefix = self.history(conversation)
+            self.backend.enqueue(failure)
+            if isinstance(failure.failure, asyncio.CancelledError):
+                with self.assertRaises(asyncio.CancelledError):
+                    await self.runtime.lead_turn(self.session_id, conversation, "Draft from the selected premise.", premise_selection=selection)
+            failed = await self.runtime.lead_turn(self.session_id, conversation, "Draft from the selected premise.", premise_selection=selection)
+            self.assertIs(failed.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
+            history = self.history(conversation)
+            self.assertEqual(len(_submitted_calls(history[len(prefix):])), 1)
+            self.assertIsNotNone(project_collaboration_history(history).premise_selection)
+            with self.assertRaises(ValueError):
+                project_collaboration_history(tuple(event for event in history if event.kind is not CollaborationEventKind.PREMISE_SELECTION))
+            self.backend.enqueue(_visible_outcome("answer", "The known failure is closed; this is a fresh ordinary turn."))
+            continued = await self.runtime.lead_turn(self.session_id, conversation, "Report current workflow state.")
+            self.assertIs(continued.kind, LeadOutcomeKind.ANSWER)
+            self.assertEqual(len(_submitted_calls(self.history(conversation)[len(history):])), 1)
+            self.assertEqual(self.history(conversation)[:len(history)], history)
+
+
+            previous_capture = project_collaboration_history(history).premise_selection
+            recovery_prefix = self.history(conversation)
+            renewed = replace(selection, request_id="renew-" + failure.__class__.__name__)
+            if isinstance(failure.failure, asyncio.CancelledError):
+                renewed = replace(renewed, choice_policy=premise.PremiseChoicePolicy.DELEGATED_MINOR, option_id=None, material_digest=None, allowed_choices=(premise.PremiseAllowedChoice(reported.premise_report.options[0].option_id, reported.premise_report.options[0].material_digest),))
+            self.backend.enqueue(_selected_premise_proposal(renewed))
+            recovered = await self.runtime.lead_turn(self.session_id, conversation, "Fresh proposal from the same whole report.", premise_selection=renewed)
+            self.assertIs(recovered.kind, LeadOutcomeKind.PROPOSAL, recovered)
+            self.assertIsNotNone(recovered.confirmation_request_id)
+            capture = project_collaboration_history(self.history(conversation)).premise_selection
+            self.assertEqual((capture.selection.report_event_id, capture.selected_text), (previous_capture.selection.report_event_id, previous_capture.selected_text))
+            self.assertEqual(recovered.proposal.authoring_scope.task_revision, 1)
+            self.assertNotEqual(capture.authoring_task_id, previous_capture.authoring_task_id)
+            self.assertEqual(recovered.proposal.basis.shared_premises[0].selected_premise, capture.selected_text)
+            self.assertEqual(self.history(conversation)[:len(recovery_prefix)], recovery_prefix)
+            self.assertEqual(len(_submitted_calls(self.history(conversation)[len(recovery_prefix):])), 1)
+            conflict = premise.PremiseConflict(capture.slot_id, capture.capture_digest, "The owner cannot draft this selected whole premise consistently.")
+            self.backend.enqueue_for(PLOT_ARCHITECT, lambda call, provider: wire_answer({"assessment": "conflict", "message": conflict.reason, "premise_conflicts": premise.premise_value_to_dict((conflict,))}, wire_contract_id(call.payload)))
+            self.backend.enqueue_for(CHARACTER_CUSTODIAN, lambda call, provider: wire_answer({"assessment": "drafted", "message": capture.selected_text, "premise_conflicts": []}, wire_contract_id(call.payload)))
+            self.backend.enqueue_for(EXECUTION_SPECIALIST, _specialist_outcome("constraints_assessed"))
+            self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome(message="Resolve the exact USER premise conflict before any candidate."))
+            held = await self.runtime.decide_lead_step(_decision(recovered, CollaborationConfirmationDecision.CONFIRM))
+            replies = [event.payload for event in self.history(conversation)[len(recovery_prefix):] if event.kind is CollaborationEventKind.SPECIALIST_REPLY]
+            self.assertEqual(replies[0].premise_conflicts, (conflict,))
+            self.assertEqual(replies[0].assessment.value, "conflict")
+            self.assertIsNone(held.turn.artifact_application_request)
+            self.assertIsNone(held.turn.story_commit_request)
 
     async def test_pre_submission_correction_failure_closes_first_rejected_call(
         self,

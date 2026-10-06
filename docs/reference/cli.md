@@ -400,6 +400,18 @@ Removed commands are absent from help and static completion. See the
 Confirm/Reject/Revise controls; artifact Apply and local Commit have separate
 controls and authority.
 
+### Premise choices
+
+`/premise` takes no arguments. With an attached session and focused conversation, it shows
+the exact current provisional analyst report and opens structured choose/reject/defer
+controls. The shell supplies the report pins; users choose whole option text and the
+disclosed targets/task transition. A minor delegation requires an exact option allowlist.
+Opening the control and reject/defer remain provider-free. A valid choice may invoke the
+Lead for a fresh authoring proposal, whose specialist execution still needs Confirm.
+Pending Apply/Commit, running work, and uncertain outcomes retain priority.
+
+See [premise states and costs](../guides/lead-agent.md#choosing-an-unresolved-premise).
+
 ### Explicit exploration controls
 
 With an attached session and focused active conversation, `/explore TEXT`

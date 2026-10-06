@@ -9,6 +9,9 @@ import uuid
 from collections.abc import Awaitable, Callable
 
 from ..lead_exploration import LeadInteractionMode, ExplorationAdoptionSelection
+from ..lead_premise_decisions import (
+    PremiseDecisionSelection, PremiseDecisionAction, PremiseChoicePolicy, PremiseAllowedChoice, PremiseAuthoringTaskRef,
+)
 from ..conversations import (
     CollaborationLeadExplorationResultPayload,
     ArtifactApplicationDecision,
@@ -27,6 +30,8 @@ from ..conversations import (
     StoryCommitPreparationRequest,
     StoryCommitDecisionResult,
     StoryCommitRequestPayload,
+    CollaborationLeadSynthesisPayload,
+    project_collaboration_history,
 )
 from ..interactive_terminal import (
     AdvisoryProgressRequest,
@@ -211,7 +216,92 @@ class InteractiveLeadAdapter:
             self._semantic_output.write_component(Notice(str(failure), label="Adoption refused", role=SemanticRole.ERROR))
             return False
 
-    def submit(self, conversation_id: str, text: str, *, interaction_mode: LeadInteractionMode = LeadInteractionMode.ORCHESTRATION, adoption: ExplorationAdoptionSelection | None = None) -> bool:
+    def premise(self, conversation_id: str) -> bool:
+        """Bind an explicit USER control to one current whole reported option."""
+        events = self._read_events(conversation_id) if self._read_events is not None else ()
+        projection = project_collaboration_history(events)
+        report = projection.premise_report
+        if report is None:
+            self._semantic_output.write_component(Notice("No terminal premise report is available here.", label="Premise decision", role=SemanticRole.INFO))
+            return False
+        known = projection.premise_selection
+        reuse = known is not None and projection.next_safe_action in {
+            CollaborationNextAction.CONTINUE_WITH_LEAD, CollaborationNextAction.RETRY_LEAD_TURN}
+        if projection.next_safe_action is not CollaborationNextAction.CHOOSE_PREMISE and not reuse:
+            self._semantic_output.write_component(Notice("Resolve the current workflow control first: " + projection.next_safe_action.value,
+                label="Premise decision", role=SemanticRole.INFO))
+            return False
+        self._semantic_output.write_component(Panel("Premise analysis (provisional)", (
+            Message("Question", report.spec.question), Message("Analysis", report.summary.message),
+            Field("Submitted analysis calls", str(report.cost.physical_calls_spent)),
+            Field("Analysis rounds", str(report.cost.rounds_spent)),
+        )))
+        control = self._picker.read_picker(Prompt("Premise decision", instruction="A choice starts a separate authoring proposal; Confirm is still required."), tuple(
+            Choice(action.value, action.value.title()) for action in ((PremiseDecisionAction.CHOOSE,) if known is not None else tuple(PremiseDecisionAction))))
+        if control.kind is ControlOutcomeKind.EOF:
+            return True
+        if control.kind is not ControlOutcomeKind.COMMIT or control.text is None:
+            return False
+        action = PremiseDecisionAction(control.text)
+        fields = {}
+        if action is PremiseDecisionAction.CHOOSE:
+            if not report.options:
+                self._semantic_output.write_component(Notice("No grounded whole option is available. Keep the premise undecided or reject and freshly clarify.", label="Premise decision", role=SemanticRole.INFO))
+                return False
+            if known is not None:
+                self._semantic_output.write_component(Panel("Retained USER choice (reference)", (
+                    Field("Source report", known.selection.report_event_id), Field("Whole option", known.option_id),
+                    Field("Material SHA-256", known.material_digest), Message("Earlier selected premise", known.selected_text),
+                    Notice("Choose an exact whole option from the current report below; a different option requires fresh authoring and Confirm.", label="New USER control"))))
+            selected = self._picker.read_picker(Prompt("Whole premise option", instruction="Choose exact whole text; all analyst dispositions remain visible."), tuple(
+                Choice(item.option_id, item.option_key, description=item.premise_text + "\n" + item.rationale + "\n" + "\n".join(
+                    f"{value.reply_event_id}: {value.disposition}; {value.reason}; residual cost: {value.residual_cost}" for value in item.reply_dispositions)) for item in report.options))
+            if selected.kind is ControlOutcomeKind.EOF:
+                return True
+            if selected.kind is not ControlOutcomeKind.COMMIT or selected.text is None:
+                return False
+            option = next(item for item in report.options if item.option_id == selected.text)
+            policy = self._picker.read_picker(Prompt("Choice authority", instruction="Delegation may select only the report recommendation inside this exact one-option allowlist."), (
+                Choice(PremiseChoicePolicy.USER_CHOICE.value, "Choose this whole option"),
+                Choice(PremiseChoicePolicy.DELEGATED_MINOR.value, "Delegate the bounded minor choice")))
+            if policy.kind is ControlOutcomeKind.EOF:
+                return True
+            if policy.kind is not ControlOutcomeKind.COMMIT or policy.text is None:
+                return False
+            choice_policy = PremiseChoicePolicy(policy.text)
+            targets = self._prompt.read_prompt(Prompt("Target paths", instruction="One canonical artifact path per line; leave empty for targetless authoring."))
+            if targets.kind is ControlOutcomeKind.EOF:
+                return True
+            if targets.kind is not ControlOutcomeKind.COMMIT or targets.text is None:
+                return False
+            fields = {"choice_policy": choice_policy,
+                "target_paths": tuple(line.strip() for line in targets.text.splitlines() if line.strip())}
+            if choice_policy is PremiseChoicePolicy.USER_CHOICE:
+                fields.update(option_id=option.option_id, material_digest=option.material_digest)
+            else:
+                fields["allowed_choices"] = (PremiseAllowedChoice(option.option_id, option.material_digest),)
+            task = report.spec.source_authoring_task
+            if known is not None:
+                current_scope = None if projection.current_proposal is None else projection.current_proposal.authoring_scope
+                task = None if current_scope is None or current_scope.task_id != known.authoring_task_id else PremiseAuthoringTaskRef(current_scope.task_id, current_scope.task_revision)
+            if task is not None:
+                scope = self._picker.read_picker(Prompt("Fresh authoring task", instruction="Neither choice reuses old drafting proof or call counters."), (
+                    Choice("new", "New task at revision 1"), Choice("successor", f"{task.task_id} revision {task.task_revision + 1}")))
+                if scope.kind is ControlOutcomeKind.EOF:
+                    return True
+                if scope.kind is not ControlOutcomeKind.COMMIT:
+                    return False
+                if scope.text == "successor":
+                    fields.update(authoring_task_id=task.task_id, expected_authoring_task_revision=task.task_revision)
+        try:
+            selection = PremiseDecisionSelection("premise_" + uuid.uuid4().hex, action,
+                conversation_id, projection.premise_report_event_id, report.report_digest, report.spec.question_id, **fields)
+            return self.submit(conversation_id, "Record this exact USER premise decision.", premise_selection=selection)
+        except (TypeError, ValueError) as failure:
+            self._semantic_output.write_component(Notice(str(failure), label="Premise decision refused", role=SemanticRole.ERROR))
+            return False
+
+    def submit(self, conversation_id: str, text: str, *, interaction_mode: LeadInteractionMode = LeadInteractionMode.ORCHESTRATION, adoption: ExplorationAdoptionSelection | None = None, premise_selection: PremiseDecisionSelection | None = None) -> bool:
         """Run one literal lead turn; return true only for call-local EOF."""
 
         self._semantic_output.write_component(
@@ -224,7 +314,8 @@ class InteractiveLeadAdapter:
                     text,
                     action_progress_sink=self._progress.observe,
                     **({"interaction_mode": interaction_mode} if interaction_mode is LeadInteractionMode.EXPLORATION else {}),
-                    **({"adoption": adoption} if adoption is not None else {}),
+                **({"adoption": adoption} if adoption is not None else {}),
+                **({"premise_selection": premise_selection} if premise_selection is not None else {}),
                 )
             )
             return self._present_and_decide(turn)
