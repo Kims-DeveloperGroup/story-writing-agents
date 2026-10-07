@@ -234,13 +234,13 @@ installation:
 python -m pip install --editable .
 ```
 
-That ordinary reinstall upgrades older viewer installations to required 0.5.4.
+That ordinary reinstall upgrades older viewer installations to required 0.6.0.
 It needs no uninstall, `--force-reinstall`, or `--ignore-installed`. A missing required
 viewer should likewise be repaired by rerunning the normal Story installation
 first; the `viewer` extra is not a separate fix.
 
-Use a forced reinstall only when viewer 0.5.4 is already selected at the exact
-required pin but its installed files or three-name API are genuinely damaged.
+Use a forced reinstall only when viewer 0.6.0 is already selected at the exact
+required pin but its installed files or four-name API are genuinely damaged.
 Use the applicable Story form so dependency parity is restored together:
 
 ```bash
@@ -254,7 +254,7 @@ incompatible-viewer result means the installed API or required physical-input
 capability does not match the exact required pin. Viewers 0.1.1 and 0.2.0
 are rejected before raw mode or an alternate screen opens; use the ordinary upgrade path
 above. Verify the project requirement and lock identify
-`997f3a2af2c6e9e1f0fa305f6caeb1e0689593ea`. Checkout maintainers can also
+`3bde78bd60d5c42db101ae97a5fa723b730c597a`. Checkout maintainers can also
 initialize the matching submodule for audit or testing; runtime imports never
 come from `vendor/jsonl-viewer`.
 

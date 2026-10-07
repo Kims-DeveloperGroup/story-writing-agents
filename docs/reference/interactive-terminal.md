@@ -168,23 +168,26 @@ selects a range, and closing the viewer restores the composer. The controls
 insert `${path}` or `${path}#Lstart-Lend`; file bytes are read later through
 runtime authorization rather than embedded by the control.
 
-`/exchanges` uses a different hosted external viewer. After attachment, the
-controller chooses an immutable scope/agent snapshot and opens the installed
-isolated read-only JSONL viewer. Story validates the pinned 0.5.4 API and
-`ViewerSpec.input_protocol="keys"` capability before terminal acquisition;
-the older 0.1.1 and 0.2.0 APIs are incompatible. The viewer owns key bindings,
-ordinary-line grammar, a single full-text search draft, goto drafts, editing,
-and cancellation. Main-view `h/j/k/l` moves character focus, Enter toggles its
-container fold,
-arrows select records, and `?` opens help. Search and `n`/`N` reveal individual
-occurrences through folded ancestors. ANSI uses readable inverse focus; plain
-output reserves an extra caret row. Story transports decoded physical text/keys
-and owns terminal
-modes, geometry, frame presentation, and restoration. Closing the view returns
-to the same shell scope without retaining the command, picker, or viewer frames.
-Earlier accepted messages and results remain visible. It cannot call or replay a provider. For `/exchanges`,
-Story requires alternate-screen support. In line mode it shows a content-free
-notice instead of displaying exchange records in scrollback.
+`/exchanges` uses the installed isolated JSONL viewer after Story chooses an
+immutable scope/agent snapshot. Story validates the pinned 0.6.0 four-name API,
+the `ViewerTerminal` transport constructor, and owned-call keyword arguments
+before terminal acquisition. The low-level handoff borrows streams and Story's
+persistent character reader under the existing input latch; it preserves the
+lobby echo guard and rejects nested input or progress overlap.
+
+The viewer owns raw mode, the alternate screen, cursor visibility, SGR mouse
+capture, geometry, rendering, input decoding, and restoration. Wheel reports
+move character focus one line; left clicks select visible JSON cells.
+`h/j/k/l`, Enter folding, arrows for records, search, `n`/`N`, and `?` retain
+their behavior. Story retains no viewer draft or frame. Closing returns to the
+same shell scope, with earlier accepted messages still visible and no exchange
+frames retained. It cannot call or replay a provider. The owned call requires
+transient display; unavailable and callback-only terminals receive a
+content-free notice.
+
+The existing generic `InteractiveExternalViewer.open(operation)` borrowed-host
+route remains available to internal callers. `/exchanges` instead calls
+`open_owned(operation)`; that route leaves terminal modes to the library.
 
 On capable terminals, Story keeps input echo disabled across shell input
 transitions so buffered commands cannot be printed outside their transient

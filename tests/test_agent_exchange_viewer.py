@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import os
 import subprocess
 import sys
@@ -46,7 +47,7 @@ from story_writing_agents.models import DebateMessage
 from tests.test_interactive_controller import ControllerTestCase
 from story_writing_agents import interactive_terminal as terminal_module
 from story_writing_agents.interactive_terminal._external_view import (
-    ExternalViewUnavailableError,
+    ExternalViewUnavailableError, ExternalTerminalIO,
 )
 from story_writing_agents.interactive_controller import _core as controller_core_module
 
@@ -124,15 +125,9 @@ class _ExactViewerSpec:
         conversation_subject=None,
         input_protocol="semantic",
     ):
-        self.session_id = session_id
-        self.conversation_id = conversation_id
-        self.agent_id = agent_id
-        self.date_time_field = date_time_field
-        self.request_type_field = request_type_field
-        self.content_field = content_field
-        self.title = title
-        self.conversation_label = conversation_label
-        self.conversation_subject = conversation_subject
+        self.session_id, self.conversation_id, self.agent_id = session_id, conversation_id, agent_id
+        self.date_time_field, self.request_type_field, self.content_field = date_time_field, request_type_field, content_field
+        self.title, self.conversation_label, self.conversation_subject = title, conversation_label, conversation_subject
         self.input_protocol = input_protocol
 
     @property
@@ -161,36 +156,27 @@ class _ExactViewerHost:
         raise NotImplementedError
 
 
-class _RecordingHost:
-    def __init__(self) -> None:
-        self.closed = 0
+class _ExactViewerTerminal:
+    def __init__(self, input_stream, output_stream, read_character=None, no_color=False):
+        self.input_stream, self.output_stream = input_stream, output_stream
+        self.read_character, self.no_color = read_character, no_color
 
-    def terminal_size(self) -> tuple[int, int]:
-        return 80, 24
 
-    def color_enabled(self) -> bool:
-        return False
-
-    def present(self, _frame: str) -> None:
-        return None
-
-    def read_event(self) -> str | None:
-        return "close"
-
-    def close_view(self) -> None:
-        self.closed += 1
+def _transport():
+    return ExternalTerminalIO(io.StringIO(), io.StringIO(), lambda before_read: "", True)
 
 
 def _viewer_module(view_jsonl=mock.DEFAULT) -> types.ModuleType:
     module = types.ModuleType("jsonl_viewer")
-    module.__all__ = ["ViewerHost", "ViewerSpec", "view_jsonl"]
+    module.__all__ = ["ViewerHost", "ViewerSpec", "ViewerTerminal", "view_jsonl"]
     module.ViewerHost = _ExactViewerHost
     module.ViewerSpec = _ExactViewerSpec
+    module.ViewerTerminal = _ExactViewerTerminal
 
     if view_jsonl is mock.DEFAULT:
 
-        def view_jsonl(source, spec, host):
-            host.close_view()
+        def view_jsonl(source, spec, host=None, *, terminal=None, transient_only=False):
+            return None
 
     module.view_jsonl = view_jsonl
     return module
@@ -428,9 +414,9 @@ class LazyViewerAdapterTests(unittest.TestCase):
     ) -> None:
         calls: list[tuple[object, object, object]] = []
 
-        def view_jsonl(source, spec, host):
-            calls.append((source, spec, host))
-            host.close_view()
+        def view_jsonl(source, spec, host=None, *, terminal=None, transient_only=False):
+            self.assertIsNone(host); self.assertIs(transient_only, True)
+            calls.append((source, spec, terminal))
 
         module = _viewer_module(view_jsonl)
         source = b'{"content":"PRIVATE","provider":"codex"}\n'
@@ -447,13 +433,16 @@ class LazyViewerAdapterTests(unittest.TestCase):
             )
         imported.assert_called_once_with("jsonl_viewer")
         self.assertEqual(calls, [])
-        host = _RecordingHost()
+        host = _transport()
         operation(host)
         self.assertEqual(len(calls), 1)
         observed_source, spec, observed_host = calls[0]
         self.assertIs(observed_source, source)
         self.assertIs(type(observed_source), bytes)
-        self.assertIs(observed_host, host)
+        self.assertIs(observed_host.input_stream, host.input_stream)
+        self.assertIs(observed_host.output_stream, host.output_stream)
+        self.assertIs(observed_host.read_character, host.read_character)
+        self.assertIs(observed_host.no_color, host.no_color)
         self.assertEqual(
             (
                 spec.session_id,
@@ -477,7 +466,6 @@ class LazyViewerAdapterTests(unittest.TestCase):
             ),
         )
         self.assertFalse(hasattr(spec, "searchable_fields"))
-        self.assertEqual(host.closed, 1)
         self.assertEqual(source, b'{"content":"PRIVATE","provider":"codex"}\n')
 
     def test_missing_nested_import_and_bad_public_surface_are_fixed_preterminal_failures(
@@ -488,7 +476,7 @@ class LazyViewerAdapterTests(unittest.TestCase):
         bad_modules = (
             types.SimpleNamespace(__all__=("ViewerHost", "ViewerSpec", "view_jsonl")),
             types.SimpleNamespace(
-                __all__=["ViewerHost", "ViewerSpec", "view_jsonl"],
+                __all__=["ViewerHost", "ViewerSpec", "ViewerTerminal", "view_jsonl"],
                 ViewerHost=_ExactViewerHost,
                 ViewerSpec=object,
                 view_jsonl=lambda source, spec, host: None,
@@ -537,7 +525,7 @@ class LazyViewerAdapterTests(unittest.TestCase):
     def test_every_repaired_api_shape_mismatch_fails_before_operation_creation(
         self,
     ) -> None:
-        def exact_view_jsonl(source, spec, host):
+        def exact_view_jsonl(source, spec, host=None, *, terminal=None, transient_only=False):
             raise AssertionError("view must not run during preparation")
 
         class Legacy02Spec(_ExactViewerSpec):
@@ -555,18 +543,18 @@ class LazyViewerAdapterTests(unittest.TestCase):
             def primary_fields(self):
                 return ("content", "timestamp", "request_type")
 
-        class BadHost(_ExactViewerHost):
-            def present(self, frame, extra=None):
+        class BadTerminal(_ExactViewerTerminal):
+            def __init__(self, input_stream, output_stream, read_character=None, no_color=False, extra=None):
                 raise NotImplementedError
 
-        def bad_view_jsonl(source, spec, host, extra=None):
+        def bad_view_jsonl(source, spec, host=None, terminal=None, transient_only=False):
             raise AssertionError("bad view must not run")
 
         variants = []
         for name, value in (
             ("ViewerSpec", Legacy02Spec),
             ("ViewerSpec", BadProjection),
-            ("ViewerHost", BadHost),
+            ("ViewerTerminal", BadTerminal),
             ("view_jsonl", bad_view_jsonl),
             ("view_jsonl", object()),
         ):
@@ -616,7 +604,7 @@ class LazyViewerAdapterTests(unittest.TestCase):
 
         private = RuntimeError("PRIVATE provider response /tmp/private")
 
-        def failing_view_jsonl(source, spec, host):
+        def failing_view_jsonl(source, spec, host=None, *, terminal=None, transient_only=False):
             raise private
 
         with mock.patch.object(
@@ -633,79 +621,38 @@ class LazyViewerAdapterTests(unittest.TestCase):
                 agent_id=ROSTER[0],
             )
         with self.assertRaises(AgentExchangeViewerError) as raised:
-            operation(_RecordingHost())
+            operation(_transport())
         self.assertEqual(raised.exception.code, "view_failed")
         self.assertEqual(str(raised.exception), VIEWER_ERROR_MESSAGES["view_failed"])
         self.assertIs(raised.exception.__cause__, private)
 
     @unittest.skipUnless(VIEWER_SOURCE.is_dir(), "pinned jsonl-viewer is unavailable")
-    def test_pinned_real_viewer_hidden_field_search_promotes_verbose_and_is_transient(
-        self,
-    ) -> None:
-        script = textwrap.dedent(
-            """
-            import json
+    def test_pinned_real_viewer_hidden_field_search_promotes_verbose_and_is_transient(self) -> None:
+        script = textwrap.dedent("""
+            import io, inspect, json, jsonl_viewer
+            from types import SimpleNamespace
             from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
             from story_writing_agents.interactive_controller._exchange_viewer import prepare_agent_exchange_view
-
-            record = {"timestamp": "2026-08-30T00:00:00+00:00", "request_type": "request",
-                      "content": "body", "provider": "codex codex"}
-            source = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\\n").encode()
-
-            class Host:
-                def __init__(self, events=("search\\tCODEX", "next_match", "previous_match", "clear_search", "close")):
-                    self.events = iter(events)
-                    self.frames, self.closed = [], 0
-                def terminal_size(self): return (240, 28)
-                def color_enabled(self): return False
-                def present(self, frame): self.frames.append(frame)
-                def read_event(self): return next(self.events)
-                def close_view(self): self.closed += 1
-
-            host = Host()
-            def prepared(snapshot):
-                return prepare_agent_exchange_view(snapshot, session_id="session_1", scope_kind=AgentExchangeScopeKind.DEBATE,
-                    scope_id="debate_1", scope_subject="Subject", agent_id="character_custodian")
-            operation = prepared(source)
-            operation(host)
-            assert host.closed == 1 and "SIMPLE" in host.frames[0]
-            searched = [frame for frame in host.frames if "Search all text='CODEX'" in frame]
-            assert searched and all("VERBOSE" in frame for frame in searched)
-            assert ["1/2" in frame for frame in searched] == [True, False, True]
-            assert all('"provider": "' + text + '"' in frame for text, frame in zip(("⟦codex⟧ codex", "codex ⟦codex⟧", "⟦codex⟧ codex"), searched))
-            assert "Search cleared" in host.frames[-1]
-
-            second = Host(("close",))
-            operation(second)
-            assert "SIMPLE" in second.frames[0] and "Search " not in second.frames[0]
-            siblings = Host(("text\\tJ", "text\\tK", "text\\tJ", "text\\tJ", "idle", "text\\tK", "search\\tCODEX", "toggle_fold", "next_sibling", "idle", "next_match", "close"))
-            operation(siblings)
-            assert all("First sibling." in siblings.frames[i] for i in (2, 4, 7))
-            assert "Last sibling." in siblings.frames[3] and siblings.frames[2] == siblings.frames[4]
-            assert "sibling." not in siblings.frames[5] and siblings.frames[2] != siblings.frames[5]
-            assert "^" in siblings.frames[5] and "^" not in siblings.frames[6]
-            assert len(siblings.frames[5].splitlines()) == len(siblings.frames[6].splitlines())
-            assert all("{...}" in siblings.frames[i] and "1/2 occurrences" in siblings.frames[i] for i in (9, 10, 11))
-            assert "2/2 occurrences" in siblings.frames[12] and '"provider": "codex ⟦codex⟧"' in siblings.frames[12]
-            assert siblings.closed == 1 and json.loads(source) == record
-            navigation = Host(("key\\tup", "key\\tdown", "key\\tpage_up", "key\\tpage_down", "close"))
-            prepared(source * 2)(navigation)
-            assert all(notice in navigation.frames[i] for i, notice in ((2, "Last record."), (3, "First record."), (4, "Last record."), (5, "First record.")))
-            def focused(frame): return next(previous for previous, line in zip(frame.splitlines(), frame.splitlines()[1:]) if line.strip() == "^")
-            assert navigation.closed == 1 and focused(navigation.frames[2]).endswith("{") and focused(navigation.frames[4]).endswith("}") and navigation.frames[3] == navigation.frames[5]
-            tall_source = (json.dumps({"content": list(range(40))}) + "\\n").encode() * 2
-            tall = Host(("text\\t" + "j" * 30, "text\\t" + "k" * 30, "text\\th", "text\\tl", "key\\tpage_up", "key\\tpage_down", "key\\tpage_down", "close"))
-            prepared(tall_source)(tall)
-            assert focused(tall.frames[2]).rstrip().endswith("28,") and tall.frames[1] == tall.frames[3]
-            assert tall.closed == 1 and tall.frames[4] == tall.frames[6] and focused(tall.frames[7]).endswith("}") and tall.frames[5] == tall.frames[8]
-
-            """
-        )
+            from story_writing_agents.interactive_terminal._external_view import ExternalTerminalIO
+            source = (json.dumps({"content": "body", "provider": "codex codex"}) + "\\n").encode(); original = bytes(source)
+            frames, closed = [], []; events = iter(("search\\tCODEX", "next_match", "previous_match", "clear_search", "close"))
+            borrowed = SimpleNamespace(terminal_size=lambda: (240, 28), color_enabled=lambda: False, present=frames.append, read_event=lambda: next(events, None), close_view=lambda: closed.append(True))
+            actual = jsonl_viewer.view_jsonl
+            assert tuple(inspect.signature(actual).parameters) == ("source", "spec", "host", "terminal", "transient_only")
+            def owned(source, spec, host=None, *, terminal=None, transient_only=False):
+                assert host is None and transient_only is True and isinstance(terminal, jsonl_viewer.ViewerTerminal)
+                actual(source, spec, borrowed)
+            jsonl_viewer.view_jsonl = owned
+            operation = prepare_agent_exchange_view(source, session_id="session_1", scope_kind=AgentExchangeScopeKind.DEBATE, scope_id="debate_1", scope_subject="Subject", agent_id="character_custodian")
+            transport = ExternalTerminalIO(io.StringIO(), io.StringIO(), lambda before_read: "", True); operation(transport)
+            searched = [frame for frame in frames if "Search all text='CODEX'" in frame]
+            assert closed == [True] and "SIMPLE" in frames[0] and all("VERBOSE" in frame for frame in searched)
+            assert ["1/2" in frame for frame in searched] == [True, False, True] and "Search all text=" not in frames[-1]
+            frames.clear(); events = iter(("close",)); operation(transport)
+            assert "SIMPLE" in frames[0] and "Search all text=" not in frames[0] and source == original
+        """)
         environment = dict(os.environ, PYTHONPATH=os.pathsep.join((str(ROOT / "src"), str(VIEWER_SOURCE))))
-        completed = subprocess.run(
-            [sys.executable, "-W", "error", "-c", script],
-            cwd=ROOT, env=environment, text=True, capture_output=True, check=False,
-        )
+        completed = subprocess.run([sys.executable, "-W", "error", "-c", script], cwd=ROOT, env=environment, text=True, capture_output=True, check=False)
         self.assertEqual(completed.returncode, 0, f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}")
 
     def test_adapter_surface_is_internal_and_only_runtime_import_is_lazy(self) -> None:
@@ -808,7 +755,7 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
             ) as prepare_view,
             mock.patch.object(
                 terminal_module.InteractiveExternalViewer,
-                "open",
+                "open_owned",
                 autospec=True,
             ) as open_view,
         ):
@@ -816,7 +763,7 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
 
         prepare_view.assert_called_once()
         open_view.assert_called_once_with(
-            controller._external_viewer, operation, transient_only=True
+            controller._external_viewer, operation
         )
         self.assertEqual(len(picker.call_args_list), 2)
         scope_prompt, scope_choices = picker.call_args_list[0].args[1:3]
@@ -883,7 +830,7 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
             ),
             mock.patch.object(
                 terminal_module.InteractiveExternalViewer,
-                "open",
+                "open_owned",
                 autospec=True,
                 side_effect=ExternalViewUnavailableError("PRIVATE_VIEWER_CONTENT"),
             ),
@@ -948,7 +895,7 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
             ) as prepare_view,
             mock.patch.object(
                 terminal_module.InteractiveExternalViewer,
-                "open",
+                "open_owned",
                 autospec=True,
             ) as open_view,
         ):

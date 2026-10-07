@@ -8,12 +8,12 @@ from collections.abc import Callable
 
 from ..agent_exchanges import AgentExchangeScopeKind
 from ..interactive_terminal._external_view import (
-    ExternalViewerHost,
-    ExternalViewOperation,
+    ExternalOwnedViewOperation,
+    ExternalTerminalIO,
 )
 
 
-_VIEWER_PUBLIC_NAMES = ("ViewerHost", "ViewerSpec", "view_jsonl")
+_VIEWER_PUBLIC_NAMES = ("ViewerHost", "ViewerSpec", "ViewerTerminal", "view_jsonl")
 _REQUIRED_PARAMETER = object()
 _VIEWER_SPEC_PARAMETERS = (
     ("session_id", _REQUIRED_PARAMETER),
@@ -34,7 +34,19 @@ _VIEWER_HOST_METHODS = {
     "read_event": ("self",),
     "close_view": ("self",),
 }
-_VIEW_JSONL_PARAMETERS = ("source", "spec", "host")
+_VIEWER_TERMINAL_PARAMETERS = (
+    ("input_stream", _REQUIRED_PARAMETER),
+    ("output_stream", _REQUIRED_PARAMETER),
+    ("read_character", None),
+    ("no_color", False),
+)
+_VIEW_JSONL_PARAMETERS = (
+    ("source", _REQUIRED_PARAMETER),
+    ("spec", _REQUIRED_PARAMETER),
+    ("host", None),
+    ("terminal", None),
+    ("transient_only", False),
+)
 _FAILURE_MESSAGES = {
     "installation_required": (
         "Required agent exchange viewer is unavailable. Repair or reinstall "
@@ -63,6 +75,8 @@ class AgentExchangeViewerError(RuntimeError):
 def _has_exact_signature(
     value: object,
     parameters: tuple[tuple[str, object], ...],
+    *,
+    keyword_only: tuple[str, ...] = (),
 ) -> bool:
     """Return whether one callable exposes the pinned named call shape."""
 
@@ -78,13 +92,16 @@ def _has_exact_signature(
     for parameter, (name, default) in zip(observed, parameters, strict=True):
         if (
             parameter.name != name
-            or parameter.kind is not inspect.Parameter.POSITIONAL_OR_KEYWORD
+            or parameter.kind is not (
+                inspect.Parameter.KEYWORD_ONLY if name in keyword_only
+                else inspect.Parameter.POSITIONAL_OR_KEYWORD
+            )
         ):
             return False
         if default is _REQUIRED_PARAMETER:
             if parameter.default is not inspect.Parameter.empty:
                 return False
-        elif parameter.default != default:
+        elif type(parameter.default) is not type(default) or parameter.default != default:
             return False
     return True
 
@@ -131,8 +148,10 @@ def _viewer_spec_projection_is_supported(
     )
 
 
-def _load_viewer_api() -> tuple[Callable[..., object], Callable[..., object]]:
-    """Load and validate only the pinned viewer's public three-name facade."""
+def _load_viewer_api() -> tuple[
+    Callable[..., object], Callable[..., object], Callable[..., object]
+]:
+    """Load and validate only the pinned viewer's public four-name facade."""
 
     try:
         module = importlib.import_module("jsonl_viewer")
@@ -147,22 +166,23 @@ def _load_viewer_api() -> tuple[Callable[..., object], Callable[..., object]]:
         raise AgentExchangeViewerError("incompatible")
     viewer_spec = getattr(module, "ViewerSpec", None)
     viewer_host = getattr(module, "ViewerHost", None)
+    viewer_terminal = getattr(module, "ViewerTerminal", None)
     view_jsonl = getattr(module, "view_jsonl", None)
     if (
         not isinstance(viewer_spec, type)
         or not _has_exact_signature(viewer_spec, _VIEWER_SPEC_PARAMETERS)
         or not _viewer_host_shape_is_supported(viewer_host)
+        or not isinstance(viewer_terminal, type)
+        or not _has_exact_signature(viewer_terminal, _VIEWER_TERMINAL_PARAMETERS)
         or not callable(view_jsonl)
         or not _has_exact_signature(
             view_jsonl,
-            tuple(
-                (parameter_name, _REQUIRED_PARAMETER)
-                for parameter_name in _VIEW_JSONL_PARAMETERS
-            ),
+            _VIEW_JSONL_PARAMETERS,
+            keyword_only=("terminal", "transient_only"),
         )
     ):
         raise AgentExchangeViewerError("incompatible")
-    return viewer_spec, view_jsonl
+    return viewer_spec, viewer_terminal, view_jsonl
 
 
 def prepare_agent_exchange_view(
@@ -173,14 +193,14 @@ def prepare_agent_exchange_view(
     scope_id: str,
     scope_subject: str,
     agent_id: str,
-) -> ExternalViewOperation:
+) -> ExternalOwnedViewOperation:
     """Prepare one immutable view before the terminal lifecycle is acquired."""
 
     if type(source) is not bytes:
         raise TypeError("source must be immutable bytes")
     if type(scope_kind) is not AgentExchangeScopeKind:
         raise TypeError("scope_kind must be an AgentExchangeScopeKind")
-    viewer_spec_type, view_jsonl = _load_viewer_api()
+    viewer_spec_type, viewer_terminal_type, view_jsonl = _load_viewer_api()
     expected_projection = (
         ("session_id", session_id),
         ("conversation_id", scope_id),
@@ -211,11 +231,26 @@ def prepare_agent_exchange_view(
     if not _viewer_spec_projection_is_supported(spec, expected_projection):
         raise AgentExchangeViewerError("incompatible")
 
-    def view(host: ExternalViewerHost) -> None:
-        if not isinstance(host, ExternalViewerHost):
-            raise TypeError("host must implement ExternalViewerHost")
+    def view(transport: ExternalTerminalIO) -> None:
+        if type(transport) is not ExternalTerminalIO:
+            raise TypeError("transport must be ExternalTerminalIO")
         try:
-            view_jsonl(source, spec, host)
+            terminal = viewer_terminal_type(
+                transport.input_stream, transport.output_stream,
+                read_character=transport.read_character,
+                no_color=transport.no_color,
+            )
+            if (getattr(terminal, "input_stream", None) is not transport.input_stream
+                    or getattr(terminal, "output_stream", None) is not transport.output_stream
+                    or getattr(terminal, "read_character", None) is not transport.read_character
+                    or getattr(terminal, "no_color", None) is not transport.no_color):
+                raise AgentExchangeViewerError("incompatible")
+        except AgentExchangeViewerError:
+            raise
+        except Exception as exc:
+            raise AgentExchangeViewerError("incompatible") from exc
+        try:
+            view_jsonl(source, spec, terminal=terminal, transient_only=True)
         except AgentExchangeViewerError:
             raise
         except Exception as exc:
