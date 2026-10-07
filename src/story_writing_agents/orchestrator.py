@@ -4516,8 +4516,8 @@ class StoryRuntime:
             return LeadTaskDecisionResult(session_id, conversation_id, decision.action,
                                           decision.task_ref, transition.event_id, turn)
 
-    @staticmethod
     def _discussion_turn(
+        self,
         session_id: str, conversation_id: str, turn_id: str, step_id: str,
         report: LeadDiscussionReport, projection: CollaborationHistoryProjection, *,
         validation_details: tuple[str, ...] = (),
@@ -4530,6 +4530,18 @@ class StoryRuntime:
         }:
             pending = (CollaborationNextAction.REPLY_TO_LEAD if report.response_kind == "question"
                        else CollaborationNextAction.CONTINUE_WITH_LEAD)
+        preparation = None
+        if pending is CollaborationNextAction.REPREPARE_COMMIT_REQUEST:
+            events = self.conversation_storage_services.event_store.read(
+                session_id, conversation_id
+            )
+            operation = self._pending_artifact_operation_result(
+                session_id, conversation_id,
+                self._effective_lead_control_events(events), projection,
+            )
+            if operation is None or operation.story_commit_preparation_request is None:
+                raise BackendProtocolError("exact Commit preparation is unavailable")
+            preparation = operation.story_commit_preparation_request
         return LeadTurnResult(
             session_id=session_id, conversation_id=conversation_id, turn_id=turn_id, step_id=step_id,
             kind=LeadOutcomeKind.DISCUSSION, message=report.response_text,
@@ -4543,6 +4555,7 @@ class StoryRuntime:
                 projection.current_story_commit_request
                 if pending is CollaborationNextAction.SUBMIT_COMMIT_DECISION else None
             ),
+            story_commit_preparation_request=preparation,
         )
 
     async def decide_lead_task(
