@@ -39,6 +39,7 @@ _FAMILIES = {
     "consultation-summary-v4": "consultation_summary",
     "artifact-review-summary-v4": "artifact_review_summary",
     "lead-response-v8": "lead",
+    "lead-response-v9": "lead",
     "specialist-assignment-response-v5": "specialist_assignment_result",
     "premise-analysis-response-v1": "premise_analysis_result",
     "premise-decision-summary-v1": "premise_decision_summary",

@@ -507,7 +507,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             ]
         )
         source_files = tuple(source_root.rglob("*.py"))
-        self.assertEqual(len(source_files), 153)
+        self.assertEqual(len(source_files), 154)
         self.assertTrue(
             {
                 source_root / "artifact_proposals.py",
@@ -1079,9 +1079,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         )
         dead_path = self.workspace.path(_access_relative("dead"))
         before = _artifact_snapshot(dead_path)
-        with mock.patch.object(
-            backend_module.os, "kill", side_effect=ProcessLookupError
-        ):
+        with _fresh_literal_object_side_effect(backend_module.os, "kill", ProcessLookupError):
             observed = backend.get_session_lifecycle("dead")
             self.assertEqual(observed.access_state, SessionAccessState.CLAIMABLE)
             self.assertEqual(
@@ -1162,16 +1160,8 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         mark = len(_debug_records(self.workspace))
         with (
             _fresh_literal_object_side_effect(backend, '_release_access_claim', release),
-            mock.patch.object(
-                backend._codex_adapter,
-                "close",
-                side_effect=close_codex,
-            ),
-            mock.patch.object(
-                backend._antigravity_adapter,
-                "close",
-                side_effect=close_antigravity,
-            ),
+            _fresh_literal_object_side_effect(backend._codex_adapter, "close", close_codex),
+            _fresh_literal_object_side_effect(backend._antigravity_adapter, "close", close_antigravity),
             mock.patch.object(backend, "_trace_debug", side_effect=trace),
         ):
             self.assertIsNone(backend.close())
@@ -1274,11 +1264,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         error_mark = len(_debug_records(self.workspace))
         with (
             _fresh_literal_object_side_effect(error_backend, '_release_access_claim', release_for_error_sink),
-            mock.patch.object(
-                WorkspaceDebugLog,
-                "error",
-                side_effect=KeyboardInterrupt("diagnostic interrupt"),
-            ) as debug_error,
+            _fresh_literal_object_side_effect(WorkspaceDebugLog, "error", KeyboardInterrupt("diagnostic interrupt")) as debug_error,
         ):
             self.assertIsNone(error_backend.close())
 

@@ -799,3 +799,39 @@ class PremiseDecisionConstraints:
                 if item.disposition == "unavailable" and item.reply_event_id not in self.unavailable_reply_ids:
                     raise ValueError("premise disposition hides available analysis")
         return result
+
+
+@dataclass(frozen=True, slots=True)
+class LeadDiscussionConstraints:
+    """Host-selected read-only answer/question contract, never task authority."""
+
+    origin_control_event_id: str
+    associated_task_id: str | None = None
+    associated_task_revision: int | None = None
+
+    def schema(self) -> dict[str, object]:
+        schema = closed_object({
+            "kind": {"type": "string", "enum": ["answer", "question"]},
+            "message": nonempty_text_schema(),
+            "used_evidence_ids": string_array(),
+        })
+        schema["description"] = (
+            "Answer or ask a question in USER-selected discussion; no task "
+            "proposal, specialist dispatch, artifact candidate, or write authority."
+        )
+        return schema
+
+    def prompt_facts(self) -> dict[str, object]:
+        return {
+            "discussion_control_event_id": self.origin_control_event_id,
+            "associated_task": None if self.associated_task_id is None else {
+                "task_id": self.associated_task_id,
+                "task_revision": self.associated_task_revision,
+            },
+            "discussion_rule": (
+                "Answer or ask a question. Discussion retains the selected task "
+                "without changing its goal, scope, completion, or confirmation. "
+                "Do not propose execution, dispatch specialists, or claim artifact "
+                "facts without actual qualified READ evidence."
+            ),
+        }

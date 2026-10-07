@@ -537,6 +537,62 @@ from story_writing_agents.conversations import (
 
 They are deliberately not package-root exports.
 
+### Explicit task choices and retained messages
+
+`StoryRuntime.decide_lead_task(decision, *, action_progress_sink=None)` and the session facade return `LeadTaskDecisionResult`. Call synchronous `runtime.inspect_lead_collaboration(session_id, conversation_id)` first and choose a returned task or material reference from `available_tasks` or `selectable_materials`. The session facade takes only `conversation_id`. The decision factories generate a request ID; reuse the same decision for a retry.
+
+```python
+from story_writing_agents.lead_task_transitions import LeadTaskAction, LeadTaskDecision
+
+# selected_task is an exact task view returned by collaboration inspection.
+decision = LeadTaskDecision.from_task(
+    selected_task.ref,
+    LeadTaskAction.RESUME,
+    text="Continue this task using the selected direction.",
+)
+result = await runtime.decide_lead_task(decision)
+```
+
+Inspection returns `CollaborationHistoryProjection`. `available_tasks` contains exact task references, labels, status, scope, goal, source events, pending controls, and submitted call IDs. `selectable_materials` contains whole text, a preview, its exact reference, and available response acceptance/call facts. `public_responses` keeps the public response records separate from the current execution projection; `discussion_context` identifies the current USER task transition, including a Resume or New Task that is still clarifying its intent. Such follow-ups keep the same planned task/revision, selected inputs, and submitted-call budget until a matching fresh proposal is admitted.
+
+Each available task exposes `ref.task_id`, `ref.task_revision`, and lifecycle
+`status`. Inspect `current_step_id`, `current_state`, and `next_safe_action`
+separately for workflow state. A `discussion_context` with a prospective target
+describes a pending Resume/New task revision; matching fresh proposal admission
+clears it. The shell displays these values and refreshes after its interactive
+decision completes.
+
+`LeadTaskDecisionResult` identifies the action, selected task, and persisted transition event. Its `turn` is optional: Hold and Discard can complete without calling the provider. A returned `LeadTurnResult` may include `discussion` and per-call `public_responses` alongside its existing result and validation fields.
+
+Discussion can return an explanation or a question without proposing specialist work. Hold keeps the selected task and its history. Resume requests a fresh proposal for the same task's next revision. Discard retires the selected idle task and its pending controls. New task creates a new task ID at revision 1 and requires its own proposal and confirmation.
+
+A selected whole draft, discussion answer, or recoverable public response supplies input with an exact source reference and digest. It does not supply an old proposal, specialist reply, READ receipt, final review, Apply, or Commit authority. A source in another conversation must belong to the same session and pass exact snapshot validation.
+
+A rejected final response remains an answer you can read, discuss, or select as
+whole input material, even if its action structure or values are invalid. Its
+rejection and validation details remain visible. Original responses, corrective
+attempts, and accepted follow-ups keep separate call identities and repair
+lineage.
+
+A unique public string stays literal. A complete public value of another type
+appears with an explicit value-representation label. Plain final text, top-level
+JSON strings or scalars, and complete JSON object/array fences can also be
+retained under the bounded recovery rules. Invalid action values and unrelated
+duplicate keys or nonfinite values do not erase the answer. Ambiguous public
+paths, private/debug content, unsafe values, and unavailable or oversized final
+text receive an unavailable-text notice. Whole object/array envelopes are never
+displayed as a fallback. A closed public slot can survive missing outer closing
+delimiters; other malformed envelopes remain unavailable. Recovery reads only
+the returned final response, excluding callback streams and private debugging.
+Selecting a rejected answer as material does not approve its action.
+
+Exact material references and digests preserve the source response as input.
+They provide no proposal, READ, owner, review, Confirm, Apply, or Commit
+authority. A trusted persisted notice identifies an actual call whose bounded
+public answer is unavailable, including a failure with no returned final text.
+
+Pending Apply/Commit and unresolved operations retain their required controls. Task transitions cannot bypass them or reset consumed calls. Inspect available choices before submitting a decision.
+
 ### Explicit interaction mode and adoption
 
 Import current exploration values from `story_writing_agents.lead_exploration`.

@@ -1,6 +1,7 @@
 """Session-lobby controller contracts, transitions, and cleanup tests."""
 
 from __future__ import annotations
+import story_writing_agents.lead_task_transitions as task
 from story_writing_agents import conversations as collaboration
 from story_writing_agents import lead_exploration as exploration
 import hashlib
@@ -9,6 +10,7 @@ import ast
 import asyncio
 import importlib.util
 import inspect
+import json
 import os
 import socket
 import subprocess
@@ -286,6 +288,30 @@ def _observed_prompt_patch(original_prompt):
         autospec=True,
         side_effect=original_prompt,
     )
+
+def _object_wrap_patch(target, attribute, value):
+    return mock.patch.object(target, attribute, wraps=value)
+
+def _autospec_effect_patch(target, attribute, value):
+    return mock.patch.object(target, attribute, autospec=True, side_effect=value)
+
+def _autospec_return_patch(target, attribute, value):
+    return mock.patch.object(target, attribute, autospec=True, return_value=value)
+
+def _object_effect_patch(target, attribute, value):
+    return mock.patch.object(target, attribute, side_effect=value)
+
+def _object_return_patch(target, attribute, value):
+    return mock.patch.object(target, attribute, return_value=value)
+
+def _object_new_patch(target, attribute, value):
+    return mock.patch.object(target, attribute, new=value)
+
+def _autospec_method_patch(target, attribute):
+    return mock.patch.object(target, attribute, autospec=True)
+
+def _availability_patch(target, value):
+    return mock.patch(target, autospec=True, return_value=value)
 
 class ScriptedTerminalCallbacks:
     """Record terminal traffic and supply scripted text, events, or callbacks."""
@@ -964,11 +990,7 @@ class ControllerContractTests(ControllerTestCase):
         failed_log.error.side_effect = SystemExit("diagnostic sink failed")
         controller._debug_log = failed_log
 
-        with mock.patch.object(
-            backend,
-            "close",
-            wraps=backend.close,
-        ) as close:
+        with _object_wrap_patch(backend, "close", backend.close) as close:
             self.assertEqual(controller.run_session_lobby(), 2)
 
         close.assert_called_once_with()
@@ -1002,11 +1024,7 @@ class ControllerContractTests(ControllerTestCase):
         failed_log.trace.side_effect = KeyboardInterrupt("diagnostic trace failure")
         controller._debug_log = failed_log
 
-        with mock.patch.object(
-            backend,
-            "close",
-            wraps=backend.close,
-        ) as close:
+        with _object_wrap_patch(backend, "close", backend.close) as close:
             self.assertEqual(controller.run_session_lobby(), 0)
 
         close.assert_called_once_with()
@@ -1134,12 +1152,8 @@ class ControllerContractTests(ControllerTestCase):
                 tuple(callbacks.records[record_start:]),
             )
 
-        with mock.patch.object(
-            terminal_module.InteractiveSemanticOutput,
-            "write_component",
-            autospec=True,
-            side_effect=capture_component,
-        ):
+        with _autospec_effect_patch(terminal_module.InteractiveSemanticOutput, "write_component",
+                 capture_component):
             agents_off = projection(
                 controller._write_agent_roster,
                 details=False,
@@ -1597,8 +1611,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 153)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 654)
+        self.assertEqual(len(modules), 154)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 660)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -1948,22 +1962,12 @@ class ControllerSettingsTests(ControllerTestCase):
             return result
 
         with (
-            mock.patch.object(
-                InteractiveController,
-                "_edit_settings_agent_provider",
-                autospec=True,
-                side_effect=capture_returned_state,
-            ),
-            mock.patch.object(
-                controller_core_module,
-                "establish_settings_default_backend",
-                wraps=controller_core_module.establish_settings_default_backend,
-            ) as establish_default,
-            mock.patch.object(
-                controller_core_module,
-                "prepare_settings_save",
-                wraps=controller_core_module.prepare_settings_save,
-            ) as prepare,
+            _autospec_effect_patch(InteractiveController, "_edit_settings_agent_provider",
+                capture_returned_state),
+            _object_wrap_patch(controller_core_module, "establish_settings_default_backend",
+                controller_core_module.establish_settings_default_backend) as establish_default,
+            _object_wrap_patch(controller_core_module, "prepare_settings_save",
+                controller_core_module.prepare_settings_save) as prepare,
             _storage_selection_patch_fixture() as select_storage,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
@@ -2706,17 +2710,9 @@ class ControllerSettingsTests(ControllerTestCase):
                     cancel,
                 )
             ) as picker,
-            mock.patch.object(
-                InteractiveController,
-                "_edit_settings_agent_provider",
-                autospec=True,
-                return_value=(provider_pending, False),
-            ) as edit_provider,
-            mock.patch.object(
-                subprocess,
-                "Popen",
-                wraps=subprocess.Popen,
-            ) as popen,
+            _autospec_return_patch(InteractiveController, "_edit_settings_agent_provider",
+                (provider_pending, False)) as edit_provider,
+            _object_wrap_patch(subprocess, "Popen", subprocess.Popen) as popen,
             mock.patch.object(subprocess, "run") as run,
             mock.patch.object(socket, "create_connection") as connect,
         ):
@@ -2952,11 +2948,8 @@ class ControllerSettingsTests(ControllerTestCase):
         original_picker = terminal_module.InteractivePickerInput.read_picker
         with (
             _observed_picker_patch(original_picker) as picker,
-            mock.patch.object(
-                controller_core_module,
-                "parse_interactive_line",
-                wraps=controller_core_module.parse_interactive_line,
-            ) as parse_line,
+            _object_wrap_patch(controller_core_module, "parse_interactive_line",
+                controller_core_module.parse_interactive_line) as parse_line,
             mock.patch.object(subprocess, "Popen") as popen,
             mock.patch.object(subprocess, "run") as run,
             mock.patch.object(socket, "create_connection") as connect,
@@ -3453,11 +3446,7 @@ class ControllerSettingsTests(ControllerTestCase):
                             commit(second),
                         ),
                     ) as picker,
-                    mock.patch.object(
-                        controller_core_module,
-                        updater_name,
-                        wraps=updater,
-                    ) as update,
+                    _object_wrap_patch(controller_core_module, updater_name, updater) as update,
                 ):
                     updated, whole_cancel = editor(candidate)
                 self.assertFalse(whole_cancel)
@@ -3469,11 +3458,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 updater = getattr(controller_core_module, updater_name)
                 with (
                     _observed_picker_patch((commit(second), cancel)) as picker,
-                    mock.patch.object(
-                        controller_core_module,
-                        updater_name,
-                        wraps=updater,
-                    ) as update,
+                    _object_wrap_patch(controller_core_module, updater_name, updater) as update,
                 ):
                     reentered, whole_cancel = editor(updated)
                 self.assertFalse(whole_cancel)
@@ -3503,11 +3488,8 @@ class ControllerSettingsTests(ControllerTestCase):
                         commit(persona_values[0]),
                     ),
                 ) as picker,
-                mock.patch.object(
-                    controller_core_module,
-                    "update_persona",
-                    wraps=controller_core_module.update_persona,
-                ) as update,
+                _object_wrap_patch(controller_core_module, "update_persona",
+                    controller_core_module.update_persona) as update,
             ):
                 persona_state, whole_cancel = controller._edit_settings_persona(state)
             self.assertFalse(whole_cancel)
@@ -3515,11 +3497,8 @@ class ControllerSettingsTests(ControllerTestCase):
             self.assertEqual(update.call_count, 1)
             with (
                 _observed_picker_patch((commit(persona_values[0]), cancel)) as picker,
-                mock.patch.object(
-                    controller_core_module,
-                    "update_persona",
-                    wraps=controller_core_module.update_persona,
-                ) as update,
+                _object_wrap_patch(controller_core_module, "update_persona",
+                    controller_core_module.update_persona) as update,
             ):
                 reentered, whole_cancel = controller._edit_settings_persona(
                     persona_state
@@ -3585,11 +3564,8 @@ class ControllerSettingsTests(ControllerTestCase):
 
             with (
                 _observed_prompt_patch((commit("02"), commit("3"), commit("03"))) as prompt,
-                mock.patch.object(
-                    controller_core_module,
-                    "update_max_debate_rounds",
-                    wraps=controller_core_module.update_max_debate_rounds,
-                ) as update,
+                _object_wrap_patch(controller_core_module, "update_max_debate_rounds",
+                    controller_core_module.update_max_debate_rounds) as update,
             ):
                 state, whole_cancel = controller._edit_settings_rounds(state)
             self.assertFalse(whole_cancel)
@@ -3599,11 +3575,8 @@ class ControllerSettingsTests(ControllerTestCase):
 
             with (
                 _observed_prompt_patch((commit("bad"), commit("03"), commit("3"))) as prompt,
-                mock.patch.object(
-                    controller_core_module,
-                    "update_max_debate_rounds",
-                    wraps=controller_core_module.update_max_debate_rounds,
-                ) as update,
+                _object_wrap_patch(controller_core_module, "update_max_debate_rounds",
+                    controller_core_module.update_max_debate_rounds) as update,
             ):
                 reentered, whole_cancel = controller._edit_settings_rounds(state)
             self.assertFalse(whole_cancel)
@@ -3613,11 +3586,8 @@ class ControllerSettingsTests(ControllerTestCase):
 
             with (
                 _observed_prompt_patch((commit("custom-a"), commit(""), commit(""))) as prompt,
-                mock.patch.object(
-                    controller_core_module,
-                    "update_agent_codex_model",
-                    wraps=controller_core_module.update_agent_codex_model,
-                ) as update,
+                _object_wrap_patch(controller_core_module, "update_agent_codex_model",
+                    controller_core_module.update_agent_codex_model) as update,
             ):
                 state, whole_cancel = controller._edit_settings_custom_model(
                     state,
@@ -3631,11 +3601,8 @@ class ControllerSettingsTests(ControllerTestCase):
 
             with (
                 _observed_prompt_patch((commit("-unsafe"), commit(""), commit(""))) as prompt,
-                mock.patch.object(
-                    controller_core_module,
-                    "update_agent_codex_model",
-                    wraps=controller_core_module.update_agent_codex_model,
-                ) as update,
+                _object_wrap_patch(controller_core_module, "update_agent_codex_model",
+                    controller_core_module.update_agent_codex_model) as update,
             ):
                 reentered, whole_cancel = controller._edit_settings_custom_model(
                     state,
@@ -3886,12 +3853,7 @@ class ControllerSettingsTests(ControllerTestCase):
         cancel = _cancel_control_outcome()
         with (
             _observed_picker_patch((choose_custom, cancel)) as picker,
-            mock.patch.object(
-                terminal_module.InteractivePromptInput,
-                "read_prompt",
-                autospec=True,
-                return_value=cancel,
-            ) as prompt,
+            _autospec_return_patch(terminal_module.InteractivePromptInput, "read_prompt", cancel) as prompt,
         ):
             unchanged, whole_cancel = controller._edit_settings_agent_model(
                 state,
@@ -4544,17 +4506,8 @@ class ControllerSettingsTests(ControllerTestCase):
         for label, action, outcome, expected in outcomes:
             with self.subTest(label=label):
                 with (
-                    mock.patch.object(
-                        InteractiveController,
-                        "_read_settings_picker",
-                        autospec=True,
-                        return_value=outcome,
-                    ) as picker,
-                    mock.patch.object(
-                        type(controller._semantic_output),
-                        "write_component",
-                        autospec=True,
-                    ) as output,
+                    _autospec_return_patch(InteractiveController, "_read_settings_picker", outcome) as picker,
+                    _autospec_method_patch(type(controller._semantic_output), "write_component") as output,
                 ):
                     self.assertEqual(
                         controller._settings_save_confirmation(
@@ -4663,63 +4616,23 @@ class ControllerSettingsTests(ControllerTestCase):
         with (
             _loaded_settings_state_patch(state),
             _cancel_picker_patch(commit_save) as picker,
-            mock.patch.object(
-                InteractiveController,
-                "_settings_save_confirmation",
-                autospec=True,
-                side_effect=confirm,
-            ) as confirmation,
-            mock.patch.object(
-                InteractiveController,
-                "_settings_change_is_message_details_only",
-                autospec=True,
-                side_effect=classify,
-            ) as classification,
-            mock.patch.object(
-                controller_core_module,
-                "prepare_settings_save",
-                autospec=True,
-                side_effect=prepare,
-            ) as prepared_save,
-            mock.patch.object(
-                controller_core_module,
-                "commit_prepared_settings_save",
-                autospec=True,
-                side_effect=commit,
-            ) as committed_save,
+            _autospec_effect_patch(InteractiveController, "_settings_save_confirmation", confirm) as confirmation,
+            _autospec_effect_patch(InteractiveController, "_settings_change_is_message_details_only",
+                classify) as classification,
+            _autospec_effect_patch(controller_core_module, "prepare_settings_save", prepare) as prepared_save,
+            _autospec_effect_patch(controller_core_module, "commit_prepared_settings_save", commit) as committed_save,
             _settings_routes_authentication_patch() as authenticate,
             _fresh_literal_object_none(backend, 'execution_profiles') as execution_profiles,
             _fresh_literal_object_none(backend, 'stage_runtime_configuration') as stage_backend,
             _fresh_literal_object_none(backend, 'validate_runtime_configuration_candidate') as validate_backend,
             _fresh_literal_object_none(backend, 'discard_runtime_configuration') as discard_backend,
             _fresh_literal_object_none(backend, 'record_runtime_configuration_recovery_required') as recovery_backend,
-            mock.patch.object(
-                controller._runtime,
-                "prepare_runtime_configuration",
-                new=runtime_prepare,
-            ),
-            mock.patch.object(
-                controller._runtime,
-                "commit_runtime_configuration",
-                new=runtime_commit,
-            ),
-            mock.patch.object(
-                controller._runtime,
-                "discard_runtime_configuration",
-                new=runtime_discard,
-            ),
+            _object_new_patch(controller._runtime, "prepare_runtime_configuration", runtime_prepare),
+            _object_new_patch(controller._runtime, "commit_runtime_configuration", runtime_commit),
+            _object_new_patch(controller._runtime, "discard_runtime_configuration", runtime_discard),
             _storage_selection_patch_fixture() as select_storage,
-            mock.patch.object(
-                workspace,
-                "write_text",
-                wraps=workspace.write_text,
-            ) as write,
-            mock.patch.object(
-                type(controller._semantic_output),
-                "write_component",
-                autospec=True,
-                side_effect=write_component,
-            ) as output,
+            _object_wrap_patch(workspace, "write_text", workspace.write_text) as write,
+            _autospec_effect_patch(type(controller._semantic_output), "write_component", write_component) as output,
         ):
             controller._run_settings()
 
@@ -4827,17 +4740,8 @@ class ControllerSettingsTests(ControllerTestCase):
         with (
             _loaded_settings_state_patch(state),
             _observed_picker_patch((commit_save, cancel)) as picker,
-            mock.patch.object(
-                InteractiveController,
-                "_settings_save_confirmation",
-                autospec=True,
-                side_effect=clear_candidate,
-            ) as confirmation,
-            mock.patch.object(
-                InteractiveController,
-                "_settings_change_is_message_details_only",
-                autospec=True,
-            ) as classification,
+            _autospec_effect_patch(InteractiveController, "_settings_save_confirmation", clear_candidate) as confirmation,
+            _autospec_method_patch(InteractiveController, "_settings_change_is_message_details_only") as classification,
             _fresh_literal_object_none(controller_core_module, 'prepare_settings_save') as prepare,
             _prepared_settings_commit_patch() as commit,
             _settings_routes_authentication_patch() as authenticate,
@@ -4890,21 +4794,15 @@ class ControllerSettingsTests(ControllerTestCase):
                 before = _tree_snapshot(workspace.root)
                 if operation == "prepare_settings_save":
                     with (
-                        mock.patch.object(
-                            controller_core_module,
-                            operation,
-                            side_effect=settings_module.SettingsError(kind),
-                        ) as failed,
+                        _object_effect_patch(controller_core_module, operation,
+                            settings_module.SettingsError(kind)) as failed,
                         _prepared_settings_commit_patch() as commit,
                     ):
                         outcome = controller._save_message_details_setting(state)
                     commit.assert_not_called()
                 else:
-                    with mock.patch.object(
-                        controller_core_module,
-                        operation,
-                        side_effect=settings_module.SettingsError(kind),
-                    ) as failed:
+                    with _object_effect_patch(controller_core_module, operation,
+                             settings_module.SettingsError(kind)) as failed:
                         outcome = controller._save_message_details_setting(state)
 
                 self.assertEqual(outcome, "retry")
@@ -4948,11 +4846,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     )
                 )
                 with (
-                    mock.patch.object(
-                        controller_core_module,
-                        "prepare_settings_save",
-                        return_value=tampered,
-                    ) as prepare,
+                    _object_return_patch(controller_core_module, "prepare_settings_save", tampered) as prepare,
                     _prepared_settings_commit_patch() as commit,
                 ):
                     with self.assertRaises(controller_core_module._ControllerAbort):
@@ -4978,17 +4872,9 @@ class ControllerSettingsTests(ControllerTestCase):
         route_before = route_path.read_bytes() if route_path.exists() else None
         terminal_failure = OSError("terminal write failed")
         with (
-            mock.patch.object(
-                controller_core_module,
-                "commit_prepared_settings_save",
-                wraps=controller_core_module.commit_prepared_settings_save,
-            ) as commit,
-            mock.patch.object(
-                type(controller._semantic_output),
-                "write_component",
-                autospec=True,
-                side_effect=terminal_failure,
-            ) as output,
+            _object_wrap_patch(controller_core_module, "commit_prepared_settings_save",
+                controller_core_module.commit_prepared_settings_save) as commit,
+            _autospec_effect_patch(type(controller._semantic_output), "write_component", terminal_failure) as output,
         ):
             with self.assertRaises(OSError) as caught:
                 controller._save_message_details_setting(state)
@@ -5234,19 +5120,11 @@ class ControllerSettingsTests(ControllerTestCase):
 
         with (
             _observed_picker_patch((commit_save, cancel)) as picker,
-            mock.patch.object(
-                InteractiveController,
-                "_settings_save_confirmation",
-                autospec=True,
-            ) as confirmation,
+            _autospec_method_patch(InteractiveController, "_settings_save_confirmation") as confirmation,
             _settings_routes_authentication_patch() as authenticate,
             _storage_selection_patch_fixture() as save,
             _fresh_literal_object_none(InteractiveController, '_settings_panel') as panel,
-            mock.patch.object(
-                type(controller._semantic_output),
-                "write_component",
-                autospec=True,
-            ) as output,
+            _autospec_method_patch(type(controller._semantic_output), "write_component") as output,
         ):
             controller._run_settings()
 
@@ -5300,18 +5178,9 @@ class ControllerSettingsTests(ControllerTestCase):
                 with (
                     _loaded_settings_state_patch(changed),
                     _observed_picker_patch(picker_outcomes) as picker,
-                    mock.patch.object(
-                        InteractiveController,
-                        "_settings_save_confirmation",
-                        autospec=True,
-                        return_value="confirm",
-                    ) as confirmation,
-                    mock.patch.object(
-                        InteractiveController,
-                        "_authenticate_settings_routes",
-                        autospec=True,
-                        return_value=(authenticated_state, auth_outcome),
-                    ) as authenticate,
+                    _autospec_return_patch(InteractiveController, "_settings_save_confirmation", "confirm") as confirmation,
+                    _autospec_return_patch(InteractiveController, "_authenticate_settings_routes",
+                        (authenticated_state, auth_outcome)) as authenticate,
                     _storage_selection_patch_fixture() as save,
                 ):
                     controller._run_settings()
@@ -5448,17 +5317,10 @@ class ControllerSettingsTests(ControllerTestCase):
             return real_commit(saved_workspace, prepared)
 
         with (
-            mock.patch.object(
-                controller_core_module,
-                "commit_prepared_settings_save",
-                autospec=True,
-                side_effect=commit_after_selection,
-            ) as commit_save,
-            mock.patch.object(
-                controller_core_module,
-                "select_conversation_storage",
-                side_effect=select_after_isolation,
-            ) as select,
+            _autospec_effect_patch(controller_core_module, "commit_prepared_settings_save",
+                commit_after_selection) as commit_save,
+            _object_effect_patch(controller_core_module, "select_conversation_storage",
+                select_after_isolation) as select,
             mock.patch.object(subprocess, "Popen") as popen,
             mock.patch.object(subprocess, "run") as run,
             mock.patch.object(socket, "create_connection") as connect,
@@ -5579,15 +5441,10 @@ class ControllerSettingsTests(ControllerTestCase):
         )
 
         with (
-            mock.patch(
-                "story_writing_agents.backend.AntigravityAdapter.executable_available",
-                autospec=True,
-                return_value=True,
-            ) as executable_available,
-            mock.patch(
+            _availability_patch("story_writing_agents.backend.AntigravityAdapter.executable_available", True) as executable_available,
+            _availability_patch(
                 "story_writing_agents.backend.AntigravityAdapter.headless_capabilities_available",
-                autospec=True,
-                return_value=True,
+                True,
             ) as headless_capabilities_available,
             mock.patch.object(subprocess, "Popen") as popen,
             mock.patch.object(subprocess, "run") as run,
@@ -5677,16 +5534,9 @@ class ControllerSettingsTests(ControllerTestCase):
         before = _tree_snapshot(workspace.root)
         before_profile = backend.execution_profile(PLOT_ARCHITECT)
         with (
-            mock.patch.object(
-                backend,
-                "stage_runtime_configuration",
-                side_effect=ConfigurationError("PRIVATE_PREFLIGHT_FAILURE"),
-            ) as stage,
-            mock.patch.object(
-                controller._runtime,
-                "prepare_runtime_configuration",
-                new=mock.AsyncMock(),
-            ) as prepare_runtime,
+            _object_effect_patch(backend, "stage_runtime_configuration",
+                ConfigurationError("PRIVATE_PREFLIGHT_FAILURE")) as stage,
+            _object_new_patch(controller._runtime, "prepare_runtime_configuration", mock.AsyncMock()) as prepare_runtime,
         ):
             self.assertEqual(controller._save_and_apply_settings(state), "retry")
         stage.assert_called_once()
@@ -5703,18 +5553,12 @@ class ControllerSettingsTests(ControllerTestCase):
         before = _tree_snapshot(workspace.root)
         before_profile = backend.execution_profile(PLOT_ARCHITECT)
         with (
-            mock.patch.object(
-                controller._runtime,
-                "prepare_runtime_configuration",
-                new=mock.AsyncMock(
+            _object_new_patch(controller._runtime, "prepare_runtime_configuration",
+                mock.AsyncMock(
                     side_effect=BackendProtocolError("PRIVATE_QUIESCENCE_FAILURE")
-                ),
-            ) as prepare_runtime,
-            mock.patch.object(
-                backend,
-                "discard_runtime_configuration",
-                wraps=backend.discard_runtime_configuration,
-            ) as discard_backend,
+                )) as prepare_runtime,
+            _object_wrap_patch(backend, "discard_runtime_configuration",
+                backend.discard_runtime_configuration) as discard_backend,
         ):
             self.assertEqual(controller._save_and_apply_settings(state), "retry")
         prepare_runtime.assert_awaited_once()
@@ -5731,18 +5575,12 @@ class ControllerSettingsTests(ControllerTestCase):
         before = _tree_snapshot(workspace.root)
         before_profile = backend.execution_profile(PLOT_ARCHITECT)
         with (
-            mock.patch.object(
-                controller._runtime,
-                "commit_runtime_configuration",
-                new=mock.AsyncMock(
+            _object_new_patch(controller._runtime, "commit_runtime_configuration",
+                mock.AsyncMock(
                     side_effect=BackendProtocolError("PRIVATE_POST_PERSIST_FAILURE")
-                ),
-            ) as commit_runtime,
-            mock.patch.object(
-                controller_core_module,
-                "restore_prepared_settings_save",
-                wraps=controller_core_module.restore_prepared_settings_save,
-            ) as restore,
+                )) as commit_runtime,
+            _object_wrap_patch(controller_core_module, "restore_prepared_settings_save",
+                controller_core_module.restore_prepared_settings_save) as restore,
         ):
             self.assertEqual(controller._save_and_apply_settings(state), "retry")
         commit_runtime.assert_awaited_once()
@@ -5774,16 +5612,10 @@ class ControllerSettingsTests(ControllerTestCase):
             raise BackendProtocolError("PRIVATE_ACTIVE_RECOVERY_FAILURE")
 
         with (
-            mock.patch.object(
-                controller._runtime,
-                "commit_runtime_configuration",
-                new=mock.AsyncMock(side_effect=activate_then_fail),
-            ) as commit_runtime,
-            mock.patch.object(
-                backend,
-                "record_runtime_configuration_recovery_required",
-                wraps=backend.record_runtime_configuration_recovery_required,
-            ) as record_recovery,
+            _object_new_patch(controller._runtime, "commit_runtime_configuration",
+                mock.AsyncMock(side_effect=activate_then_fail)) as commit_runtime,
+            _object_wrap_patch(backend, "record_runtime_configuration_recovery_required",
+                backend.record_runtime_configuration_recovery_required) as record_recovery,
         ):
             self.assertEqual(
                 controller._save_and_apply_settings(state),
@@ -5867,12 +5699,8 @@ class ControllerSettingsTests(ControllerTestCase):
         bundle = controller._conversation_storage_services
         self.assertIsNotNone(bundle)
         self.assertIs(bundle.backend, ConversationStorageBackend.FILESYSTEM)
-        with mock.patch.object(
-            ConversationStorageProvisioner,
-            "install",
-            autospec=True,
-            side_effect=AssertionError("a real installer must not execute"),
-        ) as install:
+        with _autospec_effect_patch(ConversationStorageProvisioner, "install",
+                 AssertionError("a real installer must not execute")) as install:
             self.assertEqual(controller.run_session_lobby(), 0)
         install.assert_not_called()
         self.assertEqual(
@@ -5907,11 +5735,7 @@ class ControllerSettingsTests(ControllerTestCase):
             self.assertTrue(callable(kwargs.get("precommit_guard")))
             return real_select(*args, **kwargs)
 
-        with mock.patch.object(
-            controller_core_module,
-            "select_conversation_storage",
-            side_effect=race_persona_catalog,
-        ) as select:
+        with _object_effect_patch(controller_core_module, "select_conversation_storage", race_persona_catalog) as select:
             self.assertEqual(controller.run_session_lobby(), 0)
         select.assert_called_once()
         self.assertEqual(
@@ -5961,11 +5785,8 @@ class ControllerSettingsTests(ControllerTestCase):
                     }
                     else "commit_prepared_settings_save"
                 )
-                with mock.patch.object(
-                    controller_core_module,
-                    operation,
-                    side_effect=settings_module.SettingsError(kind),
-                ) as save:
+                with _object_effect_patch(controller_core_module, operation,
+                         settings_module.SettingsError(kind)) as save:
                     self.assertEqual(controller.run_session_lobby(), 0)
                 save.assert_called_once()
                 after = _tree_snapshot(workspace.root)
@@ -6042,14 +5863,11 @@ class ControllerSettingsTests(ControllerTestCase):
                 workspace = self.make_workspace()
                 before = _tree_snapshot(workspace.root)
                 controller, _backend, callbacks = _message_visibility_controller_fixture(self, workspace)
-                with mock.patch.object(
-                    controller_core_module,
-                    "select_conversation_storage",
-                    return_value=ConversationStorageSelectionReport.failed(
+                with _object_return_patch(controller_core_module, "select_conversation_storage",
+                         ConversationStorageSelectionReport.failed(
                         failure,
                         desired_backend="filesystem",
-                    ),
-                ) as select:
+                    )) as select:
                     self.assertEqual(controller.run_session_lobby(), 0)
                 select.assert_called_once()
                 self.assertEqual(_tree_snapshot(workspace.root), before)
@@ -6160,11 +5978,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
             "/quit",
         )
         with (
-            mock.patch.object(
-                subprocess,
-                "Popen",
-                wraps=subprocess.Popen,
-            ) as popen,
+            _object_wrap_patch(subprocess, "Popen", subprocess.Popen) as popen,
             mock.patch.object(subprocess, "run") as run,
             mock.patch.object(socket, "create_connection") as connect,
         ):
@@ -6478,10 +6292,40 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             text = "Provisional 한글\r\nwhole text. "
             idea = exploration.ExplorationIdea("ui-current-idea", exploration.ExplorationIdeaKind.ALTERNATIVE, text, hashlib.sha256(text.encode()).hexdigest())
             report = exploration.LeadExplorationReport("ui-request", "ui-call", exploration.ExplorationReportStatus.IDEAS, "Provisional possibilities.", (idea,))
-            event = SimpleNamespace(event_id="ui-result", payload=collaboration.CollaborationLeadExplorationResultPayload(report))
+            from tests import collaboration_contract_fixture as events_fixture
+            drafts = (
+                events_fixture.make_draft(
+                    "ui-user", collaboration.CollaborationEventKind.MESSAGE,
+                    events_fixture.USER, events_fixture.LEAD,
+                    collaboration.CollaborationMessagePayload("Explore directions."),
+                ),
+                events_fixture.make_draft(
+                    report.request_event_id,
+                    collaboration.CollaborationEventKind.LEAD_EXPLORATION_REQUEST,
+                    events_fixture.USER, events_fixture.LEAD,
+                    collaboration.CollaborationLeadExplorationRequestPayload("ui-user"),
+                ),
+                *events_fixture.provider_call_drafts(
+                    invocation_id="ui-invocation", call_id=report.provider_call_id,
+                    role=events_fixture.LEAD.agent_id, recipient=events_fixture.LEAD,
+                    invocation_kind=collaboration.CollaborationInvocationKind.LEAD_EXPLORATION,
+                ),
+                events_fixture.make_draft(
+                    "ui-result", collaboration.CollaborationEventKind.LEAD_EXPLORATION_RESULT,
+                    events_fixture.LEAD, events_fixture.USER,
+                    collaboration.CollaborationLeadExplorationResultPayload(report),
+                ),
+            )
+            drafts = tuple(
+                replace(item, session_id="session", conversation_id=_UNIQUE_C,
+                        turn_id="turn", step_id=STEP_ID)
+                for item in drafts
+            )
+            batch = events_fixture.make_batch((), "ui-exploration", *drafts)
+            history = events_fixture.store_batch((), batch)
             current[:] = [replace(self._terminal_turn(CollaborationStepState.COMPLETED), message=report.message, kind=LeadOutcomeKind.EXPLORATION, state=None, interaction_mode=exploration.LeadInteractionMode.EXPLORATION, exploration=report, evidence=None, next_action=CollaborationNextAction.CONTINUE_WITH_LEAD)]
             output = self._Output()
-            adapter = lead_policy_module.InteractiveLeadAdapter(session, runner, self._Progress(), self._Picker(self._commit(idea.idea_id)), self._Prompt(self._commit("core_documents/global_outline.md")), output, read_events=lambda conversation: (event,) if conversation == _UNIQUE_C else ())
+            adapter = lead_policy_module.InteractiveLeadAdapter(session, runner, self._Progress(), self._Picker(self._commit(idea.idea_id)), self._Prompt(self._commit("core_documents/global_outline.md")), output, read_events=lambda conversation: history if conversation == _UNIQUE_C else ())
             self.assertFalse(adapter.submit(_UNIQUE_C, "Explore directions.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION))
             self.assertEqual((set(forwarded[-1]), forwarded[-1]["interaction_mode"]), ({"action_progress_sink", "interaction_mode"}, exploration.LeadInteractionMode.EXPLORATION))
             self.assertIn("Exploration (provisional)", "\n".join(render_plain(component, width=120).text for component in output.components))
@@ -6530,6 +6374,71 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             self.assertFalse(adapter.premise(conversation))
             self.assertEqual(tuple(item.identity for item in adapter._picker.calls[2][1]), ("user_choice",))
             self.assertEqual(forwarded[-1]["premise_selection"].report_event_id, unranked.premise_report_ref.report_event_id)
+
+        from tests.test_lead_orchestration import _task_fixture, _discussion_reply
+        case = _task_fixture(self)
+        task_conversation = case.conversation("Shell task choices")
+        runner.run(case.proposal(task_conversation))
+        case.backend.enqueue(_discussion_reply("Whole shell material e\u0301\r\n"))
+        runner.run(case.runtime.decide_lead_task(task.LeadTaskDecision.for_conversation(
+            case.session_id, task_conversation, task.LeadTaskAction.DISCUSS, text="Discuss role responsibilities.",
+        )))
+        projection = case.runtime.inspect_lead_collaboration(case.session_id, task_conversation)
+        selected_task, material = projection.available_tasks[0], projection.selectable_materials[-1]
+        decisions = []
+        async def decide_task(decision, *, action_progress_sink=None):
+            decisions.append(decision)
+            return collaboration.LeadTaskDecisionResult(
+                decision.session_id, decision.conversation_id, decision.action,
+                decision.task_ref, "shell_transition", None,
+            )
+        with (mock.patch.object(RuntimeSession, "inspect_lead_collaboration", return_value=projection) as inspection,
+              mock.patch.object(RuntimeSession, "decide_lead_task", side_effect=decide_task)):
+            for action in task.LeadTaskAction:
+                picks = [self._commit(action.value), self._commit("task_0")]
+                uses_material = action in (task.LeadTaskAction.DISCUSS, task.LeadTaskAction.RESUME,
+                                          task.LeadTaskAction.NEW_TASK)
+                if uses_material:
+                    picks.append(self._commit("material_0"))
+                output = self._Output()
+                adapter = lead_policy_module.InteractiveLeadAdapter(
+                    case.runtime.session(case.session_id), runner, self._Progress(), self._Picker(*picks),
+                    self._Prompt(self._commit("Explicit question or new writing intent.")), output,
+                )
+                self.assertFalse(adapter.task(task_conversation, material_choices=(material,)))
+                task_ref = selected_task.ref
+                identity = f"Task ID {task_ref.task_id} | Revision {task_ref.task_revision}"
+                shown = output.components[-1].items
+                self.assertEqual(shown[-1].label, identity)
+                self.assertIn(f"Lifecycle status: {selected_task.status} —", shown[-1].value)
+                self.assertEqual(tuple((item.label, item.value) for item in shown[:3]), (
+                    ("Workflow step", projection.current_step_id or "none"),
+                    ("Workflow step state", projection.current_state.value
+                     if projection.current_state is not None else "no active step"),
+                    ("Workflow next action", projection.next_safe_action.value)))
+                self.assertEqual(adapter._picker.calls[1][1][-1].description,
+                                 identity + " — " + selected_task.status + " — " + selected_task.goal)
+                self.assertEqual(inspection.call_count, 2 * len(decisions))
+                decision = decisions[-1]
+                self.assertEqual((decision.action, decision.task_ref), (action, selected_task.ref))
+                self.assertEqual(decision.material_refs, (material.ref,) if uses_material else ())
+                self.assertEqual(decision.text, "Explicit question or new writing intent." if uses_material else None)
+                self.assertEqual(tuple(item.label for item in adapter._picker.calls[0][1]),
+                                 ("Discuss", "Hold", "Resume", "Discard", "New Task"))
+                if uses_material:
+                    self.assertEqual(adapter._picker.calls[2][0].name, "Whole input material")
+                    self.assertEqual(adapter._picker.calls[2][1][1].description, material.text)
+            adapter._picker = self._Picker(self._commit("discuss"), self._commit("independent"), self._commit("none"))
+            adapter._prompt = self._Prompt(self._commit("Independent task-free question."))
+            self.assertFalse(adapter.task(task_conversation))
+            self.assertIsNone(decisions[-1].task_ref)
+            self.assertEqual(decisions[-1].material_refs, ())
+            self.assertEqual(decisions[-1].text, "Independent task-free question.")
+            before = tuple(decisions)
+            for outcome in (ControlOutcomeKind.CANCEL, ControlOutcomeKind.EOF):
+                adapter._picker = self._Picker(self._commit("discuss"), ControlOutcome(outcome))
+                self.assertEqual(adapter.task(task_conversation), outcome is ControlOutcomeKind.EOF)
+                self.assertEqual(tuple(decisions), before)
 
     def test_ordinary_lead_progress_sink_finishes_before_lead_and_elapsed_output(self) -> None:
         session = RuntimeSession.__new__(RuntimeSession); runner = asyncio.Runner(); self.addCleanup(runner.close)
@@ -6830,6 +6739,43 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             self.assertIn("Inspect /history and /exchanges before continuing.", message_item.content)
             self.assertNotIn("No capacity available", message_item.content)
 
+        from tests.test_lead_orchestration import _task_fixture, _discussion_reply, _submitted_calls
+        corrections = (_discussion_reply("Corrected public text."),
+                       _discussion_reply("Original public text."), '{"analysis":{"message":"PRIVATE"}}')
+        for correction in corrections:
+            case = _task_fixture(self)
+            conversation = case.conversation("Per-call literal public visibility")
+            invalid = json.loads(_discussion_reply("Original public text."))
+            invalid["agent_action"]["task_result"]["used_evidence_ids"] = "wrong array type"
+            case.backend.enqueue(json.dumps(invalid))
+            case.backend.enqueue(correction)
+            result = runner.run(case.runtime.decide_lead_task(task.LeadTaskDecision.for_conversation(
+                case.session_id, conversation, task.LeadTaskAction.DISCUSS, text="Discuss; do not draft.",
+            )))
+            output = self._Output()
+            adapter = lead_policy_module.InteractiveLeadAdapter(
+                case.runtime.session(case.session_id), runner, self._Progress(),
+                self._Picker(), self._Prompt(), output,
+                read_events=case.history,
+            )
+            adapter._present_and_decide(result.turn)
+            rendered = "\n".join(render_plain(component, width=400).text for component in output.components)
+            self.assertIn("Original public text.", rendered)
+            self.assertIn("rejected", rendered)
+            self.assertIn("Call validation", rendered)
+            self.assertNotIn("PRIVATE", rendered)
+            self.assertEqual(rendered.count("Public response disposition"), len(result.turn.public_responses))
+            if '"response_text"' in correction:
+                corrected = json.loads(correction)["agent_action"]["task_result"]["response_text"]
+                self.assertEqual(rendered.count(corrected), 2 if corrected == "Original public text." else 1)
+                self.assertIn("accepted", rendered)
+                self.assertIn("Repairs call", rendered)
+            else:
+                self.assertIn("Public response unavailable", rendered)
+                self.assertIn(_submitted_calls(case.history(conversation))[-1].call_id, rendered)
+                notice = f"for rejected call {case.backend.calls[-1].call_id}:"
+                self.assertIn(notice + " no bounded literal final response_text was recoverable.", rendered)
+
     def test_pending_commit_redisclosure_reuses_exact_picker_without_apply(self):
         digest = "sha256:" + "a" * 64
         request = SimpleNamespace(confirmation_request_id="pending-commit", application_result_event_id="applied-event", candidate=SimpleNamespace(candidate_id="b" * 64), request_digest=digest)
@@ -6935,21 +6881,11 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             mock.patch.object(RuntimeSession, "lead_turn", lead_turn),
             mock.patch.object(RuntimeSession, "decide_artifact_application", application_decision),
             mock.patch.object(RuntimeSession, "decide_story_commit", commit_decision),
-            mock.patch.object(
-                lead_policy_module,
-                "project_lead_turn_result",
-                return_value=SimpleNamespace(),
-            ),
-            mock.patch.object(
-                lead_policy_module,
-                "project_artifact_application_decision_result",
-                return_value=SimpleNamespace(),
-            ),
-            mock.patch.object(
-                lead_policy_module,
-                "project_story_commit_decision_result",
-                return_value=SimpleNamespace(),
-            ),
+            _object_return_patch(lead_policy_module, "project_lead_turn_result", SimpleNamespace()),
+            _object_return_patch(lead_policy_module, "project_artifact_application_decision_result",
+                SimpleNamespace()),
+            _object_return_patch(lead_policy_module, "project_story_commit_decision_result",
+                SimpleNamespace()),
         ):
             for kind, revision in (
                 (ArtifactApplicationDecisionKind.REJECT, None),

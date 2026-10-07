@@ -10,6 +10,10 @@ from .catalog import (
     normalize_conversation_subject,
 )
 from .context import (
+    LeadTaskView,
+    LeadMaterialChoice,
+    LeadPublicResponseView,
+    LeadTaskDecisionResult,
     ArtifactObjective,
     artifact_objective_context,
     COLLABORATION_READABLE_CONTEXT_POLICY,
@@ -45,6 +49,11 @@ from .context import (
     validate_conversation_context_window,
 )
 from .events import (
+    CollaborationLeadTaskDecisionPayload,
+    CollaborationLeadTaskTransitionPayload,
+    CollaborationLeadMaterialCapturePayload,
+    CollaborationLeadDiscussionPayload,
+    CollaborationLeadPublicResponsePayload,
     ArtifactDraftSource,
     ArtifactObjectiveCandidateBinding,
     ArtifactObjectiveFacts,
@@ -177,6 +186,15 @@ from ..git.story_commit_contracts import StoryCommitDecision
 
 
 _PUBLIC_TYPES = (
+    CollaborationLeadTaskDecisionPayload,
+    CollaborationLeadTaskTransitionPayload,
+    CollaborationLeadMaterialCapturePayload,
+    CollaborationLeadDiscussionPayload,
+    CollaborationLeadPublicResponsePayload,
+    LeadTaskView,
+    LeadMaterialChoice,
+    LeadPublicResponseView,
+    LeadTaskDecisionResult,
     ArtifactObjective,
     ArtifactDraftSource,
     ArtifactObjectiveCandidateBinding,
@@ -496,4 +514,13 @@ __all__ = [
     "validate_collaboration_candidate_batch",
     "validate_collaboration_transition",
     "validate_conversation_context_window",
+    'CollaborationLeadTaskDecisionPayload',
+    'CollaborationLeadTaskTransitionPayload',
+    'CollaborationLeadMaterialCapturePayload',
+    'CollaborationLeadDiscussionPayload',
+    'CollaborationLeadPublicResponsePayload',
+    'LeadTaskView',
+    'LeadMaterialChoice',
+    'LeadPublicResponseView',
+    'LeadTaskDecisionResult',
 ]

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from ..lead_task_transitions import LeadTaskAction, LeadTaskDecision
+from ..conversations import LeadTaskDecisionResult, LeadMaterialChoice
+
 import asyncio
 import dataclasses
 import inspect
@@ -181,6 +184,124 @@ class InteractiveLeadAdapter:
         self._read_events = read_events
         self._pending_elapsed: str | None = None
         self._pending_specialist_panels: tuple[object, ...] = ()
+
+    def task(
+        self, conversation_id: str, *,
+        material_choices: tuple[LeadMaterialChoice, ...] = (),
+    ) -> bool:
+        """Select USER task controls and whole input through friendly choices."""
+        projection = self._session.inspect_lead_collaboration(conversation_id)
+        def write_task_status(current) -> None:
+            items = [
+                Field("Workflow step", current.current_step_id or "none"),
+                Field("Workflow step state", current.current_state.value
+                      if current.current_state is not None else "no active step"),
+                Field("Workflow next action", current.next_safe_action.value),
+            ]
+            items.extend(
+                Field(f"Task ID {item.ref.task_id} | Revision {item.ref.task_revision}",
+                      "Lifecycle status: " + item.status + " — " + item.goal
+                      + f" (retained calls: {len(item.submitted_call_ids)})")
+                for item in current.available_tasks
+            )
+            receipt = current.discussion_context
+            if (receipt is not None
+                    and receipt.action in {LeadTaskAction.RESUME, LeadTaskAction.NEW_TASK}
+                    and receipt.target_task_id is not None):
+                items.extend((
+                    Field("Pending task ID", receipt.target_task_id),
+                    Field("Pending task revision", str(receipt.target_task_revision)),
+                    Field("Pending planning step", receipt.planning_step_id or "none"),
+                    Field("Pending task state", "awaiting a fresh proposal"),
+                ))
+            self._semantic_output.write_component(Panel("Tasks", tuple(items)))
+
+        write_task_status(projection)
+        if projection.next_safe_action in {
+            CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
+            CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY,
+            CollaborationNextAction.FINALIZE_RECOMMENDATION,
+        } or projection.current_state is CollaborationStepState.RUNNING:
+            self._semantic_output.write_component(Notice(
+                "Task execution is blocked. Inspect /history or /exchanges to read saved public responses.",
+                label="task control", role=SemanticRole.WARNING,
+            ))
+            return False
+        control = self._picker.read_picker(
+            Prompt("Task action", instruction="Discussion does not change the task. Resume/new work requires fresh confirmation."),
+            tuple(Choice(action.value, action.value.replace("_", " ").title()) for action in LeadTaskAction),
+        )
+        if control.kind is ControlOutcomeKind.EOF:
+            return True
+        if control.kind is not ControlOutcomeKind.COMMIT or control.text is None:
+            return False
+        action = LeadTaskAction(control.text)
+        candidates = tuple(item for item in projection.available_tasks if (
+            action in {LeadTaskAction.DISCUSS, LeadTaskAction.NEW_TASK}
+            or item.status not in {"discarded", "completed", "protected"}
+        ))
+        optional = action in {LeadTaskAction.DISCUSS, LeadTaskAction.NEW_TASK}
+        choices = (*((Choice("independent", "No task association"),) if optional else ()),
+                   *(Choice(f"task_{index}", item.label, description=f"Task ID {item.ref.task_id} | Revision {item.ref.task_revision} — " + item.status + " — " + item.goal)
+                     for index, item in enumerate(candidates)))
+        if not choices:
+            self._semantic_output.write_component(Notice("No eligible task. Choose New task for independent work.", label="task control"))
+            return False
+        selected = self._picker.read_picker(Prompt("Writing task"), tuple(choices))
+        if selected.kind is ControlOutcomeKind.EOF:
+            return True
+        if selected.kind is not ControlOutcomeKind.COMMIT or selected.text is None:
+            return False
+        chosen_task = None if selected.text == "independent" else candidates[int(selected.text.removeprefix("task_"))]
+        materials = ()
+        text = None
+        if action in {LeadTaskAction.DISCUSS, LeadTaskAction.RESUME, LeadTaskAction.NEW_TASK}:
+            available = material_choices or projection.selectable_materials
+            picked = self._picker.read_picker(
+                Prompt("Whole input material", instruction="Input only: no previous plan, READ, review or confirmation authority is reused."),
+                (Choice("none", "No prior material"), *(
+                    Choice(f"material_{index}", item.label, description=item.text)
+                    for index, item in enumerate(available)
+                )),
+            )
+            if picked.kind is ControlOutcomeKind.EOF:
+                return True
+            if picked.kind is not ControlOutcomeKind.COMMIT or picked.text is None:
+                return False
+            if picked.text != "none":
+                materials = (available[int(picked.text.removeprefix("material_"))].ref,)
+            entered = self._prompt.read_prompt(Prompt(
+                "Discussion question" if action is LeadTaskAction.DISCUSS else "Fresh writing intent",
+                instruction="State the question or goal literally; this does not authorize execution.",
+            ))
+            if entered.kind is ControlOutcomeKind.EOF:
+                return True
+            if entered.kind is not ControlOutcomeKind.COMMIT or not entered.text:
+                return False
+            text = entered.text
+        decision = (chosen_task.decision(action, text=text, material_refs=materials) if chosen_task is not None else
+                    LeadTaskDecision.for_conversation(self._session.session_id, conversation_id, action, text=text, material_refs=materials))
+        self._progress.begin()
+        try:
+            result = self._run_operation(self._session.decide_lead_task(
+                decision, action_progress_sink=self._progress.observe,
+            ))
+        except (ValueError, TypeError, BackendProtocolError) as error:
+            self._semantic_output.write_component(Notice(str(error), label="task control", role=SemanticRole.ERROR))
+            return False
+        finally:
+            self._pending_elapsed = self._progress.finish()
+        if type(result) is not LeadTaskDecisionResult:
+            raise TypeError("task decision returned an invalid result")
+        if result.turn is not None:
+            presented = self._present_and_decide(result.turn)
+            write_task_status(self._session.inspect_lead_collaboration(conversation_id))
+            return presented
+        self._semantic_output.write_component(Notice(
+            action.value.replace("_", " ").title() + " recorded; task history and actual costs are retained.", label="task control",
+        ))
+        write_task_status(self._session.inspect_lead_collaboration(conversation_id))
+        return False
 
     def adopt(self, conversation_id: str) -> bool:
         """Bind one visible whole idea and explicit targets to a fresh normal task."""
@@ -382,6 +503,13 @@ class InteractiveLeadAdapter:
             self._write_elapsed()
             return False
 
+    def _lead_turn_panel(self, turn: LeadTurnResult):
+        if self._read_events is None:
+            return project_lead_turn_result(turn)
+        return project_lead_turn_result(
+            turn, public_response_events=self._read_events(turn.conversation_id),
+        )
+
     def _present_and_decide(self, turn: LeadTurnResult) -> bool:
         """Render typed turns and consume only explicit structured controls."""
 
@@ -396,7 +524,7 @@ class InteractiveLeadAdapter:
                         turn,
                         message=f"{turn.message}\n\n{diagnostic_hint}",
                     )
-            self._semantic_output.write_component(project_lead_turn_result(turn))
+            self._semantic_output.write_component(self._lead_turn_panel(turn))
             self._write_elapsed()
             if turn.state in {
                 CollaborationStepState.OUTCOME_UNKNOWN,
@@ -641,7 +769,7 @@ class InteractiveLeadAdapter:
             story_commit_preparation_request=None,
             story_commit_request=request,
         )
-        self._semantic_output.write_component(project_lead_turn_result(prepared_turn))
+        self._semantic_output.write_component(self._lead_turn_panel(prepared_turn))
         return self._decide_story_commit(prepared_turn, request)
 
     def _decide_story_commit(

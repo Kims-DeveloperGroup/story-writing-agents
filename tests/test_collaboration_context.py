@@ -285,6 +285,10 @@ class CollaborationTransitionTests(unittest.TestCase):
                 "premise_selection",
                 "premise_admission",
                 "premise_admission_event_id",
+                "available_tasks",
+                "selectable_materials",
+                "public_responses",
+                "discussion_context",
             ),
         )
 
@@ -1330,6 +1334,13 @@ class CollaborationReadableProjectionTests(unittest.TestCase):
         memory = project_collaboration_readable_history(editorial_history())[0]
         observed_keys = {field.key for record in all_records + (memory,) for field in record.fields}
         artifact_keys = {
+            CollaborationReadableFieldKey.LEAD_TASK_CONTROL,
+            CollaborationReadableFieldKey.LEAD_SELECTED_MATERIAL,
+            CollaborationReadableFieldKey.LEAD_DISCUSSION_TEXT,
+            CollaborationReadableFieldKey.LEAD_PUBLIC_RESPONSE_TEXT,
+            CollaborationReadableFieldKey.LEAD_PUBLIC_RESPONSE_STATUS,
+            CollaborationReadableFieldKey.LEAD_PUBLIC_RESPONSE_DIAGNOSTICS,
+
             CollaborationReadableFieldKey.LEAD_RECOMMENDATION_PURPOSE,
             CollaborationReadableFieldKey.LEAD_RECOMMENDATION_INSTRUCTION,
             CollaborationReadableFieldKey.LEAD_RECOMMENDATION_RESULT,
@@ -1355,6 +1366,12 @@ class CollaborationReadableProjectionTests(unittest.TestCase):
         self.assertEqual(
             tuple(item.value for item in CollaborationReadableFieldKey),
             (
+                'lead_task.control',
+                'lead_task.selected_material',
+                'lead_discussion.text',
+                'lead_public_response.text',
+                'lead_public_response.status',
+                'lead_public_response.diagnostics',
                 "message.content",
                 "editorial.text",
                 "editorial.reason",

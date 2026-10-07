@@ -54,6 +54,9 @@ from tests.collaboration_contract_fixture import (
 from tests.helpers import pristine_initialized_workspace
 
 
+def _object_effect_patch(target, attribute, value):
+    return mock.patch.object(target, attribute, side_effect=value)
+
 @dataclass(slots=True)
 class _Harness:
     workspace: Workspace
@@ -669,17 +672,9 @@ class FilesystemCollaborationEventStoreFailureTests(unittest.TestCase):
                             raise OSError("file fsync failed")
                         real_fsync(descriptor)
 
-                    patcher = mock.patch.object(
-                        filesystem_module.os,
-                        "fsync",
-                        side_effect=fail_regular,
-                    )
+                    patcher = _object_effect_patch(filesystem_module.os, "fsync", fail_regular)
                 else:
-                    patcher = mock.patch.object(
-                        filesystem_module.os,
-                        "replace",
-                        side_effect=OSError("replace failed"),
-                    )
+                    patcher = _object_effect_patch(filesystem_module.os, "replace", OSError("replace failed"))
                 with patcher, self.assertRaises(OSError):
                     value.store.append_batch(batches["confirmation"])
                 self.assertEqual(value.history_path.read_bytes(), before)
@@ -698,11 +693,7 @@ class FilesystemCollaborationEventStoreFailureTests(unittest.TestCase):
                 real_fsync(descriptor)
 
             with (
-                mock.patch.object(
-                    filesystem_module.os,
-                    "fsync",
-                    side_effect=fail_directory,
-                ),
+                _object_effect_patch(filesystem_module.os, "fsync", fail_directory),
                 self.assertRaises(OSError),
             ):
                 value.store.append_batch(batch)
@@ -747,11 +738,7 @@ class FilesystemCollaborationEventStoreFailureTests(unittest.TestCase):
                 real_flock(descriptor, operation)
 
             with (
-                mock.patch.object(
-                    filesystem_module._fcntl,
-                    "flock",
-                    side_effect=fail_acquire,
-                ),
+                _object_effect_patch(filesystem_module._fcntl, "flock", fail_acquire),
                 self.assertRaises(OSError),
             ):
                 value.store.append_batch(batch)
@@ -768,11 +755,7 @@ class FilesystemCollaborationEventStoreFailureTests(unittest.TestCase):
                 real_flock(descriptor, operation)
 
             with (
-                mock.patch.object(
-                    filesystem_module._fcntl,
-                    "flock",
-                    side_effect=fail_unlock,
-                ),
+                _object_effect_patch(filesystem_module._fcntl, "flock", fail_unlock),
                 self.assertRaises(OSError),
             ):
                 value.store.append_batch(batch)

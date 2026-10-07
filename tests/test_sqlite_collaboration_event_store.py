@@ -119,6 +119,9 @@ def _spawn_append_worker(
     results.put(outcome)
 
 
+def _autospec_effect_patch(target, attribute, value):
+    return mock.patch.object(target, attribute, autospec=True, side_effect=value)
+
 class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.workspace, self.metadata, self.store = self.fresh_store()
@@ -854,12 +857,8 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
             )
 
         with (
-            mock.patch.object(
-                sqlite_database_module.SQLiteDatabase,
-                "write",
-                autospec=True,
-                side_effect=fail_immediately_before_commit,
-            ),
+            _autospec_effect_patch(sqlite_database_module.SQLiteDatabase, "write",
+                fail_immediately_before_commit),
             self.assertRaises(RuntimeError) as commit_raised,
         ):
             commit_store.append_batch(commit_batch)
@@ -891,12 +890,7 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
             raise sqlite_database_module.SQLiteDatabaseUnavailableError()
 
         with (
-            mock.patch.object(
-                sqlite_database_module.SQLiteDatabase,
-                "write",
-                autospec=True,
-                side_effect=fail_after_durable_commit,
-            ),
+            _autospec_effect_patch(sqlite_database_module.SQLiteDatabase, "write", fail_after_durable_commit),
             self.assertRaises(ConversationStorageUnavailableError),
         ):
             durable_store.append_batch(durable_batch)

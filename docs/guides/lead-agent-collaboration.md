@@ -133,7 +133,7 @@ Use its Confirm/Reject/Revise control:
 | --- | --- |
 | Confirm | One bounded Lead preparation. An artifact candidate then needs review confirmation; a consultation proposal needs execution confirmation. A material missing choice may produce a question. |
 | Reject | No preparation call. An existing authoring objective stays open. |
-| Revise | Supply nonempty revision instructions. The Lead prepares a revised recommendation requiring a new Confirm. |
+| Revise | Supply nonempty instructions or a question. The exact pending recommendation closes; Lead can discuss it or offer a fresh proposal requiring its own Confirm. |
 | Cancel or EOF | No decision is submitted and no preparation starts. |
 
 This illustrative flow starts with a recommendation that includes a visible
@@ -158,6 +158,53 @@ An ordinary message such as “Yes, use that” is also meaningful: it is a new
 instruction interpreted in context and supersedes a pending recommendation.
 It is not the recommendation's structured Confirm. A new proposal still
 requires its own review or execution decision.
+
+### Discuss, hold, resume, discard, or start again
+
+A Revise request can lead to an explanation or a question about the task, another topic, or how the participants work. Discussion keeps the authoring task separate: it does not turn that task into workflow guidance or require specialist work for every question.
+
+Use `/task` in the focused conversation to choose an action, a task, and optional whole input material. The shell offers readable labels, including the source conversation for material from elsewhere in the session. Choose `No task association` for a discussion without a writing task. Enter a discussion question or fresh writing intent when prompted. Cancel or EOF submits no choice and starts no provider work.
+
+The task panel and choices show full task IDs, revisions, and lifecycle status.
+The panel separately shows the workflow step, its state, and the next safe action.
+A prospective Resume or New task target is labeled pending until a fresh proposal
+is admitted. The panel refreshes after the choice and its confirmation or
+execution complete. Selection uses returned references; users do not construct
+task IDs or revisions.
+
+Choose the next action explicitly:
+
+| Choice | Result |
+| --- | --- |
+| Discuss | Ask a question without authorizing execution. |
+| Hold | Keep the task and its material while retiring a safely pending unconfirmed control. |
+| Resume | State the next intent for the selected task. Review its fresh next-revision proposal and Confirm before specialists run. |
+| Discard | End a safely idle task and its associated unconfirmed controls; retain its history and material. |
+| New task | State a new intent and choose optional source material. A new task starts at revision 1 with its own proposed scope and confirmations. |
+
+Select a whole retained draft, discussion answer, or final public response when you want to use it as material. The runtime verifies its source and digest within the session. Selection supplies input; it does not reuse an old proposal, specialist reply, READ receipt, final review, Apply, or Commit authority. Completed or discarded source tasks keep their status.
+
+A rejected final response remains an answer you can read, discuss, or select as
+whole input material, even if its action structure or values are invalid. Its
+rejection and validation details remain visible. Original responses, corrective
+attempts, and accepted follow-ups keep separate call identities and repair
+lineage.
+
+A unique public string stays literal. A complete public value of another type
+appears with an explicit value-representation label. Plain final text, top-level
+JSON strings or scalars, and complete JSON object/array fences can also be
+retained under the bounded recovery rules. Invalid action values and unrelated
+duplicate keys or nonfinite values do not erase the answer. Ambiguous public
+paths, private/debug content, unsafe values, and unavailable or oversized final
+text receive an unavailable-text notice. Whole object/array envelopes are never
+displayed as a fallback. A closed public slot can survive missing outer closing
+delimiters; other malformed envelopes remain unavailable. Recovery reads only
+the returned final response, excluding callback streams and private debugging.
+Selecting a rejected answer as material does not approve its action.
+
+Pending Apply/Commit controls and unresolved operations retain their priority. Task choices cannot bypass them or reset spent calls. Reading the current choices does not start provider work or write artifacts.
+
+See [explicit task API choices](../reference/runtime-api.md#explicit-task-choices-and-retained-messages) for the supported inspection and decision factories.
 
 ### Follow a draft through to an artifact
 

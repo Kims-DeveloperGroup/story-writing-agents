@@ -23,6 +23,7 @@ class ActionKind(StrEnum):
     LEAD_INPUT = "lead_input"
     LEAD_EXPLORE = "lead_explore"
     LEAD_ADOPT = "lead_adopt"
+    LEAD_TASK = "lead_task"
     PREMISE_DECISION = "premise_decision"
     LIST_AGENTS = "list_agents"
     SEARCH = "search"
@@ -259,6 +260,7 @@ _ACTION_FIELD_RULES: dict[ActionKind, tuple[frozenset[str], frozenset[str]]] = {
     ActionKind.LEAD_INPUT: (frozenset({"text"}), frozenset({"text"})),
     ActionKind.LEAD_EXPLORE: (frozenset({"text"}), frozenset({"text"})),
     ActionKind.LEAD_ADOPT: (_NO_FIELDS, _NO_FIELDS),
+    ActionKind.LEAD_TASK: (_NO_FIELDS, _NO_FIELDS),
     ActionKind.PREMISE_DECISION: (_NO_FIELDS, _NO_FIELDS),
     ActionKind.LIST_AGENTS: (_NO_FIELDS, _NO_FIELDS),
     ActionKind.SEARCH: (frozenset({"text"}), frozenset({"text"})),
@@ -364,6 +366,7 @@ class CommandCompletionContext:
 COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec("Writing", "/explore TEXT", (), True, False, "/explore Explore possible directions"),
     CommandSpec("Writing", "/adopt", (), True, True, "/adopt"),
+    CommandSpec("Writing", "/task", (), True, False, "/task"),
     CommandSpec("Writing", "/premise", (), True, True, "/premise"),
     CommandSpec("Agents", "/agents", (), False, False, "/agents"),
     CommandSpec("Agents", "/auth", (), True, True, "/auth"),
@@ -458,6 +461,7 @@ _PERSONA_AGENT_ALIASES: dict[str, str] = {
 _COMMAND_ALIASES: dict[str, str] = {
     "explore": "/explore",
         "adopt": "/adopt",
+    "task": "/task",
         "premise": "/premise",
     "agents": "/agents",
     "auth": "/auth",
@@ -742,6 +746,8 @@ def _parse_slash_command(line: str) -> InteractiveAction:
         return InteractiveAction(ActionKind.LEAD_EXPLORE, text=_remainder_after_ascii_delimiters(tail))
     if command == "adopt":
         return _no_argument_action(tail, ActionKind.LEAD_ADOPT, "/adopt")
+    if command == "task":
+        return _no_argument_action(tail, ActionKind.LEAD_TASK, "/task")
     if command == "premise":
         return _no_argument_action(tail, ActionKind.PREMISE_DECISION, "/premise")
     if command == "agents":

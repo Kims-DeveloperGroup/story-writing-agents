@@ -40,7 +40,7 @@ output path, direct RAG query, or legacy direct-run payload.
 
 | Group | Canonical rows |
 | --- | --- |
-| Writing | `/explore TEXT`; `/adopt` |
+| Writing | `/explore TEXT`; `/adopt`; `/task` |
 | Agents | `/agents`; `/auth`; `/settings` |
 | Session overrides | `/override language LANG \| persona AGENT NAME \| reset` |
 | Sessions | `/session list \| create NAME \| resume [NAME] \| pause` |
@@ -90,6 +90,21 @@ input. `/adopt` returns field-free `lead_adopt`; extra arguments are rejected.
 The controller owns current-focus idea selection, target prompts and exact
 adoption receipts. Neither action changes the default meaning of ordinary input
 or grants specialist, Apply or Commit authority.
+
+## Task choices
+
+`/task` takes no arguments and requires the focused session and conversation. Its registry action is `LEAD_TASK` (`lead_task`); it may call the provider and cannot write artifacts.
+
+The controller offers `Task action`: Discuss, Hold, Resume, Discard, or New Task. Applicable choices then use the `Writing task` and `Whole input material` pickers, followed by `Discussion question` or `Fresh writing intent`. Materials from the same session carry their source conversation subject. Discuss also offers `No task association` for a task-free question. The choices bind the runtime's returned references; users do not enter task IDs, message IDs, or digests. Cancel and EOF submit no decision and start no provider work.
+
+The task panel and choices show full task IDs, revisions, and lifecycle status.
+The panel separately shows the workflow step, its state, and the next safe action.
+A prospective Resume or New task target is labeled pending until a fresh proposal
+is admitted. The panel refreshes after the choice and its confirmation or
+execution complete. Selection uses returned references; users do not construct
+task IDs or revisions.
+
+Pending controls and unresolved operations still govern which task decisions are safe. Reading available choices does not confirm a proposal or apply an artifact. See [task choices and retained messages](runtime-api.md#explicit-task-choices-and-retained-messages) for the runtime boundary.
 
 ## Management grammar
 

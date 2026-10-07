@@ -16,7 +16,7 @@ BUILTIN_RESULT_CONTRACT_IDS = frozenset({
     "lead-exploration-response-v1",
     "lead-response-v6", "specialist-assignment-response-v3",
     "lead-response-v7", "specialist-assignment-response-v4",
-    "lead-response-v8", "specialist-assignment-response-v5",
+    "lead-response-v8", "lead-response-v9", "lead-discussion-response-v1", "specialist-assignment-response-v5",
     "premise-analysis-response-v1", "premise-decision-summary-v1",
     "consultation-summary-v4", "artifact-review-summary-v4",
 })
@@ -115,7 +115,7 @@ def _enum_map(name: str, shape: str) -> dict:
 
 def project_result_schema(schema: Mapping, contract_id: str) -> dict:
     """Project an owner-authored result schema without changing its domain schema."""
-    family = {"lead-response-v7": "lead-response-v6", "lead-response-v8": "lead-response-v6", "specialist-assignment-response-v4": "specialist-assignment-response-v3", "specialist-assignment-response-v5": "specialist-assignment-response-v3"}.get(contract_id, contract_id)
+    family = {"lead-response-v7": "lead-response-v6", "lead-response-v8": "lead-response-v6", "lead-response-v9": "lead-response-v6", "lead-discussion-response-v1": "lead-response-v6", "specialist-assignment-response-v4": "specialist-assignment-response-v3", "specialist-assignment-response-v5": "specialist-assignment-response-v3"}.get(contract_id, contract_id)
     known = family in BUILTIN_RESULT_CONTRACT_IDS
     if not known:
         return deepcopy(dict(schema))
@@ -165,7 +165,7 @@ def project_result_schema(schema: Mapping, contract_id: str) -> dict:
 
 def normalize_result(value: object, contract_id: str) -> object:
     """Restore internal domain field names after strict new-wire validation."""
-    family = {"lead-response-v7": "lead-response-v6", "lead-response-v8": "lead-response-v6", "specialist-assignment-response-v4": "specialist-assignment-response-v3", "specialist-assignment-response-v5": "specialist-assignment-response-v3"}.get(contract_id, contract_id)
+    family = {"lead-response-v7": "lead-response-v6", "lead-response-v8": "lead-response-v6", "lead-response-v9": "lead-response-v6", "lead-discussion-response-v1": "lead-response-v6", "specialist-assignment-response-v4": "specialist-assignment-response-v3", "specialist-assignment-response-v5": "specialist-assignment-response-v3"}.get(contract_id, contract_id)
     if family not in BUILTIN_RESULT_CONTRACT_IDS:
         return value
 
@@ -888,6 +888,26 @@ _catalog(
 )
 
 
+_catalog("used_evidence_ids", "Exact qualified READ receipt IDs actually used by this read-only discussion. An empty list claims no artifact facts.")
+_catalog("discussion_control_event_id", "Runtime-provided exact USER discussion-control origin; copy it only as context, never as execution authority.")
+_catalog("associated_task", "Read-only task association for discussion; no goal, scope, revision or completion change is authorized.")
+_catalog("discussion_rule", "Host-selected discussion boundary and artifact-evidence requirements; provider output cannot change the interaction mode.")
+
+
+
+_catalog("task_transition discussion_constraints task_context", "Exact runtime-owned USER task/discussion transition. Preserve its disclosed task and scope identities; provider prose cannot select, hold, discard or resume a task.")
+_catalog("selected_task_materials selected_material_source material_refs", "Explicit USER-selected whole same-session literal sources. These are inputs only, never specialist draft proof, artifact READ evidence or execution authority.")
+_catalog("capture_event_id material_capture_event_ids", "Exact durable whole-material capture identities bound to the USER transition and its prospective task.")
+_catalog("origin_event_id origin_control_event_id origin_message_event_id origin_kind", "Exact durable USER control and literal message origin in the enclosing receipt. Preserve the recorded control type and correlations.")
+_catalog("source_task_ref task_ref associated_task_ref", "Exact current source-task scope receipt. Discussion association and historical provenance do not authorize a successor or candidate.")
+_catalog("target_task_id target_task_revision planning_step_id", "Host-pinned prospective task/revision and planning cost lineage. Clarification reuses these exact identities without refunding submitted calls.")
+_catalog("scope_event_id scope_digest", "Exact persisted source scope event and current canonical sha256-prefixed scope digest.")
+_catalog("task_material_authority", "Runtime-owned restriction: selected literal material supplies no READ, owner-draft, candidate, confirmation, Apply or Commit proof.")
+_catalog("acceptance response_kind", "Disposition of the enclosing literal public response or closed read-only discussion answer/question; acceptance alone grants no execution authority.")
+_catalog("used_evidence", "Historical exact qualified artifact READ receipt facts used by this read-only discussion. Reuse never proves current artifact bytes or authorizes mutation.")
+_catalog("call_kind repair_of_call_id", "Exact producing physical-call category and optional diagnosed prior call repaired by this response; never infer or reset call cost.")
+
+
 def field_description(name: str) -> str:
     try:
         return FIELD_CATALOG[name]
@@ -1454,3 +1474,224 @@ ENUM_MEANINGS.update({
     "options": "Whole provisional options are available for explicit USER choice",
     "clarification": "Premise analysis cannot yet offer a grounded whole option",
 })
+
+
+def recover_lead_public_response(
+    response_text: str, contract_id: str, *, maximum_utf8_bytes: int,
+) -> str | None:
+    """Recover public final content without accepting its structured action."""
+    if contract_id not in {
+        "lead-response-v6", "lead-response-v7", "lead-response-v8",
+        "lead-response-v9", "lead-discussion-response-v1",
+    } or type(response_text) is not str:
+        return None
+    if type(maximum_utf8_bytes) is not int or maximum_utf8_bytes < 1:
+        return None
+    try:
+        if len(response_text.encode("utf-8")) > maximum_utf8_bytes:
+            return None
+    except UnicodeError:
+        return None
+
+    fence_lines = response_text.strip().splitlines(keepends=True)
+    if fence_lines:
+        opening = fence_lines[0].strip()
+        if opening and opening[0] in "`~":
+            marker_character = opening[0]
+            marker_size = len(opening) - len(opening.lstrip(marker_character))
+            if marker_size >= 3:
+                marker = marker_character * marker_size
+                language = opening[marker_size:].strip().casefold()
+                if len(fence_lines) < 3 or fence_lines[-1].strip() != marker:
+                    return None
+                fenced_body = "".join(fence_lines[1:-1])
+                if fenced_body.lstrip().startswith(("{", "[")):
+                    if language not in {"", "json"}:
+                        return None
+                    response_text = fenced_body
+
+    paths = (
+        ("agent_action", "task_result", "response_text"),
+        ("task_result", "response_text"),
+        ("agent_action", "response_text"),
+        ("response_text",),
+    )
+    private_keys = {
+        "private",
+        "privatethought", "private_reasoning", "private_thought",
+        "private_thoughts", "debug", "callback", "callbacks",
+        "tool_calls", "function_call", "analysis", "reasoning",
+    }
+    position = 0
+    length = len(response_text)
+    string_decoder = json.JSONDecoder()
+
+    def whitespace() -> None:
+        nonlocal position
+        while position < length and response_text[position].isspace():
+            position += 1
+
+    def value():
+        nonlocal position
+        whitespace()
+        start = position
+        if position >= length:
+            raise ValueError("missing value")
+        token = response_text[position]
+        if token == '"':
+            decoded, position = string_decoder.raw_decode(response_text, position)
+            return ("string", start, position, decoded, True)
+        if token in "{[":
+            closing = "}" if token == "{" else "]"
+            kind = "object" if token == "{" else "array"
+            position += 1
+            children = []
+            whitespace()
+            if position < length and response_text[position] == closing:
+                position += 1
+                return (kind, start, position, children, True)
+            while position < length:
+                if kind == "object":
+                    if response_text[position] != '"':
+                        raise ValueError("object key")
+                    key, position = string_decoder.raw_decode(response_text, position)
+                    whitespace()
+                    if position >= length or response_text[position] != ":":
+                        raise ValueError("object separator")
+                    position += 1
+                    child = value()
+                    children.append((key, child))
+                else:
+                    children.append(value())
+                whitespace()
+                if position >= length:
+                    return (kind, start, position, children, False)
+                if response_text[position] == closing:
+                    position += 1
+                    return (kind, start, position, children, True)
+                if response_text[position] != ",":
+                    raise ValueError("value separator")
+                position += 1
+                whitespace()
+                if position >= length:
+                    raise ValueError("missing trailing value")
+            return (kind, start, position, children, False)
+        for constant in ("-Infinity", "Infinity", "NaN", "true", "false", "null"):
+            if response_text.startswith(constant, position):
+                position += len(constant)
+                return ("scalar", start, position, None, True)
+        if token == "-":
+            position += 1
+        if position >= length or response_text[position] not in "0123456789":
+            raise ValueError("number")
+        if response_text[position] == "0":
+            position += 1
+        else:
+            while position < length and response_text[position] in "0123456789":
+                position += 1
+        if position < length and response_text[position] == ".":
+            position += 1
+            digit_start = position
+            while position < length and response_text[position] in "0123456789":
+                position += 1
+            if position == digit_start:
+                raise ValueError("fraction")
+        if position < length and response_text[position] in "eE":
+            position += 1
+            if position < length and response_text[position] in "+-":
+                position += 1
+            digit_start = position
+            while position < length and response_text[position] in "0123456789":
+                position += 1
+            if position == digit_start:
+                raise ValueError("exponent")
+        return ("scalar", start, position, None, True)
+
+    def visible(text: str) -> str | None:
+        if not text or "\x00" in text:
+            return None
+        try:
+            return text if len(text.encode("utf-8")) <= maximum_utf8_bytes else None
+        except UnicodeError:
+            return None
+
+    def unsafe(node) -> bool:
+        if node[0] == "string":
+            return "\x00" in node[3] or not unicode_safe(node[3])
+        if node[0] == "object":
+            return any(
+                key.casefold() in private_keys or not unicode_safe(key) or unsafe(child)
+                for key, child in node[3]
+            )
+        if node[0] == "array":
+            return any(unsafe(child) for child in node[3])
+        return False
+
+    def unicode_safe(text: str) -> bool:
+        try:
+            text.encode("utf-8")
+            return "\x00" not in text
+        except UnicodeError:
+            return False
+
+    ambiguous = False
+
+    def at_path(node, path):
+        nonlocal ambiguous
+        if not path:
+            return [node]
+        if node[0] != "object":
+            return []
+        matching = [child for key, child in node[3] if key == path[0]]
+        found = [answer for child in matching for answer in at_path(child, path[1:])]
+        if len(matching) > 1 and found:
+            ambiguous = True
+        return found
+
+    stripped = response_text.lstrip()
+    if not stripped:
+        return None
+    try:
+        root = value()
+        whitespace()
+        if position != length:
+            raise ValueError("extra final content")
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        return visible(response_text) if stripped[0] not in '{["' else None
+    if root[0] == "string":
+        return visible(root[3])
+    if root[0] == "scalar":
+        return visible("Public final value (not a structured Lead result):\n"
+                       + response_text[root[1]:root[2]])
+    if root[0] != "object":
+        return None
+    answers = [answer for path in paths for answer in at_path(root, path)]
+    if ambiguous or len(answers) != 1:
+        return None
+    answer = answers[0]
+    if answer[0] == "string":
+        return visible(answer[3])
+    if not answer[4] or unsafe(answer):
+        return None
+    return visible("Public response value (not a literal response_text string):\n"
+                   + response_text[answer[1]:answer[2]])
+
+for _value, _meaning in {
+    "discuss": "Explicit USER read-only discussion association; writing and pending controls remain separate.",
+    "hold": "Explicit USER hold of a safely active task, preserving its source, goal and costs.",
+    "resume": "Explicit USER fresh successor proposal for the exact retained task; fresh Confirm and owner drafts required.",
+    "discard": "Explicit USER retirement of a safely active task, without deleting its history.",
+    "new_task": "Explicit USER fresh independent task at revision one, with fresh scope and confirmation.",
+    "discussion": "Closed provisional answer/question, not authoring or artifact authority.",
+    "public_response": "Literal final response_text from one exact physical call, selectable only as input.",
+    "accepted": "The enclosing response passed its offered result validation; this alone is not workflow proof.",
+    "unestablished": "Literal response retained without established result acceptance or execution authority.",
+    "lead_discussion": "Separately accounted read-only Lead invocation; it cannot spend or extend authoring rounds.",
+    "lead_task_decision": "Historical explicit USER task control, with exact source and request pins.",
+    "lead_task_transition": "Historical runtime receipt of one exact USER task control; no execution permission.",
+    "lead_material_capture": "Historical exact whole literal source selected by USER as input only.",
+    "lead_public_response": "Historical per-call literal public text and diagnostics without workflow authority.",
+    "task_decision": "Durable explicit USER task control origin.",
+    "revise_decision": "Durable structured USER Revise origin bound to its exact pending control.",
+}.items():
+    ENUM_MEANINGS.setdefault(_value, _meaning)

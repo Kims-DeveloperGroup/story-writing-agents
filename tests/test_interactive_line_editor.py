@@ -33,6 +33,7 @@ from story_writing_agents.interactive_terminal._model import MainInputHistorySta
 
 EXPECTED_SUGGESTIONS = (
     "/explore", "/adopt",
+    "/task",
     "/premise",
     "/agents",
     "/auth",
@@ -52,6 +53,14 @@ EXPECTED_SUGGESTIONS = (
     "/toggle",
     "/quit",
 )
+
+
+def _autospec_effect_patch(target, attribute, value):
+    return mock.patch.object(target, attribute, autospec=True, side_effect=value)
+
+
+def _line_effect_patch(target, attribute, value):
+    return mock.patch.object(target, attribute, side_effect=value)
 
 
 class ScriptedInput:
@@ -360,7 +369,7 @@ class SuggestionContractTests(unittest.TestCase):
         )
         expected_identities = {"/?": "/help", "/toggle": "/progress"}
         for suggestion in suggestions:
-            with (self.subTest(token=suggestion.token) if suggestion.token not in ("/explore", "/adopt", "/premise") else contextlib.nullcontext()):
+            with (self.subTest(token=suggestion.token) if suggestion.token not in ("/explore", "/adopt", "/premise", "/task") else contextlib.nullcontext()):
                 self.assertEqual(
                     suggestion.canonical_token,
                     expected_identities.get(suggestion.token, suggestion.token),
@@ -482,18 +491,10 @@ class SuggestionContractTests(unittest.TestCase):
         first_provider = mock.Mock(return_value=())
         second_provider = mock.Mock(return_value=())
         with (
-            mock.patch.object(
-                InteractiveMainLineEditor,
-                "_read_line",
-                autospec=True,
-                side_effect=lambda _self, prompt, _provider: prompt,
+            _autospec_effect_patch(InteractiveMainLineEditor, "_read_line",
+                lambda _self, prompt, _provider: prompt,
             ) as internal_read,
-            mock.patch.object(
-                editor_module,
-                "read_main_command_line",
-                autospec=True,
-                side_effect=lambda _driver, prompt: prompt,
-            ) as main_read,
+            _autospec_effect_patch(editor_module, "read_main_command_line", lambda _driver, prompt: prompt) as main_read,
         ):
             first_reader = bind_suggestion_reader(editor, first_provider)
             second_reader = bind_suggestion_reader(editor, second_provider)
@@ -954,16 +955,8 @@ class CapabilityAndFailureTests(unittest.TestCase):
             mock.patch.object(editor_module, "_termios", FakeTermios()),
             mock.patch.object(editor_module.os, "name", "posix"),
             mock.patch.dict(os.environ, {"TERM": "xterm"}),
-            mock.patch.object(
-                editor_module.os,
-                "get_terminal_size",
-                side_effect=OSError("size unavailable"),
-            ),
-            mock.patch.object(
-                editor_module.os,
-                "fpathconf",
-                side_effect=_fake_fpathconf,
-            ),
+            _line_effect_patch(editor_module.os, "get_terminal_size", OSError("size unavailable")),
+            _line_effect_patch(editor_module.os, "fpathconf", _fake_fpathconf),
         ):
             self.assertEqual(editor.read_line("p> "), "fallback")
         fallback.assert_called_once_with("p> ")

@@ -11,6 +11,9 @@ from story_writing_agents import lead_premise_decisions as premise
 import copy
 import inspect
 import json
+import story_writing_agents.lead_task_transitions as task
+from story_writing_agents import provider_wire as wire
+from story_writing_agents.conversations.events import COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES
 import pickle
 import shutil
 import tempfile
@@ -237,6 +240,9 @@ def _selected_premise_proposal(selection):
     return scoped_proposal(PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST, selected=selection.authoring_task_id,
                           domains=("plot_structure", "character_world", "tone_execution"),
                           revision=revision, paths=selection.target_paths, mutate=captured_scope)
+
+def _object_positional_patch(target, attribute, value):
+    return mock.patch.object(target, attribute, value)
 
 class _Finalizer:
     """Minimal synchronous provider terminal seam."""
@@ -1089,6 +1095,16 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
         )
 
 
+def _discussion_reply(text, kind="answer"):
+    result = {"response_type": kind, "response_text": text, "used_evidence_ids": []}
+    return json.dumps({"agent_action": {"action_type": "submit_result", "task_result": result}})
+
+def _task_fixture(test):
+    case = LeadOrchestrationTestCase()
+    case.setUp()
+    test.addCleanup(case.doCleanups)
+    return case
+
 class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
     async def test_direct_search_read_answer_uses_bounded_history_without_proposal(
         self,
@@ -1128,7 +1144,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertIsNone(result.confirmation_request_id)
         self.assertEqual(
             tuple(call.payload["response_contract"]["allowed_action_types"] for call in calls),
-            (["search_context", "submit_result"], ["search_context", "read_context", "submit_result"], ["search_context", "submit_result"]),
+            (["search_context", "submit_result"], ["search_context", "read_context", "submit_result"], ["search_context", "read_context", "submit_result"]),
         )
         self.assertIn(
             "Visible lead response.",
@@ -1186,6 +1202,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         CollaborationEventKind.MESSAGE,
                         CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
                         CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
+                        CollaborationEventKind.LEAD_PUBLIC_RESPONSE,
                         CollaborationEventKind.MESSAGE,
                     ) + ((CollaborationEventKind.LEAD_RECOMMENDATION_REQUEST,) if kind == "recommendation" else ()),
                 )
@@ -1502,6 +1519,43 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             "action": "start", "next_step": "prepare", "target_paths": ["core_documents/global_outline.md"] * 2}}}
         self.assertIn(Rule.ARTIFACT_OBJECTIVE_TARGETS, facts.diagnose(json.dumps(duplicated)))
 
+
+        limit = COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES
+        def recover(raw):
+            return wire.recover_lead_public_response(
+                raw, "lead-discussion-response-v1", maximum_utf8_bytes=limit,
+            )
+        public = _discussion_reply("Literal e\u0301\r\n")
+        exact = public + " " * (limit - len(public.encode("utf-8")))
+        self.assertEqual(recover(exact), "Literal e\u0301\r\n")
+        self.assertIsNone(recover(exact + " "))
+        native = json.loads(public)
+        value_prefix = "Public response value (not a literal response_text string):\n"
+        for value in (None, 1, "\ud800", "\0"):
+            changed = json.loads(public)
+            changed["agent_action"]["task_result"]["response_text"] = value
+            expected = None if isinstance(value, str) else value_prefix + json.dumps(value)
+            self.assertEqual(recover(json.dumps(changed)), expected)
+        for raw, expected in (
+            ("{", None),
+            ('{"analysis":{"response_text":"PRIVATE"}}', None),
+            (public[:-1] + ', "duplicate":1, "duplicate":2}', "Literal e\u0301\r\n"),
+            (public[:-1] + ', "debug":NaN}', "Literal e\u0301\r\n"),
+            (public[:-1] + ', "debug":Infinity}', "Literal e\u0301\r\n"),
+            ("Direct final e\u0301\r\n", "Direct final e\u0301\r\n"),
+            (json.dumps("Direct final e\u0301\r\n"), "Direct final e\u0301\r\n"),
+            ("42", "Public final value (not a structured Lead result):\n42"),
+            ("```json\n" + public + "\n```", "Literal e\u0301\r\n"),
+            ('```json\n{"analysis":{"response_text":"PRIVATE"}}\n```', None),
+            ('```json\n[{"privateThought":"PRIVATE"}]\n```', None),
+        ):
+            self.assertEqual(recover(raw), expected)
+        native["agent_action"]["task_result"]["response_type"] = 7
+        self.assertEqual(recover(json.dumps(native)), "Literal e\u0301\r\n")
+        self.assertIsNone(recover('{"response_text":{"private":"SECRET"}}'))
+        native["agent_action"]["action_type"] = "read"
+        self.assertEqual(recover(json.dumps(native)), "Literal e\u0301\r\n")
+
     async def test_front_schema_rejection_is_repaired_once(self) -> None:
         conversation_id = self.conversation("Repair schema")
 
@@ -1537,6 +1591,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         )
         self.assertEqual(persisted.trace, result.trace)
         self.assertEqual(len(self.backend.calls), 2)
+        self.assertEqual(result.public_responses[0].response.call_id, self.backend.calls[1].call_id)
+        self.assertEqual(result.public_responses[0].response.repair_of_call_id, self.backend.calls[0].call_id)
         for call in self.backend.calls:
             assert_guidance(self, dict(call.payload), dict(call.schema))
         repair = _workflow_material(self.backend.calls[-1].payload)
@@ -1936,6 +1992,87 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
             await self.runtime.decide_lead_step(_decision(stale, CollaborationConfirmationDecision.CONFIRM))
         self.assertEqual((self.history(memory_id), len(self.backend.calls)), (before, calls))
 
+        from tests.test_specialist_routing_runtime import scoped_proposal
+        case = _task_fixture(self)
+        conversation = case.conversation("Explicit task lifecycle")
+        pending = await case.proposal(conversation)
+        view = case.runtime.inspect_lead_collaboration(case.session_id, conversation)
+        original = next(item for item in view.available_tasks if item.ref.task_id == pending.proposal.authoring_scope.task_id)
+        hold = task.LeadTaskDecision.from_task(original.ref, task.LeadTaskAction.HOLD)
+        prefix, spent = case.history(conversation), len(case.backend.calls)
+        held = await case.runtime.decide_lead_task(hold)
+        repeated = await case.runtime.decide_lead_task(hold)
+        self.assertEqual(repeated.transition_event_id, held.transition_event_id)
+        self.assertEqual(len(case.backend.calls), spent)
+        self.assertEqual(case.history(conversation)[:len(prefix)], prefix)
+        current = next(item for item in case.runtime.inspect_lead_collaboration(case.session_id, conversation).available_tasks
+                       if item.ref.task_id == original.ref.task_id)
+        self.assertEqual((current.status, current.scope), ("held", original.scope))
+        resume = task.LeadTaskDecision.from_task(current.ref, task.LeadTaskAction.RESUME, text="Resume with a fresh plan.")
+        unchanged = case.history(conversation)
+        with self.assertRaises(ValueError):
+            await case.runtime.decide_lead_task(replace(resume, request_id=hold.request_id))
+        self.assertEqual(case.history(conversation), unchanged)
+        self.assertEqual(len(case.backend.calls), spent)
+        case.backend.enqueue(_discussion_reply("Which direction should the resumed task pursue?", "clarification_question"))
+        case.backend.enqueue(scoped_proposal(
+            PLOT_ARCHITECT, paths=(), domains=("plot_structure",),
+            mutate=lambda value, _: value.update(message=original.goal)))
+        resumed = await case.runtime.decide_lead_task(resume)
+        self.assertIsNone(resumed.turn.proposal)
+        receipt = case.runtime.inspect_lead_collaboration(case.session_id, conversation).discussion_context
+        self.assertEqual((receipt.target_task_id, receipt.target_task_revision),
+                         (original.ref.task_id, original.ref.task_revision + 1))
+        question_prefix = case.history(conversation)
+        repeated = await case.runtime.decide_lead_task(resume)
+        self.assertEqual(repeated.transition_event_id, resumed.transition_event_id)
+        self.assertEqual(case.history(conversation), question_prefix)
+        self.assertEqual(len(case.backend.calls), spent + 1)
+        resumed = replace(resumed, turn=await case.runtime.lead_turn(
+            case.session_id, conversation, "The selected direction stays on this same fresh revision.",
+        ))
+        self.assertEqual(len(_submitted_calls(case.history(conversation)[len(unchanged):])), 2)
+        self.assertEqual({event.step_id for event in case.history(conversation)[len(unchanged):]
+                          if type(event.payload) is CollaborationProviderCallPayload
+                          and event.payload.state is CollaborationProviderCallState.SUBMITTED},
+                         {receipt.planning_step_id})
+        self.assertEqual((resumed.turn.proposal.authoring_scope.task_id, resumed.turn.proposal.authoring_scope.task_revision),
+                         (original.ref.task_id, original.ref.task_revision + 1))
+        self.assertIs(resumed.turn.state, CollaborationStepState.AWAITING_CONFIRMATION)
+        view = case.runtime.inspect_lead_collaboration(case.session_id, conversation)
+        self.assertEqual(next(item.status for item in view.available_tasks
+                              if item.ref.task_id == current.ref.task_id), "active")
+        self.assertIsNone(case.runtime.inspect_lead_collaboration(
+            case.session_id, conversation).discussion_context)
+        self.assertEqual(len(case.backend.calls), spent + 2)
+        current_prefix = case.history(conversation)
+        with self.assertRaises(ValueError):
+            await case.runtime.decide_lead_task(task.LeadTaskDecision.from_task(original.ref, task.LeadTaskAction.HOLD))
+        self.assertEqual(case.history(conversation), current_prefix)
+        self.assertEqual(len(case.backend.calls), spent + 2)
+        await case._decide(resumed.turn, CollaborationConfirmationDecision.REJECT)
+        current = next(item for item in case.runtime.inspect_lead_collaboration(case.session_id, conversation).available_tasks
+                       if item.ref.task_id == original.ref.task_id)
+        discarded = await case.runtime.decide_lead_task(task.LeadTaskDecision.from_task(current.ref, task.LeadTaskAction.DISCARD))
+        self.assertIsNone(discarded.turn)
+        retired = next(item for item in case.runtime.inspect_lead_collaboration(case.session_id, conversation).available_tasks
+                       if item.ref.task_id == original.ref.task_id)
+        self.assertEqual(retired.status, "discarded")
+        with self.assertRaises(ValueError):
+            await case.runtime.decide_lead_task(task.LeadTaskDecision.from_task(retired.ref, task.LeadTaskAction.RESUME,
+                                                                             text="Cannot revive discarded authority."))
+        case.backend.enqueue(scoped_proposal(EXECUTION_SPECIALIST, paths=(), domains=("tone_execution",)))
+        created = await case.runtime.decide_lead_task(task.LeadTaskDecision.from_task(retired.ref, task.LeadTaskAction.NEW_TASK,
+                                                                                   text="Start separate prose work."))
+        self.assertNotEqual(created.turn.proposal.authoring_scope.task_id, retired.ref.task_id)
+        self.assertEqual(created.turn.proposal.authoring_scope.task_revision, 1)
+        self.assertEqual(created.turn.proposal.authoring_scope.domains, (ArtifactReviewDomain.TONE_EXECUTION,))
+        self.assertEqual(next(item for item in case.runtime.inspect_lead_collaboration(case.session_id, conversation).available_tasks
+                              if item.ref.task_id == retired.ref.task_id).status, "discarded")
+        self.assertEqual(len(_submitted_calls(case.history(conversation))), spent + 3)
+        self.assertEqual(StoryRuntime(case.control_workspace, case.backend).inspect_lead_collaboration(
+            case.session_id, conversation), case.runtime.inspect_lead_collaboration(case.session_id, conversation))
+
     async def test_reference_drift_blocks_confirmation_without_calls(self) -> None:
         conversation_id = self.conversation("Drift")
         proposed = await self.proposal(
@@ -1999,6 +2136,30 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
                 self.assertIs(projection.current_state, CollaborationStepState.SUPERSEDED)
                 self.assertIsNone(revised.turn.recommendation_request)
 
+        case = _task_fixture(self)
+        conversation = case.conversation("Independent Revise discussion")
+        pending = await case.proposal(conversation)
+        prefix, scope = case.history(conversation), pending.proposal.authoring_scope
+        case.backend.enqueue(_discussion_reply("Plot owns outlines; the selected draft remains unchanged."))
+        revised = await case._decide(pending, CollaborationConfirmationDecision.REVISE)
+        self.assertIsNone(revised.turn.proposal)
+        self.assertEqual(revised.turn.discussion.response_text, "Plot owns outlines; the selected draft remains unchanged.")
+        self.assertEqual(revised.turn.discussion.associated_task_ref.task_id, scope.task_id)
+        for text in ("How do these roles cooperate?", "Unrelated scheduling question."):
+            case.backend.enqueue(_discussion_reply(text, "clarification_question"))
+            discussed = await case.runtime.lead_turn(case.session_id, conversation, text)
+            self.assertEqual(discussed.discussion.response_text, text)
+            self.assertEqual(discussed.discussion.used_evidence, ())
+            self.assertIsNone(discussed.proposal)
+        view = case.runtime.inspect_lead_collaboration(case.session_id, conversation)
+        saved = next(item for item in view.available_tasks if item.ref.task_id == scope.task_id)
+        self.assertEqual(saved.scope, scope)
+        self.assertEqual(case.history(conversation)[:len(prefix)], prefix)
+        self.assertEqual(len(_submitted_calls(case.history(conversation))), len(case.backend.calls))
+        self.assertEqual(len(case.backend.calls), 4)
+        self.assertFalse(any(isinstance(event.payload, CollaborationAssignmentDispatchPayload)
+                             for event in case.history(conversation)))
+
 
 
 class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
@@ -2007,9 +2168,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
     ) -> None:
         conversation_id = self.conversation("Direct lead domain rejection")
         self.backend.enqueue(_visible_outcome("answer", ""))
-        with mock.patch.object(
-            orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", 1,
-        ):
+        with _object_positional_patch(orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", 1):
             result = await self.runtime.lead_turn(
                 self.session_id, conversation_id, "Reject an empty answer.",
             )
@@ -2119,10 +2278,9 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             original_publish(provider)
             original_publish(provider)
 
-        with mock.patch.object(
-            orchestrator_module._AccountingContextProvider,
-            "publish_validation_messages", publish_twice,
-        ):
+        with _object_positional_patch(orchestrator_module._AccountingContextProvider,
+                 "publish_validation_messages",
+                 publish_twice):
             result = await self.runtime.lead_turn(
                 self.session_id, conversation_id, "Repair an empty answer.",
             )
@@ -2276,7 +2434,6 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
     async def test_rejected_returned_result_closes_and_next_turn_uses_one_fresh_call(
         self,
     ) -> None:
-        rejected_body = "REJECTED_BODY_MUST_NOT_PERSIST_OR_BE_RESENT"
 
         def complete_value(message: str) -> dict[str, object]:
             return {
@@ -2355,6 +2512,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         )
         for label, initial_script, rejection_code in cases:
             with self.subTest(label=label):
+                rejected_body = f"REJECTED_BODY_MUST_NOT_PERSIST_OR_BE_RESENT_{label}"
                 backend = _LeadBackend(persist_context_threads=True)
                 runtime = StoryRuntime(self.control_workspace, backend)  # type: ignore[arg-type]
                 conversation_id = self.conversation(f"Same-turn correction {label}")
@@ -2442,7 +2600,17 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                         for event in history
                     )
                 )
-                self.assertNotIn(rejected_body, repr(history))
+                self.assertNotIn(rejected_body, repr(tuple(
+                    event for event in history
+                    if event.kind is not CollaborationEventKind.LEAD_PUBLIC_RESPONSE)))
+                expected_public = () if label == "malformed" else (("rejected", rejected_body),)
+                self.assertEqual(
+                    tuple((item.response.acceptance.value, item.response.response_text)
+                          for item in result.public_responses),
+                    expected_public + (("accepted", f"Corrected {label} answer."),),
+                )
+                self.assertNotIn(rejected_body, repr(tuple(
+                    item.response.validation_details for item in result.public_responses)))
                 self.assertNotIn(
                     rejected_body,
                     json.dumps(dict(backend.calls[-1].payload), ensure_ascii=False),
@@ -2739,6 +2907,61 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             self.assertNotIn(secret, repr(result.validation_details))
             self.assertNotIn(secret, repr(history))
 
+        case = _task_fixture(self)
+        conversation = case.conversation("Original and corrected public responses")
+        invalid = json.loads(_discussion_reply("Original rejected public text."))
+        invalid["agent_action"]["action_type"] = "read"
+        invalid["agent_action"]["task_result"]["used_evidence_ids"] = "invalid array"
+        case.backend.enqueue(json.dumps(invalid))
+        case.backend.enqueue(_discussion_reply("Corrected visible answer."))
+        decision = task.LeadTaskDecision.for_conversation(case.session_id, conversation, task.LeadTaskAction.DISCUSS,
+                                                         text="Discuss the role boundaries without authoring.")
+        result = await case.runtime.session(case.session_id).decide_lead_task(decision)
+        self.assertEqual(len(result.turn.public_responses), 2, result.turn.validation_details)
+        original, corrected = result.turn.public_responses
+        self.assertEqual((original.response.response_text, corrected.response.response_text),
+                         ("Original rejected public text.", "Corrected visible answer."))
+        self.assertEqual((original.response.acceptance, corrected.response.acceptance),
+                         (task.LeadPublicResponseAcceptance.REJECTED, task.LeadPublicResponseAcceptance.ACCEPTED))
+        self.assertTrue(original.response.validation_details)
+        self.assertEqual(original.response.validation_details, result.turn.validation_details)
+        calls = _submitted_calls(case.history(conversation))
+        self.assertEqual([(item.response.invocation_id, item.response.call_id) for item in (original, corrected)],
+                         [(item.invocation_id, item.call_id) for item in calls])
+        self.assertEqual(corrected.response.repair_of_call_id, original.response.call_id)
+        self.assertEqual((original.response.call_kind, corrected.response.call_kind), ("initial", "initial"))
+        self.assertEqual(len(calls), 2)
+        self.assertIsNone(result.turn.proposal)
+        prefix = case.history(conversation)
+        replayed = await case.runtime.decide_lead_task(decision)
+        self.assertEqual(replayed.transition_event_id, result.transition_event_id)
+        self.assertEqual(case.history(conversation), prefix)
+        self.assertEqual(len(case.backend.calls), 2)
+        restarted = StoryRuntime(case.control_workspace, case.backend)
+        restored = restarted.session(case.session_id).inspect_lead_collaboration(conversation)
+        self.assertEqual(restored.public_responses, result.turn.public_responses)
+        selected = next(item for item in restored.selectable_materials if item.ref == original.ref)
+        self.assertEqual((selected.text, selected.acceptance), (original.response.response_text, "rejected"))
+        unchanged = case.history(conversation)
+        forged = task.LeadTaskDecision.for_conversation(case.session_id, conversation, task.LeadTaskAction.NEW_TASK,
+                                                       text="Use only an exact whole message.",
+                                                       material_refs=(replace(selected.ref, material_digest="0" * 64),))
+        with self.assertRaises(ValueError):
+            await restarted.decide_lead_task(forged)
+        self.assertEqual(case.history(conversation), unchanged)
+        self.assertEqual(len(case.backend.calls), 2)
+
+        for ref in (replace(selected.ref, session_id="foreign_session"),
+                    replace(selected.ref, event_id="stale_public_event")):
+            with self.assertRaises(ValueError):
+                refused = task.LeadTaskDecision.for_conversation(
+                    case.session_id, conversation, task.LeadTaskAction.NEW_TASK,
+                    text="Require the original current-session whole message.", material_refs=(ref,),
+                )
+                await restarted.decide_lead_task(refused)
+            self.assertEqual(case.history(conversation), unchanged)
+            self.assertEqual(len(case.backend.calls), 2)
+
     async def test_search_before_first_rejection_uses_attempt_labels(self) -> None:
         private = "PRIVATE_LATE_RETRIEVAL_REJECTION_한🙂"
 
@@ -2910,7 +3133,15 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertLessEqual(len(notices), 8)
         self.assertTrue(tuple(item.validation_details[0] for item in notices) == details,
                         "durable notices differ from returned report")
-        self.assertFalse(secret in repr(history), "durable history contains provider text")
+        self.assertNotIn(secret, repr(tuple(
+            event for event in history if event.kind is not CollaborationEventKind.LEAD_PUBLIC_RESPONSE)))
+        self.assertEqual(
+            tuple((item.response.acceptance.value, item.response.response_text)
+                  for item in result.public_responses),
+            (("rejected", secret), ("accepted", "Accepted after repair.")),
+        )
+        self.assertNotIn(secret, repr(tuple(
+            item.response.validation_details for item in result.public_responses)))
 
     async def test_minimal_reference_answer_needs_no_provider_correction(self) -> None:
         backend = _LeadBackend(persist_context_threads=True)
@@ -2985,11 +3216,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 runtime = StoryRuntime(self.control_workspace, backend)  # type: ignore[arg-type]
                 conversation_id = self.conversation(label)
                 backend.enqueue(response)
-                with mock.patch.object(
-                    orchestrator_module,
-                    "COLLABORATION_PHYSICAL_CALL_LIMIT",
-                    1,
-                ):
+                with _object_positional_patch(orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", 1):
                     result = await runtime.lead_turn(
                         self.session_id,
                         conversation_id,
@@ -3028,9 +3255,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             }, ensure_ascii=False)
 
         self.backend.enqueue(malformed)
-        with mock.patch.object(
-            orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", 1,
-        ):
+        with _object_positional_patch(orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", 1):
             result = await self.runtime.lead_turn(
                 self.session_id, conversation_id,
                 "Reject an invalid result without another provider call.",
@@ -3170,6 +3395,26 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                     self.assertEqual(sum(type(event.payload) is CollaborationMessagePayload
                                          and event.payload.content == original for event in self.history(conversation)), 1)
 
+        case = _task_fixture(self)
+        conversation = case.conversation("Unknown discussion submission")
+        case.backend.enqueue(_SubmittedFailure(RuntimeError("uncertain discussion"), submission_uncertain=True))
+        decision = task.LeadTaskDecision.for_conversation(
+            case.session_id, conversation, task.LeadTaskAction.DISCUSS, text="Discuss without writing.",
+        )
+        with self.assertRaisesRegex(RuntimeError, "^uncertain discussion$"):
+            await case.runtime.decide_lead_task(decision)
+        prefix = case.history(conversation)
+        self.assertEqual(len(_submitted_calls(prefix)), 1)
+        restarted = StoryRuntime(case.control_workspace, case.backend)
+        view = restarted.inspect_lead_collaboration(case.session_id, conversation)
+        self.assertIs(view.next_safe_action, CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME)
+        with self.assertRaises(ValueError):
+            await restarted.decide_lead_task(task.LeadTaskDecision.for_conversation(
+                case.session_id, conversation, task.LeadTaskAction.DISCUSS, text="Never replay unknown work.",
+            ))
+        self.assertEqual(case.history(conversation), prefix)
+        self.assertEqual(len(case.backend.calls), 1)
+
     async def test_unresolved_running_becomes_outcome_unknown_without_provider(
         self,
     ) -> None:
@@ -3204,6 +3449,17 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             project_collaboration_history(self.history(conversation_id)).current_state,
             CollaborationStepState.OUTCOME_UNKNOWN,
         )
+
+        prefix = self.history(conversation_id)
+        inspected = self.runtime.inspect_lead_collaboration(self.session_id, conversation_id)
+        self.assertIs(inspected.current_state, CollaborationStepState.OUTCOME_UNKNOWN)
+        for action in (task.LeadTaskAction.DISCUSS, task.LeadTaskAction.NEW_TASK):
+            decision = task.LeadTaskDecision.for_conversation(self.session_id, conversation_id, action,
+                                                              text="Do not replay uncertain work.")
+            with self.assertRaises(ValueError):
+                await self.runtime.decide_lead_task(decision)
+        self.assertEqual(self.history(conversation_id), prefix)
+        self.assertEqual(self.backend.calls, [])
 
     def test_capability_is_private_nonserializable_and_single_use(self) -> None:
         capability = orchestrator_module._ConfirmedStepCapability(

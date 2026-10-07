@@ -157,6 +157,9 @@ def _chat_block_message(
     )
 
 
+def _object_wrap_patch(target, attribute, value):
+    return mock.patch.object(target, attribute, wraps=value)
+
 class InteractiveSemanticOutputTests(unittest.TestCase):
     """Lock the internal adapter boundary and deterministic view fixtures."""
 
@@ -639,11 +642,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             raise AssertionError("semantic output must not read")
 
         terminal = InteractiveTerminal(read_line, records.append, width=80)
-        with mock.patch.object(
-            _core,
-            "render_component",
-            wraps=render_component,
-        ) as render:
+        with _object_wrap_patch(_core, "render_component", render_component) as render:
             output = InteractiveSemanticOutput(terminal)
             self.assertEqual(reads, [])
             self.assertEqual(records, [])
@@ -951,11 +950,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
                 ),
             ),
         )
-        with mock.patch.object(
-            _core,
-            "render_component",
-            wraps=render_component,
-        ) as render:
+        with _object_wrap_patch(_core, "render_component", render_component) as render:
             for call, expected in cases:
                 with self.subTest(expected=expected):
                     before = render.call_count
@@ -975,11 +970,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             (EXECUTION_SPECIALIST, "execution", SpeakerAccent.BLUE),
         )
         expected_content = '{\n  "answer": "界"\n}'
-        with mock.patch.object(
-            _core,
-            "render_component",
-            wraps=render_component,
-        ) as render:
+        with _object_wrap_patch(_core, "render_component", render_component) as render:
             for agent_id, alias, accent in agent_cases:
                 with self.subTest(agent_id=agent_id):
                     prior_renders = render.call_count
@@ -1179,11 +1170,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
                 ),
             ),
         )
-        with mock.patch.object(
-            _core,
-            "render_component",
-            wraps=render_component,
-        ) as render:
+        with _object_wrap_patch(_core, "render_component", render_component) as render:
             for call, expected in cases:
                 with self.subTest(expected=expected):
                     before = render.call_count

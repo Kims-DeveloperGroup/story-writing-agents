@@ -5,8 +5,15 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from enum import StrEnum
 from ..lead_premise_decisions import PremiseDecisionReport, PremiseReportRef, premise_value_to_dict
+from ..lead_task_transitions import LeadPublicResponse, task_value_to_dict
 
 from ..conversations import (
+    project_collaboration_history,
+    CollaborationLeadTaskDecisionPayload,
+    CollaborationLeadTaskTransitionPayload,
+    CollaborationLeadMaterialCapturePayload,
+    CollaborationLeadDiscussionPayload,
+    CollaborationLeadPublicResponsePayload,
     CollaborationLeadExplorationRequestPayload,
     CollaborationLeadExplorationResultPayload,
     CollaborationExplorationAdoptionPayload,
@@ -181,7 +188,9 @@ def _premise_report_items(report: PremiseDecisionReport, ref: PremiseReportRef |
     return tuple(items)
 
 
-def project_lead_turn_result(result: LeadTurnResult) -> Panel:
+def project_lead_turn_result(
+    result: LeadTurnResult, *, public_response_events: tuple[CollaborationEvent, ...] = (),
+) -> Panel:
     """Project one runtime-validated visible lead result without side effects."""
 
     if type(result) is not LeadTurnResult:
@@ -201,6 +210,16 @@ def project_lead_turn_result(result: LeadTurnResult) -> Panel:
         for detail in result.validation_details
         for line in detail.split("\n")
     )
+    if result.discussion is not None:
+        items.append(Notice("Read-only discussion; writing task and pending controls stay separately bound."))
+        if result.discussion.associated_task_ref is not None:
+            ref = result.discussion.associated_task_ref
+            items.append(Field("Associated task", f"{ref.task_id} @ {ref.task_revision}"))
+    latest = result.public_responses[-1] if result.public_responses else None
+    for public in result.public_responses:
+        shown_above = (public is latest and public.response.acceptance.value == "accepted"
+                       and public.response.response_text == result.message)
+        items.extend(_public_response_items(public.response, show_text=not shown_above))
     if result.exploration is not None:
         items.extend(_exploration_items(result.exploration))
     if result.premise_report is not None:
@@ -243,7 +262,82 @@ def project_lead_turn_result(result: LeadTurnResult) -> Panel:
         items.extend(_payload_items(result.story_commit_request, {}, {}, {}))
     if result.recommendation_request is not None:
         items.extend(_payload_items(result.recommendation_request, {}, {}, {}, session_id=result.session_id))
+    items.extend(_public_response_omission_items(result, public_response_events))
     return Panel("Lead", tuple(items), state=_event_state(result))
+
+
+
+def _public_response_omission_items(
+    result: LeadTurnResult, events: tuple[CollaborationEvent, ...],
+) -> tuple[Notice, ...]:
+    """Render persisted omissions only after full replay and exact call matching."""
+    if not events:
+        return ()
+    project_collaboration_history(events)
+    current = tuple(event for event in events
+                    if (event.session_id, event.conversation_id, event.turn_id, event.step_id) == (
+                        result.session_id, result.conversation_id, result.turn_id, result.step_id))
+    submitted = tuple(event for event in current
+                      if type(event.payload) is CollaborationProviderCallPayload
+                      and event.payload.state.value == "submitted"
+                      and event.payload.invocation_kind.value in {"lead", "lead_discussion"})
+    available = {(event.payload.response.invocation_id, event.payload.response.call_id)
+                 for event in current
+                 if type(event.payload) is CollaborationLeadPublicResponsePayload}
+    items = []
+    for notice in current:
+        payload = notice.payload
+        if (type(payload) is not CollaborationMessagePayload
+                or notice.sender.kind.value != "runtime" or notice.recipient.kind.value != "user"
+                or payload.trace is not None or payload.validation_details
+                or payload.validation_invocation_id is not None
+                or payload.validation_call_id is not None):
+            continue
+        for source in submitted:
+            call = source.payload
+            identity = (call.invocation_id, call.call_id)
+            if source.sequence >= notice.sequence or identity in available:
+                continue
+            for disposition in ("accepted", "rejected"):
+                expected = (
+                    f"Public response unavailable for {disposition} call {call.call_id}: "
+                    "no bounded literal final response_text was recoverable."
+                )
+                if payload.content != expected:
+                    continue
+                diagnostics = tuple(event for event in current
+                                    if type(event.payload) is CollaborationMessagePayload
+                                    and event.sender.kind.value == "runtime"
+                                    and event.recipient.kind.value == "user"
+                                    and event.sequence < notice.sequence
+                                    and event.payload.validation_details
+                                    and (event.payload.validation_invocation_id,
+                                         event.payload.validation_call_id) == identity)
+                if disposition == "rejected" and not diagnostics:
+                    continue
+                items.append(Notice(
+                    payload.content,
+                    label=(f"Public response unavailable — call {call.ordinal} "
+                           f"({call.call_kind.value}, {disposition})"),
+                    role=SemanticRole.ERROR,
+                ))
+    return tuple(items)
+
+
+def _public_response_items(
+    response: LeadPublicResponse, *, show_text: bool = True,
+) -> tuple[Field | Message | Notice, ...]:
+    items = [Field("Public response disposition", response.acceptance.value),
+             Field("Provider call", f"{response.call_kind} #{response.ordinal} ({response.call_id})"),
+             (_message("Literal final response_text", response.response_text) if show_text else
+              Notice("This call's accepted text is shown in the Lead response above."))]
+    if response.repair_of_call_id is not None:
+        items.append(Field("Repairs call", response.repair_of_call_id))
+    if response.validation_details:
+        items.append(Notice("\n".join(response.validation_details),
+                            label="Call validation", role=SemanticRole.ERROR))
+    items.append(Notice("Selectable literal input; no draft, verified evidence or write authority."))
+    return tuple(items)
 
 
 def project_lead_error_result(
@@ -520,6 +614,40 @@ def _payload_items(
     *,
     session_id: str | None = None,
 ) -> tuple[Section | Field | Notice | Message | Record | ListView, ...]:
+    if type(payload) is CollaborationLeadPublicResponsePayload:
+        return _public_response_items(payload.response)
+    if type(payload) is CollaborationLeadDiscussionPayload:
+        report = payload.report
+        return (Field("Discussion", report.response_kind),
+                _message("Lead discussion", report.response_text),
+                Notice("Provisional discussion input; no authoring or artifact authority."))
+    if type(payload) is CollaborationLeadTaskDecisionPayload:
+        decision = payload.decision
+        items = [Field("User task action", decision.action.value)]
+        if decision.task_ref is not None:
+            ref = decision.task_ref
+            items.append(Field("Writing task", f"{ref.task_id} @ {ref.task_revision}"))
+        if decision.text is not None:
+            items.append(_message("User request", decision.text, role=SemanticRole.DEFAULT))
+        return tuple(items)
+    if type(payload) is CollaborationLeadTaskTransitionPayload:
+        receipt = payload.receipt
+        items = [Field("Recorded task action", receipt.action.value)]
+        if receipt.target_task_id is not None:
+            items.append(Field("Fresh proposal task",
+                               f"{receipt.target_task_id} @ {receipt.target_task_revision}"))
+        items.append(Notice("Task control alone does not confirm or execute a proposal."))
+        return tuple(items)
+    if type(payload) is CollaborationLeadMaterialCapturePayload:
+        capture = payload.capture
+        source = capture.source
+        return (Field("Selected whole input", source.kind.value),
+                Field("Source session", source.session_id),
+                Field("Source conversation", source.conversation_id),
+                Field("Source event", source.event_id),
+                Field("Material SHA256", source.material_digest),
+                _message("Selected material", capture.selected_text),
+                Notice("Literal input only; current owner drafting and review require fresh confirmation."))
     if type(payload) is CollaborationPremiseDecisionPayload:
         choice = payload.selection
         return (Field("USER premise decision", choice.action.value), Field("Request", choice.request_id),

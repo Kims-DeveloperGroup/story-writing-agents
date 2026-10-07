@@ -8,6 +8,8 @@ session-wide event sequence.
 
 from __future__ import annotations
 
+from ..lead_task_transitions import LeadMaterialKind, task_material_sha256, task_value_to_dict
+
 import hashlib
 import json
 from collections.abc import Mapping
@@ -20,8 +22,6 @@ from ..editorial_state import (
 )
 from .context import project_editorial_state
 from ..lead_premise_decisions import premise_value_to_dict
-from .events import (CollaborationEditorialRecordPayload, CollaborationPremiseDecisionPayload,
-    CollaborationPremiseSelectionPayload, CollaborationPremiseFreshWorkAdmissionPayload)
 from .context import (
     CollaborationReadableRecord, artifact_objective_context,
     project_collaboration_history,
@@ -29,6 +29,7 @@ from .context import (
 from .events import (
     CollaborationMessagePayload,
     CollaborationExecutionResult,
+    CollaborationExecutionOutcomeKind,
     CollaborationStepStatePayload,
     ArtifactApplicationDecisionPayload, ArtifactApplicationRequestPayload,
     ArtifactApplicationResultPayload, ArtifactReviewCandidatePayload,
@@ -41,6 +42,16 @@ from .events import (
     ArtifactObjectivePayload, ArtifactObjectivePayloadV2, CollaborationEvent,
     LeadRecommendationRequestPayload, LeadRecommendationDecisionPayload,
     LeadRecommendationStartedPayload, LeadRecommendationResultPayload,
+    CollaborationEditorialRecordPayload,
+    CollaborationLeadDiscussionPayload,
+    CollaborationLeadMaterialCapturePayload,
+    CollaborationLeadPublicResponsePayload,
+    CollaborationLeadTaskDecisionPayload,
+    CollaborationLeadTaskTransitionPayload,
+    CollaborationPremiseDecisionPayload,
+    CollaborationPremiseFreshWorkAdmissionPayload,
+    CollaborationPremiseSelectionPayload,
+    CollaborationSpecialistAssessment,
 )
 from ..writing_artifacts.change_sets import (
     ArtifactCreateOperation, ArtifactDeleteOperation, ArtifactPatchOperation,
@@ -104,6 +115,21 @@ def _operations(operations: tuple[object, ...]) -> list[dict[str, object]]:
 
 
 def _visible_details(payload: object) -> dict[str, object]:
+    """Session-only visible facts omitted by the bounded search field contract."""
+    if type(payload) in {
+        CollaborationLeadTaskDecisionPayload, CollaborationLeadTaskTransitionPayload,
+        CollaborationLeadMaterialCapturePayload, CollaborationLeadDiscussionPayload,
+        CollaborationLeadPublicResponsePayload,
+    }:
+        member = next(getattr(payload, name) for name in ("decision", "receipt", "capture", "report", "response")
+                      if hasattr(payload, name))
+        value = task_value_to_dict(member)
+        for name in ("response_text", "selected_text", "text", "validation_details"):
+            value.pop(name, None)
+        return {"task_context": value, "task_material_authority": (
+            "Literal discussion/selected/public material only; no draft, READ, "
+            "candidate, confirmation, Apply or Commit authority."
+        )}
     if type(payload) is CollaborationPremiseDecisionPayload:
         return {"premise_decision": premise_value_to_dict(payload.selection), "authority": "Exact USER control; generic Confirm is not a choice."}
     if type(payload) is CollaborationPremiseSelectionPayload:
@@ -112,7 +138,6 @@ def _visible_details(payload: object) -> dict[str, object]:
         return {"fresh_work_admission": premise_value_to_dict(payload.admission), "authority": "Cost attribution only; no execution authority."}
     if type(payload) is CollaborationEditorialRecordPayload:
         return {"editorial_record": editorial_revision_to_dict(payload.record), "authority": "Exact USER editorial intake; current approval comes only from the validated revision chain."}
-    """Session-only visible facts omitted by the bounded search field contract."""
 
     if type(payload) in {
         ArtifactObjectivePayload, ArtifactObjectivePayloadV2,
@@ -547,6 +572,45 @@ class SessionHistorySnapshot:
         _include_editorial: bool = True,
     ) -> dict[str, object]:
         """Project unseen facts; callers alone establish native-thread continuity."""
+        sources = {(row.metadata.conversation_id, record.event_id): record
+                   for row in self.conversations for record in row.records}
+        for row in self.conversations:
+            for record in row.records:
+                if type(record.payload) is not CollaborationLeadMaterialCapturePayload:
+                    continue
+                capture = record.payload.capture
+                ref = capture.source
+                source = sources.get((ref.conversation_id, ref.event_id))
+                if ref.session_id != self.session_id or source is None:
+                    raise ValueError("selected task material source is missing from this exact session snapshot")
+                payload = source.payload
+                if ref.kind is LeadMaterialKind.PUBLIC_RESPONSE and type(payload) is CollaborationLeadPublicResponsePayload:
+                    text = payload.response.response_text
+                elif ref.kind is LeadMaterialKind.DISCUSSION and type(payload) is CollaborationLeadDiscussionPayload:
+                    text = payload.report.response_text
+                elif ref.kind is LeadMaterialKind.DRAFT and type(payload) is CollaborationSpecialistReplyPayload and payload.assessment is CollaborationSpecialistAssessment.DRAFTED:
+                    text = payload.message
+                elif ref.kind is LeadMaterialKind.DRAFT and type(payload) is CollaborationLeadSynthesisPayload:
+                    scope = payload.authoring_scope
+                    source_row = next(item for item in self.conversations
+                                      if item.metadata.conversation_id == ref.conversation_id)
+                    if (scope is None or scope.intent.value != "authoring"
+                            or scope.activity.value not in {"draft", "revise"}
+                            or payload.premise_report is not None
+                            or not any(type(item.payload) is CollaborationExecutionResult
+                                       and item.payload.overall_outcome is CollaborationExecutionOutcomeKind.SUCCEEDED
+                                       and item.payload.synthesis_result_event_id == ref.event_id
+                                       and (item.payload.proposal_id, item.payload.proposal_revision,
+                                            item.payload.proposal_digest, item.payload.execution_attempt_id)
+                                       == (payload.proposal_id, payload.proposal_revision,
+                                           payload.proposal_digest, payload.execution_attempt_id)
+                                       for item in source_row.records)):
+                        raise ValueError("selected integrated material has no exact successful authoring result")
+                    text = payload.message
+                else:
+                    raise ValueError("selected task material source type changed")
+                if text != capture.selected_text or task_material_sha256(text) != ref.material_digest:
+                    raise ValueError("selected task material source bytes changed")
         prior = {item[0]: (item[1], item[2]) for item in previous}
         current_ids = {item.metadata.conversation_id for item in self.conversations}
         if set(prior) - current_ids or len(prior) != len(previous):
