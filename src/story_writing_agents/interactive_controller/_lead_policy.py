@@ -41,6 +41,7 @@ from ..interactive_terminal import (
     Choice,
     Field,
     Panel,
+    Section,
     ControlOutcomeKind,
     InteractiveAdvisoryProgress,
     InteractivePickerInput,
@@ -510,7 +511,12 @@ class InteractiveLeadAdapter:
         editorial = self._session.inspect_editorial_state()
         if not editorial.revisions:
             return panel
-        return Panel(panel.title, panel.items + (project_editorial_state(editorial),), state=panel.state)
+        editorial_panel = project_editorial_state(editorial)
+        return Panel(
+            panel.title,
+            panel.items + (Section(editorial_panel.title, editorial_panel.items),),
+            state=panel.state,
+        )
 
     def _present_and_decide(self, turn: LeadTurnResult) -> bool:
         """Render typed turns and consume only explicit structured controls."""

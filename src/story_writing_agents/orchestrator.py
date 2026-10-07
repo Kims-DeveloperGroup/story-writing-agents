@@ -4246,7 +4246,7 @@ class StoryRuntime:
                     current = {item.ref: item for item in state.current_records}
                     for relation in request.relation_decisions:
                         peer = current.get(relation.other_ref)
-                        if peer is None or peer.approval_state is not EditorialApprovalState.SELECTED:
+                        if peer is None or state.effective_approval(peer.ref) is not EditorialApprovalState.SELECTED:
                             return EditorialRecordResult(EditorialRecordStatus.STALE_REFERENCE,
                                                          "Editorial relation requires an exact current selected counterpart.")
                         residual = state.scope_state(peer.ref).coverage
@@ -4416,8 +4416,9 @@ class StoryRuntime:
             "scope_states": [item for item in view["scope_states"] if item["record_ref"]["record_id"] in ids],
             "scope_relations": [item for item in view["scope_relations"] if item["origin_ref"]["record_id"] in ids],
             "applied_facts": [item for item in view["applied_facts"] if item["record_ref"]["record_id"] in ids],
-            "application_attempts": [item for item in view["application_attempts"]
-                                     if item["record_ref"]["record_id"] in ids]}
+            "application_attempts": [item for item in view["application_attempts"] if item["record_ref"]["record_id"] in ids],
+            "provenance_gaps": [item for item in view["provenance_gaps"]
+                                if editorial_ref_from_dict(item["record_ref"]) in needed]}
 
 
     def inspect_lead_collaboration(

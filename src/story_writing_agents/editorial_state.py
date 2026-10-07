@@ -557,7 +557,7 @@ class EditorialStateProjection:
         return next(item for item in self.scope_states if item.record_ref == ref)
 
     def context_refs(self, refs: tuple[EditorialRecordRef, ...]) -> tuple[EditorialRecordRef, ...]:
-        ids = _editorial_context_ids(self.revisions, self.scope_relations, refs)
+        ids = _editorial_context_ids(self.revisions, self.scope_states, self.scope_relations, refs)
         return tuple(item.ref for item in self.current_records if item.record_id in ids)
 
     def context_digest(self, refs: tuple[EditorialRecordRef, ...]) -> str:
@@ -694,6 +694,7 @@ def editorial_attempt_to_dict(value: EditorialApplicationAttempt) -> dict:
 
 
 def _editorial_context_ids(revisions: tuple[EditorialRecordRevision, ...],
+                      states: tuple[EditorialRecordScopeState, ...],
                       relations: tuple[EditorialScopeRelationFact, ...],
                       refs: tuple[EditorialRecordRef, ...]) -> set[str]:
     _tuple(refs, EditorialRecordRef)
@@ -701,6 +702,10 @@ def _editorial_context_ids(revisions: tuple[EditorialRecordRevision, ...],
         revisions, key=lambda item: (item.record_id, item.revision))}.values())}
     if any(ref.record_id not in current or current[ref.record_id].ref != ref for ref in refs):
         raise EditorialStateIntegrityError("editorial context receipt is no longer current")
+    coverage = {item.record_ref: item.coverage for item in states}
+    effective = {record_id: record for record_id, record in current.items()
+                 if record.approval_state is EditorialApprovalState.SELECTED
+                 and coverage[record.ref].status != "replaced"}
     ids = {ref.record_id for ref in refs}
     changed = True
     while changed:
@@ -710,11 +715,11 @@ def _editorial_context_ids(revisions: tuple[EditorialRecordRevision, ...],
             if ids.intersection(pair) and not pair.issubset(ids):
                 ids.update(pair)
                 changed = True
-        for record_id, record in current.items():
-            if record_id in ids or record.approval_state is not EditorialApprovalState.SELECTED:
+        for record_id, record in effective.items():
+            if record_id in ids:
                 continue
-            if any(editorial_scope_relation(record.draft.scope, current[item].draft.scope) != "disjoint"
-                   for item in ids if item in current):
+            if any(editorial_coverage_relation(coverage[record.ref], coverage[effective[item].ref]) != "disjoint"
+                   for item in ids if item in effective):
                 ids.add(record_id)
                 changed = True
     return ids
@@ -726,7 +731,7 @@ def editorial_context_digest_values(revisions: tuple[EditorialRecordRevision, ..
                                refs: tuple[EditorialRecordRef, ...]) -> str:
     current = {item.record_id: item for item in tuple({item.record_id: item for item in sorted(
         revisions, key=lambda item: (item.record_id, item.revision))}.values())}
-    ids = _editorial_context_ids(revisions, relations, refs)
+    ids = _editorial_context_ids(revisions, states, relations, refs)
     return hashlib.sha256(_bytes({
         "records": [editorial_revision_to_dict(current[item]) for item in sorted(ids) if item in current],
         "scope_states": [editorial_scope_state_to_dict(item) for item in states
@@ -799,6 +804,8 @@ def project_editorial_scopes(
             chosen = intersected if decision.scope is None else decision.scope
             if editorial_scope_contains(intersected, chosen) is not True:
                 raise EditorialStateIntegrityError("editorial relation exceeds exact intersection")
+            if epoch_coverage[(other.record_id, other.draft.scope)].status == "replaced":
+                raise EditorialStateIntegrityError("editorial relation counterpart has no remaining coverage")
             facts.append(EditorialScopeRelationFact(record.ref, index, decision))
             if decision.kind is EditorialRelationKind.REPLACE:
                 try:

@@ -7049,7 +7049,7 @@ def project_editorial_state(session_id: str, events: tuple[CollaborationEventV2,
                      ArtifactApplicationOutcomeKind.RECOVERY_REQUIRED: "recovery_required"}.get(
                          result.outcome, "failed")
         else:
-            phase = "uncertain" if any(item.decision is ArtifactApplicationDecisionKind.CONFIRM
+            phase = "uncertain" if any(item.decision is ArtifactApplicationDecisionKind.APPLY
                                        for item in decisions) else "pending"
         request_ref = EditorialProvenanceRef(
             session_id, request_event.conversation_id, request_event.event_id,

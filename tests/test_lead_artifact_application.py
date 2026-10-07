@@ -378,8 +378,11 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
                 self.assertEqual(self.artifact_snapshot(), before)
                 self.assertEqual(self.git_snapshot(), git_before)
                 state = self.runtime.inspect_editorial_state(self.session_id)
-                attempts = tuple(
-                    item for item in state.application_attempts if item.record_ref == memory.record_ref)
+                request = turn.artifact_application_request
+                attempts = tuple(item for item in state.application_attempts
+                                 if item.record_ref == memory.record_ref
+                                 and item.request_event.conversation_id == turn.conversation_id
+                                 and item.application_request_digest == request.application_request_digest)
                 self.assertEqual(attempts[-1].phase, "recovery_required" if expected is
                                  ArtifactApplicationOutcomeKind.RECOVERY_REQUIRED else "uncertain")
                 self.assertEqual(attempts[-1].target_paths, (_RULES,))
@@ -505,7 +508,10 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
             any(type(event.payload) is StoryCommitRequestPayload for event in absent_events)
         )
 
-        turn = await self.reviewed_create("Result persistence failure")
+        turn = await self.reviewed_create(
+            "Result persistence failure", editorial_refs=(memory.record_ref,),
+            editorial_context_digest=self.runtime.inspect_editorial_state(self.session_id)
+            .context_digest((memory.record_ref,)))
         original_read = type(store).read
         pair_failed = False
 
@@ -540,6 +546,14 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.assertIsNone(uncertain.outcome.result)
         self.assertTrue(self.workspace.path(_RULES).exists())
         self.assertEqual(self.git_snapshot(), git_before)
+        observed = self.runtime.inspect_editorial_state(self.session_id)
+        request = turn.artifact_application_request
+        attempt = next(item for item in observed.application_attempts
+                       if item.record_ref == memory.record_ref
+                       and item.request_event.conversation_id == turn.conversation_id
+                       and item.application_request_digest == request.application_request_digest)
+        self.assertEqual((attempt.phase, attempt.result_event, attempt.verified_coverage),
+                         ("uncertain", None, None))
 
 
 

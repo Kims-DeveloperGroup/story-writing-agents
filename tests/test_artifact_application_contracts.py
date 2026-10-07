@@ -445,11 +445,8 @@ class ArtifactApplicationRequestTests(ApplicationContractTestCase):
                 self.assert_application_error(
                     code,
                     lambda attached_paths=attached_paths: ArtifactApplicationRequest(
-                        1,
-                        request.provenance,
-                        request.change_set,
-                        attached_paths,
-                    ),
+                        1, request.provenance,
+                        request.change_set, attached_paths),
                 )
 
 

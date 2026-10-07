@@ -228,10 +228,7 @@ class ArtifactApplicationSecurityTests(_ApplicationStoreTestCase):
         with self.subTest(case="journal_hardlink"):
             root, repository = self.new_repository()
             _seed_five_operation_state(root)
-            request = _five_operation_request(
-                repository,
-                application_id="application-hardlink",
-            )
+            request = _five_operation_request(repository, application_id="application-hardlink")
             repository._applications._fault_injector = _inject_once("after_journal")
             with self.assertRaises(_InjectedFault):
                 _apply(repository, request)
@@ -247,9 +244,7 @@ class ArtifactApplicationSecurityTests(_ApplicationStoreTestCase):
             root, repository = self.new_repository()
             _seed_five_operation_state(root)
             request = _five_operation_request(
-                repository,
-                application_id="application-alias",
-            )
+                repository, application_id="application-alias")
             state = _state_root(root)
             state.mkdir(parents=True, exist_ok=True)
             state.joinpath("Catalog.json").write_bytes(b"alias")

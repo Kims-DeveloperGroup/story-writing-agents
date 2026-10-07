@@ -378,16 +378,12 @@ class CollaborationBudgetAndOutcomeTests(unittest.TestCase):
             replace(assignment, round=2) for assignment in first.assignments
         )
         second = make_proposal(
-            proposal_id=PROPOSAL_ID,
-            proposal_revision=2,
-            assignments=second_assignments,
-            inputs=first.basis.inputs,
-            rounds_spent=1,
-            physical_calls_spent=4,
+            proposal_id=PROPOSAL_ID, proposal_revision=2,
+            assignments=second_assignments, inputs=first.basis.inputs,
+            rounds_spent=1, physical_calls_spent=4,
         )
         request = proposal_state(
-            second,
-            CollaborationStepState.AWAITING_CONFIRMATION,
+            second, CollaborationStepState.AWAITING_CONFIRMATION,
             confirmation_request_id="request_round_2",
         )
         batch = make_batch(
@@ -405,22 +401,17 @@ class CollaborationBudgetAndOutcomeTests(unittest.TestCase):
             make_proposal(rounds_spent=2)
 
         drift = make_proposal(
-            proposal_id=PROPOSAL_ID,
-            proposal_revision=2,
-            assignments=second_assignments,
-            inputs=first.basis.inputs,
-            rounds_spent=1,
-            physical_calls_spent=3,
+            proposal_id=PROPOSAL_ID, proposal_revision=2,
+            assignments=second_assignments, inputs=first.basis.inputs,
+            rounds_spent=1, physical_calls_spent=3,
         )
         drift_batch = make_batch(
             history,
             "batch_spent_drift",
             make_draft("proposal_spent_drift", CollaborationEventKind.MESSAGE, LEAD, USER, drift),
             _state_draft(
-                'request_spent_drift',
-                drift,
-                CollaborationStepState.AWAITING_CONFIRMATION,
-                confirmation_request_id='request_spent_drift',
+                'request_spent_drift', drift,
+                CollaborationStepState.AWAITING_CONFIRMATION, confirmation_request_id='request_spent_drift',
             ),
         )
         _assert_invalid(self, history, drift_batch)
@@ -469,8 +460,7 @@ class CollaborationBudgetAndOutcomeTests(unittest.TestCase):
                 (),
                 "batch_user_for_calls",
                 _user_message_draft(
-                    'user_for_calls',
-                    'Start a bounded lead turn.',
+                    'user_for_calls', 'Start a bounded lead turn.',
                 ),
             ),
         )
@@ -495,12 +485,9 @@ class CollaborationBudgetAndOutcomeTests(unittest.TestCase):
         projection = project_collaboration_history(history)
         self.assertEqual(projection.physical_calls_spent, 12)
         prepared_thirteen = CollaborationProviderCallPayload(
-            "invocation_lead_limit",
-            "call_lead_13",
-            13,
-            "lead_orchestrator",
-            CollaborationInvocationKind.LEAD,
-            CollaborationProviderCallKind.CONTINUATION,
+            "invocation_lead_limit", "call_lead_13",
+            13, "lead_orchestrator",
+            CollaborationInvocationKind.LEAD, CollaborationProviderCallKind.CONTINUATION,
             CollaborationProviderCallState.PREPARED,
         )
         prepared_history = store_batch(
@@ -509,10 +496,8 @@ class CollaborationBudgetAndOutcomeTests(unittest.TestCase):
                 history,
                 "batch_prepared_thirteen",
                 make_draft(
-                    "prepared_call_lead_13",
-                    CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
-                    RUNTIME,
-                    LEAD,
+                    "prepared_call_lead_13", CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
+                    RUNTIME, LEAD,
                     prepared_thirteen,
                 ),
             ),
@@ -529,10 +514,8 @@ class CollaborationBudgetAndOutcomeTests(unittest.TestCase):
                 prepared_history,
                 "batch_submitted_thirteen",
                 make_draft(
-                    "submitted_call_lead_13",
-                    CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
-                    RUNTIME,
-                    LEAD,
+                    "submitted_call_lead_13", CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
+                    RUNTIME, LEAD,
                     submitted_thirteen,
                 ),
             ),
@@ -698,14 +681,11 @@ class CollaborationConfirmationAndRecoveryTests(unittest.TestCase):
         self,
     ) -> None:
         message = _user_message_draft(
-                      'submitted_user_message',
-                      'Request sent to the Lead.',
+                      'submitted_user_message', 'Request sent to the Lead.',
                   )
         calls = provider_call_drafts(
-            invocation_id="lead_invocation",
-            call_id="lead_call",
-            role="lead_orchestrator",
-            recipient=LEAD,
+            invocation_id="lead_invocation", call_id="lead_call",
+            role="lead_orchestrator", recipient=LEAD,
             invocation_kind=CollaborationInvocationKind.LEAD,
         )
         prepared = store_batch((), make_batch((), "prepared_lead_batch", message, calls[0]))

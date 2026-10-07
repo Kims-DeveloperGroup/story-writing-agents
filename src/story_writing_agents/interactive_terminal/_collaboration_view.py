@@ -218,7 +218,8 @@ def project_editorial_state(state: EditorialStateProjection) -> Panel:
         attempts = tuple(item for item in state.application_attempts
                          if item.record_ref.record_id == record.record_id)
         for attempt in attempts:
-            items.append(Field("Historical Apply", f"{attempt.phase}: {attempt.application_id}; "
+            items.append(Field(f"Historical Apply | Editorial revision {attempt.record_ref.revision}",
+                               f"{attempt.phase}: {attempt.application_id}; "
                                + ("coverage verified" if attempt.verified_coverage is not None
                                   else "coverage unverified")))
     items.append(Field("Current manuscript", "not established by editorial selection or historical Apply; current source qualification remains required"))
