@@ -1144,7 +1144,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertIsNone(result.confirmation_request_id)
         self.assertEqual(
             tuple(call.payload["response_contract"]["allowed_action_types"] for call in calls),
-            (["search_context", "submit_result"], ["search_context", "read_context", "submit_result"], ["search_context", "submit_result"]),
+            (["search_context", "submit_result"], ["search_context", "read_context", "submit_result"], ["search_context", "read_context", "submit_result"]),
         )
         self.assertIn(
             "Visible lead response.",
@@ -1202,6 +1202,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         CollaborationEventKind.MESSAGE,
                         CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
                         CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
+                        CollaborationEventKind.LEAD_PUBLIC_RESPONSE,
                         CollaborationEventKind.MESSAGE,
                     ) + ((CollaborationEventKind.LEAD_RECOMMENDATION_REQUEST,) if kind == "recommendation" else ()),
                 )
@@ -2429,7 +2430,6 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
     async def test_rejected_returned_result_closes_and_next_turn_uses_one_fresh_call(
         self,
     ) -> None:
-        rejected_body = "REJECTED_BODY_MUST_NOT_PERSIST_OR_BE_RESENT"
 
         def complete_value(message: str) -> dict[str, object]:
             return {
@@ -2508,6 +2508,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         )
         for label, initial_script, rejection_code in cases:
             with self.subTest(label=label):
+                rejected_body = f"REJECTED_BODY_MUST_NOT_PERSIST_OR_BE_RESENT_{label}"
                 backend = _LeadBackend(persist_context_threads=True)
                 runtime = StoryRuntime(self.control_workspace, backend)  # type: ignore[arg-type]
                 conversation_id = self.conversation(f"Same-turn correction {label}")
@@ -2595,7 +2596,17 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                         for event in history
                     )
                 )
-                self.assertNotIn(rejected_body, repr(history))
+                self.assertNotIn(rejected_body, repr(tuple(
+                    event for event in history
+                    if event.kind is not CollaborationEventKind.LEAD_PUBLIC_RESPONSE)))
+                expected_public = () if label == "malformed" else (("rejected", rejected_body),)
+                self.assertEqual(
+                    tuple((item.response.acceptance.value, item.response.response_text)
+                          for item in result.public_responses),
+                    expected_public + (("accepted", f"Corrected {label} answer."),),
+                )
+                self.assertNotIn(rejected_body, repr(tuple(
+                    item.response.validation_details for item in result.public_responses)))
                 self.assertNotIn(
                     rejected_body,
                     json.dumps(dict(backend.calls[-1].payload), ensure_ascii=False),
@@ -3118,7 +3129,15 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertLessEqual(len(notices), 8)
         self.assertTrue(tuple(item.validation_details[0] for item in notices) == details,
                         "durable notices differ from returned report")
-        self.assertFalse(secret in repr(history), "durable history contains provider text")
+        self.assertNotIn(secret, repr(tuple(
+            event for event in history if event.kind is not CollaborationEventKind.LEAD_PUBLIC_RESPONSE)))
+        self.assertEqual(
+            tuple((item.response.acceptance.value, item.response.response_text)
+                  for item in result.public_responses),
+            (("rejected", secret), ("accepted", "Accepted after repair.")),
+        )
+        self.assertNotIn(secret, repr(tuple(
+            item.response.validation_details for item in result.public_responses)))
 
     async def test_minimal_reference_answer_needs_no_provider_correction(self) -> None:
         backend = _LeadBackend(persist_context_threads=True)

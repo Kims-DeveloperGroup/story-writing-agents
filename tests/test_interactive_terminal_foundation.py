@@ -205,6 +205,14 @@ def _fresh_notice(message, **options):
     return Notice(message, **options)
 
 
+def _fresh_message(*arguments, **options):
+    return Message(*arguments, **options)
+
+
+def _fresh_field(*arguments, **options):
+    return Field(*arguments, **options)
+
+
 class ObservedStream:
     """Expose deterministic stream capabilities without real terminal I/O."""
 
@@ -863,14 +871,9 @@ class SemanticModelFoundationTests(unittest.TestCase):
         )
 
         compatible = Message("user", "body")
-        explicit = Message(
-            "user",
-            "body",
-            role=SemanticRole.DEFAULT,
-            state=ViewState.COMPLETED,
-            presentation=MessagePresentation.INLINE,
-            metadata=None,
-            accent=SpeakerAccent.CYAN,
+        explicit = _fresh_message(
+            "user", "body", role=SemanticRole.DEFAULT, state=ViewState.COMPLETED,
+            presentation=MessagePresentation.INLINE, metadata=None, accent=SpeakerAccent.CYAN,
         )
         self.assertEqual(compatible, explicit)
         self.assertFalse(hasattr(compatible, "__dict__"))
@@ -882,36 +885,21 @@ class SemanticModelFoundationTests(unittest.TestCase):
         self.assertEqual(restored, explicit)
         self.assertIs(type(restored), Message)
 
-        chat = Message(
-            "you",
-            "accepted",
-            presentation=MessagePresentation.CHAT_BLOCK,
-            metadata="user → plot",
-            accent=SpeakerAccent.MAGENTA,
+        chat = _fresh_message(
+            "you", "accepted", presentation=MessagePresentation.CHAT_BLOCK,
+            metadata="user → plot", accent=SpeakerAccent.MAGENTA,
         )
         view = ListView("Messages", (chat,))
         self.assertEqual(view.items, (chat,))
         self.assertEqual(view.total_count, None)
 
         invalid_calls = (
-            lambda: Message(  # type: ignore[misc]
-                "user",
-                "body",
-                SemanticRole.DEFAULT,
-            ),
-            lambda: Message(  # type: ignore[arg-type]
-                "user",
-                "body",
-                presentation="inline",
-            ),
+            lambda: _fresh_message("user", "body", SemanticRole.DEFAULT),
+            lambda: _fresh_message("user", "body", presentation="inline"),
             lambda: Message("user", "body", metadata=1),  # type: ignore[arg-type]
             lambda: Message("user", "body", metadata=""),
             lambda: Message("user", "body", metadata="  "),
-            lambda: Message(  # type: ignore[arg-type]
-                "user",
-                "body",
-                accent="cyan",
-            ),
+            lambda: _fresh_message("user", "body", accent="cyan"),
             lambda: ListView(  # type: ignore[arg-type]
                 "Unsupported",
                 (Notice("notice"),),
@@ -1279,12 +1267,7 @@ class RenderingFoundationTests(unittest.TestCase):
     def test_narrow_rendering_preserves_labels_wraps_by_cells_and_stacks_fields(
         self,
     ) -> None:
-        field = Field(
-            "Status",
-            "界界 e\u0301 value",
-            role=SemanticRole.SUCCESS,
-            state=ViewState.COMPLETED,
-        )
+        field = _fresh_field("Status", "界界 e\u0301 value", role=SemanticRole.SUCCESS, state=ViewState.COMPLETED)
         frame = render_plain(field, width=20)
         self.assertEqual(
             frame.text,
@@ -2058,15 +2041,12 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         ):
             with self.subTest(width=width):
                 driver, output = self._progress_driver()
-                with mock.patch.object(
-                    RawTerminalDriver,
-                    "capabilities",
-                    autospec=True,
-                    return_value=capability(
-                        CapabilityProfile.PLAIN,
-                        width=width,
-                    ),
-                ):
+                with _fresh_literal_object_return_value_autospec(
+            RawTerminalDriver, "capabilities", capability(
+                CapabilityProfile.PLAIN,
+                width=width,
+            ),
+        ):
                     result = asyncio.run(
                         driver.run_advisory_progress(
                             operation(), render_advisory_progress_frame

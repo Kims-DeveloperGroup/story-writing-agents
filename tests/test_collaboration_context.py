@@ -285,6 +285,10 @@ class CollaborationTransitionTests(unittest.TestCase):
                 "premise_selection",
                 "premise_admission",
                 "premise_admission_event_id",
+                "available_tasks",
+                "selectable_materials",
+                "public_responses",
+                "discussion_context",
             ),
         )
 

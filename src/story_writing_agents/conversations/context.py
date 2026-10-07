@@ -3638,6 +3638,100 @@ def _project_task_context(
     events: tuple[CollaborationEvent, ...], projection: CollaborationHistoryProjection,
 ) -> CollaborationHistoryProjection:
     """Validate USER controls and project literal material without execution proof."""
+    def _artifact_revision_source(receipt, original, history) -> bool:
+        if (
+            receipt is None or original is None
+            or receipt.origin_kind != "revise_decision"
+            or receipt.action is not LeadTaskAction.RESUME
+            or receipt.material_capture_event_ids
+            or receipt.source_task_ref is None
+            or original.authoring_scope is None
+        ):
+            return False
+        scope = original.authoring_scope
+        ref = receipt.source_task_ref
+        if (
+            scope.schema_version != 3
+            or scope.intent is not AuthoringIntent.AUTHORING
+            or scope.activity is not AuthoringActivity.REVIEW
+            or (scope.task_id, scope.task_revision) != (ref.task_id, ref.task_revision)
+            or (receipt.target_task_id, receipt.target_task_revision)
+            != (scope.task_id, scope.task_revision + 1)
+            or receipt.planning_step_id != original.step_id
+            or ref.scope_digest != "sha256:" + hashlib.sha256(
+                json.dumps(asdict(scope), sort_keys=True, separators=(",", ":"),
+                           ensure_ascii=False).encode("utf-8")
+            ).hexdigest()
+        ):
+            return False
+        by_id = {item.event_id: item for item in history}
+        source = by_id.get(ref.scope_event_id)
+        origin = by_id.get(receipt.origin_event_id)
+        transitions = tuple(
+            item for item in history
+            if type(item.payload) is CollaborationLeadTaskTransitionPayload
+            and item.payload.receipt == receipt
+        )
+        if (
+            source is None or origin is None or len(transitions) != 1
+            or (source.session_id, source.conversation_id) != (ref.session_id, ref.conversation_id)
+            or getattr(source.payload, "authoring_scope", None) != scope
+            or type(origin.payload) is not CollaborationConfirmationPayload
+            or origin.payload.decision is not CollaborationConfirmationDecision.REVISE
+            or origin.sender.kind is not CollaborationActorKind.USER
+            or origin.recipient.kind is not CollaborationActorKind.RUNTIME
+            or (origin.session_id, origin.conversation_id, origin.step_id)
+            != (ref.session_id, ref.conversation_id, original.step_id)
+            or (origin.payload.proposal_id, origin.payload.proposal_revision, origin.payload.proposal_digest)
+            != (original.proposal_id, original.proposal_revision, original.proposal_digest)
+            or (transitions[0].session_id, transitions[0].conversation_id,
+                transitions[0].turn_id, transitions[0].step_id, transitions[0].batch_id)
+            != (origin.session_id, origin.conversation_id, origin.turn_id, origin.step_id, origin.batch_id)
+        ):
+            return False
+        request = by_id.get(origin.payload.confirmation_request_event_id)
+        if (
+            request is None or type(request.payload) is not CollaborationStepStatePayload
+            or request.payload.state not in {
+                CollaborationStepState.AWAITING_CONFIRMATION,
+                CollaborationStepState.RECONFIRMATION_REQUIRED,
+            }
+            or request.payload.confirmation_request_id != origin.payload.confirmation_request_id
+            or (request.payload.proposal_id, request.payload.proposal_revision, request.payload.proposal_digest)
+            != (original.proposal_id, original.proposal_revision, original.proposal_digest)
+        ):
+            return False
+        candidates = tuple(
+            item for item in history
+            if (item.session_id, item.conversation_id, item.step_id)
+            == (origin.session_id, origin.conversation_id, origin.step_id)
+            and item.sequence < origin.sequence
+            and type(item.payload) is ArtifactReviewCandidatePayload
+            and (item.payload.consultation_proposal_id, item.payload.consultation_proposal_revision,
+                 item.payload.consultation_proposal_digest)
+            == (original.proposal_id, original.proposal_revision, original.proposal_digest)
+        )
+        if len(candidates) != 1:
+            return False
+        candidate = candidates[0].payload.candidate
+        state = next((
+            item.payload for item in reversed(history)
+            if (item.session_id, item.conversation_id, item.step_id)
+            == (origin.session_id, origin.conversation_id, origin.step_id)
+            and item.sequence < origin.sequence
+            and type(item.payload) is ArtifactProposalStatePayload
+            and (item.payload.candidate_id, item.payload.candidate_revision, item.payload.candidate_digest)
+            == (candidate.candidate_id, candidate.candidate_revision, candidate.candidate_digest)
+            and (item.payload.consultation_proposal_id, item.payload.consultation_proposal_revision,
+                 item.payload.consultation_proposal_digest)
+            == (original.proposal_id, original.proposal_revision, original.proposal_digest)
+        ), None)
+        return bool(
+            state is not None
+            and state.state is ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION
+            and state.confirmation_request_id == origin.payload.confirmation_request_id
+        )
+
     prior: dict[str, CollaborationEvent] = {}
     tasks: dict[str, tuple[CollaborationEvent, AuthoringScope]] = {}
     goals: dict[str, str] = {}
@@ -3687,6 +3781,7 @@ def _project_task_context(
                              == (scope.task_id, scope.task_revision)), None)
             if planning is not None:
                 source_review_revision = False
+                source_artifact_revision = False
                 prepared_final_review = False
                 if scope.activity is AuthoringActivity.REVIEW:
                     past = tuple(prior.values())
@@ -3795,9 +3890,78 @@ def _project_task_context(
                             for item in events
                         )
                     )
+                    source_artifact_revision = _artifact_revision_source(planning, original, past)
+                    if source_artifact_revision:
+                        direct_replacement = bool(
+                            event.step_id == planning.planning_step_id
+                            and payload.proposal_id != original.proposal_id
+                            and payload.proposal_revision == original.proposal_revision + 1
+                        )
+                        request_event = next((
+                            item for item in reversed(past)
+                            if item.step_id == event.step_id
+                            and type(item.payload) is LeadRecommendationRequestPayload
+                            and item.payload.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT
+                        ), None)
+                        preparation_start = None if request_event is None else next((
+                            item for item in reversed(past)
+                            if item.step_id == event.step_id
+                            and type(item.payload) is LeadRecommendationStartedPayload
+                            and item.payload.request_event_id == request_event.event_id
+                        ), None)
+                        preparation_decision = None if preparation_start is None else prior.get(
+                            preparation_start.payload.decision_event_id
+                        )
+                        preparation_source = None if request_event is None else prior.get(
+                            request_event.payload.source_recommendation_event_id
+                        )
+                        prepared_replacement = bool(
+                            request_event is not None
+                            and request_event.payload.authoring_scope == scope
+                            and (request_event.payload.source_proposal_id,
+                                 request_event.payload.source_proposal_revision,
+                                 request_event.payload.source_proposal_digest)
+                            == (original.proposal_id, original.proposal_revision, original.proposal_digest)
+                            and request_event.payload.source_execution_attempt_id is None
+                            and preparation_source is not None
+                            and preparation_source.step_id == planning.planning_step_id
+                            and type(preparation_source.payload) is CollaborationLeadJudgmentPayload
+                            and preparation_source.payload.kind is LeadOutcomeKind.RECOMMENDATION
+                            and preparation_source.payload.authoring_scope == scope
+                            and preparation_start is not None
+                            and preparation_decision is not None
+                            and type(preparation_decision.payload) is LeadRecommendationDecisionPayload
+                            and preparation_decision.payload.decision.kind is CollaborationConfirmationDecision.CONFIRM
+                            and any(
+                                item.batch_id == event.batch_id
+                                and item.step_id == event.step_id
+                                and type(item.payload) is LeadRecommendationResultPayload
+                                and item.payload.state is LeadRecommendationState.COMPLETED
+                                and item.payload.request_event_id == request_event.event_id
+                                and item.payload.start_event_id == preparation_start.event_id
+                                and item.payload.decision_event_id == preparation_decision.event_id
+                                for item in events
+                            )
+                        )
+                        new_candidates = tuple(
+                            item for item in events
+                            if item.batch_id == event.batch_id
+                            and item.step_id == event.step_id
+                            and type(item.payload) is ArtifactReviewCandidatePayload
+                            and (item.payload.consultation_proposal_id,
+                                 item.payload.consultation_proposal_revision,
+                                 item.payload.consultation_proposal_digest)
+                            == (payload.proposal_id, payload.proposal_revision, payload.proposal_digest)
+                        )
+                        source_artifact_revision = bool(
+                            (direct_replacement or prepared_replacement)
+                            and (scope.task_id, scope.task_revision)
+                            == (planning.target_task_id, planning.target_task_revision)
+                            and len(new_candidates) == 1
+                        )
                 if (scope.schema_version != 3 or scope.intent is not AuthoringIntent.AUTHORING
                         or (scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
-                            and not source_review_revision and not prepared_final_review)):
+                            and not (source_review_revision or source_artifact_revision) and not prepared_final_review)):
                     raise ValueError("task transition requires fresh authoring scope and owner drafts")
                 required = tuple(f"selected_material_{index}" for index in
                                  range(1, len(planning.material_capture_event_ids) + 1))
