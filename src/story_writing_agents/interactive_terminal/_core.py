@@ -83,6 +83,7 @@ from ._external_view import (
     _BorrowedLineViewerHost,
     ExternalViewUnavailableError,
     ExternalViewOperation,
+    ExternalOwnedViewOperation,
 )
 from ._live_composer import (
     BoundaryProvider,
@@ -574,6 +575,7 @@ class InteractiveTerminal:
         "_advisory_progress",
         "_debate_progress",
         "_external_view_open",
+        "_owned_external_view_open",
         "_input_session",
         "_native_input_handoff",
         "_live_composer",
@@ -651,6 +653,7 @@ class InteractiveTerminal:
             lambda notice, _sleeper: self._write_startup_result_notice(notice)
         )
         self._text_viewer_read = _plain_text_viewer_reader(read_line, width)
+        self._owned_external_view_open = _unavailable_owned_external_view
         self._external_view_open = _plain_external_view_opener(
             read_line,
             write_text,
@@ -1905,7 +1908,7 @@ class InteractiveTextViewer:
 class InteractiveExternalViewer:
     """Bind one generic external view without exposing terminal resources."""
 
-    __slots__ = ("_open",)
+    __slots__ = ("_open", "_open_owned")
 
     def __init__(self, terminal: InteractiveTerminal) -> None:
         """Retain only the terminal's package-internal view capability."""
@@ -1914,6 +1917,9 @@ class InteractiveExternalViewer:
             raise TypeError("terminal must be an InteractiveTerminal")
         self._open: Callable[..., None] = (
             terminal._external_view_open
+        )
+        self._open_owned: Callable[[ExternalOwnedViewOperation], None] = (
+            terminal._owned_external_view_open
         )
 
     def open(
@@ -1929,6 +1935,13 @@ class InteractiveExternalViewer:
         if not callable(operation):
             raise TypeError("operation must be callable")
         self._open(operation, transient_only=transient_only)
+
+    def open_owned(self, operation: ExternalOwnedViewOperation) -> None:
+        """Run a transient view that owns modes through Story's live transport."""
+
+        if not callable(operation):
+            raise TypeError("operation must be callable")
+        self._open_owned(operation)
 
 
 class InteractiveAdvisoryProgress:
@@ -2562,6 +2575,14 @@ def _plain_text_viewer_reader(
     return read_text_viewer
 
 
+def _unavailable_owned_external_view(operation: ExternalOwnedViewOperation) -> None:
+    """Refuse callback transports before exposing streams or invoking a view."""
+
+    if not callable(operation):
+        raise TypeError("operation must be callable")
+    raise ExternalViewUnavailableError("external viewer requires live terminal transport")
+
+
 def _plain_external_view_opener(
     read_line: Callable[[str], str],
     write_text: Callable[[str], None],
@@ -3066,6 +3087,7 @@ def build_stream_terminal(
         render_text_viewer_fallback,
     )
     terminal._external_view_open = driver.open_external_view
+    terminal._owned_external_view_open = driver.open_owned_external_view
 
     async def run_advisory_progress(
         operation,

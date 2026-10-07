@@ -6,8 +6,8 @@
 > Lead input; `$` opens canonical-artifact selection and `$$` continues through
 > the independent range viewer. Bare
 > `/exchanges` separately hosts the pinned independent JSONL
-> renderer through an unlisted generic borrowed-host seam while Story remains
-> sole terminal owner. #274 also adds an unlisted mode-gated accepted-input projection
+> viewer through an unlisted low-level stream handoff. The library owns its
+> terminal modes; Story preserves input exclusivity and its lobby echo guard. #274 also adds an unlisted mode-gated accepted-input projection
 > seam. Its former advisory/consensus controller consumers are historical; these
 > rules do not make scrollback or process memory private.
 
@@ -116,12 +116,12 @@ line fallback. The driver observes bounded output width and height before the
 first viewer frame and after every nonexit key. It installs no `SIGWINCH`
 handler or background resize loop, and it never hides or shows the cursor.
 
-The hosted external view uses the same sole driver and input latch but no Story
-renderer state. A capable operation uses one raw-mode/alternate-screen
-lifecycle; fallback borrows plain line callbacks. Nested input, nested view, and
-progress overlap are rejected. The external host receives only complete-frame
-geometry, color eligibility, presentation, normalized physical input, and
-idempotent close.
+The external viewer uses Story's existing input latch without Story renderer
+state. Its owned-terminal route borrows streams and a persistent character
+reader while preserving the lobby echo guard; nested input/view and progress
+overlap are rejected. The library owns raw mode, alternate screen, cursor,
+mouse reporting, decoding and restoration. The generic borrowed-host route
+continues to validate complete frames and support ordinary-line callbacks.
 
 For startup storage activation, authenticated runtime preparation, native
 authentication probes, persisted omitted-resume preparation, advisory and
@@ -318,7 +318,7 @@ does not parse or restyle those frames: its host admits only printable text, LF,
 and SGR when color is eligible, rejects every other control, and rejects SGR in
 plain mode. Removing the renderer's allowed decoration preserves the exact
 plain text, gutter markers, JSON, search position, and help. The pinned external
-[design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/997f3a2af2c6e9e1f0fa305f6caeb1e0689593ea/docs/design-system.md)
+[design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/3bde78bd60d5c42db101ae97a5fa723b730c597a/docs/design-system.md)
 is authoritative for those roles.
 
 The controller constructs semantic components only from trusted roles/states
@@ -383,9 +383,10 @@ scrollback may still retain or transform display.
 
 There are two separate viewer control vocabularies. The ranged viewer uses
 fixed alternate-screen enter, home-and-clear redraw, and alternate-screen exit
-around Story-rendered sanitized bounded text. The hosted external view uses the
-same fixed screen lifecycle around externally rendered frames that pass the
-host validator. Caller/external text can never supply cursor movement,
+around Story-rendered sanitized bounded text. Borrowed-host external views use the
+same fixed screen lifecycle around frames that pass the host validator. The
+owned JSONL library emits its fixed lifecycle controls independently of source
+content. Caller/source text can never supply cursor movement,
 alternate-screen, erase, OSC, mouse, clipboard, title, hyperlink, or raw-mode
 controls.
 
@@ -808,11 +809,12 @@ and every non-SGR escape before output. This is display neutralization, not
 redaction of request or provider-response content.
 
 The controller lazily validates the exact required `jsonl_viewer` facade,
-constructor and callable signatures, host shape, immutable header/field
+constructor and callable signatures, host/terminal shape, immutable header/field
 projection, primary-field order, and the `input_protocol="semantic"`
 constructor default before asking the terminal to open. It constructs and
-verifies the specification with `input_protocol="keys"`. The exact 0.5.4
-constructor omits search-field presets; older 0.1.1 and 0.2.0 APIs are rejected.
+verifies the specification with `input_protocol="keys"`. The exact 0.6.0
+contract includes `ViewerTerminal` and the optional-host, keyword-only
+owned-call parameters. Earlier APIs are rejected.
 Missing or incompatible standard-install packages therefore acquire no raw
 mode or alternate screen and produce fixed repair/reinstall guidance. The
 renderer receives only immutable bytes and a generic specification; it opens no
@@ -824,30 +826,32 @@ projection: bounded recursive expansion removes only the extra encoded layer,
 while genuine text escaping remains. Preview limits apply independently to
 string leaves and never truncate a container, key, structural token, or child.
 These transformations happen inside the external renderer and do not weaken
-the host's printable-or-SGR frame validation or mutate source bytes.
+the renderer's display neutralization or mutate source bytes.
 
-The capable lifecycle acquires the universal input latch, rejects reentry or
-progress overlap, validates the current terminal configuration, activates raw
-mode, enters one alternate screen, runs the operation, closes the host, exits
-the screen, restores termios, and releases the latch. During idle input waits, the raw host returns a semantic `idle` event after a
-500 ms absolute deadline. This dedicated nonfatal signal preserves incomplete
-UTF-8 and buffered input; ordinary transport and escape-deadline failures remain
-sticky. The viewer alternates cached cursor frames, while Story keeps sole
-ownership of terminal modes, presentation, and restoration.
+For `/exchanges`, the capable handoff acquires the universal input latch,
+rejects reentry/progress overlap, validates live capability and retains the
+lobby echo guard. It supplies a `ViewerTerminal` and requests
+`transient_only=True`. The library enters raw mode and one alternate screen,
+hides the cursor, enables SGR mouse reporting, runs the view and restores
+those modes. Story revalidates and restores its own baseline before releasing
+the latch; restoration uncertainty remains fatal.
 
-During the operation,
-Story decodes bounded physical input into `text<TAB>TEXT` or
-`key<TAB>NAME`; the viewer owns bindings, actions, search/goto drafts, editing,
-and cancellation. Drafts and printable logical cursors are rendered in complete
-validated frames under that same terminal lifecycle. Story opens no search or
-goto editor and retains no viewer draft or committed-frame cache.
+The library's readiness exception crosses Story's persistent reader as its
+nonfatal `LiveInputIdle` signal, then is rethrown outside that reader. This
+preserves partial UTF-8 and buffered characters without turning an idle wait
+into a sticky transport failure. Neither layer flushes or reads ahead to
+discard queued input. After close, any queued SGR report is consumed by Story's
+existing escape decoder before the next command.
 
-Bare or unsupported/incomplete ASCII Escape input becomes a physical event
-for the viewer to interpret. Malformed decoding or a transport deadline reached
-while assembling an incomplete Unicode code point can fail the view through
-the existing terminal-error and restoration path. These failures are not draft
-cancellation. Restoration failure remains fatal; an active operation failure
-takes precedence over host-close failure.
+The viewer owns bindings, mouse hit testing, search/goto drafts, editing,
+cancellation and cached cursor frames. A wheel report uses the existing
+one-line cursor transition; a left press targets a visible JSON character.
+Mouse reports leave prompts/help/errors unchanged. Normal reporting prevents
+ordinary wheel history scrolling; emulator settings and explicit overrides
+remain outside application control. Default termination cleanup is scoped by
+the library; existing custom/ignored signal dispositions are preserved.
+The generic borrowed-host route keeps its original frame/event lifecycle.
+Story opens no separate search or goto editor and retains no viewer state.
 
 `/exchanges` refuses line fallback before presenting a frame and shows a
 content-free notice; line mode cannot remove already printed content from

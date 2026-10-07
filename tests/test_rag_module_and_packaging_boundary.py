@@ -37,9 +37,9 @@ _GENERIC_RAG_REPOSITORY = "https://github.com/Kims-DeveloperGroup/generic-rag.gi
 _GENERIC_RAG_REQUIREMENT = (
     f"generic-rag @ git+{_GENERIC_RAG_REPOSITORY}@{_GENERIC_RAG_PIN}"
 )
-_OLD_JSONL_VIEWER_PIN = "1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec"
-_JSONL_VIEWER_PIN = "997f3a2af2c6e9e1f0fa305f6caeb1e0689593ea"
-_JSONL_VIEWER_VERSION = "0.5.4"
+_OLD_JSONL_VIEWER_PIN = "997f3a2af2c6e9e1f0fa305f6caeb1e0689593ea"
+_JSONL_VIEWER_PIN = "3bde78bd60d5c42db101ae97a5fa723b730c597a"
+_JSONL_VIEWER_VERSION = "0.6.0"
 _JSONL_VIEWER_REPOSITORY = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git"
 _JSONL_VIEWER_REQUIREMENT = (
     f"jsonl-viewer @ git+{_JSONL_VIEWER_REPOSITORY}@{_JSONL_VIEWER_PIN}"
@@ -1360,7 +1360,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
                 from story_writing_agents.interactive_controller._exchange_viewer import prepare_agent_exchange_view
                 import jsonl_viewer
-                assert jsonl_viewer.__all__ == ["ViewerHost", "ViewerSpec", "view_jsonl"]
+                assert jsonl_viewer.__all__ == ["ViewerHost", "ViewerSpec", "ViewerTerminal", "view_jsonl"]
                 assert not any(
                     name == "generic_rag" or name.startswith("generic_rag.")
                     for name in sys.modules
@@ -1373,6 +1373,12 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     def read_event(self): return "close"
                     def close_view(self): self.closed += 1
                 host = Host()
+                import io, jsonl_viewer
+                from story_writing_agents.interactive_terminal._external_view import ExternalTerminalIO
+                active_host = host; actual_view = jsonl_viewer.view_jsonl
+                def owned(source, spec, host=None, *, terminal=None, transient_only=False):
+                    assert host is None and transient_only is True and isinstance(terminal, jsonl_viewer.ViewerTerminal); actual_view(source, spec, active_host)
+                jsonl_viewer.view_jsonl = owned; transport = ExternalTerminalIO(io.StringIO(), io.StringIO(), lambda before_read: "", True)
                 operation = prepare_agent_exchange_view(
                     b"",
                     session_id="session_1",
@@ -1381,7 +1387,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     scope_subject="Subject",
                     agent_id="lead_orchestrator",
                 )
-                operation(host)
+                operation(transport)
                 assert host.closed == 1
                 assert host.frames and "READ ONLY" in host.frames[0]
                 """
@@ -1577,6 +1583,12 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     def close_view(self): self.closed += 1
                 source = b'{{"timestamp":"2026-08-30T00:00:00Z","request_type":"request","content":"ok"}}\\n'
                 host = Host()
+                import io, jsonl_viewer
+                from story_writing_agents.interactive_terminal._external_view import ExternalTerminalIO
+                active_host = host; actual_view = jsonl_viewer.view_jsonl
+                def owned(source, spec, host=None, *, terminal=None, transient_only=False):
+                    assert host is None and transient_only is True and isinstance(terminal, jsonl_viewer.ViewerTerminal); actual_view(source, spec, active_host)
+                jsonl_viewer.view_jsonl = owned; transport = ExternalTerminalIO(io.StringIO(), io.StringIO(), lambda before_read: "", True)
                 operation = prepare_agent_exchange_view(
                     source,
                     session_id="session_1",
@@ -1585,12 +1597,12 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     scope_subject="Subject",
                     agent_id="lead_orchestrator",
                 )
-                operation(host)
+                operation(transport)
                 assert host.closed == 1
                 assert host.frames and "READ ONLY" in host.frames[0]
                 assert source.endswith(b"\\n")
                 import jsonl_viewer
-                assert jsonl_viewer.__all__ == ["ViewerHost", "ViewerSpec", "view_jsonl"]
+                assert jsonl_viewer.__all__ == ["ViewerHost", "ViewerSpec", "ViewerTerminal", "view_jsonl"]
                 """
             )
             modes = (
@@ -1739,7 +1751,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import importlib.metadata
                 import json
                 viewer = importlib.metadata.distribution("jsonl-viewer")
-                assert viewer.version == "0.1.1"
+                assert viewer.version == "0.5.4"
                 direct_url = json.loads(viewer.read_text("direct_url.json"))
                 assert direct_url == {{
                     "url": {_JSONL_VIEWER_REPOSITORY!r},
@@ -1879,6 +1891,12 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     def read_event(self): return "close"
                     def close_view(self): self.closed += 1
                 host = Host()
+                import io, jsonl_viewer
+                from story_writing_agents.interactive_terminal._external_view import ExternalTerminalIO
+                active_host = host; actual_view = jsonl_viewer.view_jsonl
+                def owned(source, spec, host=None, *, terminal=None, transient_only=False):
+                    assert host is None and transient_only is True and isinstance(terminal, jsonl_viewer.ViewerTerminal); actual_view(source, spec, active_host)
+                jsonl_viewer.view_jsonl = owned; transport = ExternalTerminalIO(io.StringIO(), io.StringIO(), lambda before_read: "", True)
                 operation = prepare_agent_exchange_view(
                     source,
                     session_id="session_1",
@@ -1887,7 +1905,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     scope_subject="Upgrade subject",
                     agent_id="character_custodian",
                 )
-                operation(host)
+                operation(transport)
                 assert host.closed == 1
                 assert source == original
                 assert host.frames
@@ -1940,13 +1958,13 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                         super().__init__()
                         self.events = iter(("text\\t/", "text\\twrong", "key\\tctrl_u", "text\\t개요", "key\\tenter", "next_match", "previous_match", "close"))
                     def read_event(self): return next(self.events)
-                searched_host = SearchHost()
+                searched_host = SearchHost(); active_host = searched_host
                 prepare_agent_exchange_view(
                     searched_source, session_id="session_1",
                     scope_kind=AgentExchangeScopeKind.CONVERSATION,
                     scope_id="conversation_1", scope_subject="Upgrade subject",
                     agent_id="lead_orchestrator",
-                )(searched_host)
+                )(transport)
                 assert searched_host.closed == 1
                 assert "1/14 occurrences • Search all text='개요'" in searched_host.frames[-1]
                 assert '"content": "개요 ⟦개요⟧ 0"' in searched_host.frames[-2]
