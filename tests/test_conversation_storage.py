@@ -349,10 +349,7 @@ class ConversationStorageContractTests(unittest.TestCase):
                     readiness.require_activation_ready()
 
     def test_value_objects_are_strict_frozen_and_internally_consistent(self) -> None:
-        state = ConversationStorageActivationState(
-            ConversationStorageBackend.FILESYSTEM,
-            0,
-        )
+        state = ConversationStorageActivationState(ConversationStorageBackend.FILESYSTEM, 0)
         self.assertEqual(
             state.to_dict(),
             {"schema_version": 1, "backend": "filesystem", "generation": 0},
@@ -362,20 +359,11 @@ class ConversationStorageContractTests(unittest.TestCase):
         for generation in (True, "0", None):
             with self.subTest(generation=generation):
                 with self.assertRaises(TypeError):
-                    ConversationStorageActivationState(  # type: ignore[arg-type]
-                        ConversationStorageBackend.FILESYSTEM,
-                        generation,
-                    )
+                    ConversationStorageActivationState(ConversationStorageBackend.FILESYSTEM, generation)
         with self.assertRaises(ValueError):
-            ConversationStorageActivationState(
-                ConversationStorageBackend.FILESYSTEM,
-                -1,
-            )
+            ConversationStorageActivationState(ConversationStorageBackend.FILESYSTEM, -1)
         with self.assertRaises(TypeError):
-            ConversationStoragePreflight(  # type: ignore[arg-type]
-                "filesystem",
-                ConversationStorageCapability.READY,
-            )
+            ConversationStoragePreflight("filesystem", ConversationStorageCapability.READY)
         with self.assertRaises(ValueError):
             _readiness(
                 ConversationStorageBackend.FILESYSTEM,
@@ -394,14 +382,8 @@ class ConversationStorageContractTests(unittest.TestCase):
             ConversationArchiveImportReceipt("imported")  # type: ignore[arg-type]
 
     def test_activation_outcomes_validate_one_exact_transition(self) -> None:
-        previous = ConversationStorageActivationState(
-            ConversationStorageBackend.FILESYSTEM,
-            0,
-        )
-        current = ConversationStorageActivationState(
-            ConversationStorageBackend.SQLITE,
-            1,
-        )
+        previous = ConversationStorageActivationState(ConversationStorageBackend.FILESYSTEM, 0)
+        current = ConversationStorageActivationState(ConversationStorageBackend.SQLITE, 1)
         activated = ConversationStorageActivationOutcome(
             ConversationStorageActivationOutcomeKind.ACTIVATED,
             previous,
@@ -423,18 +405,12 @@ class ConversationStorageContractTests(unittest.TestCase):
             (
                 ConversationStorageActivationOutcomeKind.ACTIVATED,
                 previous,
-                ConversationStorageActivationState(
-                    ConversationStorageBackend.FILESYSTEM,
-                    1,
-                ),
+                ConversationStorageActivationState(ConversationStorageBackend.FILESYSTEM, 1),
             ),
             (
                 ConversationStorageActivationOutcomeKind.ACTIVATED,
                 previous,
-                ConversationStorageActivationState(
-                    ConversationStorageBackend.SQLITE,
-                    2,
-                ),
+                ConversationStorageActivationState(ConversationStorageBackend.SQLITE, 2),
             ),
         )
         for kind, before, after in invalid:
@@ -526,9 +502,7 @@ class ConversationStorageContractTests(unittest.TestCase):
             ) -> ConversationArchiveImportReceipt:
                 lease.validate(workspace_key=coordinator.workspace_key)
                 calls.append(("import", payload))
-                return ConversationArchiveImportReceipt(
-                    ConversationArchiveImportStatus.IMPORTED
-                )
+                return ConversationArchiveImportReceipt(ConversationArchiveImportStatus.IMPORTED)
 
         with coordinator.borrow(timeout_seconds=2.0) as lease:
             payload = Source().export_archive(lease)
@@ -698,10 +672,8 @@ class ConversationStorageServicesTests(unittest.TestCase):
             )
 
         with mock.patch.object(
-            WorkspaceConversationStorageMutationCoordinator,
-            "borrow",
-            new=recording_borrow,
-        ):
+                 WorkspaceConversationStorageMutationCoordinator, 'borrow', new=recording_borrow
+             ):
             metadata = services.catalog.create("session_a", "Coordinated")
             services.event_store.append_batch(
                 contract_batches(metadata.conversation_id)["proposal"]
@@ -757,10 +729,7 @@ class ConversationStorageServicesTests(unittest.TestCase):
     ) -> None:
         workspace = _initialized_workspace(self)
         catalog = FilesystemConversationCatalog(workspace)
-        event_store = FilesystemCollaborationEventStore(
-            workspace,
-            catalog=catalog,
-        )
+        event_store = FilesystemCollaborationEventStore(workspace, catalog=catalog)
         metadata = catalog.create("session_a", "Direct v2 adapter")
         receipt = event_store.append_batch(
             contract_batches(metadata.conversation_id)["proposal"]
@@ -802,14 +771,8 @@ class ConversationStorageServicesTests(unittest.TestCase):
         workspace = _initialized_workspace(self)
         services = compose_filesystem_conversation_storage(workspace)
         with self.assertRaises(ConversationStorageServicesError):
-            ConversationStorageComponentBinding(  # type: ignore[arg-type]
-                provenance=object(),
-                component=services.catalog,
-            )
-        bad_catalog = ConversationStorageComponentBinding(
-            provenance=services.provenance,
-            component=object(),
-        )
+            ConversationStorageComponentBinding(provenance=object(), component=services.catalog)
+        bad_catalog = ConversationStorageComponentBinding(provenance=services.provenance, component=object())
         with self.assertRaises(ConversationStorageServicesError):
             ConversationStorageServices(  # type: ignore[arg-type]
                 catalog_binding=bad_catalog,
@@ -828,10 +791,7 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
 
         self.assertEqual(
             state,
-            ConversationStorageActivationState(
-                ConversationStorageBackend.FILESYSTEM,
-                0,
-            ),
+            ConversationStorageActivationState(ConversationStorageBackend.FILESYSTEM, 0),
         )
         self.assertEqual(_namespace_snapshot(workspace.root), before)
         self.assertFalse(_marker_path(workspace).exists())
@@ -843,10 +803,7 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
         pinned_root = workspace.root
         other = _initialized_workspace(self)
         other_root = other.root
-        expected = ConversationStorageActivationState(
-            ConversationStorageBackend.SQLITE,
-            7,
-        )
+        expected = ConversationStorageActivationState(ConversationStorageBackend.SQLITE, 7)
         workspace.write_json(
             CONVERSATION_STORAGE_ACTIVATION_STATE_PATH,
             expected.to_dict(),
@@ -892,24 +849,16 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
             other_before = _namespace_snapshot(other.root)
             with (
                 mock.patch.object(
-                    Workspace,
-                    "__init__",
-                    side_effect=AssertionError("workspace materialized"),
+                    Workspace, '__init__', side_effect=AssertionError('workspace materialized')
                 ) as materialize,
                 mock.patch.object(
-                    Workspace,
-                    "path",
-                    side_effect=AssertionError("filesystem path accessed"),
+                    Workspace, 'path', side_effect=AssertionError('filesystem path accessed')
                 ) as path,
                 mock.patch.object(
-                    Workspace,
-                    "read_text",
-                    side_effect=AssertionError("filesystem read attempted"),
+                    Workspace, 'read_text', side_effect=AssertionError('filesystem read attempted')
                 ) as read_text,
                 mock.patch.object(
-                    Workspace,
-                    "write_json",
-                    side_effect=AssertionError("filesystem write attempted"),
+                    Workspace, 'write_json', side_effect=AssertionError('filesystem write attempted')
                 ) as write_json,
             ):
                 with self.assertRaises(ConversationStorageCoordinationError) as caught:
@@ -965,10 +914,7 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
                 readiness=_filesystem_sqlite_readiness(),
             )
 
-        expected = ConversationStorageActivationState(
-            ConversationStorageBackend.SQLITE,
-            1,
-        )
+        expected = ConversationStorageActivationState(ConversationStorageBackend.SQLITE, 1)
         self.assertIs(
             outcome.kind,
             ConversationStorageActivationOutcomeKind.ACTIVATED,
@@ -993,10 +939,7 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
         pinned_root = workspace.root
         other = _initialized_workspace(self)
         other_root = other.root
-        current = ConversationStorageActivationState(
-            ConversationStorageBackend.FILESYSTEM,
-            1,
-        )
+        current = ConversationStorageActivationState(ConversationStorageBackend.FILESYSTEM, 1)
         workspace.write_json(
             CONVERSATION_STORAGE_ACTIVATION_STATE_PATH,
             current.to_dict(),
@@ -1042,10 +985,7 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
             with self.assertRaises(ConversationStorageCoordinationError):
                 lease.validate(workspace_key=os.fspath(other_root))
 
-        expected = ConversationStorageActivationState(
-            ConversationStorageBackend.SQLITE,
-            2,
-        )
+        expected = ConversationStorageActivationState(ConversationStorageBackend.SQLITE, 2)
         self.assertEqual(outcome.current, expected)
         self.assertEqual(read_roots, [pinned_root])
         self.assertEqual(write_roots, [pinned_root])
@@ -1231,10 +1171,7 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
         write_json.assert_called_once_with(
             mock.ANY,
             CONVERSATION_STORAGE_ACTIVATION_STATE_PATH,
-            ConversationStorageActivationState(
-                ConversationStorageBackend.FILESYSTEM,
-                2,
-            ).to_dict(),
+            ConversationStorageActivationState(ConversationStorageBackend.FILESYSTEM, 2).to_dict(),
         )
         self.assertEqual(write_json.call_args.args[0].root, workspace.root)
         self.assertEqual(_marker_path(workspace).read_bytes(), before)
@@ -1266,11 +1203,8 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
 
         with coordinator.borrow(timeout_seconds=2.0) as lease:
             with mock.patch.object(
-                Workspace,
-                "write_json",
-                side_effect=write_then_fail,
-                autospec=True,
-            ) as write_json:
+                     Workspace, 'write_json', side_effect=write_then_fail, autospec=True
+                 ) as write_json:
                 with self.assertRaises(ConversationStorageActivationError):
                     compare_and_set_conversation_storage_activation(
                         workspace,
@@ -1283,10 +1217,7 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
         self.assertEqual(write_json.call_args.args[0].root, workspace.root)
         self.assertEqual(
             load_conversation_storage_activation_state(workspace),
-            ConversationStorageActivationState(
-                ConversationStorageBackend.FILESYSTEM,
-                2,
-            ),
+            ConversationStorageActivationState(ConversationStorageBackend.FILESYSTEM, 2),
         )
         self.assertEqual(_marker_temporaries(workspace), [])
 
@@ -1297,9 +1228,7 @@ class ConversationStorageCoordinatorTests(unittest.TestCase):
         before = _namespace_snapshot(workspace.root)
 
         first = WorkspaceConversationStorageMutationCoordinator(workspace)
-        second = WorkspaceConversationStorageMutationCoordinator(
-            Workspace(workspace.root)
-        )
+        second = WorkspaceConversationStorageMutationCoordinator(Workspace(workspace.root))
 
         self.assertEqual(first.workspace_key, os.fspath(workspace.root))
         self.assertEqual(second.workspace_key, first.workspace_key)
@@ -1365,9 +1294,7 @@ class ConversationStorageCoordinatorTests(unittest.TestCase):
     def test_same_thread_nested_borrows_share_one_lease_and_expiry(self) -> None:
         workspace = _initialized_workspace(self)
         first = WorkspaceConversationStorageMutationCoordinator(workspace)
-        second = WorkspaceConversationStorageMutationCoordinator(
-            Workspace(workspace.root)
-        )
+        second = WorkspaceConversationStorageMutationCoordinator(Workspace(workspace.root))
 
         with first.borrow(timeout_seconds=2.0) as outer:
             self.assertTrue(outer.active)
@@ -1407,10 +1334,8 @@ class ConversationStorageCoordinatorTests(unittest.TestCase):
             self.assertIsInstance(failures[0], ConversationStorageCoordinationError)
 
             with mock.patch.object(
-                composition_module.time,
-                "monotonic",
-                return_value=lease.expires_at_monotonic,
-            ):
+                     composition_module.time, 'monotonic', return_value=lease.expires_at_monotonic
+                 ):
                 self.assertFalse(lease.active)
                 with self.assertRaises(ConversationStorageCoordinationError):
                     lease.validate(workspace_key=coordinator.workspace_key)
@@ -1431,9 +1356,7 @@ class ConversationStorageCoordinatorTests(unittest.TestCase):
     def test_same_workspace_coordinators_serialize_threads(self) -> None:
         workspace = _initialized_workspace(self)
         first = WorkspaceConversationStorageMutationCoordinator(workspace)
-        second = WorkspaceConversationStorageMutationCoordinator(
-            Workspace(workspace.root)
-        )
+        second = WorkspaceConversationStorageMutationCoordinator(Workspace(workspace.root))
         attempted = threading.Event()
         entered = threading.Event()
         failures: list[BaseException] = []
@@ -1459,9 +1382,7 @@ class ConversationStorageCoordinatorTests(unittest.TestCase):
     def test_same_workspace_contention_times_out_and_recovers(self) -> None:
         workspace = _initialized_workspace(self)
         first = WorkspaceConversationStorageMutationCoordinator(workspace)
-        second = WorkspaceConversationStorageMutationCoordinator(
-            Workspace(workspace.root)
-        )
+        second = WorkspaceConversationStorageMutationCoordinator(Workspace(workspace.root))
         attempted = threading.Event()
         finished = threading.Event()
         failures: list[BaseException] = []

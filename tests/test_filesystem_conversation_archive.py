@@ -1,6 +1,8 @@
 """Filesystem canonical schema-v2 conversation archive tests."""
 
 from __future__ import annotations
+from story_writing_agents.conversations.session_context import project_editorial_state
+from tests.test_collaboration_events import scoped_editorial_history
 
 from tests.conversation_archive_fixture import one_conversation_archive
 from tests.test_collaboration_events import editorial_history
@@ -240,11 +242,19 @@ class FilesystemConversationArchiveRoundTripTests(unittest.TestCase):
         self.assertIs(retry.status, ConversationArchiveImportStatus.UNCHANGED)
         self.assertEqual(_export(workspace), payload)
 
-        memory = one_conversation_archive(events=editorial_history())
+        memory = one_conversation_archive(events=scoped_editorial_history(editorial_history()))
         other = initialized_workspace(self)
         self.assertIs(_import(other, memory).status, ConversationArchiveImportStatus.IMPORTED)
         self.assertEqual(_export(other), memory)
         self.assertEqual(event_images(_export(other)), event_images(memory))
+
+        restored = _export(other).sessions[0]
+        state = project_editorial_state(restored.session_id, restored.conversations[0].events)
+        self.assertEqual(tuple(item.status for item in state.scope_states[-3:]), ("partial", "active",
+            "active"))
+        self.assertEqual(state.current_records[-2].context_refs,
+                         project_editorial_state(restored.session_id, restored.conversations[0].events[:2])
+                             .context_refs((state.current_records[-3].ref,)))
 
     def test_unrelated_complete_records_and_private_lock_state_are_preserved(
         self,

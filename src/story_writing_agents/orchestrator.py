@@ -36,10 +36,13 @@ from .conversations.events import (
 )
 from .lead_provider_contracts import PremiseDecisionConstraints
 
+from .editorial_scope import (
+    EditorialScope, EditorialScopeKind, editorial_scope_contains, intersect_editorial_scopes,
+)
 from .editorial_state import (
     EditorialRecordRequest, EditorialRecordResult, EditorialRecordStatus,
     EditorialRecordRef, EditorialStateProjection, EditorialApprovalState,
-    EditorialStateIntegrityError, build_editorial_revision, editorial_ref_to_dict,
+    EditorialStateIntegrityError, EditorialRelationKind, editorial_ref_from_dict, build_editorial_revision, editorial_ref_to_dict,
 )
 from .conversations import CollaborationEditorialRecordPayload, editorial_provenance_available
 
@@ -3335,6 +3338,7 @@ class StoryRuntime:
         authoring_scope: AuthoringScope | None = None,
         shared_premises: tuple[CollaborationSharedPremise, ...] = (),
         editorial_refs: tuple[EditorialRecordRef, ...] = (),
+        editorial_context_digest: str | None = None,
     ) -> CollaborationProposalBasis:
         if type(artifact_binding) is not SessionArtifactBinding:
             raise TypeError("recommendation basis requires an exact artifact binding")
@@ -3356,7 +3360,7 @@ class StoryRuntime:
             inputs=inputs, evidence=evidence,
             schema_version=2 if authoring_scope is not None and authoring_scope.schema_version == 3 else 1,
             shared_premises=shared_premises,
-            editorial_refs=editorial_refs,
+            editorial_refs=editorial_refs, editorial_context_digest=editorial_context_digest,
         )
 
     def _recommendation_request_draft(
@@ -3712,6 +3716,7 @@ class StoryRuntime:
                 preparation_cap = min(preparation_cap, remaining - floor)
             elif source_proposal is not None and source_proposal.basis.schema_version == 2:
                 inherited_capture = self._remap_shared_premises(source_proposal.basis, selected_inputs)
+        _bound_editorial_refs, _bound_editorial_digest = self._editorial_context_for_scope(source.session_id, scope, session_history)
         request = LeadRecommendationRequestPayload(
             request_event_id=request_event_id, request_id=self._new_id("rc"),
             action_id=self._new_id("ra") if previous is None else previous.action_id,
@@ -3730,7 +3735,7 @@ class StoryRuntime:
                 artifact_binding=artifact_binding,
                 authoring_scope=scope,
                 shared_premises=inherited_capture,
-                editorial_refs=self._editorial_refs_for_scope(source.session_id, scope, session_history),
+                editorial_refs=_bound_editorial_refs, editorial_context_digest=_bound_editorial_digest,
             ),
             source_fingerprint=self._recommendation_source_fingerprint(
                 source.session_id,
@@ -3903,7 +3908,7 @@ class StoryRuntime:
             stale = False
             if decision.kind is not CollaborationConfirmationDecision.REJECT:
                 try:
-                    self._validate_editorial_refs(session_id, request.basis.editorial_refs)
+                    self._validate_editorial_refs(session_id, request.basis.editorial_refs, request.basis.editorial_context_digest, scope=request.authoring_scope)
                     artifact_binding = self._session_artifact_binding(session_id)
                     scope = request.authoring_scope
                     current = None if scope is None else self._authoring_tasks(
@@ -3938,7 +3943,7 @@ class StoryRuntime:
                             artifact_binding=artifact_binding,
                             authoring_scope=request.authoring_scope,
                             shared_premises=self._remap_shared_premises(request.basis, current_inputs),
-                            editorial_refs=request.basis.editorial_refs,
+                            editorial_refs=request.basis.editorial_refs, editorial_context_digest=request.basis.editorial_context_digest,
                         ) != request.basis
                         or self._recommendation_source_fingerprint(
                             session_id,
@@ -4233,9 +4238,44 @@ class StoryRuntime:
                     if not proposals:
                         return EditorialRecordResult(EditorialRecordStatus.INVALID_PROVENANCE,
                             "The editorial origin task and revision are not present in this session history.")
+            context_refs = ()
+            declared_scope = request.draft.scope if request.draft is not None else previous.draft.scope
+            try:
+                self._qualify_editorial_scopes(session_id, (declared_scope,))
+                if request.relation_decisions:
+                    current = {item.ref: item for item in state.current_records}
+                    for relation in request.relation_decisions:
+                        peer = current.get(relation.other_ref)
+                        if peer is None or state.effective_approval(peer.ref) is not EditorialApprovalState.SELECTED:
+                            return EditorialRecordResult(EditorialRecordStatus.STALE_REFERENCE,
+                                                         "Editorial relation requires an exact current selected counterpart.")
+                        residual = state.scope_state(peer.ref).coverage
+                        intersection = intersect_editorial_scopes(declared_scope, peer.draft.scope)
+                        if intersection is None or residual.status == "unknown":
+                            return EditorialRecordResult(EditorialRecordStatus.SCOPE_CLARIFICATION_REQUIRED,
+                                                         "Editorial relationship coverage needs explicit scope clarification.")
+                        if relation.scope is not None:
+                            if editorial_scope_contains(declared_scope, relation.scope) is not True or editorial_scope_contains(peer.draft.scope, relation.scope) is not True:
+                                raise ValueError("editorial relation scope exceeds its exact declared intersection")
+                        elif not intersection:
+                            raise ValueError("editorial relation requires shared target coverage")
+                        footprint = relation.scope or EditorialScope(EditorialScopeKind.KNOWN, intersection)
+                        self._qualify_editorial_scopes(session_id, (peer.draft.scope, footprint))
+                        if residual.exclusions:
+                            self._qualify_editorial_scopes(session_id, (EditorialScope(EditorialScopeKind.KNOWN, residual.exclusions),))
+                        if relation.kind is EditorialRelationKind.REPLACE:
+                            residual.replaces(footprint)
+                    refs = request.relation_refs()
+                    if state.context_digest(refs) != request.expected_editorial_context_digest:
+                        return EditorialRecordResult(EditorialRecordStatus.STALE_CONTEXT,
+                                                     "Editorial effective coverage or relationships changed; inspect before deciding.")
+                    context_refs = state.context_refs(refs)
+            except (ValueError, TypeError) as exc:
+                return EditorialRecordResult(EditorialRecordStatus.INVALID_SCOPE, str(exc))
             event_id = self._new_id("e")
             record = build_editorial_revision(request, session_id=session_id, conversation_id=conversation_id,
-                event_id=event_id, record_id=self._new_id("ed") if previous is None else previous.record_id, previous=previous)
+                event_id=event_id, record_id=self._new_id("ed") if previous is None else previous.record_id, previous=previous, context_refs=context_refs)
+            EditorialStateProjection(session_id, state.revisions + (record,))
             draft = self._draft_with_id(event_id=event_id, session_id=session_id, conversation_id=conversation_id,
                 turn_id=self._new_id("t"), step_id=self._new_id("s"), kind=CollaborationEventKind.EDITORIAL_RECORD,
                 sender=_USER_ACTOR, recipient=_LEAD_ACTOR, payload=CollaborationEditorialRecordPayload(record))
@@ -4260,28 +4300,126 @@ class StoryRuntime:
             if any(item.basis.editorial_refs != refs for item in sources):
                 raise EditorialStateIntegrityError("confirmed task revision changed its editorial capture")
             return refs
-        return snapshot.editorial_refs()
+        refs = snapshot.editorial_refs()
+        if not scope.target_paths:
+            return refs
+        state = snapshot.editorial_state()
+        records = {record.ref: record for record in state.current_records}
+        return tuple(ref for ref in refs if (
+            records[ref].draft.scope.kind is EditorialScopeKind.UNKNOWN
+            or any(target.path in scope.target_paths
+                   for target in records[ref].draft.scope.targets)
+        ))
+
+
+    def _qualify_editorial_scopes(self, session_id: str, scopes: tuple[EditorialScope, ...]) -> None:
+        ranges = tuple(target for scope in scopes for target in scope.targets if target.start_line is not None)
+        if not ranges:
+            return
+        binding = self._session_artifact_binding(session_id)
+        with _open_session_artifact_repository(binding) as artifacts:
+            snapshots = {item.path: item for item in artifacts.read_current(tuple(dict.fromkeys(
+                target.path for target in ranges)))}
+            for target in ranges:
+                snapshot = snapshots.get(target.path)
+                if snapshot is None or snapshot.source.source_sha256 != target.source_sha256:
+                    raise ValueError("editorial selected range source is unavailable or changed")
+                self._select_current_reference_bytes(snapshot.content, target.start_line, target.end_line)
+
+    def _editorial_context_for_scope(self, session_id: str, scope: AuthoringScope | None,
+                                    snapshot: SessionHistorySnapshot | None = None) -> tuple:
+        snapshot = self._editorial_snapshot(session_id) if snapshot is None else snapshot
+        refs = self._editorial_refs_for_scope(session_id, scope, snapshot)
+        if not refs:
+            return (), None
+        confirmed = {(event.payload.proposal_id, event.payload.proposal_revision, event.payload.proposal_digest)
+                     for event in snapshot.events() if type(event.payload) is CollaborationConfirmationPayload
+                     and event.payload.decision is CollaborationConfirmationDecision.CONFIRM}
+        sources = tuple(event.payload for event in snapshot.events() if type(event.payload) is CollaborationProposal
+                        and event.payload.authoring_scope is not None and scope is not None
+                        and (event.payload.authoring_scope.task_id, event.payload.authoring_scope.task_revision)
+                        == (scope.task_id, scope.task_revision)
+                        and (event.payload.proposal_id, event.payload.proposal_revision, event.payload.proposal_digest)
+                        in confirmed)
+        if sources:
+            digest = sources[0].basis.editorial_context_digest
+            if digest is None or any(item.basis.editorial_context_digest != digest for item in sources):
+                raise EditorialStateIntegrityError("confirmed task lost its original editorial topology pin")
+        else:
+            digest = snapshot.editorial_state().context_digest(refs)
+        self._validate_editorial_refs(session_id, refs, digest, snapshot=snapshot, scope=scope)
+        return refs, digest
+
+    def _validate_editorial_refs(self, session_id: str, refs: tuple[EditorialRecordRef, ...],
+                                expected_context_digest: str | None, *,
+                                snapshot: SessionHistorySnapshot | None = None,
+                                scope: AuthoringScope | None = None) -> None:
+        if not refs:
+            if expected_context_digest is not None:
+                raise ValueError("empty editorial capture cannot acquire a topology pin")
+            return
+        snapshot = self._editorial_snapshot(session_id) if snapshot is None else snapshot
+        state = snapshot.editorial_state()
+        selected = {record.ref: record for record in state.selected_records}
+        if any(ref not in selected for ref in refs):
+            raise ValueError("editorial capture is no longer an exact selected USER revision")
+        if expected_context_digest is None or state.context_digest(refs) != expected_context_digest:
+            raise ValueError("editorial effective coverage or relationships changed; fresh planning is required")
+        relevant = tuple(selected[ref] for ref in refs if scope is None or not scope.target_paths
+                         or selected[ref].draft.scope.kind is EditorialScopeKind.UNKNOWN
+                         or any(target.path in scope.target_paths for target in selected[ref].draft.scope.targets))
+        for record in relevant:
+            scope_state = state.scope_state(record.ref)
+            coverage = scope_state.coverage
+            if coverage.status == "unknown" and coverage.scope.kind is EditorialScopeKind.KNOWN:
+                raise ValueError("editorial residual mapping needs explicit scope clarification")
+            qualification = [coverage.scope]
+            if coverage.exclusions:
+                qualification.append(EditorialScope(EditorialScopeKind.KNOWN, coverage.exclusions))
+            for fact in scope_state.relations:
+                if fact.decision.scope is not None:
+                    qualification.append(fact.decision.scope)
+                for ref in (fact.origin_ref, fact.decision.other_ref):
+                    source = next(item for item in state.revisions if item.ref == ref)
+                    qualification.append(source.draft.scope)
+            self._qualify_editorial_scopes(session_id, tuple(qualification))
+        if scope is not None and any(state.scope_state(record.ref).explicit_conflicts for record in relevant):
+            raise ValueError("an exact USER editorial conflict needs explicit relation resolution")
 
     @staticmethod
-    def _editorial_pinned_view(snapshot: SessionHistorySnapshot, refs: tuple[EditorialRecordRef, ...]) -> dict:
+    def _editorial_pinned_view(snapshot: SessionHistorySnapshot, refs: tuple[EditorialRecordRef, ...],
+                              expected_context_digest: str | None) -> dict:
+        state = snapshot.editorial_state()
+        if expected_context_digest is None or state.context_digest(refs) != expected_context_digest:
+            raise SessionContextHistoryChangedError()
         view = snapshot.editorial_view()
         if view is None:
             raise SessionContextCapacityError()
-        desired = {ref.record_id: ref for ref in refs}
-        records = [item for item in view["records"] if item["record_ref"]["record_id"] in desired
-                   and item["record_ref"] == editorial_ref_to_dict(desired[item["record_ref"]["record_id"]])]
-        if len(records) != len(refs):
+        needed = set(state.context_refs(refs))
+        by_ref = {record.ref: record for record in state.revisions}
+        todo = list(needed)
+        while todo:
+            ref = todo.pop()
+            record = by_ref[ref]
+            dependencies = set(record.context_refs) | set(record.request.relation_refs())
+            for fact in state.scope_state(ref).relations if ref in {item.ref for item in state.current_records} else ():
+                dependencies.update((fact.origin_ref, fact.decision.other_ref))
+            for dependency in dependencies - needed:
+                needed.add(dependency)
+                todo.append(dependency)
+        rows = [item for item in view["records"] if editorial_ref_from_dict(item["record_ref"]) in needed]
+        if len(rows) != len(needed):
             raise SessionContextCapacityError()
-        return {**view, "records": records, "selected_refs": [editorial_ref_to_dict(ref) for ref in refs],
-                "applied_facts": [], "provenance_gaps": [item for item in view["provenance_gaps"]
-                    if item["record_ref"]["record_id"] in desired]}
+        ids = {ref.record_id for ref in needed}
+        return {**view, "records": rows, "selected_refs": [editorial_ref_to_dict(ref) for ref in refs],
+            "editorial_context_digest": expected_context_digest,
+            "scope_states": [item for item in view["scope_states"] if item["record_ref"]["record_id"] in ids],
+            "scope_relations": [item for item in view["scope_relations"] if item["origin_ref"]["record_id"] in ids],
+            "applied_facts": [item for item in view["applied_facts"] if item["record_ref"]["record_id"] in ids],
+            "application_attempts": [item for item in view["application_attempts"] if item["record_ref"]["record_id"] in ids],
+            "provenance_gaps": [item for item in view["provenance_gaps"]
+                                if editorial_ref_from_dict(item["record_ref"]) in needed]}
 
-    def _validate_editorial_refs(self, session_id: str, refs: tuple[EditorialRecordRef, ...]) -> None:
-        if not refs:
-            return
-        selected = {record.ref for record in self.inspect_editorial_state(session_id).selected_records}
-        if any(ref not in selected for ref in refs):
-            raise ValueError("editorial selection changed; inspect current records and freshly propose before Confirm")
 
     def inspect_lead_collaboration(
         self, session_id: str, conversation_id: str,
@@ -6937,7 +7075,7 @@ class StoryRuntime:
                 separators=(",", ":"),
             ),
             action_progress_sink=action_progress_sink,
-            editorial_refs=proposal.basis.editorial_refs,
+            editorial_refs=proposal.basis.editorial_refs, editorial_context_digest=proposal.basis.editorial_context_digest,
         )
 
     async def _run_lead_synthesis(
@@ -7099,7 +7237,7 @@ class StoryRuntime:
                 separators=(",", ":"),
             ),
             action_progress_sink=action_progress_sink,
-            editorial_refs=proposal.basis.editorial_refs,
+            editorial_refs=proposal.basis.editorial_refs, editorial_context_digest=proposal.basis.editorial_context_digest,
         )
 
     async def _run_premise_assignment(
@@ -7130,7 +7268,7 @@ class StoryRuntime:
                 dispatch_event_id=dispatch_event_id),
             fallback_answer=json.dumps({"assessment": "insufficient_evidence",
                 "message": _SAFE_STRUCTURED_FALLBACK_MESSAGE, "alternatives": []}),
-            action_progress_sink=action_progress_sink, editorial_refs=proposal.basis.editorial_refs,
+            action_progress_sink=action_progress_sink, editorial_refs=proposal.basis.editorial_refs, editorial_context_digest=proposal.basis.editorial_context_digest,
         )
 
     async def _run_premise_synthesis(
@@ -7204,7 +7342,7 @@ class StoryRuntime:
             physical_call_limit=proposal.budget.synthesis_max_physical_calls, round_number=1,
             decoder=decode, fallback_answer=json.dumps({"status": "clarification",
                 "message": _SAFE_STRUCTURED_FALLBACK_MESSAGE, "options": [], "recommended_option_key": None}),
-            action_progress_sink=action_progress_sink, editorial_refs=proposal.basis.editorial_refs,
+            action_progress_sink=action_progress_sink, editorial_refs=proposal.basis.editorial_refs, editorial_context_digest=proposal.basis.editorial_context_digest,
         )
 
     @staticmethod
@@ -7384,6 +7522,7 @@ class StoryRuntime:
         action_progress_sink: ContextActionProgressSink | None,
         constraints: LeadProviderConstraints | None = None,
         editorial_refs: tuple[EditorialRecordRef, ...] = (),
+        editorial_context_digest: str | None = None,
     ) -> _CollaborationInvocationResult:
         session_history: SessionHistorySnapshot | None = None
         artifact_inputs = tuple(
@@ -7407,7 +7546,7 @@ class StoryRuntime:
         try:
             session_history = self._editorial_snapshot(session_id) if agent_id == LEAD_ORCHESTRATOR or editorial_refs else None
             if editorial_refs:
-                material_value = {**material_value, "editorial_state": self._editorial_pinned_view(session_history, editorial_refs)}
+                material_value = {**material_value, "editorial_state": self._editorial_pinned_view(session_history, editorial_refs, editorial_context_digest)}
             if agent_id == LEAD_ORCHESTRATOR:
                 generation_pin = artifact_binding.acquire_generation_pin()
             repository_access = partial(
@@ -9246,7 +9385,7 @@ class StoryRuntime:
                 evidence=proposal.basis.evidence,
                 schema_version=proposal.basis.schema_version,
                 shared_premises=proposal.basis.shared_premises,
-                editorial_refs=proposal.basis.editorial_refs,
+                editorial_refs=proposal.basis.editorial_refs, editorial_context_digest=proposal.basis.editorial_context_digest,
             ),
         )
 
@@ -14811,6 +14950,7 @@ class StoryRuntime:
                 for item in profiles
             ],
         }
+        _bound_editorial_refs, _bound_editorial_digest = ((), None) if intent.premise_decision is not None else self._editorial_context_for_scope(session_id, intent.authoring_scope, session_history)
         basis = CollaborationProposalBasis(
             route="lead_specialist_consultation",
             route_fingerprint=self._canonical_digest(route_value),
@@ -14821,7 +14961,7 @@ class StoryRuntime:
             evidence=evidence,
             schema_version=2 if intent.authoring_scope is not None and intent.authoring_scope.schema_version == 3 else 1,
             shared_premises=captured,
-            editorial_refs=() if intent.premise_decision is not None else self._editorial_refs_for_scope(session_id, intent.authoring_scope, session_history),
+            editorial_refs=_bound_editorial_refs, editorial_context_digest=_bound_editorial_digest,
         )
         budget = CollaborationBudget(
             round_limit=COLLABORATION_ROUND_LIMIT,
@@ -14884,7 +15024,7 @@ class StoryRuntime:
         artifact_binding: SessionArtifactBinding | None = None,
     ) -> None:
         """Re-derive every mutable runtime fact before minting start authority."""
-        self._validate_editorial_refs(session_id, proposal.basis.editorial_refs)
+        self._validate_editorial_refs(session_id, proposal.basis.editorial_refs, proposal.basis.editorial_context_digest, scope=proposal.authoring_scope)
 
         if artifact_binding is None:
             artifact_binding = self._session_artifact_binding(session_id)
@@ -15019,7 +15159,7 @@ class StoryRuntime:
                 evidence=proposal.basis.evidence,
                 schema_version=proposal.basis.schema_version,
                 shared_premises=proposal.basis.shared_premises,
-                editorial_refs=proposal.basis.editorial_refs,
+                editorial_refs=proposal.basis.editorial_refs, editorial_context_digest=proposal.basis.editorial_context_digest,
             )
             budget = CollaborationBudget(
                 round_limit=COLLABORATION_ROUND_LIMIT,

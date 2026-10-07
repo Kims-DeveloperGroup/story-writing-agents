@@ -220,6 +220,33 @@ artifact contents. Current artifact claims still require the existing READ recei
 See the [editorial memory API](../reference/runtime-api.md#editorial-memory-methods)
 for typed intake and inspection.
 
+### Scope, relations, and application evidence
+
+An editorial decision carries its intended application scope separately from the document
+that supplied its evidence. Use a canonical artifact target, or an inclusive line range
+anchored to its exact source digest. A named scene or work-wide meaning that cannot be
+mapped to a known target remains unknown and needs clarification. Source drift does not
+silently rebase a range or erase the original user intent.
+
+Overlapping targets do not establish a semantic contradiction. Explicit user relations
+record coexistence, conflict, or replacement against exact current decision references.
+A proposed alternative cannot replace selected direction. Partial replacement keeps the
+original decision's remaining coverage and history; restoring an earlier direction makes
+a fresh user decision. Recency and a narrower scope do not select a winner.
+
+Inspection separates selected direction, effective remaining coverage, unresolved
+conflicts, current source observations, and historical application attempts. Selecting a
+new direction does not update manuscript bytes. Failed or uncertain Apply attempts stay
+visible with their task, revision, candidate, source, and target identities. A matching
+successful receipt establishes historical use; it does not prove semantic fulfillment or
+that the current manuscript still contains those bytes. Current observations require
+qualified source evidence.
+
+Proposals with editorial references also capture the relevant relation and coverage
+context. If another decision changes that context, an old confirmation becomes stale
+even when the original referenced decision itself has not changed. Obtain a fresh
+proposal after resolving the relevant conflict or replacement.
+
 ## The normal workflow
 
 ```text

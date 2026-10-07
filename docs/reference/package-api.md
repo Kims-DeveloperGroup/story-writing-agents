@@ -24,11 +24,11 @@ The stable inventories in this revision are:
 | `story_writing_agents.writing_artifacts` | 76 | Canonical artifact/reference values plus pure exact change-set, relationship-policy, and artifact-application contracts |
 | `story_writing_agents.artifact_proposals` | 16 | Direct-only pure intent, evidence, exact candidate, reviewer-map, and strict candidate-codec contracts |
 
-The production graph has 152 modules and 646 runtime dependency edges, with
+The production graph has 155 modules and 666 runtime dependency edges, with
 no runtime cycles. The package root has 106 exports. The conversations facade
-contributes 124 event exports and 33 context exports; its bindings are identical
-to the owner bindings. Editorial records add one pure contract leaf and four
-consumer-to-leaf edges, using the existing conversation store.
+has 187 exports, including 132 event and 37 context exports; its bindings are
+identical to the owner bindings. Editorial scope and record values use pure
+contract owners and the existing conversation store.
 
 Import the management facade explicitly:
 
@@ -59,6 +59,8 @@ and capture values. Both runtime facades accept the mode and adoption controls
 as keyword arguments. These values grant no provider, draft, confirmation or
 mutation authority. See [exploration and adoption](runtime-api.md#explicit-interaction-mode-and-adoption).
 
+Canonical editorial target and residual coverage values live at
+`story_writing_agents.editorial_scope`; the pure leaf owns geometry and closed codecs.
 Editorial memory value contracts live at `story_writing_agents.editorial_state`,
 including typed requests, drafts, exact revision references and state inspection values.
 The runtime and session facades provide explicit recording and inspection; the existing

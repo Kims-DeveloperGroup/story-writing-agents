@@ -65,6 +65,7 @@ from tests.test_lead_orchestration import (
     LeadOrchestrationTestCase,
     _LeadBackend,
     _decision,
+    _live_material,
     _live_scope,
     _provider_envelope,
     _read_history_hit,
@@ -113,7 +114,7 @@ def _artifact_outcome(
     objective_intent: object = None,
 ):
     def respond(call, _provider):
-        material = _workflow_material(call.payload)
+        material = _live_material(call)
         resolved_operations = (
             operations(call, material) if callable(operations) else operations
         )

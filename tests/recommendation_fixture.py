@@ -73,9 +73,12 @@ def decision(turn, kind=c.CollaborationConfirmationDecision.CONFIRM, **changes):
     return c.LeadRecommendationDecision(**values)
 
 
-def preparation(turn, *, text=DRAFT, mutate=None):
+def preparation(turn, *, text=DRAFT, mutate=None, read_evidence=False):
     request = turn.recommendation_request
     selected = [item.event_id for item in request.draft_sources]
+    def selected_evidence(call, path):
+        return (call.payload["context_observation"]["read_results"][0]["evidence_id"]
+                if read_evidence else artifact._status_id(call, path))
     intent = ({"action": "start", "request": request.instruction,
                "target_paths": list(request.target_paths), "next_step": "prepare",
                "draft_source_event_ids": selected}
@@ -84,12 +87,16 @@ def preparation(turn, *, text=DRAFT, mutate=None):
                "next_step": "prepare", "draft_source_event_ids": selected})
     producer = artifact._artifact_outcome(
         operations=lambda call, material: [
-            {"kind": "replace", "evidence_id": artifact._status_id(call, path), "new_text": text}
+            ({
+                "kind": "patch", "evidence_id": selected_evidence(call, path),
+                "replacement_text": text,
+            } if read_evidence else
+            {"kind": "replace", "evidence_id": selected_evidence(call, path), "new_text": text})
             if path.startswith("core_documents/") else
             {"kind": "create", "suggested_path": path, "new_text": text}
             for path in request.target_paths],
-        evidence_status="empty",
-        evidence_ids=lambda call, material: [artifact._status_id(call, OUTLINE)],
+        evidence_status="verified" if read_evidence else "empty",
+        evidence_ids=lambda call, material: [selected_evidence(call, OUTLINE)],
         objective_intent=intent,
     )
     if request.kind is c.LeadRecommendationActionKind.PREPARE_CONSULTATION:
@@ -114,6 +121,8 @@ def preparation(turn, *, text=DRAFT, mutate=None):
 
     def respond(call, provider):
         value = json.loads(producer(call, provider))
+        if read_evidence:
+            value["action"]["used_handles"] = list(provider.used_handles)
         body = value["action"]["result"]
         body["authoring_scope"] = lead._compact_scope(
             json.loads(json.dumps(asdict(request.authoring_scope)))

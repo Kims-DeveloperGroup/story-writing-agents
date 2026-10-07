@@ -119,9 +119,7 @@ class ArtifactApplicationRecoveryTests(_ApplicationStoreTestCase):
             for path in root.rglob("*.md")
             if path.is_file()
         }
-        repository._applications._fault_injector = _inject_once(
-            "after_revalidation"
-        )
+        repository._applications._fault_injector = _inject_once("after_revalidation")
         with self.assertRaisesRegex(_InjectedFault, "after_revalidation"):
             _apply(repository, request)
         after = {
@@ -166,8 +164,7 @@ class ArtifactApplicationRecoveryTests(_ApplicationStoreTestCase):
                     application_id=f"application-target-{occurrence}",
                 )
                 repository._applications._fault_injector = _inject_once(
-                    "after_target",
-                    occurrence=occurrence,
+                    "after_target", occurrence=occurrence,
                 )
                 with self.assertRaisesRegex(_InjectedFault, "after_target"):
                     _apply(repository, request)
@@ -231,10 +228,7 @@ class ArtifactApplicationSecurityTests(_ApplicationStoreTestCase):
         with self.subTest(case="journal_hardlink"):
             root, repository = self.new_repository()
             _seed_five_operation_state(root)
-            request = _five_operation_request(
-                repository,
-                application_id="application-hardlink",
-            )
+            request = _five_operation_request(repository, application_id="application-hardlink")
             repository._applications._fault_injector = _inject_once("after_journal")
             with self.assertRaises(_InjectedFault):
                 _apply(repository, request)
@@ -250,9 +244,7 @@ class ArtifactApplicationSecurityTests(_ApplicationStoreTestCase):
             root, repository = self.new_repository()
             _seed_five_operation_state(root)
             request = _five_operation_request(
-                repository,
-                application_id="application-alias",
-            )
+                repository, application_id="application-alias")
             state = _state_root(root)
             state.mkdir(parents=True, exist_ok=True)
             state.joinpath("Catalog.json").write_bytes(b"alias")
@@ -431,8 +423,8 @@ class ArtifactApplicationBoundaryTests(_ApplicationStoreTestCase):
                     resolved = resolve(target)
                     if resolved is not None and resolved != module:
                         edges.add((module, resolved))
-        self.assertEqual(len(modules), 154)
-        self.assertEqual(len(edges), 660)
+        self.assertEqual(len(modules), 155)
+        self.assertEqual(len(edges), 666)
         store = "story_writing_agents.writing_artifacts._application_store"
         repository = "story_writing_agents.writing_artifacts.repository"
         self.assertEqual(

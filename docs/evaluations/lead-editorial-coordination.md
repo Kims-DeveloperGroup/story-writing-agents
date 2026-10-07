@@ -108,6 +108,29 @@ Record unsupported baseline variants as `not_supported`. Do not label a
 different authoring flow as a successful review-only or exploration result.
 After-only feature evidence cannot establish a matched creative-quality gain.
 
+### Scoped decision expectations (#810)
+
+For the decision-memory comparison, retain the exact user decision, source evidence,
+canonical scope, relation receipts, and manuscript/candidate identities. Observe these
+four sequences separately: an overlapping proposed alternative leaves selected intent
+unchanged; explicit partial replacement preserves residual intent; a new selected
+direction stays distinct from unchanged manuscript bytes and failed or uncertain Apply;
+and restoring old wording creates a fresh decision whose history survives restart and
+conversation transfer. Unmappable scope and stale source anchors require clarification.
+
+Include a cross-conversation relation change that affects an existing decision while
+its original record reference, revision, digest, and the old proposal's conversation tail
+remain unchanged. Audit provider-free rejection of the stale confirmation and successful
+confirmation of a genuinely fresh, correctly pinned proposal. Also retain an unrelated
+disjoint-decision control so irrelevant memory does not invalidate every proposal.
+
+These are workflow observations for the #800 protocol. Actual creative-quality claims
+remain #806: run matched provider arms and obtain independent author-intent and
+reader/editor human reviews through the participation shell. Deterministic fixtures,
+readable status, or synthetic scores cannot substitute for those reviews. Reviewers must
+judge preservation of protected ambiguity, setup, and voice from eligible outputs;
+a scope overlap or successful Apply receipt is insufficient evidence of semantic quality.
+
 ## Editorial rubric
 
 Score each dimension independently from 0 to 4; higher is better. Retain the

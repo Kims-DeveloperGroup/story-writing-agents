@@ -260,9 +260,7 @@ class ConversationArchiveValueTests(unittest.TestCase):
         wrong_identity = collaboration_history("conversation_b")
         operations: tuple[Callable[[], object], ...] = (
             lambda: ConversationArchiveSession("session_a", ()),
-            lambda: ConversationArchiveSession(
-                "session_a", (conversation, conversation)
-            ),
+            lambda: ConversationArchiveSession("session_a", (conversation, conversation)),
             lambda: ConversationArchive(
                 2,
                 (
@@ -312,16 +310,12 @@ class ConversationArchiveValueTests(unittest.TestCase):
             archive_module, "CONVERSATION_ARCHIVE_MAX_CONVERSATIONS", 1
         ):
             with self.assertRaises(ConversationArchiveBoundsError):
-                ConversationArchiveSession(
-                    "session_a", (conversation_a, conversation_b)
-                )
+                ConversationArchiveSession('session_a', (conversation_a, conversation_b))
         events = collaboration_history()
         with mock.patch.object(archive_module, "CONVERSATION_ARCHIVE_MAX_EVENTS", 1):
             with self.assertRaises(ConversationArchiveBoundsError):
                 archive_conversation(events=events)
-        with mock.patch.object(
-            archive_module, "CONVERSATION_ARCHIVE_MAX_AGGREGATE_UTF8_BYTES", 1
-        ):
+        with mock.patch.object(archive_module, 'CONVERSATION_ARCHIVE_MAX_AGGREGATE_UTF8_BYTES', 1):
             with self.assertRaises(ConversationArchiveBoundsError):
                 archive_conversation(subject="S", events=(events[0],))
         with mock.patch.object(archive_module, "CONVERSATION_ARCHIVE_MAX_RAW_BYTES", 1):
@@ -479,13 +473,7 @@ class ConversationArchiveWireTests(unittest.TestCase):
             wire + b"\n",
             wire.replace(b',"sessions"', b', "sessions"', 1),
             (
-                json.dumps(
-                    top,
-                    ensure_ascii=False,
-                    allow_nan=False,
-                    separators=(",", ":"),
-                    sort_keys=True,
-                )
+                json.dumps(top, ensure_ascii=False, allow_nan=False, separators=(",", ":"), sort_keys=True)
                 + "\n"
             ).encode(),
             compact_json(top, ensure_ascii=True),

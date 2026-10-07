@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from enum import StrEnum
+from ..editorial_state import EditorialStateProjection
 from ..lead_premise_decisions import PremiseDecisionReport, PremiseReportRef, premise_value_to_dict
 from ..lead_task_transitions import LeadPublicResponse, task_value_to_dict
 
@@ -186,6 +187,43 @@ def _premise_report_items(report: PremiseDecisionReport, ref: PremiseReportRef |
         Field("Provisional recommended option", report.recommended_option_id or "none"),
         Notice("Costs remain on distinct lineages. Earlier report/admission receipts and other failed fronts remain in history; fresh authoring needs new Confirm. Use /premise to choose, reject or defer.", label="next action")))
     return tuple(items)
+
+
+def project_editorial_state(state: EditorialStateProjection) -> Panel:
+    """Display selected direction separately from observed artifact authority."""
+    items = []
+    for record in state.current_records:
+        scoped = state.scope_state(record.ref)
+        coverage = scoped.coverage
+        target = "; ".join(
+            item.path if item.start_line is None else
+            f"{item.path}:{item.start_line}-{item.end_line} @ {item.source_sha256}"
+            for item in coverage.scope.targets
+        ) or "unknown: " + (coverage.scope.clarification or "clarification required")
+        items.extend((
+            Field(f"Editorial {record.record_id} | Revision {record.revision}",
+                  f"{state.effective_approval(record.ref).value}: {record.draft.text}"),
+            Field("Target coverage", target),
+            Field("Remaining intent", coverage.status),
+        ))
+        if coverage.exclusions:
+            items.append(Field("Excluded coverage", "; ".join(
+                f"{item.path}:{item.start_line}-{item.end_line} @ {item.source_sha256}"
+                for item in coverage.exclusions)))
+        if scoped.explicit_conflicts:
+            items.append(Field("Explicit USER conflicts", str(len(scoped.explicit_conflicts))))
+        if scoped.unclassified_overlaps:
+            items.append(Field("Geometric overlaps (unclassified)",
+                               ", ".join(ref.record_id for ref in scoped.unclassified_overlaps)))
+        attempts = tuple(item for item in state.application_attempts
+                         if item.record_ref.record_id == record.record_id)
+        for attempt in attempts:
+            items.append(Field(f"Historical Apply | Editorial revision {attempt.record_ref.revision}",
+                               f"{attempt.phase}: {attempt.application_id}; "
+                               + ("coverage verified" if attempt.verified_coverage is not None
+                                  else "coverage unverified")))
+    items.append(Field("Current manuscript", "not established by editorial selection or historical Apply; current source qualification remains required"))
+    return Panel("Editorial direction", tuple(items))
 
 
 def project_lead_turn_result(

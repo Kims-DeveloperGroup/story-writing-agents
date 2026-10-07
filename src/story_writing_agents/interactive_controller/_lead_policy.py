@@ -41,6 +41,7 @@ from ..interactive_terminal import (
     Choice,
     Field,
     Panel,
+    Section,
     ControlOutcomeKind,
     InteractiveAdvisoryProgress,
     InteractivePickerInput,
@@ -58,6 +59,7 @@ from ..interactive_terminal._collaboration_view import (
     project_artifact_application_decision_result,
     project_lead_error_result,
     project_lead_turn_result,
+    project_editorial_state,
     project_specialist_results,
     project_story_commit_decision_result,
 )
@@ -504,10 +506,16 @@ class InteractiveLeadAdapter:
             return False
 
     def _lead_turn_panel(self, turn: LeadTurnResult):
-        if self._read_events is None:
-            return project_lead_turn_result(turn)
-        return project_lead_turn_result(
-            turn, public_response_events=self._read_events(turn.conversation_id),
+        panel = (project_lead_turn_result(turn) if self._read_events is None else
+                 project_lead_turn_result(turn, public_response_events=self._read_events(turn.conversation_id)))
+        editorial = self._session.inspect_editorial_state()
+        if not editorial.revisions:
+            return panel
+        editorial_panel = project_editorial_state(editorial)
+        return Panel(
+            panel.title,
+            panel.items + (Section(editorial_panel.title, editorial_panel.items),),
+            state=panel.state,
         )
 
     def _present_and_decide(self, turn: LeadTurnResult) -> bool:

@@ -932,6 +932,20 @@ appearing twice.
 
 The displayed `next_action` is guidance, not an additional authorization.
 
+### Editorial scope inspection
+
+Editorial inspection shows selected direction and its remaining coverage alongside
+explicit conflicts, source uncertainty, and historical application attempts. A new
+selection can coexist with unchanged manuscript bytes. Failed or uncertain Apply stays
+visible; a historical successful receipt does not establish current manuscript content
+or semantic fulfillment. Source observations require qualified current evidence.
+
+Use the existing typed editorial USER controls to name exact scope and counterpart
+receipts for coexistence, conflict, or replacement. Partial replacement preserves the
+original residual scope. Unmapped scenes and stale range anchors need clarification;
+geometry alone does not decide semantic conflict. See
+[editorial decisions](lead-agent.md#editorial-decisions) for the scope and relation flow.
+
 ## Budgets and boundaries
 
 See [authoring call limits and measured support](lead-authoring-call-support.md) for

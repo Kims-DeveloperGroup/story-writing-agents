@@ -1168,6 +1168,32 @@ STRUCTURED_INPUT_FIELDS = STRUCTURED_INPUT_FIELDS | frozenset({
     "provenance_gaps", "source_ref",
 })
 INPUT_ENUM_FIELDS = INPUT_ENUM_FIELDS | frozenset({"approval_state", "effective_approval_state", "revision_approval", "disposition"})
+STRUCTURED_INPUT_FIELDS |= frozenset({
+    "scope", "targets", "exclusions", "coverage", "scope_states", "scope_relations",
+    "relations", "relation_decisions", "context_refs", "origin_ref", "other_ref",
+    "explicit_conflicts", "unclassified_overlaps", "application_attempts",
+    "request_event", "result_event", "verified_coverage",
+})
+for _editorial_phase, _editorial_phase_meaning in {
+    "pending": "An exact Apply request awaits its separate USER decision.",
+    "running": "An exact artifact operation is in progress; it grants no new authority.",
+    "applied": "Exact historical Apply succeeded; current bytes and semantic coverage need independent evidence.",
+    "unchanged": "Exact historical Apply reported no byte change; semantic coverage remains separately verified.",
+    "failed": "An exact application did not establish successful delivery.",
+    "uncertain": "An exact application outcome remains unknown; inspect before any new authority.",
+    "recovery_required": "An exact artifact operation requires recovery before new authority.",
+}.items():
+    ENUM_MEANINGS.setdefault(_editorial_phase, _editorial_phase_meaning)
+_catalog("source_sha256", "Exact bare64 source-byte anchor for a declared editorial range. Preserve it; current source/range qualification is host-owned and the anchor alone grants no READ or workflow authority.")
+_catalog("scope targets", "Explicit USER target coverage, separate from evidence-document provenance. Unknown coverage needs clarification; never infer scene positions.")
+_catalog("clarification", "Literal reason target coverage is unknown; no guessed range or document identity.")
+_catalog("exclusions coverage", "Host-derived remaining intent: whole documents retain intent beyond current EOF, minus exact source-anchored exclusions. Incomparable anchors remain unknown.")
+_catalog("editorial_context_digest expected_editorial_context_digest context_refs", "Host-pinned relevant editorial coverage and relation topology. Preserve the original pin; changing a related record can stale authority even if a cited revision stays identical.")
+_catalog("relation_decisions scope_relations relations origin_ref other_ref decision_index", "Exact explicit USER relation receipts and causal provenance. Geometric overlap alone is not semantic conflict. A partial relation applies only to its declared coverage.")
+_catalog("scope_states explicit_conflicts unclassified_overlaps", "Derived residual coverage, explicit unresolved USER conflicts, and unclassified geometric overlaps. Do not silently resolve any relation or mint approval.")
+_catalog("application_attempts request_event result_event application_id application_request_digest phase", "Exact historical Apply request/result association. Pending, failed, uncertain or recovery states do not prove current manuscript or delivery of editorial intent.")
+_catalog("verified_coverage", "Exact verified application extent when available; null means coverage is unverified even when a target path matches or Apply historically succeeded.")
+_catalog("omitted_scope_state_count omitted_relation_count omitted_attempt_count", "Exact bounded-view omission counts; do not infer absent relations or application evidence.")
 _catalog("schema", "Runtime-issued context-view format identifier, not provider authority or a response choice.")
 _catalog("kind", "Literal classification in the enclosing supplied record. Editorial kinds distinguish direction, alternative, protected ambiguity, setup obligation and concern; they grant no workflow authority.")
 _catalog("action", "Exact historical USER editorial intake operation in the enclosing request; it cannot be selected or replayed by a provider.")

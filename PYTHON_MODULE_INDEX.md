@@ -98,7 +98,7 @@ fields to provider wire paths. This package-internal boundary owns no provider s
 persistence, or authority and is not a public facade.
 `provider_wire` is a stateless stdlib leaf for vocabulary, projections, schemas, diagnostics, and invocation
 guidance derived from current schema choices; semantic owners retain domain APIs, storage, and state.
-`lead_exploration`, `editorial_state`, `lead_premise_decisions`, and `lead_task_transitions` own immutable provisional material, USER editorial records, and whole premise choice/cost contracts and USER task/discussion/source receipts. Consumers own workflow authority; conversation events/replay retain these facts in the existing store without a new registry or resource owner.
+`lead_exploration`, `editorial_state`/`editorial_scope`, `lead_premise_decisions`, and `lead_task_transitions` own immutable provisional material, USER editorial records with canonical coverage/causal relations and exact application observations, and whole premise choice/cost contracts and USER task/discussion/source receipts. Consumers own workflow authority; conversation events/replay retain these facts in the existing store without a new registry or resource owner.
 `lead_provider_contracts` owns immutable Lead choice snapshots shared by schema projections,
 prompt facts, and closed validation rules. It depends on domain contracts; orchestration
 retains confirmation, current-source membership, READ receipt, and lifecycle authority.

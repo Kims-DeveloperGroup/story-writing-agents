@@ -166,6 +166,7 @@ from story_writing_agents.session_recovery.transition_assessment import (
     SessionTransitionOperation,
     SessionTransitionScope,
 )
+from story_writing_agents.editorial_state import EditorialStateProjection
 from story_writing_agents.orchestrator import RuntimeSession
 from story_writing_agents.workspace import (
     Workspace,
@@ -1611,8 +1612,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 154)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 660)
+        self.assertEqual(len(modules), 155)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 666)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -6115,6 +6116,11 @@ class ControllerContentionTests(ControllerTestCase):
 class InteractiveLeadAdapterTests(unittest.TestCase):
     """Verify the terminal adapter emits only exact runtime decisions."""
 
+    def setUp(self) -> None:
+        self.enterContext(mock.patch.object(
+            RuntimeSession, "inspect_editorial_state",
+            return_value=EditorialStateProjection("session", ())))
+
     class _Progress:
         def __init__(self) -> None:
             self.begins: list[tuple[object, ...]] = []
@@ -6173,6 +6179,14 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
 
     def test_literal_lead_turn_and_consultation_decisions_are_exact(self) -> None:
         session = RuntimeSession.__new__(RuntimeSession)
+        from tests.test_collaboration_events import editorial, editorial_request
+        record = editorial.build_editorial_revision(
+            editorial_request("editorial_terminal"), session_id="session",
+            conversation_id=_UNIQUE_C, event_id="editorial_terminal",
+            record_id="editorial_terminal", previous=None)
+        editorial_projection = EditorialStateProjection("session", (record,))
+        self.enterContext(mock.patch.object(
+            RuntimeSession, "inspect_editorial_state", return_value=editorial_projection))
         proposal = make_proposal()
         proposed = LeadTurnResult(
             "session",
@@ -6272,6 +6286,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 self._Output(),  # type: ignore[arg-type]
             )
             self.assertFalse(adapter.submit(_UNIQUE_C, "cancel proposal"))
+            self.assertIn(repr(record.draft.text)[1:-1], repr(adapter._semantic_output.components))
             self.assertFalse(any(label == "decision" for label, _value in calls))
 
             calls.clear()

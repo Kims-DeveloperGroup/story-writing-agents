@@ -9,7 +9,7 @@ import json
 from dataclasses import replace
 from unittest import mock
 
-from story_writing_agents import StoryRuntime
+from story_writing_agents import StoryRuntime, editorial_scope as scopes
 from story_writing_agents import conversations as c
 from story_writing_agents.agents import PLOT_ARCHITECT
 from story_writing_agents.writing_artifacts import ArtifactApplicationError, ArtifactApplicationErrorCode
@@ -31,7 +31,10 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         brief = "Reader effect: unease. Goal: restrained tension. Protect unreliable narration and unresolved allegiance; change only rhythm and gestures; exclude exposition and new crossings. Success: preserve ambiguity while exposing factual uncertainty."
         account = "Fact: the bridge collapsed. Interpretation: Mina may be unreliable. Adopt Character: preserve ambiguity. Modify Plot: strengthen hesitation without revealing allegiance. Reject an invented crossing; no source supports it. Defer Execution’s literal-crossing concern pending evidence, retaining every concern ID. Cost: the physical route remains unknown. A gesture is a provisional idea. Reviewed does not mean unanimous support, publication, or a fulfilled document request."
         conversation_id = self.conversation("Editorial authoring")
-        memory = await self.runtime.record_editorial_decision(self.session_id, conversation_id, editorial_request("authoring_memory"))
+        memory = await self.runtime.record_editorial_decision(self.session_id, conversation_id,
+            replace(editorial_request("authoring_memory"),
+            draft=replace(editorial_request("authoring_memory").draft,
+                          scope=scopes.EditorialScope.whole(path))))
         pristine = self.snapshots()
         original_result = lead._live_result
         with mock.patch.object(lead, "_live_result", side_effect=lambda call, value: original_result(call, {**value, "message": brief} if value.get("kind") == "proposal" else value)):
@@ -63,7 +66,9 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.assertEqual(prepared.proposal.participants, ROSTER)
         self.assertEqual(prepared.proposal.basis.editorial_refs, request.basis.editorial_refs)
         from tests.collaboration_contract_fixture import replace_proposal
-        self.assertNotEqual(prepared.proposal.proposal_digest, replace_proposal(prepared.proposal, authoring_scope=prepared.proposal.authoring_scope, basis=replace(prepared.proposal.basis, editorial_refs=())).proposal_digest)
+        self.assertNotEqual(prepared.proposal.proposal_digest, replace_proposal(prepared.proposal,
+            authoring_scope=prepared.proposal.authoring_scope, basis=replace(prepared.proposal.basis,
+            editorial_refs=(), editorial_context_digest=None)).proposal_digest)
         self.assertNotIn(memory.record.event_id, {item.input_id for item in prepared.proposal.basis.inputs})
         self.assertEqual(prepared.proposal.authoring_scope, replace(request.authoring_scope, activity=lead.AuthoringActivity.REVIEW))
         self.assertEqual(request.authoring_scope.interpretation, brief)
@@ -166,3 +171,19 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         await other_case.apply(await other_case.review(await other_case.prepare(foreign)))
         self.assertIs(other_case.objective(origin).state, c.ArtifactObjectiveState.OPEN)
         self.assertIs(other_case.objective(foreign).state, c.ArtifactObjectiveState.SATISFIED)
+
+        state = self.runtime.inspect_editorial_state(self.session_id)
+        attempt = next(item for item in state.application_attempts if item.record_ref == memory.record_ref)
+        self.assertEqual((attempt.phase, attempt.candidate_digest, attempt.affected_paths),
+                         ("applied", review.candidate.candidate_digest, (path,)))
+        self.assertEqual(state.scope_state(superseded_memory.record_ref).coverage.scope,
+                         memory.record.draft.scope)
+        changed = replace(memory.record.draft, text="A new USER direction, not yet reflected.")
+        direction = await self.runtime.record_editorial_decision(self.session_id, conversation_id,
+            editorial.EditorialRecordRequest.directive(changed,
+                transition_reason="Explicit fresh direction."))
+        current = self.runtime.inspect_editorial_state(self.session_id)
+        self.assertEqual(current.selected_records, (direction.record,))
+        self.assertEqual(current.applied_facts, facts)
+        self.assertFalse(
+            any(item.record_ref == direction.record_ref for item in current.application_attempts))

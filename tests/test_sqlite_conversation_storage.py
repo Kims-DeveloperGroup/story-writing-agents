@@ -1,6 +1,8 @@
 """Public behavior and conformance tests for optional SQLite storage."""
 
 from __future__ import annotations
+from story_writing_agents.conversations.session_context import project_editorial_state
+from tests.test_collaboration_events import scoped_editorial_history
 
 from tests.conversation_archive_fixture import one_conversation_archive
 from tests.test_collaboration_events import editorial_history
@@ -235,10 +237,7 @@ class SQLiteCollaborationSearchContractTests(
     def test_sqlite_results_equal_the_reference_v2_search(self) -> None:
         query = CollaborationHistorySearchQuery("Consult specialists")
         scope = CollaborationHistorySearchScope(self.session_id)
-        reference = ReferenceCollaborationHistorySearch(
-            self.catalog,
-            self.store,
-        )
+        reference = ReferenceCollaborationHistorySearch(self.catalog, self.store)
         self.assertEqual(
             self.services.search.search(scope, query),
             reference.search(scope, query),
@@ -651,15 +650,9 @@ class SQLitePreflightAndProvisionTests(unittest.TestCase):
         allocated_uuid = mock.Mock(hex=allocated_hex)
 
         with (
+            mock.patch.object(sqlite_module, 'uuid4', return_value=allocated_uuid) as uuid4,
             mock.patch.object(
-                sqlite_module,
-                "uuid4",
-                return_value=allocated_uuid,
-            ) as uuid4,
-            mock.patch.object(
-                sqlite_module,
-                "_insert_metadata",
-                wraps=sqlite_module._insert_metadata,
+                sqlite_module, '_insert_metadata', wraps=sqlite_module._insert_metadata
             ) as insert_metadata,
         ):
             with self.assertRaises(WorkspaceFormatError) as caught:
@@ -754,12 +747,20 @@ class SQLiteArchiveTests(unittest.TestCase):
         self.assertIs(unchanged.status, ConversationArchiveImportStatus.UNCHANGED)
         self.assertEqual(storage_snapshot(target), before)
 
-        memory = one_conversation_archive(events=editorial_history())
+        memory = one_conversation_archive(events=scoped_editorial_history(editorial_history()))
         other = initialized_workspace(self)
         provision(other)
         self.assertIs(self.import_payload(other, memory).status, ConversationArchiveImportStatus.IMPORTED)
         self.assertEqual(self.export_payload(other), memory)
         self.assertEqual(event_images(self.export_payload(other)), event_images(memory))
+
+        restored = self.export_payload(other).sessions[0]
+        state = project_editorial_state(restored.session_id, restored.conversations[0].events)
+        self.assertEqual(tuple(item.status for item in state.scope_states[-3:]), ("partial", "active",
+            "active"))
+        self.assertEqual(state.current_records[-2].context_refs,
+                         project_editorial_state(restored.session_id, restored.conversations[0].events[:2])
+                             .context_refs((state.current_records[-3].ref,)))
 
     def test_import_is_one_transaction_for_metadata_events_and_all_batches(
         self,
@@ -777,11 +778,7 @@ class SQLiteArchiveTests(unittest.TestCase):
                 raise sqlite_module.SQLiteDatabaseFormatError()
             return original(connection, event)
 
-        with mock.patch.object(
-            sqlite_module,
-            "_insert_collaboration_event",
-            new=fail_late,
-        ):
+        with mock.patch.object(sqlite_module, '_insert_collaboration_event', new=fail_late):
             with self.assertRaises(WorkspaceFormatError):
                 self.import_payload(target, representative_archive())
         self.assertEqual(calls, 8)
@@ -815,10 +812,8 @@ class SQLiteArchiveTests(unittest.TestCase):
         provision(rejected)
         before = self.authoritative_rows(rejected)
         with mock.patch.object(
-            sqlite_module,
-            "_insert_metadata",
-            wraps=sqlite_module._insert_metadata,
-        ) as insert_metadata:
+                 sqlite_module, '_insert_metadata', wraps=sqlite_module._insert_metadata
+             ) as insert_metadata:
             with self.assertRaises(WorkspaceFormatError):
                 self.import_payload(rejected, overflow)
         insert_metadata.assert_not_called()
@@ -908,11 +903,7 @@ class SQLiteArchiveTests(unittest.TestCase):
                 )
             validator(connection)
 
-        with mock.patch.object(
-            sqlite_module,
-            "_validate_database_snapshot",
-            new=corrupt_postwrite,
-        ):
+        with mock.patch.object(sqlite_module, '_validate_database_snapshot', new=corrupt_postwrite):
             with self.assertRaises(WorkspaceFormatError):
                 self.import_payload(clean, payload)
         self.assertEqual(calls, 4)

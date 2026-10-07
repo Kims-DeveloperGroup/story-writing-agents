@@ -3337,6 +3337,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
                 "..writing_artifacts",
                 "._model",
                 "..lead_premise_decisions",
+                "..editorial_state",
             },
             "_external_view.py": set(),
             "_input_lifecycle.py": set(),

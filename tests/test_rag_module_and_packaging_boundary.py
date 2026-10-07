@@ -345,11 +345,13 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 154)
-        self.assertEqual(len(edges), 660)
+        self.assertEqual(len(modules), 155)
+        self.assertEqual(len(edges), 666)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
+                "story_writing_agents.editorial_scope",
+                "story_writing_agents.editorial_state",
                 "story_writing_agents.conversations.catalog",
                 "story_writing_agents.conversations.context",
                 "story_writing_agents.conversations.events",
@@ -1205,7 +1207,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.workspace.core as workspace_core
                 from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
                 assert len(story_writing_agents.__all__) == 106
-                assert len(conversations.__all__) == 177
+                assert len(conversations.__all__) == 187
                 assert len(conversation_events.__all__) == 132
                 assert len(conversation_context.__all__) == 37
                 assert conversations.CollaborationProposal is conversation_events.CollaborationProposal
@@ -1457,7 +1459,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.conversations.context as context
                 import story_writing_agents.conversations.events as events
                 assert len(story_writing_agents.__all__) == 106
-                assert len(conversations.__all__) == 177
+                assert len(conversations.__all__) == 187
                 assert len(events.__all__) == 132
                 assert len(context.__all__) == 37
                 assert catalog.ConversationCatalog is conversations.ConversationCatalog
