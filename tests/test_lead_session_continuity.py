@@ -264,3 +264,50 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         invalid = await restarted.record_editorial_decision(self.session_id, provisional, editorial_request("missing_citation", provenance_refs=(replace(provenance, event_id="unavailable"),)))
         self.assertIs(invalid.status, editorial.EditorialRecordStatus.INVALID_PROVENANCE)
         self.assertIsNone(invalid.record)
+
+        capacity_conversation = self.conversation("Complete payload overflow")
+        source_path = self.workspace.path("core_documents/global_outline.md")
+        marker = "PRIVATE_CAPACITY_SOURCE\n"
+        source_text = marker + '\\"' * ((131_072 - len(marker.encode("utf-8"))) // 2)
+        source_path.write_text(source_text, encoding="utf-8")
+        self.assertLessEqual(len(source_text.encode("utf-8")), 131_072)
+        preserved_history = (self.history(first), self.history(second))
+        preserved_approval = self.runtime.inspect_editorial_state(self.session_id)
+        submitted_before = tuple(self.backend.call_records)
+        with self.assertRaises(SessionContextCapacityError) as initial_capacity:
+            await self.say(capacity_conversation, "Review ${core_documents/global_outline.md} before answering.")
+        self.assertEqual(initial_capacity.exception.stage, "provider_payload")
+        self.assertGreater(initial_capacity.exception.actual_utf8_bytes, MAX_SESSION_CONTEXT_UTF8_BYTES)
+        self.assertEqual(initial_capacity.exception.maximum_utf8_bytes, MAX_SESSION_CONTEXT_UTF8_BYTES)
+        self.assertEqual(initial_capacity.exception.excess_utf8_bytes,
+            initial_capacity.exception.actual_utf8_bytes - MAX_SESSION_CONTEXT_UTF8_BYTES)
+        self.assertNotIn(marker.strip(), str(initial_capacity.exception))
+        self.assertNotIn(marker.strip(), repr(initial_capacity.exception))
+        self.assertEqual(tuple(self.backend.call_records), submitted_before)
+        self.assertEqual((self.history(first), self.history(second)), preserved_history)
+        self.assertEqual(self.runtime.inspect_editorial_state(self.session_id), preserved_approval)
+        self.assertNotIn(marker.strip(), repr(self.history(capacity_conversation)))
+        failed_capacity = self.checkpoint()
+        self.assertIsNone(failed_capacity.record.ready_checkpoint)
+        self.assertEqual(failed_capacity.record.attempt.provider_calls, ())
+        capacity_history = self.history(capacity_conversation)
+        self.runtime.conversation_storage_services.catalog.archive(self.session_id, capacity_conversation)
+        self.backend.context_threads.clear()
+        capacity_restart = StoryRuntime(self.workspace, self.backend)
+        restart_conversation = self.conversation("Overflow after restart")
+        restart_storage = capacity_restart.conversation_storage_services
+        retained_capacity = SessionHistorySourceAdapter(
+            restart_storage.catalog, restart_storage.event_store, self.session_id).capture()
+        archived_row = next(row for row in retained_capacity.conversations
+            if row.metadata.conversation_id == capacity_conversation)
+        self.assertEqual(archived_row.metadata.status.value, "archived")
+        self.assertEqual(restart_storage.event_store.read(self.session_id, capacity_conversation), capacity_history)
+        with self.assertRaises(SessionContextCapacityError) as restarted_capacity:
+            await self.say(restart_conversation, "Review ${core_documents/global_outline.md} before answering.",
+                runtime=capacity_restart)
+        self.assertEqual(restarted_capacity.exception.stage, "provider_payload")
+        self.assertGreater(restarted_capacity.exception.actual_utf8_bytes, MAX_SESSION_CONTEXT_UTF8_BYTES)
+        self.assertNotIn(marker.strip(), str(restarted_capacity.exception))
+        self.assertEqual(tuple(self.backend.call_records), submitted_before)
+        self.assertEqual(capacity_restart.inspect_editorial_state(self.session_id), preserved_approval)
+        self.assertEqual(source_path.read_text(encoding="utf-8"), source_text)

@@ -65,8 +65,37 @@ MAX_SESSION_CONTEXT_UTF8_BYTES = 262_144
 class SessionContextCapacityError(ValueError):
     """Exact retained context cannot fit; no omission or summary is allowed."""
 
-    def __init__(self) -> None:
-        super().__init__("exact session context exceeds the delivery capacity")
+    def __init__(
+        self,
+        *,
+        stage: str = "session_context",
+        actual_utf8_bytes: int | None = None,
+    ) -> None:
+        if stage not in {
+            "session_context", "session_history", "editorial_view",
+            "known_envelope", "provider_payload",
+        }:
+            raise ValueError("invalid session context capacity stage")
+        if actual_utf8_bytes is not None and (
+            type(actual_utf8_bytes) is not int or actual_utf8_bytes < 0
+        ):
+            raise ValueError("context byte count must be a nonnegative integer")
+        self.stage = stage
+        self.actual_utf8_bytes = actual_utf8_bytes
+        self.maximum_utf8_bytes = MAX_SESSION_CONTEXT_UTF8_BYTES
+        self.excess_utf8_bytes = (
+            None if actual_utf8_bytes is None
+            else max(0, actual_utf8_bytes - self.maximum_utf8_bytes)
+        )
+        message = "exact session context exceeds the delivery capacity"
+        if stage != "session_context" or actual_utf8_bytes is not None:
+            actual = "unavailable" if actual_utf8_bytes is None else str(actual_utf8_bytes)
+            excess = "unavailable" if self.excess_utf8_bytes is None else str(self.excess_utf8_bytes)
+            message += (
+                f" (stage: {stage}; actual UTF-8 bytes: {actual}; "
+                f"maximum: {self.maximum_utf8_bytes}; excess: {excess})"
+            )
+        super().__init__(message)
 
 
 class SessionContextHistoryChangedError(ValueError):
@@ -556,7 +585,7 @@ class SessionHistorySnapshot:
         try:
             return bounded_editorial_view(state, remaining)
         except ValueError as failure:
-            raise SessionContextCapacityError() from failure
+            raise SessionContextCapacityError(stage="editorial_view") from failure
 
     def editorial_refs(self) -> tuple[EditorialRecordRef, ...]:
         view = self.editorial_view()
@@ -674,6 +703,9 @@ class SessionHistorySnapshot:
             editorial = self.editorial_view()
             if editorial is not None:
                 value["editorial_state"] = editorial
-        if len(_encoded(value)) > MAX_SESSION_CONTEXT_UTF8_BYTES:
-            raise SessionContextCapacityError()
+        actual_utf8_bytes = len(_encoded(value))
+        if actual_utf8_bytes > MAX_SESSION_CONTEXT_UTF8_BYTES:
+            raise SessionContextCapacityError(
+                stage="session_history", actual_utf8_bytes=actual_utf8_bytes,
+            )
         return value

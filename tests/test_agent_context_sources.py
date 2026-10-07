@@ -379,11 +379,7 @@ class RealAuthorityAdapterTests(_SourceFixture):
         allowed = "core_documents/global_outline.md"
         blocked = "core_documents/character_sheets.md"
         self.publish(core_updates={"global_outline.md": "bounded outline"})
-        adapter = WritingArtifactSourceAdapter(
-            self.repository,
-            _scope(),
-            allowed_paths=frozenset({allowed}),
-        )
+        adapter = WritingArtifactSourceAdapter(self.repository, _scope(), allowed_paths=frozenset({allowed}))
 
         inventory = adapter.inventory(CONTEXT_SOURCE_POLICY)
 
@@ -400,11 +396,7 @@ class RealAuthorityAdapterTests(_SourceFixture):
         self.assertIs(caught.exception.code, ContextSourceErrorCode.AUTHORITY_MISMATCH)
         for invalid in ({allowed}, frozenset({"../escape.md"})):
             with self.subTest(invalid=invalid), self.assertRaises(ContextSourceError):
-                WritingArtifactSourceAdapter(
-                    self.repository,
-                    _scope(),
-                    allowed_paths=invalid,  # type: ignore[arg-type]
-                )
+                WritingArtifactSourceAdapter(self.repository, _scope(), allowed_paths=invalid)
 
     def test_artifact_capture_retries_once_then_reports_persistent_drift(self) -> None:
         adapter = WritingArtifactSourceAdapter(self.repository, _scope())
@@ -545,10 +537,7 @@ class RealAuthorityAdapterTests(_SourceFixture):
         )
         services.event_store.append_batch(batch)
         history = services.event_store.read("session", conversation_id)
-        captured_context = select_bounded_collaboration_context(
-            history,
-            event_ids=("proposal_event", "request_event"),
-        )
+        captured_context = select_bounded_collaboration_context(history, event_ids=("proposal_event", "request_event"))
         scope = _scope(subject_id=conversation_id)
         adapter = FocusedConversationSourceAdapter(
             services.catalog,
@@ -725,9 +714,7 @@ class RealAuthorityAdapterTests(_SourceFixture):
             "2026-08-28T00:00:00+00:00",
         )
         self.workspace.append_debate_message("session", debate_id, message)
-        debate_scope = _scope(
-            subject_kind=ContextSubjectKind.DEBATE, subject_id=debate_id
-        )
+        debate_scope = _scope(subject_kind=ContextSubjectKind.DEBATE, subject_id=debate_id)
         debate = ActiveDebateSourceAdapter(
             self.workspace, debate_scope, debate_id
         ).capture(f"debate/{debate_id}", CONTEXT_SOURCE_POLICY)
@@ -800,9 +787,7 @@ class RegistrySearchTests(_SourceFixture):
         with self.assertRaises(ContextSourceError) as caught:
             ContextSourceRegistry(
                 WritingArtifactSourceAdapter(self.repository, scope),
-                FocusedConversationSourceAdapter(
-                    services.catalog, services.event_store, other, None
-                ),
+                FocusedConversationSourceAdapter(services.catalog, services.event_store, other, None),
                 ActiveDebateSourceAdapter(self.workspace, scope, None),
                 OwnAgentStateSourceAdapter(self.workspace, scope),
             )
@@ -813,10 +798,7 @@ class RegistrySearchTests(_SourceFixture):
     ) -> None:
         scope = _scope()
         registry = self.registry(scope)
-        snapshot = _artifact_snapshot(
-            scope,
-            lines=("prefix\n", "ＮＥＥＤＬＥ\u200bgap\n", "needle tail\n"),
-        )
+        snapshot = _artifact_snapshot(scope, lines=("prefix\n", "ＮＥＥＤＬＥ\u200bgap\n", "needle tail\n"))
         manifest = ContextManifest(scope, (_entry(snapshot.descriptor),))
         calls: list[str] = []
 
@@ -861,11 +843,7 @@ class RegistrySearchTests(_SourceFixture):
         self.assertEqual(
             (matches[0].record.boundary.start, matches[0].record.boundary.end), (3, 27)
         )
-        lower = replace(
-            CONTEXT_ACTION_POLICY,
-            max_snippet_utf8_bytes=20,
-            max_excerpt_utf8_bytes=20,
-        )
+        lower = replace(CONTEXT_ACTION_POLICY, max_snippet_utf8_bytes=20, max_excerpt_utf8_bytes=20)
         matches, _, _ = registry.search(
             manifest,
             (ContextSearchQuery("needle", (ContextSourceKind.WRITING_ARTIFACT,)),),
@@ -892,9 +870,7 @@ class RegistrySearchTests(_SourceFixture):
         self.assertTrue(truncated)
         self.assertEqual(scanned, 0)
         capture.assert_not_called()
-        drifted = _artifact_snapshot(
-            scope, lines=("needle changed\n",), revision_seed=b"changed"
-        )
+        drifted = _artifact_snapshot(scope, lines=("needle changed\n",), revision_seed=b"changed")
         registry.capture = mock.Mock(side_effect=(snapshot, drifted))  # type: ignore[method-assign]
         with self.assertRaises(ContextSourceError) as caught:
             registry.search(

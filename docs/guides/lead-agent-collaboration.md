@@ -969,6 +969,20 @@ insufficient. Specialists cannot broaden their own assignment, source scope,
 or budget. A full-workspace read, arbitrary path, unbounded search, provider
 subagent, or hidden authority is never implied by a prompt.
 
+### When exact context exceeds capacity
+
+The current complete provider-context JSON has a 262,144 UTF-8-byte limit,
+including envelope and escaping. A capacity notice identifies the measurement
+stage and shows actual/maximum/excess bytes when available, without quoting story
+or conversation content. The rejected submission does not invoke the provider;
+existing history and failure records remain available for inspection.
+
+Editorial-memory bounds are separate from the complete required-history payload.
+Archive, a conversation change or restart can keep that history in delivery and
+does not promise more capacity. Inspect the retained history and current task
+before choosing the next request. Selective history delivery is a future policy
+boundary, not an automatic summary, deletion or replay permission.
+
 ## A practical checklist
 
 When collaborating with the lead:

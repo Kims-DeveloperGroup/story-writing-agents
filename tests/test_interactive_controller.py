@@ -1613,7 +1613,7 @@ class ControllerContractTests(ControllerTestCase):
         for module_name in graph:
             visit(module_name)
         self.assertEqual(len(modules), 155)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 666)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 667)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -6505,6 +6505,24 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                     if driver is not None:
                         self.assertLess(rendered.index("User"), rendered.index("working")); self.assertEqual(driver._progress_rows, 0)
             self.assertEqual(stream.getvalue().count("User"), 3); self.assertIn("503 Overloaded", rendered); self.assertIn("provider failure", rendered); self.assertIn("Elapsed: 00:00:00", rendered)
+
+        from story_writing_agents.conversations.session_context import SessionContextCapacityError
+        capacity = SessionContextCapacityError(stage="provider_payload", actual_utf8_bytes=262_145)
+        capacity_call = mock.AsyncMock(side_effect=capacity)
+        self.enterContext(_object_new_patch(RuntimeSession, "lead_turn", capacity_call))
+        output, progress, picker = self._Output(), self._Progress(), self._Picker()
+        adapter = lead_policy_module.InteractiveLeadAdapter(
+            session, runner, progress, picker, self._Prompt(), output)
+        self.assertFalse(adapter.submit(_UNIQUE_C, "PRIVATE_CAPACITY_USER"))
+        notice = next(component for component in output.components
+            if isinstance(component, lead_policy_module.Notice) and component.label == "context capacity")
+        self.assertIn(str(capacity), notice.text)
+        self.assertIn("oversized payload was not submitted", notice.text)
+        self.assertNotIn("PRIVATE_CAPACITY_USER", notice.text)
+        self.assertIs(notice.role, lead_policy_module.SemanticRole.ERROR)
+        self.assertIs(notice.state, lead_policy_module.ViewState.ERROR)
+        self.assertEqual(capacity_call.await_count, 1)
+        self.assertEqual((progress.observed, picker.calls), ([], []))
 
     def test_provider_invocation_failure_surfaces_transient_stream_error_in_final_output(self) -> None:
         session = RuntimeSession.__new__(RuntimeSession)

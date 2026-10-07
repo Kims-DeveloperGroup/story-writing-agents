@@ -117,7 +117,7 @@ Dependencies flow from `service`, `sources`, and `progress` toward manifest/acti
 contracts. Filesystem source access is delegated to writing-artifact and workspace owners. Optional
 validation diagnostics preserve rejection, repair, checkpoint, and authority decisions.
 
-`service` owns provider delivery and verified native continuity; host retains integrity receipts and complete-history coverage. `request_compaction` shares only when properties and bytes decrease before accounting; it owns no durable state or resources.
+`service` owns provider delivery, exact payload UTF-8 capacity diagnostics and verified native continuity; host retains integrity receipts and complete-history coverage. `request_compaction` shares only when properties and bytes decrease before accounting; it owns no durable state or resources.
 
 ### Agent exchange capture
 
@@ -139,7 +139,7 @@ search/storage contracts without owning persistence.
 - `conversations.events`, `conversations.session_context`
 - `conversation_search`, `conversation_literal_search`, `conversation_retrieval`
 
-`catalog` owns catalog behavior; `events` owns typed exploration request/report/adoption captures and schema-v2 event contracts; `context` enforces current-focus provenance and fresh drafting, and `context` projects exact Commit authority or typed reprepare from durable Apply history; `session_context` projects exact session history without storage bookkeeping or native-thread ownership; `events` also owns immutable qualified premise captures and strict basis-v2 codecs; `context` validates first-confirm task pins and inherits both physical-call and round counters through the existing confirmed recommendation handoff.
+`catalog` owns catalog behavior; `events` owns typed exploration request/report/adoption captures and schema-v2 event contracts; `context` enforces current-focus provenance and fresh drafting, and `context` projects exact Commit authority or typed reprepare from durable Apply history; `session_context` projects exact session history and owns the fixed UTF-8 delivery cap/content-free capacity exception, without storage bookkeeping or native-thread ownership; `events` also owns immutable qualified premise captures and strict basis-v2 codecs; `context` validates first-confirm task pins and inherits both physical-call and round counters through the existing confirmed recommendation handoff.
 fresh delivery is complete, while compatible continuation carries unseen facts. Search implementations must return public
 search/retrieval contracts rather than expose storage internals. Conversation events and
 retrieval may carry bounded validation details associated with the physical provider call;

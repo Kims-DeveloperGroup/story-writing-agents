@@ -252,6 +252,28 @@ class CandidateWireContractTests(unittest.TestCase):
                         selected, full, compact, _ = projected(short_target, duplicate=index, padding=padding, diagnostics=True)
                     self.assertEqual(size(selected), service_module.MAX_SESSION_CONTEXT_UTF8_BYTES)
                     self.assertGreater(size(compact), service_module.MAX_SESSION_CONTEXT_UTF8_BYTES)
+                    service_module._require_context_capacity(schema, selected[0], stage="provider_payload")
+                    escaped = '한\n\\"'
+                    with mock.patch.object(service_module, "_latest_debate_candidate_record",
+                        side_effect=(record(1, short_base), record(index, short_target))):
+                        below, _, _, _ = projected(short_target, duplicate=index,
+                            padding=escaped + padding[10:], diagnostics=True)
+                    self.assertEqual(size(below), service_module.MAX_SESSION_CONTEXT_UTF8_BYTES - 1)
+                    service_module._require_context_capacity(schema, below[0], stage="provider_payload")
+                    with mock.patch.object(service_module, "_latest_debate_candidate_record",
+                        side_effect=(record(1, short_base), record(index, short_target))):
+                        over, _, _, _ = projected(short_target, duplicate=index,
+                            padding=escaped + padding[8:], diagnostics=True)
+                    self.assertEqual(size(over), service_module.MAX_SESSION_CONTEXT_UTF8_BYTES + 1)
+                    with self.assertRaises(service_module.SessionContextCapacityError) as caught:
+                        service_module._require_context_capacity(schema, over[0], stage="provider_payload")
+                    self.assertEqual(caught.exception.stage, "provider_payload")
+                    self.assertEqual(caught.exception.actual_utf8_bytes, size(over))
+                    self.assertEqual(caught.exception.maximum_utf8_bytes,
+                        service_module.MAX_SESSION_CONTEXT_UTF8_BYTES)
+                    self.assertEqual(caught.exception.excess_utf8_bytes, 1)
+                    self.assertNotIn(escaped, str(caught.exception))
+                    self.assertNotIn(escaped, repr(caught.exception))
         with mock.patch.object(service_module, "_latest_debate_candidate_record", side_effect=(record(1, "small"), record(2, "small"))):
             self.assertEqual(projected("small"), {"content_delivery": "full_text", "content_text": "small"})
         with mock.patch.object(service_module, "_latest_debate_candidate_record", side_effect=(record(1, base), record(2, base + "stale"))):

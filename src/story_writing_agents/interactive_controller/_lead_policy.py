@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ..lead_task_transitions import LeadTaskAction, LeadTaskDecision
 from ..conversations import LeadTaskDecisionResult, LeadMaterialChoice
+from ..conversations.session_context import SessionContextCapacityError
 
 import asyncio
 import dataclasses
@@ -468,6 +469,23 @@ class InteractiveLeadAdapter:
                     label="authentication required",
                     role=SemanticRole.ERROR,
                     state=ViewState.ERROR,
+                )
+            )
+            self._write_elapsed()
+            return False
+        except SessionContextCapacityError as failure:
+            error_message = str(failure)
+            advice = (
+                "The oversized payload was not submitted to the provider. "
+                "Inspect /history and /exchanges before continuing."
+            )
+            self._semantic_output.write_component(
+                project_lead_error_result(error_message, advice=advice)
+            )
+            self._semantic_output.write_component(
+                Notice(
+                    f"{error_message} {advice}", label="context capacity",
+                    role=SemanticRole.ERROR, state=ViewState.ERROR,
                 )
             )
             self._write_elapsed()

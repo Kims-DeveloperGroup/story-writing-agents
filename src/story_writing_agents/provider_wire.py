@@ -999,6 +999,10 @@ for _editorial_value, _editorial_meaning in {
     "protected_ambiguity": "USER-protected intentional ambiguity; do not automatically explain it",
     "setup_obligation": "a retained setup obligation; Apply does not infer semantic fulfillment",
     "unresolved_concern": "a retained concern until an explicit USER editorial revision",
+    "proposed": (
+        "A provisional editorial record awaiting explicit USER selection; "
+        "it grants no artifact, READ, confirmation or workflow authority."
+    ),
     "selected": "exact USER-selected editorial intent in its enclosing record; no artifact or workflow permission",
     "superseded": "a historical editorial revision replaced by an exact USER operation; it is not current selected intent",
     "recorded": "an exact USER editorial operation was durably recorded",

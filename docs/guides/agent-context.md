@@ -113,14 +113,31 @@ current evidence receipt, confirmation, replay, artifact-write, or Git
 authority. Explicit references and SEARCH/READ evidence rules still apply.
 
 Exact delivery permits at most 4,096 conversations and an inclusive limit of
-262,144 UTF-8 bytes for the canonically serialized contextual payload, including
-framing and any reference observation it carries. Excess fails with
-`exact session context exceeds the delivery capacity`; runtime never silently
-omits or summarizes required history. Known history, current state, input, and
-framing are checked before provider work. Generated observations are checked
-before the subsequent substantive submission, so their excess does not imply
-that no earlier provider call occurred. This runtime byte limit does not
-guarantee that the selected model's token window can hold the context.
+262,144 UTF-8 bytes for the complete canonically serialized contextual payload,
+including framing, JSON escaping and any reference observation it carries.
+Equality is allowed. This current payload cap excludes the separately delivered
+output schema and native transport bytes; it is not a token budget or a guarantee
+that the selected model's context window can hold the request.
+
+Excess raises `SessionContextCapacityError`. The content-free diagnostic identifies
+its stage and reports actual/maximum/excess UTF-8 bytes when measured. An early
+editorial allocation can fail before a final payload exists, so its counts remain
+explicitly unavailable. History/editorial preflight and known-envelope checks are
+distinct from the final provider-payload check. That final check uses the existing
+provider encoder immediately before initial or continuation submission; generated
+observations are checked before their subsequent substantive submission. A capacity
+stop prevents the offending submission, without implying that no earlier provider
+call occurred. Existing accepted user/control records and failure audit remain;
+capacity failure creates no approval or successful task progress.
+
+Bounded editorial memory improves decision discovery and restoration, but does not
+solve the complete required-history delivery limit. Fresh threads still require
+full retained history; verified compatible threads receive the established missing
+content and new facts. Archive, conversation change or restart alone is not a
+capacity bypass. Runtime never silently omits, summarizes or deletes required
+history to fit. Selective delivery needs a separate policy defining preserved
+originals, required history, retrieval/provenance, explicit omissions, restart
+behavior and consistent contracts for both providers.
 
 ## Checkpoints and provider input
 
