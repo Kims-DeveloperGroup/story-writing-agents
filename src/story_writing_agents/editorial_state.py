@@ -804,7 +804,7 @@ def project_editorial_scopes(
             chosen = intersected if decision.scope is None else decision.scope
             if editorial_scope_contains(intersected, chosen) is not True:
                 raise EditorialStateIntegrityError("editorial relation exceeds exact intersection")
-            if epoch_coverage[(other.record_id, other.draft.scope)].status == "replaced":
+            if epochs[(other.record_id, other.draft.scope)].status == "replaced":
                 raise EditorialStateIntegrityError("editorial relation counterpart has no remaining coverage")
             facts.append(EditorialScopeRelationFact(record.ref, index, decision))
             if decision.kind is EditorialRelationKind.REPLACE:

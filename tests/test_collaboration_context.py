@@ -550,9 +550,7 @@ class CollaborationBudgetAndOutcomeTests(unittest.TestCase):
         _assert_invalid(self, history, over)
 
     def test_partial_failure_preserves_sibling_and_prohibits_synthesis(self) -> None:
-        history, proposal, result = executed_history(
-            failed_assignment_id="assignment_character"
-        )
+        history, proposal, result = executed_history(failed_assignment_id="assignment_character")
         projection = project_collaboration_history(history)
         self.assertEqual(projection.execution_result, result)
         self.assertEqual(
@@ -710,10 +708,7 @@ class CollaborationConfirmationAndRecoveryTests(unittest.TestCase):
     def test_rejected_submitted_lead_projects_retry_and_readable_closure(
         self,
     ) -> None:
-        message = _user_message_draft(
-                      'rejected_user_message',
-                      'Reject the returned provider result.',
-                  )
+        message = _user_message_draft('rejected_user_message', 'Reject the returned provider result.')
         calls = provider_call_drafts(
             invocation_id="rejected_invocation",
             call_id="rejected_call",
@@ -790,10 +785,7 @@ class CollaborationConfirmationAndRecoveryTests(unittest.TestCase):
         yes_batch = make_batch(
             awaiting,
             "batch_free_text",
-            _user_message_draft(
-                'free_text_yes',
-                'Yes',
-            ),
+            _user_message_draft('free_text_yes', 'Yes'),
         )
         with_yes = store_batch(awaiting, yes_batch)
         projection = project_collaboration_history(with_yes)
@@ -970,10 +962,7 @@ class CollaborationAtomicBatchTests(unittest.TestCase):
         event_conflict = make_batch(
             history,
             "batch_event_conflict",
-            _user_message_draft(
-                'proposal_event',
-                'Different event with a reused ID.',
-            ),
+            _user_message_draft('proposal_event', 'Different event with a reused ID.'),
         )
         _assert_invalid(
             self,
@@ -997,10 +986,7 @@ class CollaborationAtomicBatchTests(unittest.TestCase):
             make_batch(
                 history,
                 "batch_after_corruption",
-                _user_message_draft(
-                    'after_corruption',
-                    'Never appended.',
-                ),
+                _user_message_draft('after_corruption', 'Never appended.'),
             ),
             CollaborationAppendFailure.CORRUPT_HISTORY,
         )

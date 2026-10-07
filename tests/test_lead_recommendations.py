@@ -283,6 +283,20 @@ class LeadRecommendationTests(RecommendationCase):
                 transition_reason="Retain the complete outline.",
                 relation_decisions=(prior_relation,),
                 expected_editorial_context_digest=state.context_digest((replacement.record_ref,))))
+        state = self.runtime.inspect_editorial_state(self.session_id)
+        self.assertEqual(state.scope_state(replacement.record_ref).status, "replaced")
+        before, calls = self.history(anchored), len(self.backend.calls)
+        refused = await self.runtime.record_editorial_decision(self.session_id, anchored,
+            editorial.EditorialRecordRequest.directive(whole, transition_reason="Consumed counterpart.",
+                relation_decisions=(replace(prior_relation, kind=editorial.EditorialRelationKind.COEXIST),),
+                expected_editorial_context_digest=state.context_digest((replacement.record_ref,))))
+        self.assertIs(refused.status, editorial.EditorialRecordStatus.STALE_REFERENCE)
+        refused = await self.runtime.record_editorial_decision(self.session_id, anchored,
+            editorial.EditorialRecordRequest.directive(whole, transition_reason="Consumed counterpart.",
+                relation_decisions=(replace(prior_relation, kind=editorial.EditorialRelationKind.CONFLICT),),
+                expected_editorial_context_digest=state.context_digest((replacement.record_ref,))))
+        self.assertIs(refused.status, editorial.EditorialRecordStatus.STALE_REFERENCE)
+        self.assertEqual((self.history(anchored), len(self.backend.calls)), (before, calls))
         finite = scopes.EditorialScope.selected_range(OUTLINE, 1, 1, hashlib.sha256(source_bytes).hexdigest())
         finite_draft = replace(draft, scope=finite)
         state = self.runtime.inspect_editorial_state(self.session_id)
