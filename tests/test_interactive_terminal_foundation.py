@@ -192,6 +192,19 @@ MODEL_EXPORTS = (
 def _fresh_literal_object_return_value_autospec(target, attribute, value):
     return mock.patch.object(target, attribute, autospec=True, return_value=value)
 
+def _fresh_autospec_effect(target, attribute, effect):
+    return mock.patch.object(target, attribute, autospec=True, side_effect=effect)
+
+def _object_effect_patch(target, attribute, value):
+    return mock.patch.object(target, attribute, side_effect=value)
+
+def _object_options_patch(target, attribute, **options):
+    return mock.patch.object(target, attribute, **options)
+
+def _fresh_notice(message, **options):
+    return Notice(message, **options)
+
+
 class ObservedStream:
     """Expose deterministic stream capabilities without real terminal I/O."""
 
@@ -1176,11 +1189,7 @@ class RenderingFoundationTests(unittest.TestCase):
         component = Panel(
             "Unsafe\x1b]0;owned\x07",
             (
-                Notice(
-                    "bad\x1b[31m text",
-                    role=SemanticRole.ERROR,
-                    state=ViewState.ERROR,
-                ),
+                _fresh_notice('bad\x1b[31m text', role=SemanticRole.ERROR, state=ViewState.ERROR),
                 Field("Wide", "界e\u0301"),
             ),
         )
@@ -1372,11 +1381,8 @@ class RenderingFoundationTests(unittest.TestCase):
                     "Pending",
                     (Field("Language", "EN (Changed)", role=SemanticRole.WARNING),),
                 ),
-                Notice(
-                    "Changed values apply only to the next shell after Save.",
-                    label="activation",
-                    role=SemanticRole.MUTED,
-                ),
+                _fresh_notice('Changed values apply only to the next shell after Save.', label='activation',
+                              role=SemanticRole.MUTED),
             ),
             state=ViewState.OPEN,
         )
@@ -1786,12 +1792,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             fallback.side_effect = failure
             with (
                 self.subTest(failure=type(failure).__name__),
-                mock.patch.object(
-                    RawTerminalDriver,
-                    "capabilities",
-                    autospec=True,
-                    return_value=line_capabilities,
-                ),
+                _fresh_literal_object_return_value_autospec(RawTerminalDriver, "capabilities", line_capabilities),
             ):
                 self.assertEqual(
                     driver.read_prompt(view, renderer, transition_prompt_input),
@@ -1867,12 +1868,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         with (
             _fresh_literal_object_return_value_autospec(RawTerminalDriver, 'capabilities', capabilities),
             _fresh_literal_object_return_value_autospec(RawTerminalDriver, '_prepare_input', (capabilities, configuration)),
-            mock.patch.object(
-                RawTerminalDriver,
-                "_read_control_line",
-                autospec=True,
-                side_effect=("12", "\x1b"),
-            ) as live,
+            _fresh_autospec_effect(RawTerminalDriver, "_read_control_line", ("12", "\x1b")) as live,
         ):
             self.assertEqual(
                 driver.read_prompt(view, renderer, transition_prompt_input),
@@ -2017,11 +2013,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
 
         with (
             _fresh_literal_object_return_value_autospec(RawTerminalDriver, 'capabilities', capability(CapabilityProfile.ANSI)),
-            mock.patch.object(
-                _driver.asyncio,
-                "sleep",
-                side_effect=controlled_progress_sleep,
-            ),
+            _object_effect_patch(_driver.asyncio, "sleep", controlled_progress_sleep),
         ):
             result = asyncio.run(
                 driver.run_advisory_progress(
@@ -2106,12 +2098,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         async def operation_failure() -> str:
             raise ValueError("operation failed")
 
-        with capable, mock.patch.object(
-            RawTerminalDriver,
-            "_clear_progress_frame",
-            autospec=True,
-            side_effect=OSError("clear failed"),
-        ), self.assertRaisesRegex(ValueError, "operation failed"):
+        with capable, _fresh_autospec_effect(RawTerminalDriver, "_clear_progress_frame", OSError("clear failed")), self.assertRaisesRegex(ValueError, "operation failed"):
             asyncio.run(
                 driver.run_advisory_progress(
                     operation_failure(), render_advisory_progress_frame
@@ -2137,11 +2124,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
 
         with (
             capable,
-            mock.patch.object(
-                _driver.asyncio,
-                "sleep",
-                side_effect=controlled_progress_sleep,
-            ),
+            _object_effect_patch(_driver.asyncio, "sleep", controlled_progress_sleep),
             self.assertRaises(AdvisoryProgressError),
         ):
             asyncio.run(driver.run_advisory_progress(slow_operation(), broken_renderer))
@@ -2151,12 +2134,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         async def quick_operation() -> str:
             return "done"
 
-        with capable, mock.patch.object(
-            RawTerminalDriver,
-            "_draw_progress_frame",
-            autospec=True,
-            side_effect=OSError("initial draw failed"),
-        ), self.assertRaises(AdvisoryProgressError):
+        with capable, _fresh_autospec_effect(RawTerminalDriver, "_draw_progress_frame", OSError("initial draw failed")), self.assertRaises(AdvisoryProgressError):
             asyncio.run(
                 driver.run_advisory_progress(
                     quick_operation(), render_advisory_progress_frame
@@ -2189,12 +2167,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                 )
             )
 
-        with capable, mock.patch.object(
-            RawTerminalDriver,
-            "_clear_progress_frame",
-            autospec=True,
-            side_effect=OSError("final clear failed"),
-        ), self.assertRaises(AdvisoryProgressError):
+        with capable, _fresh_autospec_effect(RawTerminalDriver, "_clear_progress_frame", OSError("final clear failed")), self.assertRaises(AdvisoryProgressError):
             asyncio.run(
                 driver.run_advisory_progress(
                     quick_operation(), render_advisory_progress_frame
@@ -2225,11 +2198,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         fallback = mock.Mock()
         input_stream = object()
         output_stream = object()
-        with mock.patch.object(
-            _core,
-            "RawTerminalDriver",
-            return_value=driver,
-        ) as driver_factory:
+        with _object_options_patch(_core, "RawTerminalDriver", return_value=driver) as driver_factory:
             terminal = _core.build_stream_terminal(
                 fallback,
                 input_stream,  # type: ignore[arg-type]
@@ -2303,11 +2272,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             accepted_component,
             driver.capabilities.return_value,
         )
-        with mock.patch.object(
-            _core,
-            "render_component",
-            wraps=render_component,
-        ) as accepted_render:
+        with _object_options_patch(_core, "render_component", wraps=render_component) as accepted_render:
             terminal_facade.InteractiveSemanticOutput(
                 terminal
             ).write_accepted_input(accepted_component)
@@ -3237,12 +3202,7 @@ class StartupPresentationFoundationTests(unittest.TestCase):
             )
             return frame
 
-        with mock.patch.object(
-            RawTerminalDriver,
-            "capabilities",
-            autospec=True,
-            side_effect=observed,
-        ):
+        with _fresh_autospec_effect(RawTerminalDriver, "capabilities", observed):
             sleeps: list[float] = []
             driver.run_startup_welcome(render, sleeps.append)
 
@@ -3333,19 +3293,11 @@ class StartupPresentationFoundationTests(unittest.TestCase):
         presentation = InteractiveStartupPresentation(terminal, sleeper=sleeper)
         presentation.show_welcome()
         presentation.show_notice(
-            Notice(
-                "Opening native sign-in.",
-                label="authentication",
-                state=ViewState.LOADING,
-            )
+            _fresh_notice('Opening native sign-in.', label='authentication', state=ViewState.LOADING)
         )
         presentation.show_result(
-            Notice(
-                "Authentication succeeded.",
-                label="authentication",
-                role=SemanticRole.SUCCESS,
-                state=ViewState.COMPLETED,
-            )
+            _fresh_notice('Authentication succeeded.', label='authentication',
+                          role=SemanticRole.SUCCESS, state=ViewState.COMPLETED)
         )
         sleeper.assert_not_called()
         rendered = "".join(records)
@@ -3406,6 +3358,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
                 "..agent_context.progress",
             },
             "_collaboration_view.py": {
+                "..lead_task_transitions",
                 "..conversations",
                 "..reply_trace",
                 "..specialist_routing",

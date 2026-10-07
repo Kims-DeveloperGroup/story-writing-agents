@@ -1,6 +1,8 @@
 """Focused public-runtime coverage for separately confirmed local story commits."""
 
 from __future__ import annotations
+import story_writing_agents.lead_task_transitions as task
+from tests.test_lead_orchestration import _discussion_reply, _SubmittedFailure, _submitted_calls
 
 from story_writing_agents import lead_exploration as exploration
 
@@ -323,6 +325,31 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         )
         self.assertEqual(self.session_git_snapshot(), before_git)
 
+        conversation = applied.request.reviewed_proposal.conversation_id
+        self.backend.enqueue(_discussion_reply("Discussion preserves this exact Commit request."))
+        await self.runtime.decide_lead_task(task.LeadTaskDecision.for_conversation(
+            self.session_id, conversation, task.LeadTaskAction.DISCUSS, text="Explain the pending Commit.",
+        ))
+        for failure in (_SubmittedFailure(RuntimeError("known Commit discussion failure")),
+                        _SubmittedFailure(asyncio.CancelledError("known Commit discussion cancellation"))):
+            prefix = self.history(conversation)
+            self.backend.enqueue(failure)
+            decision = task.LeadTaskDecision.for_conversation(
+                self.session_id, conversation, task.LeadTaskAction.DISCUSS, text="Read-only Commit discussion.",
+            )
+            if isinstance(failure.failure, asyncio.CancelledError):
+                with self.assertRaises(asyncio.CancelledError):
+                    await self.runtime.decide_lead_task(decision)
+            else:
+                await self.runtime.decide_lead_task(decision)
+            projection = StoryRuntime(self.workspace, self.backend).inspect_lead_collaboration(
+                self.session_id, conversation,
+            )
+            self.assertEqual(projection.current_story_commit_request, request)
+            self.assertEqual(len(_submitted_calls(self.history(conversation)[len(prefix):])), 1)
+            self.assertEqual(self.history(conversation)[:len(prefix)], prefix)
+            self.assertEqual(self.artifact_snapshot(), before_files)
+            self.assertEqual(self.session_git_snapshot(), before_git)
         close_calls = []
         original_close = type(pin).close
 
@@ -350,6 +377,31 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         self.assert_commit_events_round_trip(
             applied.request.reviewed_proposal.conversation_id
         )
+
+        uncertain = LeadStoryCommitTests()
+        uncertain.setUp()
+        self.addCleanup(uncertain.doCleanups)
+        pending = await uncertain.applied_create("Unknown discussion with pending Commit")
+        conversation = pending.request.reviewed_proposal.conversation_id
+        files_before, git_before = uncertain.artifact_snapshot(), uncertain.session_git_snapshot()
+        uncertain.backend.enqueue(_SubmittedFailure(RuntimeError("uncertain pending discussion"), submission_uncertain=True))
+        with self.assertRaisesRegex(RuntimeError, "^uncertain pending discussion$"):
+            await uncertain.runtime.decide_lead_task(task.LeadTaskDecision.for_conversation(
+                uncertain.session_id, conversation, task.LeadTaskAction.DISCUSS, text="Explain without committing.",
+            ))
+        prefix, spent = uncertain.history(conversation), len(uncertain.backend.calls)
+        restarted = StoryRuntime(uncertain.workspace, uncertain.backend)
+        blocked = restarted.inspect_lead_collaboration(uncertain.session_id, conversation)
+        self.assertEqual(blocked.current_story_commit_request, pending.commit_request)
+        self.assertIs(blocked.next_safe_action, CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME)
+        with self.assertRaises(ValueError):
+            await restarted.decide_lead_task(task.LeadTaskDecision.for_conversation(
+                uncertain.session_id, conversation, task.LeadTaskAction.DISCUSS, text="Do not replay unknown work.",
+            ))
+        self.assertEqual(uncertain.history(conversation), prefix)
+        self.assertEqual(len(uncertain.backend.calls), spent)
+        self.assertEqual(uncertain.artifact_snapshot(), files_before)
+        self.assertEqual(uncertain.session_git_snapshot(), git_before)
 
 
     async def test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git(

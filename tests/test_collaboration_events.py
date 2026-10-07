@@ -231,6 +231,11 @@ class CollaborationValueContractTests(unittest.TestCase):
         self.assertEqual(COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES, 32_768)
         expected = {
             CollaborationEventKind: (
+                    'lead_task_decision',
+                    'lead_task_transition',
+                    'lead_material_capture',
+                    'lead_discussion',
+                    'lead_public_response',
                 'lead_exploration_request',
                 'lead_exploration_result',
                 'exploration_adoption',
@@ -345,6 +350,7 @@ class CollaborationValueContractTests(unittest.TestCase):
             ),
             CollaborationTerminalScope: ("assignment", "synthesis"),
             CollaborationInvocationKind: (
+                    'lead_discussion',
                 "lead",
                 "lead_exploration",
                 "specialist_assignment",
@@ -359,6 +365,7 @@ class CollaborationValueContractTests(unittest.TestCase):
             CollaborationProviderCallState: ("prepared", "submitted"),
             LeadOutcomeKind: (
                 'exploration',
+                    'discussion',
                 "answer",
                 "question",
                 "critique",
@@ -1553,11 +1560,19 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
     ) -> None:
         exploration_names = ('CollaborationLeadExplorationRequestPayload', 'CollaborationLeadExplorationResultPayload', 'CollaborationExplorationAdoptionPayload', 'CollaborationPremiseDecisionPayload', 'CollaborationPremiseSelectionPayload', 'CollaborationPremiseFreshWorkAdmissionPayload')
         exploration_names += ("CollaborationEditorialRecordPayload",)
+        task_names = (
+            'CollaborationLeadTaskDecisionPayload',
+            'CollaborationLeadTaskTransitionPayload',
+            'CollaborationLeadMaterialCapturePayload',
+            'CollaborationLeadDiscussionPayload',
+            'CollaborationLeadPublicResponsePayload',
+        )
+        exploration_names += task_names
         expected_event_exports = COLLABORATION_EVENT_EXPORTS
         expected_context_exports = COLLABORATION_CONTEXT_EXPORTS
         self.assertEqual(tuple(events_owner.__all__), expected_event_exports)
         self.assertEqual(tuple(context_owner.__all__), expected_context_exports)
-        self.assertEqual(len(conversations.__all__), 168)
+        self.assertEqual(len(conversations.__all__), 177)
         self.assertNotIn("__getattr__", vars(events_owner))
         self.assertNotIn("__getattr__", vars(context_owner))
         self.assertNotIn("__getattr__", vars(conversations))
@@ -1566,7 +1581,7 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
             for name in conversations.__all__
             if name.startswith("Collaboration") or name.startswith("COLLABORATION_")
         }
-        self.assertEqual(len(collaboration_names), 70)
+        self.assertEqual(len(collaboration_names), 75)
         for owner in (events_owner, context_owner):
             for name in (n for n in owner.__all__ if n not in exploration_names):
                 if name.startswith("Collaboration") or name.startswith(
@@ -1579,12 +1594,12 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
         callable_names = {
             name
             for name in conversations.__all__
-            if (name.startswith("Collaboration")
+            if name not in task_names and ((name.startswith("Collaboration")
             or name.startswith("collaboration_")
             or name.startswith("encode_collaboration_")
             or name.startswith("decode_collaboration_")
             or name.startswith("project_collaboration_")
-            or name.startswith("validate_collaboration_")) and name not in exploration_names
+            or name.startswith("validate_collaboration_")) and name not in exploration_names)
         }
         callable_names.discard("CollaborationPayload")
         for name in callable_names:
@@ -1618,6 +1633,16 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
             CollaborationProposal,
         )
 
+        for name in (
+            'LeadTaskView',
+            'LeadMaterialChoice',
+            'LeadPublicResponseView',
+            'LeadTaskDecisionResult',
+        ):
+            self.assertIs(getattr(context_owner, name), getattr(conversations, name))
+            self.assertEqual(getattr(conversations, name).__module__, "story_writing_agents.conversations")
+            self.assertNotIn(name, story_writing_agents.__all__)
+            self.assertFalse(hasattr(story_writing_agents, name))
         for name in ("project_editorial_state", "editorial_provenance_available"):
             self.assertIs(getattr(context_owner, name), getattr(conversations, name))
             self.assertNotIn(name, story_writing_agents.__all__)
@@ -1685,9 +1710,9 @@ import story_writing_agents
 import story_writing_agents.conversations as facade
 import story_writing_agents.conversations.context as context
 import story_writing_agents.conversations.events as events
-assert len(facade.__all__) == 168
-assert len(events.__all__) == 127
-assert len(context.__all__) == 33
+assert len(facade.__all__) == 177
+assert len(events.__all__) == 132
+assert len(context.__all__) == 37
 assert facade.CollaborationProposal is events.CollaborationProposal
 assert facade.CollaborationEventStore is context.CollaborationEventStore
 assert not hasattr(story_writing_agents, "CollaborationProposal")

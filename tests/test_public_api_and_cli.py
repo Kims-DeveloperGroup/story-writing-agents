@@ -95,6 +95,14 @@ from tests.sqlite_conversation_storage_fixture import database_path, provision
 
 from tests.test_smoke_cli import editorial_action, editorial_fixture
 
+def _cli_new_patch(attribute, value):
+    return mock.patch.object(cli_module, attribute, value)
+
+
+def _cli_object_effect_patch(target, attribute, value):
+    return mock.patch.object(target, attribute, side_effect=value)
+
+
 def _fresh_construction_seam_patch(module, attribute):
     return mock.patch.object(
         module,
@@ -111,6 +119,9 @@ def _fresh_cli_value_patch(attribute, value):
         attribute,
         return_value=value,
     )
+
+def _object_options_patch(target, attribute, **options):
+    return mock.patch.object(target, attribute, **options)
 
 
 def _fresh_cli_effect_patch(attribute, effect):
@@ -1348,11 +1359,7 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(sys, "stdin", stdin),
                     mock.patch.object(sys, "stdout", stdout),
                     mock.patch.object(sys, "stderr", stderr),
-                    mock.patch.object(
-                        cli_module,
-                        "_parse_backend_overrides",
-                        side_effect=AssertionError("parsed overrides before TTY"),
-                    ) as parse_overrides,
+                    _fresh_cli_effect_patch("_parse_backend_overrides", AssertionError("parsed overrides before TTY")) as parse_overrides,
                     _fresh_workspace_resolution_failure_patch(AssertionError("resolved workspace before TTY")) as resolve_workspace,
                     _fresh_cli_context_failure_patch(AssertionError("loaded context before TTY")) as load_context,
                     mock.patch.object(cli_module, "AgentBackend") as backend,
@@ -1869,12 +1876,8 @@ class CliTests(unittest.TestCase):
                 or events.append(('auth_coordinator', None)) or coordinator
             )),
             _fresh_cli_effect_patch('select_default_provider', select_default),
-            mock.patch.object(
-                cli_module.ConfigManager,
-                "load_configuration_snapshot",
-                autospec=True,
-                side_effect=load_snapshot,
-            ),
+            _object_options_patch(cli_module.ConfigManager, 'load_configuration_snapshot',
+                                  autospec=True, side_effect=load_snapshot),
             _fresh_default_backend_attempt_patch(establish_default),
             _fresh_cli_effect_patch('_effective_interactive_providers', routes),
             _fresh_recording_cli_context_patch(events),
@@ -2003,11 +2006,8 @@ class CliTests(unittest.TestCase):
                     ConversationStorageCapability.UNAVAILABLE,
                 )
                 runtime_probe_context = (
-                    mock.patch.object(
-                        storage_selection_module,
-                        "probe_sqlite_conversation_storage_runtime",
-                        return_value=unavailable_preflight,
-                    )
+                    _object_options_patch(storage_selection_module, 'probe_sqlite_conversation_storage_runtime',
+                                          return_value=unavailable_preflight)
                     if runtime_unavailable
                     else contextlib.nullcontext(None)
                 )
@@ -2251,11 +2251,8 @@ class CliTests(unittest.TestCase):
             _fresh_terminal_builder_patch(terminal),
             mock.patch.object(cli_module, "ProviderAuthService", return_value=object()),
             _fresh_cli_value_patch('InteractiveAuthCoordinator', coordinator),
-            mock.patch.object(
-                cli_module,
-                "establish_default_backend",
-                wraps=cli_module.establish_default_backend,
-            ) as establish,
+            _object_options_patch(cli_module, 'establish_default_backend',
+                                  wraps=cli_module.establish_default_backend) as establish,
             _fresh_cli_value_patch('AgentBackend', backend) as backend_factory,
             _fresh_cli_value_patch('InteractiveController', controller),
         ):
@@ -2309,11 +2306,8 @@ class CliTests(unittest.TestCase):
             mock.patch.object(cli_module, "ProviderAuthService", return_value=object()),
             _fresh_cli_value_patch('InteractiveAuthCoordinator', coordinator),
             _fresh_default_backend_attempt_patch(concurrent_winner) as establish,
-            mock.patch.object(
-                cli_module,
-                "_effective_interactive_providers",
-                wraps=cli_module._effective_interactive_providers,
-            ) as routes,
+            _object_options_patch(cli_module, '_effective_interactive_providers',
+                                  wraps=cli_module._effective_interactive_providers) as routes,
             mock.patch.object(cli_module, "AgentBackend", return_value=mock.Mock()) as backend,
             _fresh_cli_value_patch('InteractiveController', controller),
         ):
@@ -2566,11 +2560,7 @@ class CliTests(unittest.TestCase):
 
     def test_noninteractive_and_non_tty_forms_never_construct_auth(self) -> None:
         provider_catalog_factory = mock.Mock()
-        provider_catalog_patcher = mock.patch.object(
-            cli_module,
-            "ProviderCatalogService",
-            provider_catalog_factory,
-        )
+        provider_catalog_patcher = _cli_new_patch("ProviderCatalogService", provider_catalog_factory)
         provider_catalog_patcher.start()
         self.addCleanup(provider_catalog_patcher.stop)
         with tempfile.TemporaryDirectory() as temporary:
@@ -2626,11 +2616,7 @@ class CliTests(unittest.TestCase):
                 _resolved_workspace_patch(workspace),
                 _fresh_captured_cli_context_patch(context),
                 _fresh_cli_value_patch('AgentBackend', backend_value),
-                mock.patch.object(
-                    cli_module,
-                    "InteractiveController",
-                    controller_factory,
-                ),
+                _cli_new_patch("InteractiveController", controller_factory),
             ):
                 return main(["chat"]), stderr.getvalue()
 
@@ -2778,11 +2764,7 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(sys, "stderr", stderr),
                     _resolved_workspace_patch(workspace),
                     _fresh_empty_cli_context_patch(),
-                    mock.patch.object(
-                        cli_module,
-                        "AgentBackend",
-                        side_effect=failure_type("backend-secret"),
-                    ),
+                    _fresh_cli_effect_patch("AgentBackend", failure_type("backend-secret")),
                 ):
                     self.assertEqual(main(["chat"]), 2)
                 self.assertEqual(
@@ -3028,11 +3010,7 @@ class CliTests(unittest.TestCase):
         stderr = io.StringIO()
         with (
             _resolved_workspace_patch(workspace),
-            mock.patch.object(
-                cli_module.WorkspaceDebugLog,
-                "error",
-                side_effect=SystemExit("diagnostic failure"),
-            ) as debug_error,
+            _cli_object_effect_patch(cli_module.WorkspaceDebugLog, "error", SystemExit("diagnostic failure")) as debug_error,
             contextlib.redirect_stderr(stderr),
         ):
             exit_code = main(
@@ -3064,11 +3042,7 @@ class CliTests(unittest.TestCase):
         stdout, stderr = _fresh_cli_output_streams()
         with (
             _resolved_workspace_patch(workspace),
-            mock.patch.object(
-                WorkspaceDebugLog,
-                "trace",
-                side_effect=SystemExit("diagnostic trace failure"),
-            ) as trace,
+            _cli_object_effect_patch(WorkspaceDebugLog, "trace", SystemExit("diagnostic trace failure")) as trace,
             contextlib.redirect_stdout(stdout),
             contextlib.redirect_stderr(stderr),
         ):

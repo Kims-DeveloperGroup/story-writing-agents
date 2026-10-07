@@ -57,6 +57,7 @@ EXPECTED_ACTION_KINDS = (
     "lead_input",
     "lead_explore",
     "lead_adopt",
+    "lead_task",
     "premise_decision",
     "list_agents",
     "search",
@@ -89,6 +90,7 @@ EXPECTED_ACTION_KINDS = (
 EXPECTED_COMMANDS = (
     CommandSpec("Writing", "/explore TEXT", (), True, False, "/explore Explore possible directions"),
     CommandSpec("Writing", "/adopt", (), True, True, "/adopt"),
+    CommandSpec("Writing", "/task", (), True, False, "/task"),
     CommandSpec("Writing", "/premise", (), True, True, "/premise"),
     CommandSpec("Agents", "/agents", (), False, False, "/agents"),
     CommandSpec("Agents", "/auth", (), True, True, "/auth"),
@@ -321,6 +323,11 @@ class InteractiveParserRetirementTests(unittest.TestCase):
         self.assertEqual(parse_interactive_line(explore_correction + " idea"), InteractiveAction(ActionKind.LEAD_EXPLORE, text="idea"))
         self.assertEqual(parse_interactive_line(adopt_correction), InteractiveAction(ActionKind.LEAD_ADOPT))
 
+        self.assertEqual(parse_interactive_line("/task"), InteractiveAction(ActionKind.LEAD_TASK))
+        self.assertIs(parse_interactive_line("/task unexpected").kind, ActionKind.PARSE_ERROR)
+        self.assertEqual(parse_interactive_line("Discuss this task."),
+                         InteractiveAction(ActionKind.LEAD_INPUT, text="Discuss this task."))
+
     def test_run_is_an_ordinary_unknown_command(self) -> None:
         self.assertEqual(
             parse_interactive_line("/run payload"),
@@ -430,20 +437,20 @@ class RetainedParserContractTests(unittest.TestCase):
         all_fields = set(samples)
         for kind, (allowed, required) in rules.items():
             valid = {name: samples[name] for name in required}
-            with (self.subTest(kind=kind, case="valid") if kind not in (ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT, ActionKind.PREMISE_DECISION) else nullcontext()):
+            with (self.subTest(kind=kind, case="valid") if kind not in (ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT, ActionKind.PREMISE_DECISION, ActionKind.LEAD_TASK) else nullcontext()):
                 self.assertIs(InteractiveAction(kind, **valid).kind, kind)
             for name in required:
                 missing = dict(valid)
                 del missing[name]
                 with (
-                    (self.subTest(kind=kind, missing=name) if kind not in (ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT, ActionKind.PREMISE_DECISION) else nullcontext()),
+                    (self.subTest(kind=kind, missing=name) if kind not in (ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT, ActionKind.PREMISE_DECISION, ActionKind.LEAD_TASK) else nullcontext()),
                     self.assertRaises(ValueError),
                 ):
                     InteractiveAction(kind, **missing)
             for name in all_fields.difference(allowed):
                 extra = dict(valid)
                 extra[name] = samples[name]
-                with (self.subTest(kind=kind, extra=name) if kind not in (ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT, ActionKind.PREMISE_DECISION) else nullcontext()), self.assertRaises(ValueError):
+                with (self.subTest(kind=kind, extra=name) if kind not in (ActionKind.LEAD_EXPLORE, ActionKind.LEAD_ADOPT, ActionKind.PREMISE_DECISION, ActionKind.LEAD_TASK) else nullcontext()), self.assertRaises(ValueError):
                     InteractiveAction(kind, **extra)
 
     def test_action_specs_and_registry_are_immutable(self) -> None:

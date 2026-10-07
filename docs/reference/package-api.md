@@ -655,6 +655,19 @@ See [Collaboration history](collaboration-history.md),
 [transcripts](conversation-transcripts.md), and
 [search](conversation-search.md).
 
+### Task decisions and public messages
+
+Both runtime facades provide synchronous `inspect_lead_collaboration()` and asynchronous `decide_lead_task()`. Inspection returns the current collaboration projection with typed task and whole-material choices. Choose returned references and construct an explicit discussion, hold, resume, discard, or new-task decision through `LeadTaskDecision` in `story_writing_agents.lead_task_transitions`; its factories supply request identities for repeatable submissions.
+
+The current projection and turn results retain public-response records with exact call identities, acceptance, and validation details. A rejected public message can be discussed or selected as input without becoming execution authority. These values are separate from package-root exports. See [the task and retained-message API](runtime-api.md#explicit-task-choices-and-retained-messages) for the exact inspection fields, decision example, and pending-control boundaries.
+
+Inspection also exposes task IDs, revisions, lifecycle status, and distinct
+workflow step/state/next-action values. Rejected final answers remain selectable
+input when bounded public content can be recovered from invalid structures or
+values. Non-string values carry an explicit representation label; private or
+ambiguous envelopes remain unavailable. Acceptance and execution authority
+continue to follow the existing validators.
+
 <a id="conversation-storage-composition"></a>
 
 ## Conversation-storage composition

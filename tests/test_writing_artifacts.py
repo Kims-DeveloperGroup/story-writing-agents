@@ -59,6 +59,15 @@ from story_writing_agents.writing_artifacts._application_store import (
 from tests.helpers import pristine_initialized_workspace
 
 
+def _artifact_effect_patch(target, attribute, value):
+    return mock.patch.object(target, attribute, side_effect=value)
+
+def _artifact_value_patch(target, attribute, value):
+    return mock.patch.object(target, attribute, return_value=value)
+
+def _artifact_primitives_patch():
+    return mock.patch.object(SecureWorkspaceStorage, "_require_primitives")
+
 class WritingArtifactTestCase(unittest.TestCase):
     """Own one initialized workspace without generated writing documents."""
 
@@ -332,11 +341,8 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
                 str(self.short_socket_root() / "manuscript/part-01/socket.md")
             )
 
-        with mock.patch.object(
-            storage_module.os,
-            "read",
-            side_effect=AssertionError("source listing decoded file content"),
-        ):
+        with _artifact_effect_patch(storage_module.os, "read",
+                 AssertionError("source listing decoded file content")):
             self.assertEqual(
                 self.repository.list_paths(),
                 tuple(sorted(safe)),
@@ -432,11 +438,7 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
         target.write_bytes(content)
         sentinel = object()
 
-        with mock.patch.object(
-            filesystem_sources_module,
-            "ArtifactContentSnapshot",
-            return_value=sentinel,
-        ) as snapshot_type:
+        with _artifact_value_patch(filesystem_sources_module, "ArtifactContentSnapshot", sentinel) as snapshot_type:
             self.assertEqual(
                 self.repository.read_current((manuscript_path,)),
                 (sentinel,),
@@ -457,11 +459,8 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
         target.write_text("é", encoding="utf-8")
         with self.assertRaisesRegex(WorkspaceFormatError, "permitted size"):
             self.repository.read_text(manuscript_path, max_bytes=1)
-        with mock.patch.object(
-            self.repository._storage,
-            "read_snapshot",
-            side_effect=AssertionError("invalid limit reached storage"),
-        ) as read_snapshot:
+        with _artifact_effect_patch(self.repository._storage, "read_snapshot",
+                 AssertionError("invalid limit reached storage")) as read_snapshot:
             for invalid_limit in (0, -1, True, "8"):
                 with self.subTest(max_bytes=invalid_limit):
                     with self.assertRaisesRegex(
@@ -549,15 +548,8 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
                     return names
 
                 with (
-                    mock.patch.object(
-                        SecureWorkspaceStorage,
-                        "_require_primitives",
-                    ),
-                    mock.patch.object(
-                        storage_module.os,
-                        "listdir",
-                        side_effect=aliased_listdir,
-                    ),
+                    _artifact_primitives_patch(),
+                    _artifact_effect_patch(storage_module.os, "listdir", aliased_listdir),
                     self.assertRaises(
                         (
                             ArtifactRootSecurityError,
@@ -598,15 +590,8 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
                     return names
 
                 with (
-                    mock.patch.object(
-                        SecureWorkspaceStorage,
-                        "_require_primitives",
-                    ),
-                    mock.patch.object(
-                        storage_module.os,
-                        "listdir",
-                        side_effect=aliased_listdir,
-                    ),
+                    _artifact_primitives_patch(),
+                    _artifact_effect_patch(storage_module.os, "listdir", aliased_listdir),
                     self.assertRaises(
                         (ArtifactRootSecurityError, ArtifactEntrySecurityError)
                     ),
@@ -653,11 +638,7 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
             return read_snapshot(relative, *args, **kwargs)
 
         requested = ("core_documents/global_outline.md",)
-        with mock.patch.object(
-            self.repository._storage,
-            "read_snapshot",
-            side_effect=record,
-        ):
+        with _artifact_effect_patch(self.repository._storage, "read_snapshot", record):
             snapshots = self.repository.read_current(requested)
 
         self.assertEqual(tuple(snapshot.path for snapshot in snapshots), requested)
@@ -680,11 +661,7 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
                 raise AssertionError("source listing read content")
             return read_bytes(relative, *args, **kwargs)
 
-        with mock.patch.object(
-            self.repository._storage,
-            "read_bytes",
-            side_effect=reject_source_content,
-        ):
+        with _artifact_effect_patch(self.repository._storage, "read_bytes", reject_source_content):
             self.assertEqual(
                 self.repository.list_paths(),
                 tuple(sorted((*CORE_ARTIFACT_PATHS, manuscript_path))),
@@ -695,11 +672,7 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
                 raise ArtifactEntrySecurityError("entry changed")
             return read_bytes(relative, *args, **kwargs)
 
-        with mock.patch.object(
-            self.repository._storage,
-            "read_bytes",
-            side_effect=fail_entry,
-        ):
+        with _artifact_effect_patch(self.repository._storage, "read_bytes", fail_entry):
             self.assertEqual(tuple(self.repository.catalog().entries), ())
 
         def fail_root(relative: str, *args, **kwargs):
@@ -707,11 +680,7 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
                 raise ArtifactRootSecurityError("root changed")
             return read_bytes(relative, *args, **kwargs)
 
-        with mock.patch.object(
-            self.repository._storage,
-            "read_bytes",
-            side_effect=fail_root,
-        ):
+        with _artifact_effect_patch(self.repository._storage, "read_bytes", fail_root):
             with self.assertRaisesRegex(ArtifactRootSecurityError, "root changed"):
                 self.repository.catalog()
         self.assertEqual(
@@ -770,31 +739,15 @@ class SecureStorageTests(WritingArtifactTestCase):
             os.chdir(initial)
             lexical_root = Path(os.path.abspath("workspace"))
             with (
-                mock.patch.object(
-                    Path,
-                    "resolve",
-                    side_effect=AssertionError("constructor resolved root"),
-                ) as resolve,
-                mock.patch.object(
-                    storage_module.os,
-                    "open",
-                    side_effect=AssertionError("constructor opened filesystem"),
-                ) as open_file,
-                mock.patch.object(
-                    storage_module.os,
-                    "stat",
-                    side_effect=AssertionError("constructor stated filesystem"),
-                ) as stat_file,
-                mock.patch.object(
-                    storage_module.os,
-                    "listdir",
-                    side_effect=AssertionError("constructor listed filesystem"),
-                ) as list_directory,
-                mock.patch.object(
-                    SecureWorkspaceStorage,
-                    "_require_primitives",
-                    side_effect=AssertionError("constructor probed primitives"),
-                ) as primitives,
+                _artifact_effect_patch(Path, "resolve", AssertionError("constructor resolved root")) as resolve,
+                _artifact_effect_patch(storage_module.os, "open",
+                    AssertionError("constructor opened filesystem")) as open_file,
+                _artifact_effect_patch(storage_module.os, "stat",
+                    AssertionError("constructor stated filesystem")) as stat_file,
+                _artifact_effect_patch(storage_module.os, "listdir",
+                    AssertionError("constructor listed filesystem")) as list_directory,
+                _artifact_effect_patch(SecureWorkspaceStorage, "_require_primitives",
+                    AssertionError("constructor probed primitives")) as primitives,
             ):
                 repository = WritingArtifactRepository("workspace")
             resolve.assert_not_called()
@@ -924,25 +877,11 @@ class SecureStorageTests(WritingArtifactTestCase):
 
                 with (
                     mock.patch.object(SecureWorkspaceStorage, "_require_primitives"),
-                    mock.patch.object(
-                        storage_module.os, "open", side_effect=record_open
-                    ),
-                    mock.patch.object(
-                        storage_module.os, "close", side_effect=record_close
-                    ),
-                    mock.patch.object(
-                        storage_module.os, "fstat", side_effect=fail_fstat
-                    ),
-                    mock.patch.object(
-                        SecureWorkspaceStorage,
-                        "_require_exact_name",
-                        side_effect=fail_exact_name,
-                    ),
-                    mock.patch.object(
-                        SecureWorkspaceStorage,
-                        "_verify_directory_chain",
-                        side_effect=fail_chain,
-                    ),
+                    _artifact_effect_patch(storage_module.os, "open", record_open),
+                    _artifact_effect_patch(storage_module.os, "close", record_close),
+                    _artifact_effect_patch(storage_module.os, "fstat", fail_fstat),
+                    _artifact_effect_patch(SecureWorkspaceStorage, "_require_exact_name", fail_exact_name),
+                    _artifact_effect_patch(SecureWorkspaceStorage, "_verify_directory_chain", fail_chain),
                     self.assertRaises((OSError, WorkspaceSecurityError)),
                 ):
                     with storage._open_root() as root_descriptor:
@@ -1010,21 +949,9 @@ class SecureStorageTests(WritingArtifactTestCase):
 
         with (
             mock.patch.object(SecureWorkspaceStorage, "_require_primitives"),
-            mock.patch.object(
-                storage_module.os,
-                "open",
-                side_effect=record_inspected_open,
-            ),
-            mock.patch.object(
-                storage_module.os,
-                "close",
-                side_effect=record_inspected_close,
-            ),
-            mock.patch.object(
-                SecureWorkspaceStorage,
-                "_require_exact_name",
-                side_effect=replace_after_open,
-            ),
+            _artifact_effect_patch(storage_module.os, "open", record_inspected_open),
+            _artifact_effect_patch(storage_module.os, "close", record_inspected_close),
+            _artifact_effect_patch(SecureWorkspaceStorage, "_require_exact_name", replace_after_open),
             self.assertRaisesRegex(
                 ArtifactEntrySecurityError,
                 "post-open replacement",
@@ -1061,21 +988,9 @@ class SecureStorageTests(WritingArtifactTestCase):
 
         with (
             mock.patch.object(SecureWorkspaceStorage, "_require_primitives"),
-            mock.patch.object(
-                storage_module.os,
-                "open",
-                side_effect=record_nested_open,
-            ),
-            mock.patch.object(
-                storage_module.os,
-                "close",
-                side_effect=record_nested_close,
-            ),
-            mock.patch.object(
-                SecureWorkspaceStorage,
-                "_verify_directory_chain",
-                side_effect=reject_detached_nested,
-            ),
+            _artifact_effect_patch(storage_module.os, "open", record_nested_open),
+            _artifact_effect_patch(storage_module.os, "close", record_nested_close),
+            _artifact_effect_patch(SecureWorkspaceStorage, "_verify_directory_chain", reject_detached_nested),
         ):
             listed = storage.list_regular_files(
                 "manuscript",
@@ -1102,11 +1017,7 @@ class SecureStorageTests(WritingArtifactTestCase):
                 raise FileNotFoundError(name)
             return inspect_file(directory, name)
 
-        with mock.patch.object(
-            SecureWorkspaceStorage,
-            "_inspect_file",
-            side_effect=delete_before_inspection,
-        ):
+        with _artifact_effect_patch(SecureWorkspaceStorage, "_inspect_file", delete_before_inspection):
             self.assertEqual(
                 self.repository.list_paths(),
                 tuple(sorted(CORE_ARTIFACT_PATHS)),
@@ -1138,25 +1049,11 @@ class SecureStorageTests(WritingArtifactTestCase):
                     return real_stat(path, *args, **kwargs)
 
                 with (
-                    mock.patch.object(
-                        SecureWorkspaceStorage,
-                        "_require_primitives",
-                    ),
-                    mock.patch.object(
-                        storage_module.os,
-                        "listdir",
-                        side_effect=aliased_listdir,
-                    ),
-                    mock.patch.object(
-                        storage_module.os,
-                        "stat",
-                        side_effect=reject_final_stat,
-                    ),
-                    mock.patch.object(
-                        self.repository._storage,
-                        "publish_bytes",
-                        side_effect=AssertionError("alias reached staging"),
-                    ) as publish,
+                    _artifact_primitives_patch(),
+                    _artifact_effect_patch(storage_module.os, "listdir", aliased_listdir),
+                    _artifact_effect_patch(storage_module.os, "stat", reject_final_stat),
+                    _artifact_effect_patch(self.repository._storage, "publish_bytes",
+                        AssertionError("alias reached staging")) as publish,
                     self.assertRaisesRegex(
                         ArtifactEntrySecurityError,
                         "spelling is not exact",
@@ -1207,25 +1104,10 @@ class SecureStorageTests(WritingArtifactTestCase):
                     return real_flock(descriptor, operation)
 
                 with (
-                    mock.patch.object(
-                        SecureWorkspaceStorage,
-                        "_require_primitives",
-                    ),
-                    mock.patch.object(
-                        storage_module.os,
-                        "listdir",
-                        side_effect=aliased_listdir,
-                    ),
-                    mock.patch.object(
-                        storage_module.os,
-                        "open",
-                        side_effect=reject_lock_creation,
-                    ),
-                    mock.patch.object(
-                        storage_module.fcntl,
-                        "flock",
-                        side_effect=record_flock,
-                    ),
+                    _artifact_primitives_patch(),
+                    _artifact_effect_patch(storage_module.os, "listdir", aliased_listdir),
+                    _artifact_effect_patch(storage_module.os, "open", reject_lock_creation),
+                    _artifact_effect_patch(storage_module.fcntl, "flock", record_flock),
                     self.assertRaisesRegex(
                         ArtifactLeaseSecurityError,
                         "spelling changed",
@@ -1299,11 +1181,7 @@ class SecureStorageTests(WritingArtifactTestCase):
             mock.patch.object(storage_module.os, "open", side_effect=record_open),
             mock.patch.object(storage_module.os, "fsync", side_effect=record_fsync),
             mock.patch.object(storage_module.os, "link", side_effect=record_link),
-            mock.patch.object(
-                SecureWorkspaceStorage,
-                "_verify_lock_identity",
-                side_effect=record_verify,
-            ),
+            _artifact_effect_patch(SecureWorkspaceStorage, "_verify_lock_identity", record_verify),
             mock.patch.object(storage_module.fcntl, "flock", side_effect=record_flock),
         ):
             with storage.exclusive_lock(relative):
@@ -1338,11 +1216,7 @@ class SecureStorageTests(WritingArtifactTestCase):
 
         with (
             mock.patch.object(SecureWorkspaceStorage, "_require_primitives"),
-            mock.patch.object(
-                storage_module.os,
-                "open",
-                side_effect=record_existing_open,
-            ),
+            _artifact_effect_patch(storage_module.os, "open", record_existing_open),
         ):
             with storage.exclusive_lock(relative):
                 pass
@@ -1393,20 +1267,9 @@ class SecureStorageTests(WritingArtifactTestCase):
                     return real_link(*args, **kwargs)
 
                 with (
-                    mock.patch.object(
-                        SecureWorkspaceStorage,
-                        "_require_primitives",
-                    ),
-                    mock.patch.object(
-                        storage_module.os,
-                        "fsync",
-                        side_effect=fail_selected_fsync,
-                    ),
-                    mock.patch.object(
-                        storage_module.os,
-                        "link",
-                        side_effect=fail_link,
-                    ),
+                    _artifact_primitives_patch(),
+                    _artifact_effect_patch(storage_module.os, "fsync", fail_selected_fsync),
+                    _artifact_effect_patch(storage_module.os, "link", fail_link),
                     self.assertRaisesRegex(
                         ArtifactLeaseSecurityError,
                         "cannot securely acquire",
@@ -1539,11 +1402,8 @@ class SecureStorageTests(WritingArtifactTestCase):
                     OSError(failure) if failure == "ancestry durability" else None
                 )
                 ancestry_patch = (
-                    mock.patch.object(
-                        SecureWorkspaceStorage,
-                        "_fsync_directory_ancestry",
-                        side_effect=ancestry_effect,
-                    )
+                    _artifact_effect_patch(SecureWorkspaceStorage, "_fsync_directory_ancestry",
+                        ancestry_effect)
                     if ancestry_effect is not None
                     else mock.patch.object(
                         SecureWorkspaceStorage,
@@ -1552,11 +1412,7 @@ class SecureStorageTests(WritingArtifactTestCase):
                     )
                 )
                 with (
-                    mock.patch.object(
-                        storage_module.fcntl,
-                        "flock",
-                        side_effect=fail_bootstrap,
-                    ),
+                    _artifact_effect_patch(storage_module.fcntl, "flock", fail_bootstrap),
                     ancestry_patch,
                     self.assertRaisesRegex(
                         ArtifactLeaseSecurityError,
@@ -1772,11 +1628,8 @@ class SecureStorageTests(WritingArtifactTestCase):
         for name in (fifo.name, unix_socket.name):
             with self.subTest(name=name):
                 with (
-                    mock.patch.object(
-                        storage_module.os,
-                        "open",
-                        side_effect=AssertionError("nonregular file was opened"),
-                    ),
+                    _artifact_effect_patch(storage_module.os, "open",
+                        AssertionError("nonregular file was opened")),
                     self.assertRaisesRegex(
                         ArtifactEntrySecurityError,
                         "unique regular file",
@@ -1787,11 +1640,7 @@ class SecureStorageTests(WritingArtifactTestCase):
         device_stat = SimpleNamespace(st_mode=stat.S_IFCHR, st_nlink=1)
         with (
             mock.patch.object(storage_module.os, "stat", return_value=device_stat),
-            mock.patch.object(
-                storage_module.os,
-                "open",
-                side_effect=AssertionError("device was opened"),
-            ),
+            _artifact_effect_patch(storage_module.os, "open", AssertionError("device was opened")),
             self.assertRaisesRegex(
                 ArtifactEntrySecurityError,
                 "unique regular file",
@@ -1817,11 +1666,7 @@ class SecureStorageTests(WritingArtifactTestCase):
 
         with storage.exclusive_lock(relative_lock):
             with (
-                mock.patch.object(
-                    SecureWorkspaceStorage,
-                    "_verify_directory_chain",
-                    side_effect=detach_then_verify,
-                ),
+                _artifact_effect_patch(SecureWorkspaceStorage, "_verify_directory_chain", detach_then_verify),
                 self.assertRaisesRegex(
                     ArtifactRootSecurityError,
                     "ancestry changed",
@@ -1871,11 +1716,8 @@ class SecureStorageTests(WritingArtifactTestCase):
                 core.mkdir()
 
         with (
-            mock.patch.object(
-                SecureWorkspaceStorage,
-                "_rename_noreplace",
-                side_effect=detach_after_target_publication,
-            ),
+            _artifact_effect_patch(SecureWorkspaceStorage, "_rename_noreplace",
+                detach_after_target_publication),
             self.assertRaisesRegex(
                 (ArtifactRootSecurityError, ArtifactApplicationStoreFailure),
                 "ancestry changed|artifact application state is corrupt",
@@ -1917,11 +1759,7 @@ class SecureStorageTests(WritingArtifactTestCase):
                 library = SimpleNamespace(**{symbol: native})
                 with (
                     mock.patch.object(storage_module.sys, "platform", platform),
-                    mock.patch.object(
-                        storage_module.ctypes,
-                        "CDLL",
-                        return_value=library,
-                    ),
+                    _artifact_value_patch(storage_module.ctypes, "CDLL", library),
                 ):
                     selected, flag = SecureWorkspaceStorage._native_rename_function()
                 self.assertIs(selected, native)
@@ -1934,11 +1772,7 @@ class SecureStorageTests(WritingArtifactTestCase):
         unavailable = NativeFunction(errno.ENOSYS)
         with (
             mock.patch.object(storage_module.sys, "platform", "linux"),
-            mock.patch.object(
-                storage_module.ctypes,
-                "CDLL",
-                return_value=SimpleNamespace(renameat2=unavailable),
-            ),
+            _artifact_value_patch(storage_module.ctypes, "CDLL", SimpleNamespace(renameat2=unavailable)),
             self.assertRaisesRegex(
                 WorkspaceSecurityError,
                 "no-replace artifact rename unavailable",
@@ -1946,10 +1780,8 @@ class SecureStorageTests(WritingArtifactTestCase):
         ):
             SecureWorkspaceStorage._native_rename_function()
 
-        with mock.patch.object(
-            SecureWorkspaceStorage,
-            "_native_rename_function",
-            side_effect=WorkspaceSecurityError(
+        with _artifact_effect_patch(SecureWorkspaceStorage, "_native_rename_function",
+            WorkspaceSecurityError(
                 "atomic no-replace artifact rename unavailable"
             ),
         ):
@@ -2022,11 +1854,7 @@ class SecureStorageTests(WritingArtifactTestCase):
 
         with storage.exclusive_lock(lock):
             with (
-                mock.patch.object(
-                    storage_module,
-                    "uuid4",
-                    return_value=SimpleNamespace(hex=collision_hex),
-                ),
+                _artifact_value_patch(storage_module, "uuid4", SimpleNamespace(hex=collision_hex)),
                 self.assertRaises(FileExistsError),
             ):
                 storage.publish_bytes(
@@ -2044,16 +1872,9 @@ class SecureStorageTests(WritingArtifactTestCase):
         owned_hex = "b" * 32
         with storage.exclusive_lock(lock):
             with (
-                mock.patch.object(
-                    storage_module,
-                    "uuid4",
-                    return_value=SimpleNamespace(hex=owned_hex),
-                ),
-                mock.patch.object(
-                    SecureWorkspaceStorage,
-                    "_rename_noreplace",
-                    side_effect=OSError("publication stopped"),
-                ),
+                _artifact_value_patch(storage_module, "uuid4", SimpleNamespace(hex=owned_hex)),
+                _artifact_effect_patch(SecureWorkspaceStorage, "_rename_noreplace",
+                    OSError("publication stopped")),
                 self.assertRaisesRegex(OSError, "publication stopped"),
             ):
                 storage.publish_bytes(
@@ -2120,11 +1941,8 @@ class SecureStorageTests(WritingArtifactTestCase):
                     real_verify(directory, name, anchor, ready, descriptor)
 
                 with (
-                    mock.patch.object(
-                        SecureWorkspaceStorage,
-                        "_verify_lock_identity",
-                        side_effect=replace_then_verify,
-                    ),
+                    _artifact_effect_patch(SecureWorkspaceStorage, "_verify_lock_identity",
+                        replace_then_verify),
                     self.assertRaisesRegex(
                         WorkspaceSecurityError,
                         "artifact lock",
@@ -2180,11 +1998,8 @@ class SecureStorageTests(WritingArtifactTestCase):
 
                 storage = SecureWorkspaceStorage(self.root)
                 with (
-                    mock.patch.object(
-                        SecureWorkspaceStorage,
-                        "_verify_lock_identity",
-                        side_effect=replace_after_flock,
-                    ),
+                    _artifact_effect_patch(SecureWorkspaceStorage, "_verify_lock_identity",
+                        replace_after_flock),
                     self.assertRaisesRegex(
                         WorkspaceSecurityError,
                         "artifact lock",

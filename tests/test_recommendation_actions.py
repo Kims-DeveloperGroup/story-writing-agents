@@ -268,8 +268,19 @@ class RecommendationActionContractTests(RecommendationCase):
         self.assertNotIn("_RecommendationCapability", encoded)
         self.assertEqual(self.history(conversation_id), before)
         # Decisions/revision and running/terminal states have their own readable fields.
-        self.backend.enqueue(recommendation(message="Revised synthetic proposal"))
-        await self.runtime.decide_lead_recommendation(decision(turn, c.CollaborationConfirmationDecision.REVISE))
+        from tests.test_lead_orchestration import _discussion_reply
+        self.backend.enqueue(_discussion_reply("How do the four roles cooperate?", "clarification_question"))
+        revised = await self.runtime.decide_lead_recommendation(decision(turn, c.CollaborationConfirmationDecision.REVISE))
+        self.assertIsNone(revised.proposal)
+        self.assertIsNone(revised.artifact_proposal)
+        self.assertEqual(revised.discussion.response_text, "How do the four roles cooperate?")
+        view = self.runtime.inspect_lead_collaboration(self.session_id, conversation_id)
+        self.assertIs(view.current_recommendation_state, c.LeadRecommendationState.STALE)
+        self.assertEqual(view.discussion_context.source_task_ref.task_id, request.authoring_scope.task_id)
+        retained = next(item for item in view.available_tasks if item.ref.task_id == request.authoring_scope.task_id)
+        self.assertEqual(retained.scope, request.authoring_scope)
+        self.assertEqual(self.history(conversation_id)[:len(before)], before)
+        self.assertEqual(len(lead._submitted_calls(self.history(conversation_id)[len(before):])), 1)
         keys = {f.key for r in c.project_collaboration_readable_history(self.history(conversation_id)) for f in r.fields}
         self.assertTrue({c.CollaborationReadableFieldKey.LEAD_RECOMMENDATION_DECISION,
                          c.CollaborationReadableFieldKey.LEAD_RECOMMENDATION_REVISION,

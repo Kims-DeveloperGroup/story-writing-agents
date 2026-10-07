@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from ..lead_task_transitions import (
+    LeadTaskDecision, LeadTaskTransitionReceipt, LeadMaterialCapture,
+    LeadDiscussionReport, LeadPublicResponse, task_value_to_dict,
+    task_value_from_dict,
+)
+
 from ..lead_premise_decisions import (
     PremiseQuestionIntent, PremiseDecisionSpec, PremiseAnalysis, PremiseDecisionReport,
     PremiseDecisionSelection, PremiseSelectionCapture, PremiseFreshWorkAdmission,
@@ -101,6 +107,12 @@ _EnumT = TypeVar("_EnumT", bound=StrEnum)
 
 class CollaborationEventKind(StrEnum):
     """Closed schema-v2 outer event kinds."""
+
+    LEAD_TASK_DECISION = "lead_task_decision"
+    LEAD_TASK_TRANSITION = "lead_task_transition"
+    LEAD_MATERIAL_CAPTURE = "lead_material_capture"
+    LEAD_DISCUSSION = "lead_discussion"
+    LEAD_PUBLIC_RESPONSE = "lead_public_response"
 
     LEAD_EXPLORATION_REQUEST = "lead_exploration_request"
     LEAD_EXPLORATION_RESULT = "lead_exploration_result"
@@ -499,7 +511,7 @@ class CollaborationLeadJudgmentPayload:
     trace: ReplyTrace | None = None
 
     def __post_init__(self) -> None:
-        if self.kind is LeadOutcomeKind.EXPLORATION:
+        if self.kind in {LeadOutcomeKind.EXPLORATION, LeadOutcomeKind.DISCUSSION}:
             raise ValueError("exploration requires its typed request-bound report")
         _require_enum(self.kind, LeadOutcomeKind, "lead judgment kind")
         _validate_visible_text(self.message, label="lead judgment message")
@@ -778,6 +790,8 @@ class StoryCommitNextAction(StrEnum):
 
 class LeadOutcomeKind(StrEnum):
     EXPLORATION = "exploration"
+
+    DISCUSSION = "discussion"
     """Closed visible semantic outcomes returned by the lead provider."""
 
     ANSWER = "answer"
@@ -1464,6 +1478,8 @@ class LeadProviderOutcome:
 
 class CollaborationInvocationKind(StrEnum):
     """Closed semantic role of one provider-call lineage."""
+
+    LEAD_DISCUSSION = "lead_discussion"
 
     LEAD = "lead"
     LEAD_EXPLORATION = "lead_exploration"
@@ -3774,12 +3790,58 @@ class CollaborationProviderCallPayload:
         if self.invocation_kind in {
             CollaborationInvocationKind.LEAD,
             CollaborationInvocationKind.LEAD_EXPLORATION,
+            CollaborationInvocationKind.LEAD_DISCUSSION,
             CollaborationInvocationKind.LEAD_SYNTHESIS,
         }:
             if self.role != LEAD_ORCHESTRATOR:
                 raise ValueError("lead and synthesis calls require the lead role")
         elif self.role not in SPECIALIST_IDS:
             raise ValueError("specialist calls require a canonical specialist role")
+
+
+@dataclass(frozen=True, slots=True)
+class CollaborationLeadTaskDecisionPayload:
+    decision: LeadTaskDecision
+
+    def __post_init__(self) -> None:
+        if type(self.decision) is not LeadTaskDecision:
+            raise TypeError("lead_task_decision requires an exact LeadTaskDecision")
+
+
+@dataclass(frozen=True, slots=True)
+class CollaborationLeadTaskTransitionPayload:
+    receipt: LeadTaskTransitionReceipt
+
+    def __post_init__(self) -> None:
+        if type(self.receipt) is not LeadTaskTransitionReceipt:
+            raise TypeError("lead_task_transition requires an exact LeadTaskTransitionReceipt")
+
+
+@dataclass(frozen=True, slots=True)
+class CollaborationLeadMaterialCapturePayload:
+    capture: LeadMaterialCapture
+
+    def __post_init__(self) -> None:
+        if type(self.capture) is not LeadMaterialCapture:
+            raise TypeError("lead_material_capture requires an exact LeadMaterialCapture")
+
+
+@dataclass(frozen=True, slots=True)
+class CollaborationLeadDiscussionPayload:
+    report: LeadDiscussionReport
+
+    def __post_init__(self) -> None:
+        if type(self.report) is not LeadDiscussionReport:
+            raise TypeError("lead_discussion requires an exact LeadDiscussionReport")
+
+
+@dataclass(frozen=True, slots=True)
+class CollaborationLeadPublicResponsePayload:
+    response: LeadPublicResponse
+
+    def __post_init__(self) -> None:
+        if type(self.response) is not LeadPublicResponse:
+            raise TypeError("lead_public_response requires an exact LeadPublicResponse")
 
 
 @dataclass(frozen=True, slots=True)
@@ -3850,6 +3912,12 @@ class CollaborationPremiseFreshWorkAdmissionPayload:
 
 
 CollaborationPayload = (
+    CollaborationLeadTaskDecisionPayload
+    | CollaborationLeadTaskTransitionPayload
+    | CollaborationLeadMaterialCapturePayload
+    | CollaborationLeadDiscussionPayload
+    | CollaborationLeadPublicResponsePayload
+    |
     CollaborationPremiseDecisionPayload
     | CollaborationPremiseSelectionPayload
     | CollaborationPremiseFreshWorkAdmissionPayload
@@ -4798,6 +4866,17 @@ def _artifact_reviewed_proposal_value(
 
 
 def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
+    if type(payload) is CollaborationLeadTaskDecisionPayload:
+        return {"payload_type": "lead_task_decision", "decision": task_value_to_dict(payload.decision)}
+    if type(payload) is CollaborationLeadTaskTransitionPayload:
+        return {"payload_type": "lead_task_transition", "receipt": task_value_to_dict(payload.receipt)}
+    if type(payload) is CollaborationLeadMaterialCapturePayload:
+        return {"payload_type": "lead_material_capture", "capture": task_value_to_dict(payload.capture)}
+    if type(payload) is CollaborationLeadDiscussionPayload:
+        return {"payload_type": "lead_discussion", "report": task_value_to_dict(payload.report)}
+    if type(payload) is CollaborationLeadPublicResponsePayload:
+        return {"payload_type": "lead_public_response", "response": task_value_to_dict(payload.response)}
+
     if type(payload) is CollaborationPremiseDecisionPayload:
         return {"payload_type": "premise_decision", "selection": premise_value_to_dict(payload.selection)}
     if type(payload) is CollaborationPremiseSelectionPayload:
@@ -5808,6 +5887,26 @@ def _decode_payload(value: object) -> CollaborationPayload:
     if type(value) is not dict:
         raise ValueError("collaboration payload must be an object")
     payload_type = value.get("payload_type")
+    if payload_type == "lead_task_decision":
+        if set(value) != {"payload_type", "decision"}:
+            raise ValueError("invalid lead_task_decision payload fields")
+        return CollaborationLeadTaskDecisionPayload(decision=task_value_from_dict(LeadTaskDecision, value["decision"]))
+    if payload_type == "lead_task_transition":
+        if set(value) != {"payload_type", "receipt"}:
+            raise ValueError("invalid lead_task_transition payload fields")
+        return CollaborationLeadTaskTransitionPayload(receipt=task_value_from_dict(LeadTaskTransitionReceipt, value["receipt"]))
+    if payload_type == "lead_material_capture":
+        if set(value) != {"payload_type", "capture"}:
+            raise ValueError("invalid lead_material_capture payload fields")
+        return CollaborationLeadMaterialCapturePayload(capture=task_value_from_dict(LeadMaterialCapture, value["capture"]))
+    if payload_type == "lead_discussion":
+        if set(value) != {"payload_type", "report"}:
+            raise ValueError("invalid lead_discussion payload fields")
+        return CollaborationLeadDiscussionPayload(report=task_value_from_dict(LeadDiscussionReport, value["report"]))
+    if payload_type == "lead_public_response":
+        if set(value) != {"payload_type", "response"}:
+            raise ValueError("invalid lead_public_response payload fields")
+        return CollaborationLeadPublicResponsePayload(response=task_value_from_dict(LeadPublicResponse, value["response"]))
     if payload_type == "premise_decision":
         item = _object(value, {"payload_type", "selection"}, label="premise decision")
         return CollaborationPremiseDecisionPayload(premise_selection_from_dict(item["selection"]))
@@ -6712,6 +6811,12 @@ def _validate_collaboration_payload(
     payload: CollaborationPayload,
 ) -> None:
     allowed: dict[CollaborationEventKind, tuple[type[object], ...]] = {
+        CollaborationEventKind.LEAD_TASK_DECISION: (CollaborationLeadTaskDecisionPayload,),
+        CollaborationEventKind.LEAD_TASK_TRANSITION: (CollaborationLeadTaskTransitionPayload,),
+        CollaborationEventKind.LEAD_MATERIAL_CAPTURE: (CollaborationLeadMaterialCapturePayload,),
+        CollaborationEventKind.LEAD_DISCUSSION: (CollaborationLeadDiscussionPayload,),
+        CollaborationEventKind.LEAD_PUBLIC_RESPONSE: (CollaborationLeadPublicResponsePayload,),
+
         CollaborationEventKind.LEAD_EXPLORATION_REQUEST: (CollaborationLeadExplorationRequestPayload,),
         CollaborationEventKind.LEAD_EXPLORATION_RESULT: (CollaborationLeadExplorationResultPayload,),
         CollaborationEventKind.EXPLORATION_ADOPTION: (CollaborationExplorationAdoptionPayload,),
@@ -6853,6 +6958,12 @@ def _validate_collaboration_direction(
         CollaborationEventKind,
         set[tuple[CollaborationActorKind, CollaborationActorKind]],
     ] = {
+        CollaborationEventKind.LEAD_TASK_DECISION: {(CollaborationActorKind.USER, CollaborationActorKind.RUNTIME)},
+        CollaborationEventKind.LEAD_TASK_TRANSITION: {(CollaborationActorKind.RUNTIME, CollaborationActorKind.USER)},
+        CollaborationEventKind.LEAD_MATERIAL_CAPTURE: {(CollaborationActorKind.RUNTIME, CollaborationActorKind.USER)},
+        CollaborationEventKind.LEAD_DISCUSSION: {(CollaborationActorKind.RUNTIME, CollaborationActorKind.USER)},
+        CollaborationEventKind.LEAD_PUBLIC_RESPONSE: {(CollaborationActorKind.RUNTIME, CollaborationActorKind.USER)},
+
         CollaborationEventKind.ARTIFACT_OBJECTIVE: {
             (CollaborationActorKind.RUNTIME, CollaborationActorKind.USER),
         },
@@ -7511,4 +7622,9 @@ __all__ = [
     "encode_collaboration_event_draft",
     "encode_collaboration_proposal",
     "encode_artifact_reviewed_proposal",
+    'CollaborationLeadTaskDecisionPayload',
+    'CollaborationLeadTaskTransitionPayload',
+    'CollaborationLeadMaterialCapturePayload',
+    'CollaborationLeadDiscussionPayload',
+    'CollaborationLeadPublicResponsePayload',
 ]
