@@ -1458,6 +1458,29 @@ physical call thirteen unreachable.
 
 <a id="reviewed-now-versus-apply-and-commit-later"></a>
 
+## Exact context capacity
+
+Lead context is limited to 262,144 UTF-8 bytes of the complete serialized provider
+payload. Equality is allowed. This is a byte limit on the current JSON payload,
+including its envelope and JSON escaping; it is separate from token/cost budgets,
+the separately delivered output schema, and a provider's model context window.
+
+A capacity stop reports its stage, actual bytes, maximum and excess when that
+stage has an exact measurement. An early editorial-allocation stop can occur
+before a complete provider payload exists; its unavailable counts are labelled
+rather than invented. The diagnostic contains measurements, not conversation or
+story text. The offending provider submission does not run. Already accepted
+user/control records and existing failure audit remain authoritative; overflow
+creates no approval, successful task progress or permission to replay work.
+
+Inspect the conversation and task state before deciding what to do next. Bounded
+editorial memory improves decision lookup and restoration, but does not bound the
+required-history delivery to the provider. Archiving, changing conversations or restarting
+can retain that history, so these actions alone do not guarantee a smaller payload.
+The current runtime does not silently omit, summarize or delete history to fit.
+Selective delivery requires a separate policy with preserved originals, required
+history, provenance, explicit omissions and consistent restart/provider behavior.
+
 ## Review, Apply, and Commit
 
 The implemented workflow constructs an exact complete-state-bound candidate,

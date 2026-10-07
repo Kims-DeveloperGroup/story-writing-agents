@@ -705,11 +705,7 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
             context_provider_failure_facts(ValueError()), ContextProviderFailureFacts()
         )
         self.assertNotIn("PRIVATE_PROVIDER_EXCEPTION", repr(facts))
-        prepared = replace(
-            submitted,
-            state=ProviderCallState.PREPARED,
-            actual_transport_utf8_bytes=None,
-        )
+        prepared = replace(submitted, state=ProviderCallState.PREPARED, actual_transport_utf8_bytes=None)
         for changes in (
             {"submitted_accountings": (prepared,)},
             {"submitted_accountings": [submitted]},
@@ -762,13 +758,7 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
                 allow_absent=allow_absent,
             ):
                 with self.assertRaises(ContextExecutionError) as caught:
-                    ContextSourceClassification(
-                        "source-invalid",
-                        channel,
-                        priority,
-                        0,
-                        allow_absent=allow_absent,  # type: ignore[arg-type]
-                    )
+                    ContextSourceClassification("source-invalid", channel, priority, 0, allow_absent=allow_absent)
                 self.assertIs(
                     caught.exception.code,
                     ContextExecutionErrorCode.INVALID_VALUE,
@@ -792,8 +782,7 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
             values = {name: getattr(original, name) for name in fields_}
             for name in fields_:
                 changed = SimpleNamespace(**{**values, name: values[name] + 1})
-                variants.add(fingerprint(policy, changed if is_action else actions,
-                                         sources if is_action else changed))
+                variants.add(fingerprint(policy, changed if is_action else actions, sources if is_action else changed))
         with mock.patch.object(service_module, "_CONTEXT_WIRE_VERSION", "agent-context-wire-v4-test"):
             variants.add(fingerprint(policy, actions, sources))
         self.assertNotIn(baseline, variants)
@@ -840,9 +829,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             result_contract=_LEAD_RESULT_CONTRACT,
             physical_call_limit=3,
         )
-        provider = _ScriptedProvider(
-            (_search, _read_search_hit, _lead_answer_with_read)
-        )
+        provider = _ScriptedProvider((_search, _read_search_hit, _lead_answer_with_read))
 
         verified_schemas = []
         diagnose = service_module.diagnose_json_text
@@ -889,10 +876,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             "reference-lead",
             "artifact-lead",
             "revision-lead",
-            ContextProvenance(
-                ContextAuthorityKind.REFERENCE_AUTHORIZATION,
-                "core_documents/global_outline.md",
-            ),
+            ContextProvenance(ContextAuthorityKind.REFERENCE_AUTHORIZATION, "core_documents/global_outline.md"),
             _digest(b"reference"),
             9,
         )
@@ -903,10 +887,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             reference_operation_id="reference-operation",
             mandatory_references=(reference,),
         )
-        provider = _ScriptedProvider(
-            (_lead_answer,),
-            reference_operation_id="reference-operation",
-        )
+        provider = _ScriptedProvider((_lead_answer,), reference_operation_id="reference-operation")
 
         result = await self.invoke(provider, request)
 
@@ -1228,10 +1209,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             ),
         )
         self.assertIs(result.projection_accounting.mode, ContextDeliveryMode.BOOTSTRAP)
-        other_definition = _ScriptedProvider(
-            (_answer,),
-            definition_fingerprint=_digest(b"other-definition"),
-        )
+        other_definition = _ScriptedProvider((_answer,), definition_fingerprint=_digest(b"other-definition"))
         result = await self.invoke(
             other_definition,
             self.request(
@@ -1257,10 +1235,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             "reference-1",
             "artifact-1",
             "revision-1",
-            ContextProvenance(
-                ContextAuthorityKind.REFERENCE_AUTHORIZATION,
-                "core_documents/global_outline.md",
-            ),
+            ContextProvenance(ContextAuthorityKind.REFERENCE_AUTHORIZATION, "core_documents/global_outline.md"),
             _digest(b"reference"),
             9,
         )
@@ -1268,10 +1243,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             reference_operation_id="reference-operation",
             mandatory_references=(reference,),
         )
-        provider = _ScriptedProvider(
-            (_answer,),
-            reference_operation_id="reference-operation",
-        )
+        provider = _ScriptedProvider((_answer,), reference_operation_id="reference-operation")
         result = await self.invoke(provider, request)
         self.assertEqual(len(result.provider_calls), 1)
         self.assertIs(
@@ -1433,11 +1405,7 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
                 accounting = active._accounting(call)
                 record_context_provider_failure(
                     failure,
-                    ContextProviderFailureFacts(
-                        accounting,
-                        timed_out=label == "timeout",
-                        taint_existing_thread=True,
-                    ),
+                    ContextProviderFailureFacts(accounting, timed_out=label == "timeout", taint_existing_thread=True),
                 )
                 return failure
 
@@ -1888,10 +1856,7 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
     async def test_bootstrap_delta_and_no_search_emit_exact_plan_and_usage_facts(
         self,
     ) -> None:
-        provider = _ScriptedProvider(
-            (_answer, _answer),
-            usage=ProviderUsage(input_tokens=7, output_tokens=3),
-        )
+        provider = _ScriptedProvider((_answer, _answer), usage=ProviderUsage(input_tokens=7, output_tokens=3))
         first_events: list[ContextExecutionEvent] = []
         first = await self.invoke(provider, event_sink=first_events.append)
         second_events: list[ContextExecutionEvent] = []
@@ -2030,10 +1995,7 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
             "reference-1",
             "artifact-1",
             "revision-1",
-            ContextProvenance(
-                ContextAuthorityKind.REFERENCE_AUTHORIZATION,
-                "core_documents/global_outline.md",
-            ),
+            ContextProvenance(ContextAuthorityKind.REFERENCE_AUTHORIZATION, "core_documents/global_outline.md"),
             _digest(b"reference"),
             9,
         )
@@ -2174,10 +2136,7 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
             "reference-observer",
             "artifact-observer",
             "revision-observer",
-            ContextProvenance(
-                ContextAuthorityKind.REFERENCE_AUTHORIZATION,
-                "core_documents/global_outline.md",
-            ),
+            ContextProvenance(ContextAuthorityKind.REFERENCE_AUTHORIZATION, "core_documents/global_outline.md"),
             _digest(b"reference-observer"),
             18,
         )
@@ -2185,10 +2144,7 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
             reference_operation_id="reference-observer-operation",
             mandatory_references=(reference,),
         )
-        provider = _ScriptedProvider(
-            (_answer,),
-            reference_operation_id="reference-observer-operation",
-        )
+        provider = _ScriptedProvider((_answer,), reference_operation_id="reference-observer-operation")
         failure = RuntimeError("PRIVATE_REFERENCE_OBSERVER_FAILURE")
         observed: list[ContextExecutionEventKind] = []
 
@@ -2225,17 +2181,11 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
             "reference-terminal",
             "artifact-terminal",
             "revision-terminal",
-            ContextProvenance(
-                ContextAuthorityKind.REFERENCE_AUTHORIZATION,
-                "core_documents/global_outline.md",
-            ),
+            ContextProvenance(ContextAuthorityKind.REFERENCE_AUTHORIZATION, "core_documents/global_outline.md"),
             _digest(b"reference-terminal"),
             18,
         )
-        provider = _ScriptedProvider(
-            (_answer,),
-            reference_operation_id="reference-terminal-operation",
-        )
+        provider = _ScriptedProvider((_answer,), reference_operation_id="reference-terminal-operation")
         request = self.request(
             reference_operation_id="reference-terminal-operation",
             mandatory_references=(reference,),
@@ -2381,9 +2331,7 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
 
         self.publish()
         action_events: list[ContextExecutionEvent] = []
-        exhausted = _ScriptedProvider(
-            (_search, _read_search_hit, _search, _read_search_hit, _search)
-        )
+        exhausted = _ScriptedProvider((_search, _read_search_hit, _search, _read_search_hit, _search))
         with self.assertRaises(ContextExecutionError):
             await self.invoke(
                 exhausted,

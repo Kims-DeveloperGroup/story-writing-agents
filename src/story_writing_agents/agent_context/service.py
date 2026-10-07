@@ -46,6 +46,7 @@ from .accounting import (
     ProviderCallAccounting,
     ProviderCallKind,
     ProviderCallState,
+    account_provider_payload,
 )
 
 from .actions import (
@@ -515,6 +516,21 @@ def _canonical_bytes(value: object) -> bytes:
     if encoded is None:
         raise _action_error(ContextActionErrorCode.INVALID_VALUE)
     return encoded
+
+
+def _require_context_capacity(
+    schema: Mapping[str, object],
+    payload: Mapping[str, object],
+    *,
+    stage: str,
+) -> None:
+    """Check actual provider payload JSON without changing delivery or accounting."""
+    payload_json, _ = account_provider_payload(schema, payload)
+    actual_utf8_bytes = len(payload_json)
+    if actual_utf8_bytes > MAX_SESSION_CONTEXT_UTF8_BYTES:
+        raise SessionContextCapacityError(
+            stage=stage, actual_utf8_bytes=actual_utf8_bytes,
+        )
 
 
 def _boundary_value(boundary: ContextSourceBoundary) -> tuple[object, ...]:
@@ -4982,8 +4998,7 @@ class AgentContextService:
                     known_payload, known_component_paths, known_reference_paths,
                     schema={}, projection=projection,
                 )
-                if len(_canonical_bytes(known_payload)) > MAX_SESSION_CONTEXT_UTF8_BYTES:
-                    raise SessionContextCapacityError()
+                _require_context_capacity({}, known_payload, stage="known_envelope")
 
             if projection.mode is ContextDeliveryMode.BOOTSTRAP:
                 retired_thread_id = active_thread_id
@@ -5167,12 +5182,6 @@ class AgentContextService:
                     payload, component_paths, reference_paths,
                     schema=schema, projection=projection,
                 )
-                if (
-                    observation is None
-                    and history_delivery is not None
-                    and len(_canonical_bytes(payload)) > MAX_SESSION_CONTEXT_UTF8_BYTES
-                ):
-                    raise SessionContextCapacityError()
                 call_request = ContextProviderCallRequest(
                     scope=scope,
                     policy_fingerprint=policy_fingerprint,
@@ -5188,10 +5197,11 @@ class AgentContextService:
                     ),
                     execution_workspace=request.execution_workspace,
                 )
-                if continuation is not None and (
-                    len(_canonical_bytes(payload)) > MAX_SESSION_CONTEXT_UTF8_BYTES
-                ):
-                    raise SessionContextCapacityError()
+                if history_delivery is not None or continuation is not None:
+                    _require_context_capacity(
+                        call_request.schema, call_request.payload,
+                        stage="provider_payload",
+                    )
                 stage = "provider"
                 provider_failure = True
                 for auth_attempt in range(2):

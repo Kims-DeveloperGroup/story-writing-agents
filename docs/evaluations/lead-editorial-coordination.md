@@ -228,6 +228,22 @@ An important error or degraded protected voice must remain visible even when
 other dimensions improve. Nine constructed cases do not establish quality
 across novels, genres, authors, languages, or production provider versions.
 
+### Editorial-memory and delivery-capacity boundary (#799, #811)
+
+The delivered #799 editorial memory supports decision discovery and restoration;
+it does not solve whole-history transmission capacity. #811 covers exact current
+JSON-byte diagnostics and boundary behavior at 262,144 UTF-8 bytes, not unlimited
+novel length or creative-quality improvement. Contract tests are deterministic
+runtime evidence, separate from #806's matched provider runs and independent
+human author-intent and reader/editor reviews.
+
+Any future selective-delivery design must define which history is required, which
+history can be retrieved with provenance, and how omissions are disclosed while
+preserving originals. It must also define archive/conversation/restart behavior
+and the same delivery contract for both providers. The current implementation
+keeps current required-history inclusion, the cap and existing authority unchanged; no
+migration or older-format compatibility work is required.
+
 ## Evidence record
 
 Use the repository's [Evidence template](../../.github/templates/evidence.md)

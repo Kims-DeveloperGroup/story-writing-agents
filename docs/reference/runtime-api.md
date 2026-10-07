@@ -1584,6 +1584,30 @@ separate exact Apply and Commit decision methods can perform those effects.
 
 <a id="context-lifecycle-observer"></a>
 
+### Session context capacity failures
+
+`conversations.session_context.SessionContextCapacityError` is the existing
+`ValueError` boundary for exact context capacity. Its host-owned diagnostic facts
+are `stage`, `actual_utf8_bytes`, `maximum_utf8_bytes` and `excess_utf8_bytes`.
+The maximum remains 262,144. Actual/excess measurements can be unavailable when an
+early allocation fails before the final payload exists; inspect the stage before
+interpreting a measurement as complete provider-payload size.
+
+History/editorial preflight and the final `provider_payload` guard have distinct
+stages. The final guard uses the existing canonical payload encoding after context
+rendering and immediately before both initial and continuation provider submission.
+It counts UTF-8 bytes, including JSON escaping and envelope fields, with equality
+allowed. Output-schema and native transport bytes are separately delivered and
+are outside this existing payload cap. Do not add overlapping component estimates
+to the final measured total.
+
+The orchestration failure path retains its current user/control/checkpoint and
+failure-audit semantics. Capacity rejection submits no offending provider request
+and grants no approval or successful progress. The interactive shell renders the
+content-free capacity summary through its trusted error-notice path. Archive and
+restart preserve history according to current continuity rules; neither is a
+capacity bypass or a selective-delivery API.
+
 ## Related APIs
 
 - [Lead-agent guide](../guides/lead-agent.md)
