@@ -424,6 +424,16 @@ CONVERSATION_FACADE_EXPORTS = (
     'LeadMaterialChoice',
     'LeadPublicResponseView',
     'LeadTaskDecisionResult',
+    'EditorialScopeKind',
+    'EditorialScopeTarget',
+    'EditorialScope',
+    'EditorialScopeCoverage',
+    'editorial_scope_relation',
+    'EditorialRelationKind',
+    'EditorialRelationDecision',
+    'EditorialScopeRelationFact',
+    'EditorialRecordScopeState',
+    'EditorialApplicationAttempt',
 )
 
 USER = CollaborationActor(CollaborationActorKind.USER)
@@ -1230,7 +1240,8 @@ def reround_assignment(
     return replace(assignment, round=round_number)
 
 
-async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_core_evidence=()):
+async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_core_evidence=(),
+                                 editorial_refs=(), editorial_context_digest=None):
     """Publish a real reviewed candidate without unrelated provider authoring."""
     import hashlib
     import json
@@ -1241,6 +1252,7 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
     from story_writing_agents.conversations.context import project_collaboration_history
     from story_writing_agents.specialist_routing import (
         AuthoringActivity, AuthoringScope, ReviewBasis, SpecialistAssignmentMode,
+        AuthoringContribution, AuthoringContributionRole,
     )
 
     runtime, session_id = case.runtime, case.session_id
@@ -1315,6 +1327,9 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
         scope = AuthoringScope(
             AuthoringActivity.REVIEW, scope_paths, candidate.disclosed_review_domains,
             "Review the exact fixture candidate.", prefix + "_task", 1,
+            schema_version=3 if editorial_refs else 2,
+            contributions=tuple(AuthoringContribution(domain, AuthoringContributionRole.DRAFT_OWNER)
+                                for domain in candidate.disclosed_review_domains) if editorial_refs else (),
         )
         live_assignments = tuple(replace(
             item, mode=SpecialistAssignmentMode.REVIEW,
@@ -1326,7 +1341,8 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
                 input_id, kind=CollaborationInputKind.ARTIFACT_CANDIDATE,
                 locator=f"artifact-candidate/{candidate.candidate_id}",
                 revision_digest=candidate.candidate_digest, start_line=None, end_line=None,
-            ),), evidence=live_evidence), authoring_scope=scope,
+            ),), evidence=live_evidence, schema_version=2 if editorial_refs else 1,
+                editorial_refs=editorial_refs, editorial_context_digest=editorial_context_digest), authoring_scope=scope,
         )
         history, _ = running_history(generic)
         result, _ = result_batch(history, generic)

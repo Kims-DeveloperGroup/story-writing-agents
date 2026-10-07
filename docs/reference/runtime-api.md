@@ -878,6 +878,29 @@ final review inherits them without substituting newly sampled memory. Applicatio
 identify historical task/candidate use and do not supply current artifact contents or
 prove ambiguity or setup has been resolved.
 
+Scope values come from `story_writing_agents.editorial_scope`: `EditorialScope`,
+`EditorialScopeTarget`, and derived `EditorialScopeCoverage`. Known targets use canonical
+artifact paths; finite inclusive ranges also require the exact source SHA. Unknown scope
+is an explicit clarification state. `EditorialRecordDraft.scope` names application
+coverage independently of provenance references.
+
+`EditorialRecordRequest.relation_decisions` carries typed `EditorialRelationDecision`
+values (coexist, conflict, replace), each naming an exact current counterpart reference,
+optional intersecting scope, and explicit user reason. A nonempty relation request also
+requires `expected_editorial_context_digest`, obtained from current inspection's
+`context_digest(refs)` for the relevant records. Empty relation requests omit that pin.
+Text-only revision preserves declared scope; explicit unknown-to-known clarification is
+allowed. Partial replacement creates a new directive and exact replacement relation so
+the previous decision's remaining coverage survives.
+
+Inspection adds `scope_states`, `scope_relations`, and `application_attempts`. These are
+deterministic history projections, distinct from qualified current source observations.
+Nonempty proposal/recommendation editorial basis requires the host-created
+`editorial_context_digest`; empty/no-memory basis retains its existing encoding.
+Confirmation revalidates both exact references and affecting topology, and checks finite
+source anchors through the guarded owning repository seam. No migration or earlier
+nonempty codec acceptance is provided.
+
 See [editorial decisions](../guides/lead-agent.md#editorial-decisions) and the
 [history contract](collaboration-history.md#editorial-memory).
 

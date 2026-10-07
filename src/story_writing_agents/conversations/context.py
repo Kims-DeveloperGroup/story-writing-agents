@@ -27,7 +27,7 @@ from .events import (
 
 from ..editorial_state import (
     EditorialStateProjection, EditorialRecordRevision, EditorialApprovalState,
-    EditorialAppliedFact, EditorialProvenanceRef, EditorialStateIntegrityError,
+    EditorialAppliedFact, EditorialApplicationAttempt, EditorialProvenanceRef, EditorialStateIntegrityError,
 )
 from .events import CollaborationEditorialRecordPayload, encode_collaboration_event, CollaborationEvidenceAcquisition
 
@@ -6981,6 +6981,21 @@ def project_editorial_state(session_id: str, events: tuple[CollaborationEventV2,
     for group in groups.values():
         project_collaboration_history(tuple(group))
     records = tuple(event.payload.record for event in events if type(event.payload) is CollaborationEditorialRecordPayload)
+    record_events = {event.payload.record.ref: event for event in events
+                     if type(event.payload) is CollaborationEditorialRecordPayload}
+    for admission in record_events.values():
+        record = admission.payload.record
+        for ref in tuple(dict.fromkeys(record.context_refs + record.request.relation_refs())):
+            source = record_events.get(ref)
+            if source is None or source.event_id == admission.event_id:
+                raise EditorialStateIntegrityError("editorial context names an unavailable admission")
+            if source.conversation_id == admission.conversation_id:
+                if source.sequence >= admission.sequence:
+                    raise EditorialStateIntegrityError("editorial context names a future local source")
+            else:
+                prefix = tuple(row for row in groups[source.conversation_id]
+                               if row.sequence <= source.sequence)
+                project_collaboration_history(prefix)
     state = EditorialStateProjection(session_id, records)
     by_ref = {record.ref: record for record in records}
     requests = [record.request.request_id for record in records]
@@ -6994,6 +7009,67 @@ def project_editorial_state(session_id: str, events: tuple[CollaborationEventV2,
         for ref in event.payload.basis.editorial_refs:
             if ref not in by_ref or by_ref[ref].approval_state is not EditorialApprovalState.SELECTED:
                 raise EditorialStateIntegrityError("workflow cites no exact selected USER editorial revision")
+    attempts = []
+    for request_event in sorted(events, key=lambda row: (row.conversation_id, row.sequence)):
+        request = request_event.payload
+        if type(request) is not ArtifactApplicationRequestPayload:
+            continue
+        reviewed = request.reviewed_proposal
+        group = groups[request_event.conversation_id]
+        consultations = tuple(row.payload for row in group
+                              if type(row.payload) is CollaborationProposal
+                              and (row.payload.proposal_id, row.payload.proposal_revision,
+                                   row.payload.proposal_digest) == (
+                                  reviewed.consultation_proposal_id,
+                                  reviewed.consultation_proposal_revision,
+                                  reviewed.consultation_proposal_digest))
+        if len(consultations) != 1:
+            raise EditorialStateIntegrityError("editorial application has no exact consultation")
+        consultation = consultations[0]
+        if not consultation.basis.editorial_refs:
+            continue
+        scope = consultation.authoring_scope
+        if scope is None:
+            raise EditorialStateIntegrityError("editorial application has no exact task scope")
+        results = tuple(row for row in group
+                        if type(row.payload) is ArtifactApplicationResultPayload
+                        and row.payload.confirmation_request_id == request.confirmation_request_id
+                        and row.payload.application_request_digest == request.application_request_digest)
+        if len(results) > 1:
+            raise EditorialStateIntegrityError("editorial application repeats its exact result")
+        result_event = results[0] if results else None
+        result = None if result_event is None else result_event.payload
+        decisions = tuple(row.payload for row in group
+                          if type(row.payload) is ArtifactApplicationDecisionPayload
+                          and row.payload.confirmation_request_event_id == request_event.event_id)
+        if result is not None:
+            phase = {ArtifactApplicationOutcomeKind.APPLIED: "applied",
+                     ArtifactApplicationOutcomeKind.UNCHANGED: "unchanged",
+                     ArtifactApplicationOutcomeKind.OUTCOME_UNKNOWN: "uncertain",
+                     ArtifactApplicationOutcomeKind.RECOVERY_REQUIRED: "recovery_required"}.get(
+                         result.outcome, "failed")
+        else:
+            phase = "uncertain" if any(item.decision is ArtifactApplicationDecisionKind.CONFIRM
+                                       for item in decisions) else "pending"
+        request_ref = EditorialProvenanceRef(
+            session_id, request_event.conversation_id, request_event.event_id,
+            hashlib.sha256(encode_collaboration_event(request_event)).hexdigest())
+        result_ref = None if result_event is None else EditorialProvenanceRef(
+            session_id, result_event.conversation_id, result_event.event_id,
+            hashlib.sha256(encode_collaboration_event(result_event)).hexdigest())
+        paths = tuple(dict.fromkeys(path for operation in request.application_request.change_set.operations
+                                    for path in (getattr(operation, "path", None),
+                                                 getattr(operation, "source_path", None),
+                                                 getattr(operation, "destination_path", None))
+                                    if path is not None))
+        affected = () if result is None or result.result is None else tuple(result.result.affected_paths)
+        for ref in consultation.basis.editorial_refs:
+            attempts.append(EditorialApplicationAttempt(
+                ref, request_ref, result_ref, scope.task_id, scope.task_revision,
+                reviewed.proposal_id, reviewed.proposal_digest,
+                reviewed.candidate.candidate_id, reviewed.candidate.candidate_digest,
+                request.application_request.provenance.application_id,
+                request.application_request_digest, paths, affected, phase))
     facts = []
     for event in sorted(events, key=lambda item: (item.conversation_id, item.sequence)):
         result = event.payload
@@ -7025,7 +7101,7 @@ def project_editorial_state(session_id: str, events: tuple[CollaborationEventV2,
                 reviewed.proposal_digest, reviewed.candidate.candidate_id, reviewed.candidate.candidate_digest,
                 application_ref, result.application_id, result.application_request_digest, result.outcome.value,
                 tuple(result.result.affected_paths)))
-    return EditorialStateProjection(session_id, records, tuple(facts), gaps)
+    return EditorialStateProjection(session_id, records, tuple(facts), gaps, tuple(attempts))
 
 __all__ = [
     "project_editorial_state",

@@ -700,6 +700,29 @@ that association separately from approval. It supplies neither current artifact 
 evidence nor semantic fulfillment or further execution permission. See the
 [editorial memory methods](runtime-api.md#editorial-memory-methods).
 
+Scope and relation fields are part of the current exact editorial request/revision
+encoding and immutable digest. Host-created revision `context_refs` capture the
+relevant current heads at relation admission. Replay verifies the captured closure,
+request context pin, counterpart currentness, and retained physical source receipts.
+Empty relation revisions retain an empty capture. Typed USER relations retain their origin revision,
+counterpart reference, intersecting scope, and reason. Projection derives remaining
+coverage and unresolved conflicts from retained history. A fully replaced decision
+retains its approval history while its effective coverage is consumed. Partial
+replacement does not erase its residual coverage or original evidence.
+
+A nonempty editorial basis includes a host-owned relevant context digest in addition to
+exact record references. The digest includes affecting relation and coverage dependencies,
+so a cross-record change can stale confirmation without changing the captured record's
+own revision. Unrelated disjoint decisions do not become a global invalidation clock.
+Empty/no-memory basis omits the digest. Current codecs reject an earlier nonempty basis
+without the pin; this enhancement supplies no migration or compatibility reader.
+
+Application attempts retain exact request/result, task/revision, reviewed proposal,
+candidate, source and target identities, including failures and incomplete outcomes.
+Historical success remains separate from current manuscript observation and semantic
+fulfillment. Filesystem, SQLite, archive, transfer and restart replay the same retained
+facts. Current source freshness comes from qualified source inspection, not memory replay.
+
 ## Atomic batch flow
 
 The storage-neutral history is an ordered sequence of nonempty batches. One

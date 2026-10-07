@@ -421,17 +421,12 @@ class ArtifactApplicationRequestTests(ApplicationContractTestCase):
         self.assert_application_error(
             ArtifactApplicationErrorCode.CORRELATION_MISMATCH,
             lambda: ArtifactApplicationRequest(
-                1,
-                drift,
-                request.change_set,
-                request.attached_core_paths,
-            ),
+                1, drift, request.change_set, request.attached_core_paths),
         )
         self.assert_application_error(
             ArtifactApplicationErrorCode.INVALID_SCHEMA,
             lambda: ArtifactApplicationRequest(
-                True,
-                request.provenance,
+                True, request.provenance,
                 request.change_set,
                 request.attached_core_paths,
             ),
@@ -474,10 +469,7 @@ class ArtifactApplicationResultTests(ApplicationContractTestCase):
             result.rename_lineage,
             (
                 ArtifactRenameLineage(
-                    _MANUSCRIPT_MOVE,
-                    _MANUSCRIPT_MOVED,
-                    result.final_artifacts[2].sha256,
-                ),
+                    _MANUSCRIPT_MOVE, _MANUSCRIPT_MOVED, result.final_artifacts[2].sha256),
             ),
         )
         self.assertEqual(result.deletion_provenance[0].path, _MANUSCRIPT_DELETE)
@@ -903,8 +895,8 @@ assert len(writing_artifacts.__all__) == len(set(writing_artifacts.__all__)) == 
                     resolved = resolve(target)
                     if resolved is not None and resolved != module:
                         edges.add((module, resolved))
-        self.assertEqual(len(modules), 154)
-        self.assertEqual(len(edges), 660)
+        self.assertEqual(len(modules), 155)
+        self.assertEqual(len(edges), 666)
         application_name = (
             "story_writing_agents.writing_artifacts.application_contracts"
         )

@@ -1,6 +1,7 @@
 """Public recommendation decisions and their preparation/recovery boundaries."""
 
 from __future__ import annotations
+import hashlib
 
 from tests.test_collaboration_events import editorial, editorial_request
 import asyncio
@@ -210,6 +211,116 @@ class LeadRecommendationTests(RecommendationCase):
         self.assertEqual((closed.kind, self.history(current)[-1].payload.state), (c.LeadOutcomeKind.ANSWER, c.LeadRecommendationState.STALE))
         self.assertEqual(tuple(event.kind for event in self.history(current)[-2:]), (c.CollaborationEventKind.LEAD_RECOMMENDATION_DECISION, c.CollaborationEventKind.LEAD_RECOMMENDATION_RESULT))
         self.assertEqual((self.history(current)[:-2], len(self.backend.calls)), (before, calls))
+
+        from story_writing_agents import editorial_scope as scopes
+        memory_source = self.conversation("Scoped USER decisions")
+        scope = scopes.EditorialScope(scopes.EditorialScopeKind.KNOWN, targets=(
+            scopes.EditorialScopeTarget(OUTLINE),
+            scopes.EditorialScopeTarget("core_documents/character_sheets.md"),
+        ))
+        draft = replace(editorial_request("scoped_public_draft").draft, scope=scope)
+        selected = await self.runtime.record_editorial_decision(self.session_id, memory_source,
+            editorial.EditorialRecordRequest.directive(draft, transition_reason="Retain both exact targets."))
+        a_ref, original_record = selected.record_ref, selected.record
+        self.assertIsNotNone(a_ref)
+        work, offered = await self.recommend(self.conversation("Pinned scope preparation"))
+        pin = offered.recommendation_request.basis.editorial_context_digest
+        self.assertEqual(offered.recommendation_request.basis.editorial_refs, (a_ref,))
+        peer_source = self.conversation("Independent source and replacement")
+        independent = replace(draft, scope=scopes.EditorialScope.whole("core_documents/narrative_rules.md"))
+        await self.runtime.record_editorial_decision(self.session_id, peer_source,
+            editorial.EditorialRecordRequest.directive(independent, transition_reason="Independent scope."))
+        state = self.runtime.inspect_editorial_state(self.session_id)
+        self.assertEqual(state.context_digest((a_ref,)), pin)
+        self.backend.enqueue(preparation(offered))
+        prepared = await self.runtime.decide_lead_recommendation(decision(offered))
+        self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL)
+        self.assertEqual(prepared.proposal.basis.editorial_context_digest, pin)
+        before, calls = self.history(work), len(self.backend.calls)
+        changed = replace(draft, scope=scopes.EditorialScope.whole(OUTLINE))
+        relation = editorial.EditorialRelationDecision(a_ref, editorial.EditorialRelationKind.REPLACE,
+                       "Replace only the outline direction.")
+        replacement = await self.runtime.record_editorial_decision(self.session_id, peer_source,
+            editorial.EditorialRecordRequest.directive(changed,
+                transition_reason="Explicit partial replacement.",
+                relation_decisions=(relation,), expected_editorial_context_digest=pin))
+        self.assertIs(replacement.status, editorial.EditorialRecordStatus.RECORDED)
+        state = self.runtime.inspect_editorial_state(self.session_id)
+        self.assertEqual(next(r for r in state.current_records if r.ref == a_ref), original_record)
+        self.assertEqual(state.scope_state(a_ref).status, "partial")
+        self.assertNotEqual(state.context_digest((a_ref,)), pin)
+        self.assertEqual(self.history(work), before)
+        self.runtime = StoryRuntime(self.control_workspace, self.backend)
+        self.assertEqual(self.runtime.inspect_editorial_state(self.session_id), state)
+        with self.assertRaises(ValueError):
+            await self.runtime.decide_lead_step(lead._decision(prepared,
+                c.CollaborationConfirmationDecision.CONFIRM))
+        self.assertEqual((self.history(work), len(self.backend.calls)), (before, calls))
+        await self.runtime.decide_lead_step(lead._decision(prepared,
+            c.CollaborationConfirmationDecision.REJECT))
+        _, fresh = await self.recommend(work)
+        fresh_basis = fresh.recommendation_request.basis
+        self.assertEqual(fresh_basis.editorial_context_digest,
+                         state.context_digest(fresh_basis.editorial_refs))
+        self.backend.enqueue(preparation(fresh))
+        new_prepared = await self.runtime.decide_lead_recommendation(decision(fresh))
+        self.assertEqual(new_prepared.proposal.basis.editorial_context_digest,
+            fresh_basis.editorial_context_digest)
+        reviewed = await self.review(new_prepared)
+        self.assertIs(reviewed.artifact_proposal.state, c.ArtifactProposalState.REVIEWED)
+        self.assertEqual(self.runtime.inspect_editorial_state(self.session_id).applied_facts, ())
+
+        self.workspace.path(OUTLINE).write_text("Source-bound outline line.\n", encoding="utf-8")
+        source_bytes = self.workspace.path(OUTLINE).read_bytes()
+        anchored = self.conversation("Whole direction with finite replacement")
+        whole = replace(draft, scope=scopes.EditorialScope.whole(OUTLINE))
+        state = self.runtime.inspect_editorial_state(self.session_id)
+        prior_relation = editorial.EditorialRelationDecision(replacement.record_ref,
+            editorial.EditorialRelationKind.REPLACE,
+                                                            "Replace the earlier whole outline direction.")
+        whole_result = await self.runtime.record_editorial_decision(self.session_id, anchored,
+            editorial.EditorialRecordRequest.directive(whole,
+                transition_reason="Retain the complete outline.",
+                relation_decisions=(prior_relation,),
+                expected_editorial_context_digest=state.context_digest((replacement.record_ref,))))
+        finite = scopes.EditorialScope.selected_range(OUTLINE, 1, 1, hashlib.sha256(source_bytes).hexdigest())
+        finite_draft = replace(draft, scope=finite)
+        state = self.runtime.inspect_editorial_state(self.session_id)
+        relation = editorial.EditorialRelationDecision(whole_result.record_ref,
+            editorial.EditorialRelationKind.REPLACE,
+                       "Replace this exact source-bound line only.", scope=finite)
+        replaced = await self.runtime.record_editorial_decision(self.session_id, anchored,
+            editorial.EditorialRecordRequest.directive(finite_draft,
+                transition_reason="Explicit finite replacement.",
+                relation_decisions=(relation,),
+                    expected_editorial_context_digest=state.context_digest((whole_result.record_ref,))))
+        self.assertIs(replaced.status, editorial.EditorialRecordStatus.RECORDED)
+        state = self.runtime.inspect_editorial_state(self.session_id)
+        self.assertEqual(state.scope_state(whole_result.record_ref).status, "partial")
+        drift_work, offered = await self.recommend(self.conversation("Range anchor drift"))
+        def search_outline(call, _provider):
+            return json.dumps({"action": {
+                "kind": "search", "path_prefix": "core_documents/",
+                "queries": [{"text": "Source-bound outline line.", "source_kinds": ["writing_artifact"]}],
+            }})
+        self.backend.enqueue(
+            search_outline, lead._read_history_hit, preparation(offered, read_evidence=True))
+        drift_plan = await self.runtime.decide_lead_recommendation(decision(offered))
+        self.assertIsNotNone(drift_plan.proposal, drift_plan)
+        before, calls = self.history(drift_work), len(self.backend.calls)
+        records, pin = state.current_records, state.context_digest(drift_plan.proposal.basis.editorial_refs)
+        self.workspace.path(OUTLINE).write_bytes(source_bytes + b"External drift.\n")
+        try:
+            with self.assertRaisesRegex(ValueError, "source is unavailable or changed"):
+                await self.runtime.decide_lead_step(lead._decision(drift_plan,
+                    c.CollaborationConfirmationDecision.CONFIRM))
+            current = self.runtime.inspect_editorial_state(self.session_id)
+            self.assertEqual((current.current_records,
+                current.context_digest(drift_plan.proposal.basis.editorial_refs)),
+                             (records, pin))
+            self.assertEqual((self.history(drift_work), len(self.backend.calls)), (before, calls))
+        finally:
+            self.workspace.path(OUTLINE).write_bytes(source_bytes)
 
 
 

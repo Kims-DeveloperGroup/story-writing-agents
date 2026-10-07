@@ -237,9 +237,7 @@ class ConversationStorageSelectionTests(unittest.TestCase):
             (
                 "filesystem",
                 {
-                    "configuration": ConfigManager(
-                        self.workspace
-                    ).load_configuration_snapshot()
+                    "configuration": ConfigManager(self.workspace).load_configuration_snapshot()
                 },
             ),
         )
@@ -306,9 +304,8 @@ class ConversationStorageSelectionTests(unittest.TestCase):
         first_agent = next(iter(agents))
         agents[first_agent] = replace(agents[first_agent], backend="antigravity")
         candidate = ConfigurationSnapshot(
-            replace(baseline.configuration.system_defaults, language="EN"),
-            agents,
-        )
+                        replace(baseline.configuration.system_defaults, language='EN'), agents
+                    )
         report = select_conversation_storage(
             self.workspace,
             "filesystem",
@@ -399,11 +396,7 @@ class ConversationStorageSelectionTests(unittest.TestCase):
         runner = mock.Mock(return_value=SimpleNamespace(returncode=0))
         provisioner = self.provisioner(runner=runner)
         unavailable = _sqlite_preflight(ConversationStorageCapability.UNAVAILABLE)
-        with mock.patch.object(
-            provisioner,
-            "probe_runtime",
-            side_effect=(unavailable, unavailable),
-        ) as probe:
+        with mock.patch.object(provisioner, 'probe_runtime', side_effect=(unavailable, unavailable)) as probe:
             report = select_conversation_storage(
                 self.workspace,
                 "sqlite",
@@ -479,11 +472,7 @@ class ConversationStorageSelectionTests(unittest.TestCase):
                 "probe_runtime",
                 return_value=_sqlite_preflight(ConversationStorageCapability.READY),
             ),
-            mock.patch.object(
-                selection_module,
-                "inspect_conversation_storage_parity",
-                return_value=mismatch,
-            ),
+            mock.patch.object(selection_module, 'inspect_conversation_storage_parity', return_value=mismatch),
         ):
             report = select_conversation_storage(
                 self.workspace,
@@ -515,12 +504,7 @@ class ConversationStorageSelectionTests(unittest.TestCase):
                     raise OSError("private write failure")
             real_write(workspace, relative, text)  # type: ignore[arg-type]
 
-        with mock.patch.object(
-            workspace_type,
-            "write_text",
-            autospec=True,
-            side_effect=fail_once,
-        ):
+        with mock.patch.object(workspace_type, 'write_text', autospec=True, side_effect=fail_once):
             report = select_conversation_storage(
                 self.workspace,
                 "filesystem",
@@ -660,11 +644,7 @@ class ConversationStorageSelectionTests(unittest.TestCase):
             empty=True,
         )
         with (
-            mock.patch.object(
-                selection_module,
-                "_validate_lease",
-                side_effect=validate,
-            ),
+            mock.patch.object(selection_module, '_validate_lease', side_effect=validate),
             mock.patch.object(
                 selection_module,
                 "inspect_conversation_storage_parity",
@@ -672,12 +652,7 @@ class ConversationStorageSelectionTests(unittest.TestCase):
                     events.append("parity") or readiness
                 ),
             ),
-            mock.patch.object(
-                ConfigManager,
-                "commit_configuration",
-                autospec=True,
-                side_effect=commit,
-            ),
+            mock.patch.object(ConfigManager, 'commit_configuration', autospec=True, side_effect=commit),
         ):
             report = select_conversation_storage(
                 self.workspace,
@@ -883,14 +858,8 @@ class ConversationStorageStartupTests(unittest.TestCase):
     def test_active_composition_rejects_activation_drift_backend_mismatch_and_contention(
         self,
     ) -> None:
-        filesystem = ConversationStorageActivationState(
-            ConversationStorageBackend.FILESYSTEM,
-            0,
-        )
-        sqlite = ConversationStorageActivationState(
-            ConversationStorageBackend.SQLITE,
-            1,
-        )
+        filesystem = ConversationStorageActivationState(ConversationStorageBackend.FILESYSTEM, 0)
+        sqlite = ConversationStorageActivationState(ConversationStorageBackend.SQLITE, 1)
         services = compose_filesystem_conversation_storage(self.workspace)
         cases = (
             (filesystem, sqlite, services),
@@ -904,11 +873,7 @@ class ConversationStorageStartupTests(unittest.TestCase):
                     "load_conversation_storage_activation_state",
                     side_effect=(before, after),
                 ),
-                mock.patch.object(
-                    selection_module,
-                    "_compose_active_services",
-                    return_value=composed,
-                ),
+                mock.patch.object(selection_module, '_compose_active_services', return_value=composed),
                 self.assertRaises(ConversationStorageCoordinationError),
             ):
                 compose_active_conversation_storage(self.workspace)
@@ -1025,16 +990,8 @@ class ConversationStorageStartupTests(unittest.TestCase):
             return real_compose(workspace, backend)  # type: ignore[arg-type]
 
         with (
-            mock.patch.object(
-                selection_module,
-                "inspect_conversation_storage_parity",
-                return_value=ready,
-            ),
-            mock.patch.object(
-                selection_module,
-                "_compose_active_services",
-                side_effect=fail_target,
-            ),
+            mock.patch.object(selection_module, 'inspect_conversation_storage_parity', return_value=ready),
+            mock.patch.object(selection_module, '_compose_active_services', side_effect=fail_target),
         ):
             with self.assertRaises(OSError):
                 activate_configured_conversation_storage(self.workspace)
@@ -1064,10 +1021,7 @@ class ConversationStorageStartupTests(unittest.TestCase):
         manager.commit_configuration(
             baseline,
             ConfigurationSnapshot(
-                replace(
-                    baseline.configuration.system_defaults,
-                    conversation_storage_backend="sqlite",
-                ),
+                replace(baseline.configuration.system_defaults, conversation_storage_backend="sqlite"),
                 baseline.configuration.agent_configs,
             ),
         )

@@ -1,6 +1,8 @@
 """Focused public-runtime coverage for exact reviewed artifact application."""
 
 from __future__ import annotations
+from story_writing_agents import editorial_scope as scopes
+from tests.test_collaboration_events import editorial, editorial_request
 
 from story_writing_agents import lead_exploration as exploration
 
@@ -107,13 +109,16 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
             ).read_bytes(),
         )
 
-    async def reviewed_create(self, subject: str = "Reviewed application", *, kind="create"):
+    async def reviewed_create(self, subject: str = "Reviewed application", *, kind="create",
+                              editorial_refs=(), editorial_context_digest=None):
         conversation_id = self.conversation(subject)
         if kind == "create":
             self.workspace.path(_RULES).unlink(missing_ok=True)
         return await seed_reviewed_artifact(self, conversation_id, (
             (kind, _RULES, "Use restrained close-third narration.\n"),
-        ))
+        ),
+            editorial_refs=editorial_refs, editorial_context_digest=editorial_context_digest,
+        )
 
     async def reviewed_rename(self):
         self.workspace.path(_INDEX).write_text("[next](second.md)\n", encoding="utf-8")
@@ -335,6 +340,11 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
              "commit", "-m", "Seed Apply failure baseline"],
             cwd=self.workspace.root, check=True, stdout=subprocess.DEVNULL,
         )
+        memory_conversation = self.conversation("Scoped failure direction")
+        draft = replace(editorial_request("failure_scope").draft, scope=scopes.EditorialScope.whole(_RULES))
+        memory = await self.runtime.record_editorial_decision(self.session_id, memory_conversation,
+            editorial.EditorialRecordRequest.directive(draft,
+                transition_reason="Retain the actual target direction."))
         for code, expected, next_action in (
             (
                 ArtifactApplicationErrorCode.RECOVERY_REQUIRED,
@@ -348,7 +358,9 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
             ),
         ):
             with self.subTest(code=code):
-                turn = await self.reviewed_create(code.value)
+                turn = await self.reviewed_create(code.value, editorial_refs=(memory.record_ref,),
+                    editorial_context_digest=self.runtime.inspect_editorial_state(self.session_id)
+                        .context_digest((memory.record_ref,)))
                 before = self.artifact_snapshot()
                 git_before = self.git_snapshot()
                 with mock.patch.object(
@@ -365,6 +377,13 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
                 self.assertIs(result.outcome.next_action, next_action)
                 self.assertEqual(self.artifact_snapshot(), before)
                 self.assertEqual(self.git_snapshot(), git_before)
+                state = self.runtime.inspect_editorial_state(self.session_id)
+                attempts = tuple(
+                    item for item in state.application_attempts if item.record_ref == memory.record_ref)
+                self.assertEqual(attempts[-1].phase, "recovery_required" if expected is
+                                 ArtifactApplicationOutcomeKind.RECOVERY_REQUIRED else "uncertain")
+                self.assertEqual(attempts[-1].target_paths, (_RULES,))
+                self.assertEqual(state.applied_facts, ())
 
         turn = await self.reviewed_create("Commit preparation failure")
         git_before = self.git_snapshot()

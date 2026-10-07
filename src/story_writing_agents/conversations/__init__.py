@@ -1,5 +1,13 @@
 """Provider-neutral subject-conversation persistence contracts."""
 
+from ..editorial_scope import (
+    EditorialScopeKind, EditorialScopeTarget, EditorialScope, EditorialScopeCoverage,
+    editorial_scope_relation,
+)
+from ..editorial_state import (
+    EditorialRelationKind, EditorialRelationDecision, EditorialScopeRelationFact,
+    EditorialRecordScopeState, EditorialApplicationAttempt,
+)
 from .catalog import (
     CONVERSATION_METADATA_SCHEMA_VERSION,
     CONVERSATION_SUBJECT_NORMALIZATION_VERSION,
@@ -523,4 +531,14 @@ __all__ = [
     'LeadMaterialChoice',
     'LeadPublicResponseView',
     'LeadTaskDecisionResult',
+    "EditorialScopeKind",
+    "EditorialScopeTarget",
+    "EditorialScope",
+    "EditorialScopeCoverage",
+    "editorial_scope_relation",
+    "EditorialRelationKind",
+    "EditorialRelationDecision",
+    "EditorialScopeRelationFact",
+    "EditorialRecordScopeState",
+    "EditorialApplicationAttempt",
 ]

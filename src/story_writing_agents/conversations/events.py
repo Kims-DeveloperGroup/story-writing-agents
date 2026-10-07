@@ -1778,12 +1778,19 @@ class CollaborationProposalBasis:
     schema_version: int = field(default=1, kw_only=True)
     shared_premises: tuple[CollaborationSharedPremise, ...] = field(default=(), kw_only=True)
     editorial_refs: tuple[EditorialRecordRef, ...] = field(default=(), kw_only=True)
+    editorial_context_digest: str | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         if type(self.schema_version) is not int or self.schema_version not in {1, 2}:
             raise ValueError("proposal basis version is unsupported")
         _validate_exact_tuple(self.editorial_refs, EditorialRecordRef, label="editorial references")
         _require_unique(tuple(item.record_id for item in self.editorial_refs), label="editorial record IDs")
+        if self.editorial_refs:
+            if (type(self.editorial_context_digest) is not str
+                    or re.fullmatch(r"[0-9a-f]{64}", self.editorial_context_digest) is None):
+                raise ValueError("editorial references require an exact host context digest")
+        elif self.editorial_context_digest is not None:
+            raise ValueError("empty editorial basis cannot carry a context digest")
         if self.editorial_refs and self.schema_version != 2:
             raise ValueError("editorial references require the current proposal basis")
         _validate_exact_tuple(self.shared_premises, CollaborationSharedPremise, label="shared premises")
@@ -4185,7 +4192,8 @@ def authoring_capture_identity(scope: AuthoringScope, basis: CollaborationPropos
                  "sources": sorted((premise_source_identity(source) for source in item.sources),
                                    key=lambda value: json.dumps(value, ensure_ascii=False))}
                 for item in basis.shared_premises]
-    return json.dumps({"scope": scoped, "premises": sorted(premises, key=lambda item: item["slot_id"]), **({"editorial_refs": [editorial_ref_to_dict(ref) for ref in basis.editorial_refs]} if basis.editorial_refs else {})},
+    return json.dumps({"scope": scoped, "premises": sorted(premises, key=lambda item: item["slot_id"]), **({"editorial_refs": [editorial_ref_to_dict(ref) for ref in basis.editorial_refs],
+            "editorial_context_digest": basis.editorial_context_digest} if basis.editorial_refs else {})},
                       ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
@@ -4688,7 +4696,8 @@ def _lead_evidence_value(evidence: CollaborationLeadEvidence) -> dict[str, objec
 
 def _basis_value(basis: CollaborationProposalBasis) -> dict[str, object]:
     return {
-        **({"editorial_refs": [editorial_ref_to_dict(item) for item in basis.editorial_refs]} if basis.editorial_refs else {}),
+        **({"editorial_refs": [editorial_ref_to_dict(item) for item in basis.editorial_refs],
+            "editorial_context_digest": basis.editorial_context_digest} if basis.editorial_refs else {}),
         **({'schema_version': 2, 'shared_premises': shared_premises_to_dict(basis.shared_premises)} if basis.schema_version == 2 else {}),
         "agent_profiles": [_profile_value(item) for item in basis.agent_profiles],
         "budget_policy_fingerprint": basis.budget_policy_fingerprint,
@@ -5495,11 +5504,13 @@ def _decode_basis(value: object) -> CollaborationProposalBasis:
             "route",
             "route_fingerprint",
         } | ({"schema_version", "shared_premises"} if type(value) is dict and value.get("schema_version") == 2 else set())
-          | ({"editorial_refs"} if type(value) is dict and "editorial_refs" in value else set()),
+          | ({"editorial_refs"} if type(value) is dict and "editorial_refs" in value else set())
+        | ({"editorial_context_digest"} if type(value) is dict and value.get("editorial_refs") else set()),
         label="proposal basis",
     )
     return CollaborationProposalBasis(
         editorial_refs=tuple(editorial_ref_from_dict(entry) for entry in _array(item.get("editorial_refs", []), label="editorial references")),
+        editorial_context_digest=item.get("editorial_context_digest"),
         schema_version=item.get('schema_version', 1),
         shared_premises=tuple(_decode_shared_premise(entry) for entry in _array(item['shared_premises'], label='shared premises')) if item.get('schema_version') == 2 else (),
         route=_string(item["route"], label="proposal route"),

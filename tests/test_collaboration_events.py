@@ -1,6 +1,8 @@
 """Immutable schema-v2 collaboration values and canonical wire contracts."""
 
 from __future__ import annotations
+from story_writing_agents import editorial_scope as scopes
+from story_writing_agents.conversations.session_context import project_editorial_state
 
 import copy
 import dataclasses
@@ -157,6 +159,38 @@ def editorial_append(history, request):
     draft = make_draft(event_id, CollaborationEventKind.EDITORIAL_RECORD, USER, LEAD,
                       events_owner.CollaborationEditorialRecordPayload(record))
     return store_batch(history, make_batch(history, event_id + "_batch", draft))
+
+
+def scoped_editorial_history(history=(), *, relation_kind=editorial.EditorialRelationKind.REPLACE,
+    relation_scope=None):
+    outline = "core_documents/global_outline.md"
+    declared = scopes.EditorialScope(scopes.EditorialScopeKind.KNOWN, targets=(
+        scopes.EditorialScopeTarget(outline),
+            scopes.EditorialScopeTarget("core_documents/character_sheets.md"),
+    ))
+    for index, scope in enumerate((declared, scopes.EditorialScope.whole(outline),
+                                   scopes.EditorialScope.whole("core_documents/narrative_rules.md"))):
+        draft = replace(editorial_request(f"scoped_fixture_{index}").draft, scope=scope)
+        request = editorial.EditorialRecordRequest.directive(
+            draft, transition_reason="Explicit USER direction.", request_id=f"scoped_request_{index}",
+        )
+        refs = ()
+        if index == 1:
+            state = project_editorial_state(SESSION_ID, history)
+            other = history[-1].payload.record.ref
+            refs = state.context_refs((other,))
+            relation = editorial.EditorialRelationDecision(other, relation_kind,
+                           "Named USER relation.", scope=relation_scope)
+            request = replace(request, relation_decisions=(relation,),
+                              expected_editorial_context_digest=state.context_digest((other,)))
+        event_id = f"scoped_event_{index}"
+        record = editorial.build_editorial_revision(request, session_id=SESSION_ID,
+            conversation_id=CONVERSATION_ID, event_id=event_id, record_id=f"scoped_record_{index}",
+                previous=None, context_refs=refs)
+        event = make_draft(event_id, CollaborationEventKind.EDITORIAL_RECORD, USER, LEAD,
+                           events_owner.CollaborationEditorialRecordPayload(record))
+        history = store_batch(history, make_batch(history, event_id + "_batch", event))
+    return history
 
 
 def _canonical_json(value: object) -> bytes:
@@ -438,7 +472,10 @@ class CollaborationValueContractTests(unittest.TestCase):
             (editorial.EditorialAction, ("directive", "propose", "select", "reject", "revise", "supersede")),
             (editorial.EditorialApprovalState, ("proposed", "selected", "rejected", "superseded")),
             (editorial.EditorialRecordKind, ("direction", "alternative", "protected_ambiguity", "setup_obligation", "unresolved_concern")),
-            (editorial.EditorialRecordStatus, ("recorded", "unchanged", "stale_reference", "pending_control_required", "invalid_provenance")),
+            (editorial.EditorialRecordStatus, ("recorded", "unchanged", "stale_reference",
+                "pending_control_required", "invalid_provenance",
+                                               "invalid_scope", "scope_clarification_required",
+                                                   "stale_context")),
         ):
             self.assertEqual(tuple(member.value for member in enum), expected)
 
@@ -568,6 +605,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                     "schema_version",
                     "shared_premises",
                     "editorial_refs",
+                    "editorial_context_digest",
                 ),
             ),
             (
@@ -779,7 +817,8 @@ class CollaborationValueContractTests(unittest.TestCase):
 
         request = editorial_request("typed_memory")
         self.assertEqual(tuple(field.name for field in dataclasses.fields(request)),
-                         ("request_id", "action", "transition_reason", "expected_ref", "draft", "revision_approval"))
+                         ("request_id", "action", "transition_reason", "expected_ref", "draft", "revision_approval",
+                          "relation_decisions", "expected_editorial_context_digest"))
         self.assertEqual(request.draft.text, EDITORIAL_TEXT)
         self.assertIs(request.draft.alternatives[0].disposition, editorial.EditorialApprovalState.REJECTED)
         self.assertFalse(hasattr(request.draft, "__dict__"))
@@ -849,10 +888,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                 CollaborationConfirmationDecision.CONFIRM,
             ),
             CollaborationEventKind.EXECUTION_RESULT: result,
-            CollaborationEventKind.INTERRUPTION: CollaborationInterruptionPayload(
-                ATTEMPT_ID,
-                "Interrupted.",
-            ),
+            CollaborationEventKind.INTERRUPTION: CollaborationInterruptionPayload(ATTEMPT_ID, 'Interrupted.'),
             CollaborationEventKind.TERMINAL_OUTCOME: (
                 CollaborationTerminalOutcomePayload(
                     ATTEMPT_ID,
@@ -928,26 +964,14 @@ class CollaborationValueContractTests(unittest.TestCase):
                     pair = (sender_kind, recipient_kind)
                     with self.subTest(kind=kind.value, pair=pair):
                         if pair in allowed[kind]:
-                            event = make_draft(
-                                "event_a",
-                                kind,
-                                sender,
-                                recipient,
-                                payload,
-                            )
+                            event = make_draft("event_a", kind, sender, recipient, payload)
                             self.assertEqual(
                                 event.direction.value,
                                 f"{sender_kind.value}_to_{recipient_kind.value}",
                             )
                         else:
                             with self.assertRaises(ValueError):
-                                make_draft(
-                                    "event_a",
-                                    kind,
-                                    sender,
-                                    recipient,
-                                    payload,
-                                )
+                                make_draft("event_a", kind, sender, recipient, payload)
 
         payload = editorial_history()[0].payload
         for sender, recipient in ((LEAD, USER), (RUNTIME, USER), (PLOT, LEAD)):
@@ -997,13 +1021,7 @@ class CollaborationValueContractTests(unittest.TestCase):
             advisory.assignments[0],
         )
         with self.assertRaises(ValueError):
-            make_draft(
-                "dispatch",
-                CollaborationEventKind.ASSIGNMENT_DISPATCH,
-                RUNTIME,
-                CHARACTER,
-                dispatch,
-            )
+            make_draft("dispatch", CollaborationEventKind.ASSIGNMENT_DISPATCH, RUNTIME, CHARACTER, dispatch)
 
     def test_result_value_requires_exact_terminal_facts(self) -> None:
         _, _, result = executed_history()
@@ -1018,10 +1036,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                 successful.reply_event_id,
             )
         with self.assertRaises(ValueError):
-            replace(
-                result,
-                assignment_outcomes=(result.assignment_outcomes[0],) * 2,
-            )
+            replace(result, assignment_outcomes=(result.assignment_outcomes[0],) * 2)
         with self.assertRaises(ValueError):
             replace(
                 result,
@@ -1357,26 +1372,15 @@ class CollaborationWireContractTests(unittest.TestCase):
                 base,
                 side_effects=tuple(reversed(base.side_effects)),
             ),
-            "physical_spent": make_proposal(
-                physical_calls_spent=2,
-                side_effects=base.side_effects,
-            ),
-            "route": make_proposal(
-                route="different_route", side_effects=base.side_effects
-            ),
-            "route_fingerprint": make_proposal(
-                route_fingerprint=DIGEST_B,
-                side_effects=base.side_effects,
-            ),
+            "physical_spent": make_proposal(physical_calls_spent=2, side_effects=base.side_effects),
+            "route": make_proposal(route="different_route", side_effects=base.side_effects),
+            "route_fingerprint": make_proposal(route_fingerprint=DIGEST_B, side_effects=base.side_effects),
             "definition_fingerprint": replace_proposal(
                 base,
                 basis=replace(
                     base.basis,
                     agent_profiles=(
-                        replace(
-                            base.basis.agent_profiles[0],
-                            definition_fingerprint=DIGEST_B,
-                        ),
+                        replace(base.basis.agent_profiles[0], definition_fingerprint=DIGEST_B),
                         *base.basis.agent_profiles[1:],
                     ),
                 ),
@@ -1386,10 +1390,7 @@ class CollaborationWireContractTests(unittest.TestCase):
                 basis=replace(
                     base.basis,
                     agent_profiles=(
-                        replace(
-                            base.basis.agent_profiles[0],
-                            execution_fingerprint=DIGEST_A,
-                        ),
+                        replace(base.basis.agent_profiles[0], execution_fingerprint=DIGEST_A),
                         *base.basis.agent_profiles[1:],
                     ),
                 ),
@@ -1411,9 +1412,7 @@ class CollaborationWireContractTests(unittest.TestCase):
                 basis=replace(
                     base.basis,
                     inputs=(
-                        replace(
-                            inputs[0], locator="$${core_documents/outline.md}:4-12"
-                        ),
+                        replace(inputs[0], locator="$${core_documents/outline.md}:4-12"),
                         inputs[1],
                     ),
                 ),
@@ -1440,10 +1439,7 @@ class CollaborationWireContractTests(unittest.TestCase):
             ),
             "input_range": replace_proposal(
                 base,
-                basis=replace(
-                    base.basis,
-                    inputs=(replace(inputs[0], start_line=4), inputs[1]),
-                ),
+                basis=replace(base.basis, inputs=(replace(inputs[0], start_line=4), inputs[1])),
             ),
         }
         self.assertEqual(len(set(variants)), len(variants))
@@ -1520,7 +1516,10 @@ class CollaborationWireContractTests(unittest.TestCase):
         top["proposal"]["purpose"] = "Tampered"
         with self.assertRaises(ValueError):
             decode_collaboration_proposal(_canonical_json(top))
-        from story_writing_agents.specialist_routing import AuthoringIntent, AuthoringActivity
+        from story_writing_agents.specialist_routing import (
+            AuthoringIntent, AuthoringActivity, AuthoringScope, ArtifactReviewDomain, AuthoringContribution,
+            AuthoringContributionRole, SpecialistAssignmentMode, ReviewBasis,
+        )
         golden = (Path(__file__).parent / "fixtures/authoring_scope_compatibility/ordinary_v1_c20dc40.json").read_bytes()
         self.assertEqual(hashlib.sha256(golden).hexdigest(), "b0f2c20d888222e16addfa05807df63dfb3fe8e0379adddb2d75f137b5c0ca1d")
         frozen = json.loads(golden)
@@ -1553,6 +1552,43 @@ class CollaborationWireContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             editorial.editorial_ref_from_dict({**editorial.editorial_ref_to_dict(record.ref), "revision": 0})
 
+        scoped = scoped_editorial_history()
+        state = project_editorial_state(SESSION_ID, scoped)
+        record = scoped[1].payload.record
+        self.assertEqual(
+            editorial.editorial_revision_from_dict(editorial.editorial_revision_to_dict(record)), record)
+        self.assertEqual(scopes.editorial_scope_from_dict(scopes.editorial_scope_to_dict(record.draft.scope)),
+                         record.draft.scope)
+        wire = editorial.editorial_revision_to_dict(record)
+        with self.assertRaises(ValueError):
+            editorial.editorial_revision_from_dict({key: value for key,
+                value in wire.items() if key != "context_refs"})
+        with self.assertRaises(ValueError):
+            replace(make_proposal().basis, schema_version=2, editorial_refs=(record.ref,))
+        with self.assertRaises(ValueError):
+            replace(record, context_refs=(record.ref,))
+        pin = state.context_digest((record.ref,))
+        basis = replace(make_proposal().basis, schema_version=2, editorial_refs=(record.ref,),
+                        editorial_context_digest=pin)
+        domains = (ArtifactReviewDomain.PLOT_STRUCTURE, ArtifactReviewDomain.CHARACTER_WORLD)
+        current_scope = AuthoringScope(AuthoringActivity.REVIEW, (), domains, "Current two-domain codec review.",
+            "task_codec", 1, schema_version=3,
+            contributions=tuple(AuthoringContribution(domain, AuthoringContributionRole.DRAFT_OWNER)
+                                for domain in domains))
+        assignments = tuple(replace(item, mode=SpecialistAssignmentMode.REVIEW,
+                                   review_basis=ReviewBasis(item.input_ids, "Review selected current inputs.", 1))
+                            for item in make_proposal().assignments)
+        pinned = replace_proposal(make_proposal(), basis=basis, authoring_scope=current_scope,
+                                  assignments=assignments)
+        self.assertEqual(decode_collaboration_proposal(encode_collaboration_proposal(pinned)), pinned)
+        wire = json.loads(encode_collaboration_proposal(pinned))
+        self.assertEqual(wire["proposal"]["basis"]["editorial_context_digest"], pin)
+        del wire["proposal"]["basis"]["editorial_context_digest"]
+        with self.assertRaises(ValueError):
+            decode_collaboration_proposal(json.dumps(wire).encode())
+        with self.assertRaises(ValueError):
+            replace(make_proposal().basis, schema_version=2, editorial_context_digest=pin)
+
 
 class CollaborationPackageBoundaryTests(unittest.TestCase):
     def test_leaf_and_facade_exports_identity_metadata_pickle_and_root_omission(
@@ -1572,7 +1608,7 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
         expected_context_exports = COLLABORATION_CONTEXT_EXPORTS
         self.assertEqual(tuple(events_owner.__all__), expected_event_exports)
         self.assertEqual(tuple(context_owner.__all__), expected_context_exports)
-        self.assertEqual(len(conversations.__all__), 177)
+        self.assertEqual(len(conversations.__all__), 187)
         self.assertNotIn("__getattr__", vars(events_owner))
         self.assertNotIn("__getattr__", vars(context_owner))
         self.assertNotIn("__getattr__", vars(conversations))
@@ -1710,7 +1746,7 @@ import story_writing_agents
 import story_writing_agents.conversations as facade
 import story_writing_agents.conversations.context as context
 import story_writing_agents.conversations.events as events
-assert len(facade.__all__) == 177
+assert len(facade.__all__) == 187
 assert len(events.__all__) == 132
 assert len(context.__all__) == 37
 assert facade.CollaborationProposal is events.CollaborationProposal
