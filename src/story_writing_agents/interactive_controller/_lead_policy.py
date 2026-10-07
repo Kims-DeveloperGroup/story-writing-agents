@@ -476,7 +476,7 @@ class InteractiveLeadAdapter:
         except SessionContextCapacityError as failure:
             error_message = str(failure)
             advice = (
-                "This delivery stopped before provider submission. "
+                "The oversized payload was not submitted to the provider. "
                 "Inspect /history and /exchanges before continuing."
             )
             self._semantic_output.write_component(

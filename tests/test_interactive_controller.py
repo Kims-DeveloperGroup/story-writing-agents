@@ -6517,7 +6517,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         notice = next(component for component in output.components
             if isinstance(component, lead_policy_module.Notice) and component.label == "context capacity")
         self.assertIn(str(capacity), notice.text)
-        self.assertIn("stopped before provider submission", notice.text)
+        self.assertIn("oversized payload was not submitted", notice.text)
         self.assertNotIn("PRIVATE_CAPACITY_USER", notice.text)
         self.assertIs(notice.role, lead_policy_module.SemanticRole.ERROR)
         self.assertIs(notice.state, lead_policy_module.ViewState.ERROR)
