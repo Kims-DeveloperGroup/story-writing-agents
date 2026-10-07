@@ -6405,7 +6405,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                     case.runtime.session(case.session_id), runner, self._Progress(), self._Picker(*picks),
                     self._Prompt(self._commit("Explicit question or new writing intent.")), output,
                 )
-                self.assertTrue(adapter.task(task_conversation, material_choices=(material,)))
+                self.assertFalse(adapter.task(task_conversation, material_choices=(material,)))
                 task_ref = selected_task.ref
                 identity = f"Task ID {task_ref.task_id} | Revision {task_ref.task_revision}"
                 shown = output.components[-1].items
@@ -6430,14 +6430,14 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                     self.assertEqual(adapter._picker.calls[2][1][1].description, material.text)
             adapter._picker = self._Picker(self._commit("discuss"), self._commit("independent"), self._commit("none"))
             adapter._prompt = self._Prompt(self._commit("Independent task-free question."))
-            self.assertTrue(adapter.task(task_conversation))
+            self.assertFalse(adapter.task(task_conversation))
             self.assertIsNone(decisions[-1].task_ref)
             self.assertEqual(decisions[-1].material_refs, ())
             self.assertEqual(decisions[-1].text, "Independent task-free question.")
             before = tuple(decisions)
             for outcome in (ControlOutcomeKind.CANCEL, ControlOutcomeKind.EOF):
                 adapter._picker = self._Picker(self._commit("discuss"), ControlOutcome(outcome))
-                self.assertEqual(adapter.task(task_conversation), outcome is not ControlOutcomeKind.EOF)
+                self.assertEqual(adapter.task(task_conversation), outcome is ControlOutcomeKind.EOF)
                 self.assertEqual(tuple(decisions), before)
 
     def test_ordinary_lead_progress_sink_finishes_before_lead_and_elapsed_output(self) -> None:

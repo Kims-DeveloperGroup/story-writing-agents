@@ -226,15 +226,15 @@ class InteractiveLeadAdapter:
                 "Task execution is blocked. Inspect /history or /exchanges to read saved public responses.",
                 label="task control", role=SemanticRole.WARNING,
             ))
-            return True
+            return False
         control = self._picker.read_picker(
             Prompt("Task action", instruction="Discussion does not change the task. Resume/new work requires fresh confirmation."),
             tuple(Choice(action.value, action.value.replace("_", " ").title()) for action in LeadTaskAction),
         )
         if control.kind is ControlOutcomeKind.EOF:
-            return False
-        if control.kind is not ControlOutcomeKind.COMMIT or control.text is None:
             return True
+        if control.kind is not ControlOutcomeKind.COMMIT or control.text is None:
+            return False
         action = LeadTaskAction(control.text)
         candidates = tuple(item for item in projection.available_tasks if (
             action in {LeadTaskAction.DISCUSS, LeadTaskAction.NEW_TASK}
@@ -246,12 +246,12 @@ class InteractiveLeadAdapter:
                      for index, item in enumerate(candidates)))
         if not choices:
             self._semantic_output.write_component(Notice("No eligible task. Choose New task for independent work.", label="task control"))
-            return True
+            return False
         selected = self._picker.read_picker(Prompt("Writing task"), tuple(choices))
         if selected.kind is ControlOutcomeKind.EOF:
-            return False
-        if selected.kind is not ControlOutcomeKind.COMMIT or selected.text is None:
             return True
+        if selected.kind is not ControlOutcomeKind.COMMIT or selected.text is None:
+            return False
         chosen_task = None if selected.text == "independent" else candidates[int(selected.text.removeprefix("task_"))]
         materials = ()
         text = None
@@ -265,9 +265,9 @@ class InteractiveLeadAdapter:
                 )),
             )
             if picked.kind is ControlOutcomeKind.EOF:
-                return False
-            if picked.kind is not ControlOutcomeKind.COMMIT or picked.text is None:
                 return True
+            if picked.kind is not ControlOutcomeKind.COMMIT or picked.text is None:
+                return False
             if picked.text != "none":
                 materials = (available[int(picked.text.removeprefix("material_"))].ref,)
             entered = self._prompt.read_prompt(Prompt(
@@ -275,9 +275,9 @@ class InteractiveLeadAdapter:
                 instruction="State the question or goal literally; this does not authorize execution.",
             ))
             if entered.kind is ControlOutcomeKind.EOF:
-                return False
-            if entered.kind is not ControlOutcomeKind.COMMIT or not entered.text:
                 return True
+            if entered.kind is not ControlOutcomeKind.COMMIT or not entered.text:
+                return False
             text = entered.text
         decision = (chosen_task.decision(action, text=text, material_refs=materials) if chosen_task is not None else
                     LeadTaskDecision.for_conversation(self._session.session_id, conversation_id, action, text=text, material_refs=materials))
@@ -288,7 +288,7 @@ class InteractiveLeadAdapter:
             ))
         except (ValueError, TypeError, BackendProtocolError) as error:
             self._semantic_output.write_component(Notice(str(error), label="task control", role=SemanticRole.ERROR))
-            return True
+            return False
         finally:
             self._pending_elapsed = self._progress.finish()
         if type(result) is not LeadTaskDecisionResult:
@@ -301,7 +301,7 @@ class InteractiveLeadAdapter:
             action.value.replace("_", " ").title() + " recorded; task history and actual costs are retained.", label="task control",
         ))
         write_task_status(self._session.inspect_lead_collaboration(conversation_id))
-        return True
+        return False
 
     def adopt(self, conversation_id: str) -> bool:
         """Bind one visible whole idea and explicit targets to a fresh normal task."""

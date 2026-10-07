@@ -1552,6 +1552,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertEqual(recover(raw), expected)
         native["agent_action"]["task_result"]["response_type"] = 7
         self.assertEqual(recover(json.dumps(native)), "Literal e\u0301\r\n")
+        self.assertIsNone(recover('{"response_text":{"private":"SECRET"}}'))
         native["agent_action"]["action_type"] = "read"
         self.assertEqual(recover(json.dumps(native)), "Literal e\u0301\r\n")
 
@@ -2038,6 +2039,9 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         self.assertEqual((resumed.turn.proposal.authoring_scope.task_id, resumed.turn.proposal.authoring_scope.task_revision),
                          (original.ref.task_id, original.ref.task_revision + 1))
         self.assertIs(resumed.turn.state, CollaborationStepState.AWAITING_CONFIRMATION)
+        view = case.runtime.inspect_lead_collaboration(case.session_id, conversation)
+        self.assertEqual(next(item.status for item in view.available_tasks
+                              if item.ref.task_id == current.ref.task_id), "active")
         self.assertIsNone(case.runtime.inspect_lead_collaboration(
             case.session_id, conversation).discussion_context)
         self.assertEqual(len(case.backend.calls), spent + 2)

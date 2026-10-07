@@ -1517,6 +1517,7 @@ def recover_lead_public_response(
         ("response_text",),
     )
     private_keys = {
+        "private",
         "privatethought", "private_reasoning", "private_thought",
         "private_thoughts", "debug", "callback", "callbacks",
         "tool_calls", "function_call", "analysis", "reasoning",

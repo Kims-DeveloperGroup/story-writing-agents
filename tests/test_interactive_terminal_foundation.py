@@ -213,6 +213,10 @@ def _fresh_field(*arguments, **options):
     return Field(*arguments, **options)
 
 
+def _fresh_semantic_fixture(factory, *arguments, **options):
+    return factory(*arguments, **options)
+
+
 class ObservedStream:
     """Expose deterministic stream capabilities without real terminal I/O."""
 
@@ -789,24 +793,14 @@ class SemanticModelFoundationTests(unittest.TestCase):
                     setattr(sample, fields(sample)[0].name, None)
 
         invalid_calls = (
-            lambda: TerminalCapabilities(
-                CapabilityProfile.LINE,
-                80,
-                input_tty=True,
-                output_tty=True,
-                raw_mode=True,
-                cursor_controls=False,
-                decorative_sgr=False,
-            ),
-            lambda: TerminalCapabilities(
-                CapabilityProfile.PLAIN,
-                80,
-                input_tty=True,
-                output_tty=True,
-                raw_mode=True,
-                cursor_controls=True,
-                decorative_sgr=True,
-            ),
+            lambda: _fresh_semantic_fixture(
+                        TerminalCapabilities, CapabilityProfile.LINE, 80, input_tty=True, output_tty=True,
+                        raw_mode=True, cursor_controls=False, decorative_sgr=False,
+                    ),
+            lambda: _fresh_semantic_fixture(
+                        TerminalCapabilities, CapabilityProfile.PLAIN, 80, input_tty=True, output_tty=True,
+                        raw_mode=True, cursor_controls=True, decorative_sgr=True,
+                    ),
             lambda: KeyEvent(KeyKind.TEXT),
             lambda: KeyEvent(KeyKind.ENTER, text="x"),
             lambda: LineInputState("x", 2),
@@ -1689,12 +1683,10 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
 
         terminal = InteractiveTerminal(read_line, lambda _text: None, width=40)
         adapter = InteractivePromptInput(terminal)
-        prompt = Prompt(
-            "Codex model",
-            scope="settings",
-            instruction="Enter exact text.",
-            default="provider default",
-        )
+        prompt = _fresh_semantic_fixture(
+                     Prompt, 'Codex model', scope='settings',
+                     instruction='Enter exact text.', default='provider default',
+                 )
         context = (
             Panel("Settings", (Notice("Pending"),), state=ViewState.OPEN),
         )

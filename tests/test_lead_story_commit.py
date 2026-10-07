@@ -327,9 +327,11 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
 
         conversation = applied.request.reviewed_proposal.conversation_id
         self.backend.enqueue(_discussion_reply("Discussion preserves this exact Commit request."))
-        await self.runtime.decide_lead_task(task.LeadTaskDecision.for_conversation(
+        discussion = await self.runtime.decide_lead_task(task.LeadTaskDecision.for_conversation(
             self.session_id, conversation, task.LeadTaskAction.DISCUSS, text="Explain the pending Commit.",
         ))
+        self.assertEqual((discussion.turn.next_action, discussion.turn.story_commit_request),
+                         (CollaborationNextAction.SUBMIT_COMMIT_DECISION, request))
         for failure in (_SubmittedFailure(RuntimeError("known Commit discussion failure")),
                         _SubmittedFailure(asyncio.CancelledError("known Commit discussion cancellation"))):
             prefix = self.history(conversation)

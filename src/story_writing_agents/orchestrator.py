@@ -4472,7 +4472,7 @@ class StoryRuntime:
                 payload=CollaborationLeadTaskTransitionPayload(receipt),
             )
             superseding = ()
-            if decision.action is not LeadTaskAction.DISCUSS and projection.current_state is CollaborationStepState.AWAITING_CONFIRMATION:
+            if decision.action is not LeadTaskAction.DISCUSS and projection.current_state in {CollaborationStepState.AWAITING_CONFIRMATION, CollaborationStepState.RECONFIRMATION_REQUIRED}:
                 proposal = projection.current_proposal
                 if proposal is not None:
                     superseding = (self._draft(
@@ -5131,7 +5131,8 @@ class StoryRuntime:
                 or not events
             ):
                 raise ValueError("lead decision has no authoritative pending request")
-            request_event = events[-1]
+            control_events = self._effective_lead_control_events(events)
+            request_event = control_events[-1]
             request_payload = request_event.payload
             if type(request_payload) is not CollaborationStepStatePayload or (
                 request_payload.state
@@ -11587,6 +11588,7 @@ class StoryRuntime:
                     sender=_RUNTIME_ACTOR, recipient=_USER_ACTOR,
                     payload=CollaborationLeadDiscussionPayload(decoded_discussion),
                 ),))
+                projection = self.conversation_storage_services.event_store.read_context(session_id, conversation_id)
                 provider._public_accepted_call_id = provider.last_submitted_call_id
                 return self._discussion_turn(
                     session_id, conversation_id, turn_id, step_id, decoded_discussion,

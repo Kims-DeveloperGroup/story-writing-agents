@@ -3989,9 +3989,14 @@ def _project_task_context(
                              and type(item.payload) is CollaborationMessagePayload
                              and item.sender.kind is CollaborationActorKind.USER), None)
                 goals[scope.task_id] = scope.interpretation if user is None else user.payload.content
-                pending = resumptions.get(scope.task_id)
-                if pending is not None and scope.task_revision == pending.target_task_revision:
-                    statuses[scope.task_id] = "active"
+            pending = resumptions.get(scope.task_id)
+            if (
+                type(payload) is CollaborationProposal
+                and pending is not None
+                and (scope.task_id, scope.task_revision)
+                == (pending.target_task_id, pending.target_task_revision)
+            ):
+                statuses[scope.task_id] = "active"
         if (type(payload) is CollaborationProviderCallPayload
                 and payload.invocation_kind is CollaborationInvocationKind.LEAD_DISCUSSION):
             control = next((item for item in transitions.values()
@@ -4887,7 +4892,17 @@ def _project_validated_collaboration_history(
                     raise ValueError(
                         "confirmation request accepts at most one decision"
                     )
-                if prior_tail is None or prior_tail.event_id != request_event.event_id:
+                if (
+                    prior_tail is None
+                    or prior_tail.event_id != request_event.event_id
+                    or (
+                        event.sequence != request_event.sequence + 1
+                        and not _closed_pure_discussion_control_gap_is_safe(
+                            request_event, event,
+                            tuple(item for item in (_control_history or events) if item.sequence < event.sequence),
+                        )
+                    )
+                ):
                     raise ValueError(
                         "confirmation request is not the authoritative tail"
                     )
@@ -6255,7 +6270,7 @@ def _validate_collaboration_co_batch(
             and decision_states[0][1].state is CollaborationStepState.SUPERSEDED
             and prior_tail is not None
             and type(prior_tail.payload) is CollaborationStepStatePayload
-            and prior_tail.payload.state is CollaborationStepState.AWAITING_CONFIRMATION
+            and prior_tail.payload.state in {CollaborationStepState.AWAITING_CONFIRMATION, CollaborationStepState.RECONFIRMATION_REQUIRED}
         ):
             state_event, state = decision_states[0]
             original_batch = tuple(

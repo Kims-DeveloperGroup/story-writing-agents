@@ -812,6 +812,9 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                          (pending_view.rounds_spent, pending_view.physical_calls_spent))
         self.assertEqual(len(_submitted_calls(self.history(prior))), spent + 1)
         self.assertIsNone(readonly.turn.proposal)
+        self.assertEqual((readonly.turn.next_action, readonly.turn.artifact_application_request),
+                         (c.CollaborationNextAction.SUBMIT_APPLICATION_DECISION,
+                          pending_view.current_artifact_application_request))
         self.assertEqual(self.artifact_bytes(), before)
         for failure in (_SubmittedFailure(RuntimeError("known discussion failure")),
                         _SubmittedFailure(asyncio.CancelledError("known discussion cancellation"))):
