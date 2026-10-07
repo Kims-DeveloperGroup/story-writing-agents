@@ -5598,7 +5598,7 @@ class InteractiveController:
             self._present_agent_exchange_projection_failure(failure)
             return
         try:
-            self._external_viewer.open(operation, transient_only=True)
+            self._external_viewer.open_owned(operation)
         except ExternalViewUnavailableError:
             self._write_notice(
                 "Agent exchanges require a terminal with transient display support.",

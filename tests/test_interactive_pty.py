@@ -1567,7 +1567,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
 
 
 
-    def _exercise_external_library_pty(self, *, edit_query: bool, termination_signal: int | None = None) -> None:
+    def _exercise_external_library_pty(self, *, edit_query: bool, termination_signal: int | None = None, termination_during_view: bool = False) -> None:
         gate = self.temporary_root / f"viewer-ready-{edit_query}-{termination_signal}"
         source = r'''
 import json
@@ -1596,8 +1596,10 @@ with lifecycle.session():
             raise RuntimeError("inter-reader barrier timed out")
         time.sleep(0.01)
     assert terminal.read_main().text.rstrip() == "/exchanges"
-    InteractiveExternalViewer(terminal).open(operation, transient_only=True)
+    InteractiveExternalViewer(terminal).open_owned(operation)
     print("VIEWER_CLOSED", flush=True)
+    assert terminal.read_main().text == "after-viewer"
+    print("AFTER_VIEWER=after-viewer", flush=True)
     with lifecycle.native_handoff():
         print(f"NATIVE_VALUE={input('native> ')}", flush=True)
     assert terminal.read_main().text == "after-native"
@@ -1618,7 +1620,7 @@ print(f"SHELL_VALUE={input('shell> ')}")
         flags = termios.tcgetattr(process.master_fd)[3]
         self.assertFalse(flags & (termios.ECHO | termios.ECHONL))
         self.assertTrue(flags & termios.ICANON)
-        if termination_signal is not None:
+        if termination_signal is not None and not termination_during_view:
             os.kill(process.process.pid, termination_signal)
             self.assertEqual(process.wait_for_exit(), -termination_signal)
             self.assertEqual(process.final_terminal_attributes, process.original_terminal_attributes)
@@ -1635,6 +1637,28 @@ print(f"SHELL_VALUE={input('shell> ')}")
         process.wait_for_text("? help • q close")
         assert termios is not None
         self.assertFalse(termios.tcgetattr(process.master_fd)[3] & termios.ICANON)
+        if termination_during_view:
+            os.kill(process.process.pid, termination_signal)
+            self.assertEqual(process.wait_for_exit(), -termination_signal)
+            self.assertIn(b"\x1b[?1000l\x1b[?1006l\x1b[H\x1b[2J\x1b[?25h\x1b[?1049l", process.raw_bytes)
+            self.assertEqual(process.final_terminal_attributes, process.original_terminal_attributes)
+            return
+        current = _ANSI_SGR_BYTES.sub(b"", process.normalized_bytes[process.normalized_bytes.rfind(b"\x1b[H\x1b[2J") + 7:]).decode("utf-8")
+        row, line = next((index + 1, line) for index, line in enumerate(current.splitlines()) if '"content"' in line)
+        column = line.index('"content"') + 1
+        mark = process.output_mark(); process.send_bytes(f"\x1b[<0;{column};{row}M".encode())
+        process.wait_for_text("? help • q close", after=mark)
+        painted = process.text_after(mark); rows = _ANSI_SGR_BYTES.sub(b"", painted.encode()).decode().splitlines()
+        if any(line.strip() == "^" for line in rows):
+            caret = next(i for i, line in enumerate(rows) if line.strip() == "^"); self.assertEqual(rows[caret - 1][rows[caret].index("^")], '"')
+        else: self.assertRegex(painted, r'\x1b\[(?:[0-9]+;)*7(?:;[0-9]+)*m"')
+        mark = process.output_mark(); process.send_bytes(f"\x1b[<65;{column};{row}M".encode())
+        process.wait_for_text("? help • q close", after=mark)
+        painted = process.text_after(mark); rows = _ANSI_SGR_BYTES.sub(b"", painted.encode()).decode().splitlines()
+        if any(line.strip() == "^" for line in rows):
+            caret = next(i for i, line in enumerate(rows) if line.strip() == "^"); self.assertEqual(rows[caret - 1][rows[caret].index("^")], "}")
+        else: self.assertRegex(painted, r"\x1b\[(?:[0-9]+;)*7(?:;[0-9]+)*m\}")
+        self.assertNotIn(f"65;{column};{row}M", process.normalized_text)
         mark = process.output_mark()
         process.wait_for_text("? help • q close", after=mark)
         self.assertNotRegex(process.text_after(mark), r"\x1b\[[0-9;]*4[;m]")
@@ -1663,7 +1687,8 @@ print(f"SHELL_VALUE={input('shell> ')}")
         mark = process.output_mark()
         process.send_bytes(b"n")
         process.wait_for_text("3/14 occurrences • Search all text='개요'", after=mark)
-        process.send_bytes(b"q")
+        process.send_bytes(b"q\x1b[<65;8;8M\x1b[<0;8;8mafter-viewer\n")
+        process.wait_for_text("AFTER_VIEWER=after-viewer")
         process.wait_for_text("native> ")
         self.assertEqual(termios.tcgetattr(process.master_fd), process.original_terminal_attributes)
         mark = process.output_mark()
@@ -1682,6 +1707,9 @@ print(f"SHELL_VALUE={input('shell> ')}")
         self.assertNotIn("U0015", process.normalized_text)
         self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 1)
         self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 1)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1006h\x1b[?1000h"), 1)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1000l\x1b[?1006l"), 1)
+        self.assertNotIn(b"65;8;8M", process.raw_bytes)
         self.assertEqual(process.final_terminal_attributes, process.original_terminal_attributes)
         self.assertEqual(_durable_tree(self.workspace.root), before)
         self.assertFalse(self.provider_log.exists())
@@ -1752,6 +1780,7 @@ print(f"SHELL_VALUE={input('shell> ')}")
             self._exercise_external_library_pty(edit_query=edit_query)
         for signum in (signal.SIGTERM, signal.SIGHUP):
             self._exercise_external_library_pty(edit_query=False, termination_signal=signum)
+            self._exercise_external_library_pty(edit_query=False, termination_signal=signum, termination_during_view=True)
         for provider in ("codex", "antigravity"):
             self._assert_auth_code_returns_to_story(provider)
 

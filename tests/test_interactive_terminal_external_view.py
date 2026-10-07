@@ -22,7 +22,7 @@ from story_writing_agents.interactive_terminal._controls import (
 )
 from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
 from story_writing_agents.interactive_terminal._external_view import (
-    ExternalViewUnavailableError,
+    ExternalViewUnavailableError, ExternalTerminalIO,
     ExternalViewerHost,
 )
 
@@ -43,6 +43,7 @@ class _Input:
 
     def read(self, size: int) -> str:
         raise AssertionError(f"text read must not run: {size}")
+    readline = read
 
     def read1(self, size: int) -> bytes:
         if size != 1:
@@ -75,6 +76,7 @@ class _Output:
 class _Termios:
     ICANON = 0x02
     ECHO = 0x08
+    ECHONL = 0x40
     VEOF = 0
     VINTR = 1
     VMIN = 4
@@ -258,6 +260,9 @@ class ExternalViewContractTests(unittest.TestCase):
             InteractiveExternalViewer(terminal).open(operation, transient_only=True)
 
         operation.assert_not_called()
+        with self.assertRaises(ExternalViewUnavailableError):
+            InteractiveExternalViewer(terminal).open_owned(operation)
+        operation.assert_not_called()
         self.assertEqual(writes, [])
 
     def test_viewer_and_callback_opener_reject_non_boolean_transient_flag(self) -> None:
@@ -365,26 +370,25 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
         self.assertEqual(events, ["key\tescape", "text\tq"])
 
     def test_escape_partial_utf8_deadline_stops_byte_reads_and_restores_terminal(self) -> None:
-        driver, input_stream, output, fallback, termios = _raw_driver("")
-        input_stream.characters = [0x1B, 0xE2, 0x82, 0xAC]
-        original_read = input_stream.read1
-        with (
-            mock.patch.object(input_stream, "read1", wraps=original_read) as reads,
-            mock.patch.object(driver_module.time, "monotonic", return_value=100.0),
-            mock.patch.object(driver_module._select, "select", side_effect=[((7,), (), ()), ((7,), (), ()), ((7,), (), ()), ((), (), ())]),
-            self.assertRaisesRegex(TimeoutError, "^external terminal character deadline expired$") as raised,
-        ):
-            driver.open_external_view(lambda host: host.read_event())
-        self.assertEqual(reads.call_args_list, [mock.call(1), mock.call(1)])
-        self.assertEqual(input_stream.characters, [0x82, 0xAC])
-        reader = driver._input_latch.live_reader
-        reader.reset_incomplete()
-        with self.assertRaises(TimeoutError) as again:
-            reader.read_character()
-        self.assertIs(again.exception, raised.exception)
-        self.assertEqual((termios.events.count("activate"), termios.events.count("restore")), (1, 1))
-        self.assertEqual("".join(output.records).count(driver_module._VIEWER_SCREEN_EXIT), 1)
-        fallback.assert_not_called()
+        driver, input_stream, output, fallback, termios = _raw_driver("€J")
+        captured = []; timeout = TimeoutError("owned deadline"); custom = ValueError("owned readiness")
+        def operation(transport):
+            captured.append(transport); driver._typeahead_buffer.append("Q")
+            ready = mock.Mock(side_effect=[None, timeout])
+            self.assertEqual(transport.read_character(ready), "Q"); ready.assert_not_called()
+            with self.assertRaises(TimeoutError) as raised: transport.read_character(ready)
+            self.assertIs(raised.exception, timeout)
+            self.assertEqual(input_stream.characters, [0x82, 0xAC, ord("J")])
+            self.assertEqual(transport.read_character(), "€")
+            with self.assertRaises(ValueError) as raised: transport.read_character(mock.Mock(side_effect=custom))
+            self.assertIs(raised.exception, custom)
+            self.assertEqual(transport.read_character(), "J")
+        with mock.patch.object(input_stream, "read1", wraps=input_stream.read1) as reads:
+            driver.open_owned_external_view(operation)
+        self.assertEqual(reads.call_args_list, [mock.call(1)] * 4)
+        self.assertEqual(input_stream.characters, []); self.assertEqual(output.records, [])
+        self.assertEqual(termios.events.count("activate"), 0); fallback.assert_not_called()
+        with self.assertRaisesRegex(RuntimeError, "transport.*closed"): captured[0].read_character()
 
     def test_escape_drain_bound_fails_closed_and_restores_terminal(self) -> None:
         driver, input_stream, output, fallback, termios = _raw_driver("\x1b[" + "0" * 4096 + "q")
@@ -400,32 +404,26 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
         fallback.assert_not_called()
 
     def test_real_library_raw_and_line_fallback_have_equal_search_behavior(self) -> None:
-        import io
-        import re
-        from jsonl_viewer import ViewerSpec, view_jsonl
-        from jsonl_viewer._standalone import _TerminalHost
-
+        import io, re, jsonl_viewer
+        from jsonl_viewer import ViewerSpec, ViewerTerminal, view_jsonl
+        from jsonl_viewer import _terminal
         source = ('{"content":"개요 one 개요 one"}\n{"content":"other"}\n').encode()
-        spec = ViewerSpec("s", "c", "a", input_protocol="keys")
-        command = "/ 개요 one\nn\nesc\nq\n"
+        spec = ViewerSpec("s", "c", "a", input_protocol="keys"); command = "/ 개요 one\nn\nesc\nq\n"
         standalone_output = io.StringIO()
-        with _TerminalHost(io.StringIO(command), standalone_output, no_color=True) as host:
-            view_jsonl(source, spec, host)
-        lines = iter(command.splitlines())
-        story_output = []
+        view_jsonl(source, spec, terminal=ViewerTerminal(io.StringIO(command), standalone_output, no_color=True))
+        lines = iter(command.splitlines()); story_output = []
         viewer = InteractiveExternalViewer(InteractiveTerminal(lambda prompt: next(lines), story_output.append, width=80))
         viewer.open(lambda host: view_jsonl(source, spec, host))
-        self.assertIn("2/2 occurrences • Search all text='개요 one'", "".join(story_output))
-        self.assertIn("2/2 occurrences • Search all text='개요 one'", standalone_output.getvalue())
         driver, _input, output, fallback, termios = _raw_driver("/wrong\x15개요 one\nnq")
-        driver.open_external_view(lambda host: view_jsonl(source, spec, host))
-        self.assertIn("2/2 occurrences • Search all text='개요 one'", "".join(output.records))
-        self.assertIn("개요 one ⟦개요 one⟧", re.sub(r"\x1b\[[0-9;]*m", "", "".join(output.records)))
-        self.assertIn("개요 one ⟦개요 one⟧", "".join(story_output))
-        self.assertNotIn("U0015", "".join(output.records))
-        self.assertEqual((termios.events.count("activate"), termios.events.count("restore")), (1, 1))
-        fallback.assert_not_called()
-        self.assertEqual(source, ('{"content":"개요 one 개요 one"}\n{"content":"other"}\n').encode())
+        with mock.patch.object(_terminal, "termios", termios), mock.patch.object(_terminal, "tty", SimpleNamespace(setcbreak=lambda descriptor, when: None)), mock.patch.dict(os.environ, {"TERM": "xterm-256color", "COLUMNS": "200"}):
+            driver.open_owned_external_view(lambda transport: view_jsonl(source, spec, terminal=ViewerTerminal(transport.input_stream, transport.output_stream, transport.read_character, True), transient_only=True))
+        for rendered in ("".join(story_output), standalone_output.getvalue(), "".join(output.records)):
+            self.assertIn("2/2 occurrences • Search all text='개요 one'", rendered)
+            self.assertIn("개요 one ⟦개요 one⟧", re.sub(r"\x1b\[[0-9;]*m", "", rendered))
+            self.assertNotIn("U0015", rendered)
+        self.assertEqual("".join(output.records).count("\x1b[?1049h"), 1)
+        self.assertEqual("".join(output.records).count("\x1b[?1000h"), 1)
+        fallback.assert_not_called(); self.assertEqual(source, ('{"content":"개요 one 개요 one"}\n{"content":"other"}\n').encode())
 
     def test_fallback_never_acquires_raw_or_ansi_and_maps_interrupt_eof(self) -> None:
         driver, _input, output, fallback, termios = _raw_driver(
@@ -484,29 +482,29 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
         driver, _input, _output, _fallback, _termios = _raw_driver("qq")
         reentry: list[BaseException] = []
 
-        def operation(host: ExternalViewerHost) -> None:
+        def operation(host: ExternalTerminalIO) -> None:
             try:
-                driver.open_external_view(lambda _nested: None)
+                driver.open_owned_external_view(lambda _nested: None)
             except BaseException as failure:
                 reentry.append(failure)
-            self.assertEqual(host.read_event(), "text\tq")
+            self.assertEqual(host.read_character(), "q")
 
-        driver.open_external_view(operation)
+        driver.open_owned_external_view(operation)
         self.assertIsInstance(reentry[0], RuntimeError)
         self.assertIn("already active", str(reentry[0]))
-        driver.open_external_view(
-            lambda host: self.assertEqual(host.read_event(), "text\tq")
+        driver.open_owned_external_view(
+            lambda host: self.assertEqual(host.read_character(), "q")
         )
 
         driver._progress_active = True
         called = False
 
-        def prohibited(_host: ExternalViewerHost) -> None:
+        def prohibited(_host: ExternalTerminalIO) -> None:
             nonlocal called
             called = True
 
         with self.assertRaisesRegex(RuntimeError, "overlap terminal progress"):
-            driver.open_external_view(prohibited)
+            driver.open_owned_external_view(prohibited)
         self.assertFalse(called)
         driver._progress_active = False
 

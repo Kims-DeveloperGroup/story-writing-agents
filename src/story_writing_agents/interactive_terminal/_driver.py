@@ -37,6 +37,8 @@ from ._external_view import (
     ExternalViewUnavailableError,
     ExternalViewerHost,
     ExternalViewOperation,
+    ExternalOwnedViewOperation,
+    ExternalTerminalIO,
 )
 from ._model import (
     CapabilityProfile,
@@ -2898,6 +2900,74 @@ class RawTerminalDriver:
                 viewport_projector,
                 viewport_renderer,
             )
+
+    def open_owned_external_view(self, operation: ExternalOwnedViewOperation) -> None:
+        """Lend live transport while the external view alone owns its modes."""
+
+        if not callable(operation):
+            raise TypeError("operation must be callable")
+        if self._progress_active:
+            raise RuntimeError("external viewer cannot overlap terminal progress")
+        with self._input_latch.input_operation():
+            if self._progress_active:
+                raise RuntimeError("external viewer cannot overlap terminal progress")
+            capabilities, configuration = self._prepare_input(
+                self._observe_input_capabilities()
+            )
+            if configuration is None:
+                raise ExternalViewUnavailableError(
+                    "external viewer requires live terminal transport"
+                )
+            transport_active = True
+
+            def read_character(before_read: Callable[[], None] | None = None) -> str:
+                if not transport_active:
+                    raise RuntimeError("external terminal transport is closed")
+                if before_read is not None and not callable(before_read):
+                    raise TypeError("before_read must be callable or None")
+                readiness_failure: Exception | None = None
+
+                def before_byte() -> None:
+                    nonlocal readiness_failure
+                    assert before_read is not None
+                    try:
+                        before_read()
+                    except Exception as failure:
+                        # Persistent decoding recognizes only its own idle exception.
+                        # Re-raise the external deadline outside that reader instead.
+                        readiness_failure = failure
+                        raise LiveInputIdle from failure
+
+                try:
+                    return self._read_character(
+                        before_read=None if before_read is None else before_byte
+                    )
+                except LiveInputIdle:
+                    if readiness_failure is not None:
+                        raise readiness_failure
+                    raise
+
+            transport = ExternalTerminalIO(
+                self._input_stream, self._output_stream, read_character,
+                no_color=not capabilities.decorative_sgr,
+            )
+            active_failure: BaseException | None = None
+            try:
+                operation(transport)
+            except BaseException as failure:
+                active_failure = failure
+            finally:
+                transport_active = False
+                # Resume the guarded Story baseline; this does not acquire a view
+                # screen/raw/mouse lifecycle or lend native authentication settings.
+                _restore_terminal_or_raise(configuration, active_failure)
+                _capabilities, resumed = self._prepare_input(
+                    self._observe_input_capabilities()
+                )
+                if resumed is None:
+                    raise RuntimeError("live external terminal handoff cannot use fallback")
+            if active_failure is not None:
+                raise active_failure
 
     def open_external_view(
         self,

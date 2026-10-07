@@ -257,9 +257,7 @@ exchange, lead, session, and runtime concerns in focused private policy modules.
 
 Only `_core` composes the private policies. Other subsystems must not import those policies;
 the controller may depend on runtime/storage/terminal facades, never the reverse.
-The existing `_lead_policy` to `interactive_terminal._collaboration_view` and
-`_exchange_viewer` to `interactive_terminal._external_view` imports are narrow internal
-presentation bridges, not general private-access permission.
+The existing `_lead_policy` to `interactive_terminal._collaboration_view` and `_exchange_viewer` to `interactive_terminal._external_view` imports are narrow presentation bridges, not general private access. Exchanges validate the pinned four-export viewer contract and use its owned terminal transport.
 
 ### Interactive terminal and presentation
 
@@ -278,7 +276,9 @@ live composition, reference activation, collaboration presentation, and the term
 Presentation modules may consume public runtime/domain contracts but never own runtime state.
 Collaboration notices render bounded validation details and scope-v3 duties, dependency choices and qualified
 captured sources before confirmation without owning runtime authority.
-The external viewer integration is lazy. `transient_only` refuses line fallback before content is rendered; `ExternalViewUnavailableError` identifies that refusal. Borrowed plain-line hosts remain for views that allow fallback. The driver owns timed viewer input polling, scoped lobby echo suppression, and temporary default SIGTERM/SIGHUP dispositions through original-terminal restoration; required signal ownership is acquired on the main thread. Individual reads retain noncanonical-mode ownership, and the persistent reader owns partial decoding across idle intervals. `InteractiveInputLifecycle` lends original terminal settings to native login and restores them after lobby cleanup. Private model/render/control modules are not APIs.
+External viewer loading is lazy. Borrowed views retain Story-owned presentation; `open_owned` lends only validated LIVE streams and the persistent reader, while jsonl-viewer owns exchange-view raw/screen/cursor/mouse modes. Callback/fallback transports refuse before content.
+The driver retains input exclusion, progress checks, lobby echo guard, and exact baseline resumption. Readiness failures cross the persistent reader as resumable idle then rethrow outside it, preserving partial decoding and typeahead.
+Default termination scopes restore the original terminal and require main-thread ownership. `InteractiveInputLifecycle` retains native-auth settings handoff and lobby cleanup. Private model/render/control modules are not APIs.
 
 ### Interactive support
 

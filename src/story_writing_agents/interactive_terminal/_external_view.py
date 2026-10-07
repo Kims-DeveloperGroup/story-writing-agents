@@ -1,11 +1,12 @@
-"""Generic borrowed-host contract for one transient external viewer."""
+"""Generic borrowed-host and owned-transport contracts for external views."""
 
 from __future__ import annotations
 
 import re
 import unicodedata
 from collections.abc import Callable
-from typing import Protocol, TypeAlias, runtime_checkable
+from dataclasses import dataclass
+from typing import Protocol, TextIO, TypeAlias, runtime_checkable
 
 
 _DEFAULT_ROWS = 24
@@ -44,6 +45,29 @@ class ExternalViewerHost(Protocol):
 
 
 ExternalViewOperation: TypeAlias = Callable[[ExternalViewerHost], None]
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalTerminalIO:
+    """Lend streams and persistent input for one externally owned terminal view.
+
+    The operation owns its view's terminal modes. Story retains stream lifetime,
+    input exclusion, buffered decoding, and restoration of its lobby baseline.
+    """
+
+    input_stream: TextIO
+    output_stream: TextIO
+    read_character: Callable[[Callable[[], None] | None], str]
+    no_color: bool
+
+    def __post_init__(self) -> None:
+        if not callable(self.read_character):
+            raise TypeError("read_character must be callable")
+        if type(self.no_color) is not bool:
+            raise TypeError("no_color must be a bool")
+
+
+ExternalOwnedViewOperation: TypeAlias = Callable[[ExternalTerminalIO], None]
 
 
 class ExternalViewUnavailableError(RuntimeError):
