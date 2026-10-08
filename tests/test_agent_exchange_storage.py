@@ -215,12 +215,8 @@ class AgentExchangeStorageBehaviorTests(unittest.TestCase):
             [record["provider"] for record in records],
             ["codex", "antigravity", "antigravity", "antigravity"],
         )
-        self.assertEqual(
-            {record["exchange_id"] for record in records}, {"shared_exchange"}
-        )
-        for line, record in zip(
-            snapshot.jsonl_bytes.splitlines(keepends=True), records
-        ):
+        self.assertEqual( {record["exchange_id"] for record in records}, {"shared_exchange"} )
+        for line, record in zip( snapshot.jsonl_bytes.splitlines(keepends=True), records ):
             self.assertEqual(set(record), _RECORD_KEYS)
             self.assertEqual(list(record), sorted(_RECORD_KEYS))
             self.assertEqual(line, _canonical_line(record))
@@ -238,27 +234,19 @@ class AgentExchangeStorageBehaviorTests(unittest.TestCase):
         exact = "x" * AGENT_EXCHANGE_CONTENT_MAX_BYTES
         exact_receipt = self.store.append(_input(content=exact, exchange_id="exact"))
         self.assertFalse(exact_receipt.content_truncated)
-        self.assertEqual(
-            exact_receipt.content_retained_utf8_bytes,
-            AGENT_EXCHANGE_CONTENT_MAX_BYTES,
-        )
+        self.assertEqual( exact_receipt.content_retained_utf8_bytes, AGENT_EXCHANGE_CONTENT_MAX_BYTES, )
         self.assertEqual(exact_receipt.content_full_characters, len(exact))
         self.assertEqual(exact_receipt.content_retained_characters, len(exact))
 
         unicode_content = "한" * 87_382
         full = unicode_content.encode("utf-8")
-        receipt = self.store.append(
-            _input(content=unicode_content, exchange_id="unicode")
-        )
+        receipt = self.store.append( _input(content=unicode_content, exchange_id="unicode") )
         self.assertEqual(receipt.content_full_utf8_bytes, len(full))
         self.assertEqual(receipt.content_retained_utf8_bytes, 262_143)
         self.assertEqual(receipt.content_full_characters, len(unicode_content))
         self.assertEqual(receipt.content_retained_characters, 87_381)
         self.assertTrue(receipt.content_truncated)
-        self.assertEqual(
-            receipt.content_sha256,
-            "sha256:" + hashlib.sha256(full).hexdigest(),
-        )
+        self.assertEqual( receipt.content_sha256, "sha256:" + hashlib.sha256(full).hexdigest(), )
         records = _decoded_snapshot(self.store)
         retained = records[-1]["content"]
         self.assertIsInstance(retained, str)
@@ -272,22 +260,13 @@ class AgentExchangeStorageBehaviorTests(unittest.TestCase):
 
     def test_global_and_per_stream_sequences_survive_new_store_instances(self) -> None:
         first = self.store.append(_input(exchange_id="e1"))
-        second = WorkspaceAgentExchangeStore(self.workspace).append(
-            _input(agent_id=ROSTER[1], exchange_id="e2")
-        )
-        third = WorkspaceAgentExchangeStore(self.workspace).append(
-            _input(session_id="session_2", exchange_id="e3")
-        )
+        second = WorkspaceAgentExchangeStore(self.workspace).append( _input(agent_id=ROSTER[1], exchange_id="e2") )
+        third = WorkspaceAgentExchangeStore(self.workspace).append( _input(session_id="session_2", exchange_id="e3") )
         fourth = WorkspaceAgentExchangeStore(self.workspace).append(
             _input(exchange_id="e4", request_type=AgentExchangeRequestType.RESPONSE)
         )
-        self.assertEqual(
-            [item.workspace_sequence for item in (first, second, third, fourth)],
-            [1, 2, 3, 4],
-        )
-        self.assertEqual(
-            [item.sequence for item in (first, second, third, fourth)], [1, 1, 1, 2]
-        )
+        self.assertEqual( [item.workspace_sequence for item in (first, second, third, fourth)], [1, 2, 3, 4], )
+        self.assertEqual( [item.sequence for item in (first, second, third, fourth)], [1, 1, 1, 2] )
 
     def test_inventory_is_content_free_ordered_and_snapshot_filters_exact_scope(
         self,
@@ -300,31 +279,18 @@ class AgentExchangeStorageBehaviorTests(unittest.TestCase):
                 content="PRIVATE two",
                 exchange_id="e2",
             ),
-            _input(
-                agent_id=ROSTER[1],
-                content="PRIVATE three",
-                exchange_id="e3",
-            ),
-            _input(
-                session_id="session_2",
-                content="PRIVATE four",
-                exchange_id="e4",
-            ),
+            _input( agent_id=ROSTER[1], content="PRIVATE three", exchange_id="e3", ),
+            _input( session_id="session_2", content="PRIVATE four", exchange_id="e4", ),
         )
         for value in values:
             self.store.append(value)
         inventory = self.store.inventory("session_1")
-        self.assertEqual(
-            [item.first_workspace_sequence for item in inventory], [1, 2, 3]
-        )
+        self.assertEqual( [item.first_workspace_sequence for item in inventory], [1, 2, 3] )
         self.assertEqual(
             [item.selection for item in inventory],
             [
                 _selection(),
-                _selection(
-                    scope_kind=AgentExchangeScopeKind.DEBATE,
-                    scope_id="debate_1",
-                ),
+                _selection( scope_kind=AgentExchangeScopeKind.DEBATE, scope_id="debate_1", ),
                 _selection(agent_id=ROSTER[1]),
             ],
         )
@@ -336,10 +302,7 @@ class AgentExchangeStorageBehaviorTests(unittest.TestCase):
             len(
                 _decoded_snapshot(
                     self.store,
-                    _selection(
-                        scope_kind=AgentExchangeScopeKind.DEBATE,
-                        scope_id="debate_1",
-                    ),
+                    _selection( scope_kind=AgentExchangeScopeKind.DEBATE, scope_id="debate_1", ),
                 )
             ),
             1,
@@ -347,9 +310,7 @@ class AgentExchangeStorageBehaviorTests(unittest.TestCase):
         _assert_storage_failure(
             self,
             AgentExchangeFailure.NOT_FOUND,
-            lambda: self.store.snapshot(
-                _selection(scope_kind=AgentExchangeScopeKind.DEBATE)
-            ),
+            lambda: self.store.snapshot( _selection(scope_kind=AgentExchangeScopeKind.DEBATE) ),
         )
 
     def test_failed_append_reservations_leave_gaps_without_reuse(self) -> None:
@@ -367,10 +328,7 @@ class AgentExchangeStorageBehaviorTests(unittest.TestCase):
         receipt = self.store.append(_input(exchange_id="succeeded"))
         self.assertEqual((receipt.workspace_sequence, receipt.sequence), (2, 2))
         records = _decoded_snapshot(self.store)
-        self.assertEqual(
-            [(record["workspace_sequence"], record["sequence"]) for record in records],
-            [(2, 2)],
-        )
+        self.assertEqual( [(record["workspace_sequence"], record["sequence"]) for record in records], [(2, 2)], )
 
     def test_rotation_keeps_exactly_seven_backups_and_complete_lines(self) -> None:
         with mock.patch.object(storage_module, "_SEGMENT_MAX_BYTES", 1_100):
@@ -393,10 +351,7 @@ class AgentExchangeStorageBehaviorTests(unittest.TestCase):
                     json.loads(line)
             snapshot = self.store.snapshot(_selection())
             retained = [json.loads(line) for line in snapshot.jsonl_bytes.splitlines()]
-            self.assertEqual(
-                [record["workspace_sequence"] for record in retained],
-                list(range(3, 11)),
-            )
+            self.assertEqual( [record["workspace_sequence"] for record in retained], list(range(3, 11)), )
 
     def test_global_pruning_replaces_split_segment_with_newest_exact_suffix(
         self,
@@ -412,16 +367,8 @@ class AgentExchangeStorageBehaviorTests(unittest.TestCase):
 
         with (
             mock.patch.object(storage_module, "_SEGMENT_MAX_BYTES", 2_100),
-            mock.patch.object(
-                storage_module,
-                "AGENT_EXCHANGE_TOTAL_MAX_BYTES",
-                3_500,
-            ),
-            mock.patch.object(
-                storage_module,
-                "_atomic_replace_leaf",
-                side_effect=recording_replace,
-            ),
+            mock.patch.object( storage_module, "AGENT_EXCHANGE_TOTAL_MAX_BYTES", 3_500, ),
+            mock.patch.object( storage_module, "_atomic_replace_leaf", side_effect=recording_replace, ),
         ):
             for index in range(8):
                 self.store.append(_input(exchange_id=f"e{index}", content="y" * 500))
@@ -429,9 +376,7 @@ class AgentExchangeStorageBehaviorTests(unittest.TestCase):
             records = [json.loads(line) for line in snapshot.jsonl_bytes.splitlines()]
             total = sum(
                 path.stat().st_size
-                for path in (_store_directory(self.workspace) / "session_1").glob(
-                    "*.jsonl*"
-                )
+                for path in (_store_directory(self.workspace) / "session_1").glob( "*.jsonl*" )
             )
             self.assertLessEqual(total, 3_500)
             sequences = [record["workspace_sequence"] for record in records]
@@ -508,11 +453,7 @@ class AgentExchangeStorageSecurityTests(unittest.TestCase):
         process_lock = storage_module._process_lock_for(workspace)
         process_lock.lock.acquire()
         try:
-            _assert_storage_failure(
-                self,
-                AgentExchangeFailure.CONTENTION,
-                lambda: store.append(_input()),
-            )
+            _assert_storage_failure( self, AgentExchangeFailure.CONTENTION, lambda: store.append(_input()), )
         finally:
             process_lock.lock.release()
         self.assertEqual(store.append(_input()).workspace_sequence, 1)
@@ -557,9 +498,7 @@ class AgentExchangeStorageSecurityTests(unittest.TestCase):
         def unexpected_case(
             workspace: Workspace, _store: WorkspaceAgentExchangeStore
         ) -> None:
-            (_store_directory(workspace) / "session_1" / "PRIVATE.txt").write_text(
-                "PRIVATE", encoding="utf-8"
-            )
+            (_store_directory(workspace) / "session_1" / "PRIVATE.txt").write_text( "PRIVATE", encoding="utf-8" )
 
         for name, mutation in (
             ("symlink", symlink_case),
@@ -701,15 +640,9 @@ class AgentExchangeStorageSecurityTests(unittest.TestCase):
         store.append(_input(content="한" * 87_382))
         rewrite_record(
             workspace,
-            lambda value: value.__setitem__(
-                "content_full_characters", value["content_retained_characters"]
-            ),
+            lambda value: value.__setitem__( "content_full_characters", value["content_retained_characters"] ),
         )
-        _assert_storage_failure(
-            self,
-            AgentExchangeFailure.CORRUPT_STORAGE,
-            lambda: store.inventory("session_1"),
-        )
+        _assert_storage_failure( self, AgentExchangeFailure.CORRUPT_STORAGE, lambda: store.inventory("session_1"), )
 
         for name, payload in (
             ("malformed", b"{\n"),
@@ -809,30 +742,18 @@ class AgentExchangeStorageSecurityTests(unittest.TestCase):
         workspace, store = self._seed()
         state = _store_directory(workspace) / ".state.json"
         state.write_bytes(b"x" * 513)
-        _assert_storage_failure(
-            self,
-            AgentExchangeFailure.CAPACITY_EXCEEDED,
-            lambda: store.inventory("session_1"),
-        )
+        _assert_storage_failure( self, AgentExchangeFailure.CAPACITY_EXCEEDED, lambda: store.inventory("session_1"), )
 
         workspace, store = self._seed()
         with _active_path(workspace).open("r+b") as handle:
             handle.truncate(2_097_153)
-        _assert_storage_failure(
-            self,
-            AgentExchangeFailure.CAPACITY_EXCEEDED,
-            lambda: store.inventory("session_1"),
-        )
+        _assert_storage_failure( self, AgentExchangeFailure.CAPACITY_EXCEEDED, lambda: store.inventory("session_1"), )
 
         workspace, store = self._seed()
         session = _store_directory(workspace) / "session_1"
         for index in range(4_097):
             (session / f"x{index}").touch(mode=0o600)
-        _assert_storage_failure(
-            self,
-            AgentExchangeFailure.CAPACITY_EXCEEDED,
-            lambda: store.inventory("session_1"),
-        )
+        _assert_storage_failure( self, AgentExchangeFailure.CAPACITY_EXCEEDED, lambda: store.inventory("session_1"), )
 
     def test_sibling_debug_logs_are_never_scanned_modified_or_counted(self) -> None:
         workspace = initialized_workspace(self)
@@ -887,11 +808,7 @@ class AgentExchangeStorageFaultTests(unittest.TestCase):
                 raise OSError(errno.EIO, "PRIVATE partial write")
             original(descriptor, payload)
 
-        with mock.patch.object(
-            storage_module,
-            "_write_all",
-            side_effect=partial_then_fail,
-        ):
+        with mock.patch.object( storage_module, "_write_all", side_effect=partial_then_fail, ):
             _assert_storage_failure(
                 self,
                 AgentExchangeFailure.IO_FAILED,
@@ -900,10 +817,7 @@ class AgentExchangeStorageFaultTests(unittest.TestCase):
         self.assertEqual(_active_path(self.workspace).read_bytes(), before)
         receipt = self.store.append(_input(exchange_id="after"))
         self.assertEqual((receipt.workspace_sequence, receipt.sequence), (3, 3))
-        self.assertEqual(
-            [record["sequence"] for record in _decoded_snapshot(self.store)],
-            [1, 3],
-        )
+        self.assertEqual( [record["sequence"] for record in _decoded_snapshot(self.store)], [1, 3], )
 
     def test_primary_capacity_failure_precedes_cleanup_io_failure(self) -> None:
         original_release = storage_module._release_advisory_lock
@@ -918,11 +832,7 @@ class AgentExchangeStorageFaultTests(unittest.TestCase):
                 "_append_segment_line",
                 side_effect=OSError(errno.ENOSPC, "PRIVATE capacity failure"),
             ),
-            mock.patch.object(
-                storage_module,
-                "_release_advisory_lock",
-                side_effect=release_then_fail,
-            ),
+            mock.patch.object( storage_module, "_release_advisory_lock", side_effect=release_then_fail, ),
         ):
             _assert_storage_failure(
                 self,
@@ -938,11 +848,7 @@ class AgentExchangeStorageFaultTests(unittest.TestCase):
             original_release(descriptor)
             raise OSError(errno.EIO, "PRIVATE cleanup failure")
 
-        with mock.patch.object(
-            storage_module,
-            "_release_advisory_lock",
-            side_effect=release_then_fail,
-        ):
+        with mock.patch.object( storage_module, "_release_advisory_lock", side_effect=release_then_fail, ):
             error = _assert_storage_failure(
                 self,
                 AgentExchangeFailure.IO_FAILED,
@@ -970,11 +876,7 @@ class AgentExchangeStorageFaultTests(unittest.TestCase):
                 "_append_under_guard",
                 side_effect=KeyboardInterrupt("PRIVATE control"),
             ),
-            mock.patch.object(
-                storage_module,
-                "_release_advisory_lock",
-                side_effect=release_then_fail,
-            ),
+            mock.patch.object( storage_module, "_release_advisory_lock", side_effect=release_then_fail, ),
             self.assertRaisesRegex(KeyboardInterrupt, "PRIVATE control"),
         ):
             self.store.append(_input(exchange_id="interrupted"))
@@ -1009,11 +911,7 @@ class AgentExchangeStorageFaultTests(unittest.TestCase):
                 raise OSError(errno.EIO, "PRIVATE state")
             original_replace(*args, **kwargs)  # type: ignore[arg-type]
 
-        with mock.patch.object(
-            storage_module,
-            "_atomic_replace_leaf",
-            side_effect=fail_stream_state,
-        ):
+        with mock.patch.object( storage_module, "_atomic_replace_leaf", side_effect=fail_stream_state, ):
             _assert_storage_failure(
                 self,
                 AgentExchangeFailure.IO_FAILED,
@@ -1024,26 +922,16 @@ class AgentExchangeStorageFaultTests(unittest.TestCase):
 
         with (
             mock.patch.object(storage_module, "_SEGMENT_MAX_BYTES", 1_100),
-            mock.patch.object(
-                storage_module,
-                "_rotate_stream",
-                side_effect=OSError(errno.EIO, "PRIVATE rotate"),
-            ),
+            mock.patch.object( storage_module, "_rotate_stream", side_effect=OSError(errno.EIO, "PRIVATE rotate"), ),
         ):
             _assert_storage_failure(
                 self,
                 AgentExchangeFailure.IO_FAILED,
-                lambda: self.store.append(
-                    _input(exchange_id="rotation_failed", content="z" * 500)
-                ),
+                lambda: self.store.append( _input(exchange_id="rotation_failed", content="z" * 500) ),
             )
         with mock.patch.object(storage_module, "_SEGMENT_MAX_BYTES", 1_100):
-            recovered = self.store.append(
-                _input(exchange_id="rotation_after", content="z" * 500)
-            )
-            self.assertGreater(
-                recovered.workspace_sequence, after_state.workspace_sequence
-            )
+            recovered = self.store.append( _input(exchange_id="rotation_after", content="z" * 500) )
+            self.assertGreater( recovered.workspace_sequence, after_state.workspace_sequence )
             sequences = [record["sequence"] for record in _decoded_snapshot(self.store)]
             self.assertEqual(sequences, sorted(set(sequences)))
 
@@ -1061,16 +949,8 @@ class AgentExchangeStorageFaultTests(unittest.TestCase):
             original_prune(directories, snapshot)  # type: ignore[arg-type]
 
         with (
-            mock.patch.object(
-                storage_module,
-                "AGENT_EXCHANGE_TOTAL_MAX_BYTES",
-                1_400,
-            ),
-            mock.patch.object(
-                storage_module,
-                "_prune_to_total",
-                side_effect=fail_over_capacity,
-            ),
+            mock.patch.object( storage_module, "AGENT_EXCHANGE_TOTAL_MAX_BYTES", 1_400, ),
+            mock.patch.object( storage_module, "_prune_to_total", side_effect=fail_over_capacity, ),
         ):
             _assert_storage_failure(
                 self,
@@ -1082,11 +962,7 @@ class AgentExchangeStorageFaultTests(unittest.TestCase):
         raw = _active_path(self.workspace).read_bytes()
         self.assertTrue(raw.endswith(b"\n"))
         self.assertEqual(len(raw.splitlines()), 2)
-        with mock.patch.object(
-            storage_module,
-            "AGENT_EXCHANGE_TOTAL_MAX_BYTES",
-            1_400,
-        ):
+        with mock.patch.object( storage_module, "AGENT_EXCHANGE_TOTAL_MAX_BYTES", 1_400, ):
             self.store.append(_input(exchange_id="prune_after", content="p" * 500))
 
         original_replace = storage_module._atomic_replace_leaf
@@ -1098,16 +974,8 @@ class AgentExchangeStorageFaultTests(unittest.TestCase):
 
         with (
             mock.patch.object(storage_module, "_SEGMENT_MAX_BYTES", 4_000),
-            mock.patch.object(
-                storage_module,
-                "AGENT_EXCHANGE_TOTAL_MAX_BYTES",
-                1_400,
-            ),
-            mock.patch.object(
-                storage_module,
-                "_atomic_replace_leaf",
-                side_effect=fail_suffix,
-            ),
+            mock.patch.object( storage_module, "AGENT_EXCHANGE_TOTAL_MAX_BYTES", 1_400, ),
+            mock.patch.object( storage_module, "_atomic_replace_leaf", side_effect=fail_suffix, ),
         ):
             _assert_storage_failure(
                 self,
@@ -1118,11 +986,7 @@ class AgentExchangeStorageFaultTests(unittest.TestCase):
             )
         with (
             mock.patch.object(storage_module, "_SEGMENT_MAX_BYTES", 4_000),
-            mock.patch.object(
-                storage_module,
-                "AGENT_EXCHANGE_TOTAL_MAX_BYTES",
-                1_400,
-            ),
+            mock.patch.object( storage_module, "AGENT_EXCHANGE_TOTAL_MAX_BYTES", 1_400, ),
         ):
             self.store.append(_input(exchange_id="replace_after", content="q" * 500))
 

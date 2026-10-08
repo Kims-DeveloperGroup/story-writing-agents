@@ -141,7 +141,8 @@ REVIEWS = {
 LIMITATION = (
     'Hashes bind supplied bytes, not provider/human authenticity, audit semantics or '
     'genuine blinding. No automatic improvement assessment; synthetic data is '
-    'mechanics-only.'
+    'mechanics-only. Participant IDs are self-attributed, not authenticated. '
+    'Two perspectives from one person are not independent human replication.'
 )
 SCORING_NOTE = (
     'Required confirmations are safeguards. Missing interaction context requires a '
@@ -535,6 +536,35 @@ def _prepare(data):
     )
 
 
+def _bind_grade_record(raw, review, packet, packet_sha):
+    if raw is None:
+        return
+    try:
+        record = json.loads(raw)
+    except (ValueError, RecursionError):
+        return
+    if type(record) is not dict or not (
+            {'self_attributed', 'identity_authenticated', 'review_packet_sha256'} & record.keys()):
+        return
+    _check(record, {'format_version': VERSION, 'comparison_id': ID, 'review_packet_sha256': SHA,
+                    'reviewer_id': ID, 'role': _enum('author_intent', 'reader_editor'),
+                    'self_attributed': ('any',), 'identity_authenticated': ('any',),
+                    'constructed_fixtures': ('any',), 'reviews': ('list', REVIEW, 9)})
+    _need(raw == _canonical(record) + b'\n', 'participant record is not canonical current JSON')
+    _need(record['self_attributed'] is True and record['identity_authenticated'] is False and
+          type(record['constructed_fixtures']) is bool and
+          record['constructed_fixtures'] == packet['constructed_fixtures'], 'participant record identity/fixture mismatch')
+    _need(record['reviewer_id'] == review['reviewer_id'] and record['role'] == review['role'],
+          'review identity does not match participant record')
+    _grade_validate(packet, {key: record[key] for key in
+                            ('format_version', 'comparison_id', 'review_packet_sha256', 'reviews')}, packet_sha)
+    _need(all(row['evidence'] is None and row['reviewer_id'] == record['reviewer_id'] and
+              row['role'] == record['role'] and row['evidence_kind'] in ('human_blinded', 'human_unblinded')
+              for row in record['reviews']), 'participant record rows are inconsistent')
+    expected = next(row for row in record['reviews'] if row['case_id'] == review['case_id'])
+    _need(dict(review, evidence=None) == expected, 'review does not match immutable participant record')
+
+
 def _reviews(data, packet, reviews_path):
     reviews, raw = _json(reviews_path)
     _check(reviews, REVIEWS)
@@ -545,7 +575,7 @@ def _reviews(data, packet, reviews_path):
         ),
         'review packet binding mismatch',
     )
-    _unique([(item["reviewer_id"], item["case_id"]) for item in reviews["reviews"]])
+    _unique([(item["reviewer_id"], item['role'], item["case_id"]) for item in reviews["reviews"]])
     indexed = {case["case_id"]: case for case in packet["cases"]}
     for review in reviews["reviews"]:
         _need(review["case_id"] in indexed, "unknown review case")
@@ -554,7 +584,8 @@ def _reviews(data, packet, reviews_path):
             sum((item['case_id'] == review['case_id'] for item in reviews['reviews'])) <= 16,
             'reviewer limit exceeded',
         )
-        data["artifacts"].read(review["evidence"], "review_record")
+        evidence = data["artifacts"].read(review["evidence"], "review_record")
+        _bind_grade_record(evidence, review, packet, reviews["review_packet_sha256"])
         for side in "AB":
             for axis, rating in review["ratings"][side].items():
                 if rating["score"] is not None:
@@ -662,6 +693,14 @@ def _compare(data, packet, mapping, reviews, reviews_sha):
             ):
                 eligible.add(review["role"])
         limitations = [LIMITATION]
+        participant_ids = sorted({row['reviewer_id'] for row in rows
+                                  if row['evidence_kind'] in {'human_blinded', 'human_unblinded'}})
+        role_coverage = {role: sorted({row['reviewer_id'] for row in rows
+                                      if row['role'] == role and row['evidence_kind'] in {'human_blinded', 'human_unblinded'}})
+                         for role in ('author_intent', 'reader_editor')}
+        single_person = len(participant_ids) == 1 and all(role_coverage.values())
+        if single_person:
+            limitations.append('Single-person, two-perspective evaluation; not independent human replication.')
         if "repository_commit" in differences and captures["comparison_kind"] == "before_after":
             limitations.append("Declared before/after repository difference is the treatment.")
         if condition_status != "matched":
@@ -746,6 +785,13 @@ def _compare(data, packet, mapping, reviews, reviews_sha):
                 },
                 'cost_missing': cost_missing,
                 'reviews': rows,
+                'participants': {
+                    'self_attributed_ids': participant_ids,
+                    'count': len(participant_ids),
+                    'role_coverage': role_coverage,
+                    'identity_authenticated': False,
+                    'single_person_two_perspectives': single_person,
+                },
                 'disagreements': {'preferences': len(preferences) > 1, 'axes': disagreements},
                 'evidence_status': ('PAIRED_EVIDENCE_AVAILABLE' if complete else 'INCONCLUSIVE'),
                 'limitations': limitations,
@@ -858,15 +904,257 @@ def _write(directory, files):
             stream.write(raw)
 
 
+class _GradeCancelled(Exception):
+    """Call-local cancellation before review publication."""
+
+
+def _grade_packet(path):
+    packet, raw = _json(path, PACKET_LIMIT)
+    interaction = {
+        'decision_counts': {name: _nullable(COUNT) for name in DECISIONS},
+        'context_text': _nullable(TEXT),
+        'evidence_sha256': {name: ('list', SHA, 32) for name in ('accounting', 'interaction')},
+        'context_status': _enum('available', 'partial', 'not_observed'),
+        'scoring_note': TEXT,
+    }
+    side = {'status': _enum('captured', 'failed', 'not_observed', 'not_supported'),
+            'output_text': ('any',), 'output_sha256': _nullable(SHA),
+            'output_utf8_bytes': _nullable(('int', 0, OUTPUT_LIMIT)),
+            'author_visible_interaction': interaction}
+    source = {'source_id': ID, 'artifact_path': TEXT, 'text': ('text', OUTPUT_LIMIT),
+              'encoding': _enum('utf-8'), 'sha256': SHA}
+    case = {'case_id': ID, 'constructed_fixture': ('any',), 'case_sha256': SHA,
+            'input_sha256': SHA, 'source_sha256': ('map', SHA, 32), 'prompt_sha256': SHA,
+            'input': {'sources': ('list', source, 32), 'user_prompts': ('list', ('text', OUTPUT_LIMIT), 128),
+                      'editorial_brief': ('any',), 'context_material': ('list', ('any',), 128),
+                      'workflow_steps': ('list', ('any',), 128)},
+            'sides': {label: side for label in 'AB'}}
+    _check(packet, {'format_version': VERSION, 'comparison_id': ID, 'dataset_id': SMALL,
+                    'dataset_sha256': SHA, 'captures_sha256': SHA, 'rubric_id': SMALL,
+                    'rubric': ('any',), 'constructed_fixtures': ('any',), 'cases': ('list', case, 9)})
+    _need(raw == _canonical(packet) + b'\n', 'packet is not canonical current JSON')
+    _need(packet['dataset_id'] == 'lead-editorial-coordination-v1' and
+          packet['rubric_id'] == 'lead-editorial-rubric-v1' and packet['rubric'] == RUBRIC,
+          'wrong packet dataset/rubric')
+    _need(type(packet['constructed_fixtures']) is bool, 'packet fixture label required')
+    _need(len(packet['cases']) == 9 and {item['case_id'] for item in packet['cases']} == set(CASES),
+          'complete nine-case packet required')
+    for item in packet['cases']:
+        _need(type(item['constructed_fixture']) is bool, 'case fixture label required')
+        inputs = item['input']
+        _need(inputs['editorial_brief'] is None or type(inputs['editorial_brief']) is dict,
+              'invalid editorial brief')
+        _need(all(type(value) is dict for key in ('context_material', 'workflow_steps')
+                  for value in inputs[key]), 'invalid context/workflow input')
+        pending, count = [(inputs, 0)], 0
+        while pending:
+            value, depth = pending.pop()
+            count += 1
+            _need(depth <= 16 and count <= 4096, 'packet input structure too large')
+            if type(value) is dict:
+                _need(len(value) <= 128 and all(type(key) is str for key in value), 'invalid input object')
+                pending.extend((part, depth + 1) for pair in value.items() for part in pair)
+            elif type(value) is list:
+                _need(len(value) <= 128, 'input array too large')
+                pending.extend((part, depth + 1) for part in value)
+            elif type(value) is str:
+                _need(len(value.encode('utf-8')) <= OUTPUT_LIMIT, 'input text too large')
+            else:
+                _need(value is None or type(value) in (bool, int, float), 'invalid input value')
+        _need(item['input_sha256'] == _sha(_canonical(inputs)) and
+              item['prompt_sha256'] == _sha(_canonical(inputs['user_prompts'])), 'packet input digest mismatch')
+        sources = inputs['sources']
+        _unique([entry['source_id'] for entry in sources])
+        _need(item['source_sha256'] == {entry['source_id']: entry['sha256'] for entry in sources},
+              'packet source map mismatch')
+        for entry in sources:
+            _need(entry['sha256'] == _sha(entry['text'].encode('utf-8')), 'packet source digest mismatch')
+        for value in item['sides'].values():
+            text = value['output_text']
+            if value['status'] != 'captured':
+                _need(text is None and value['output_sha256'] is None and value['output_utf8_bytes'] is None,
+                      'noncaptured side has output')
+            else:
+                _need(type(text) is str and bool(text) and len(text.encode('utf-8')) <= OUTPUT_LIMIT,
+                      'invalid captured output')
+                _need(value['output_sha256'] == _sha(text.encode('utf-8')) and
+                      value['output_utf8_bytes'] == len(text.encode('utf-8')), 'packet output digest mismatch')
+            view = value['author_visible_interaction']
+            counts = view['decision_counts']
+            available = (all(number is not None for number in counts.values()) and
+                         bool(view['evidence_sha256']['accounting']) and bool(view['context_text']) and
+                         bool(view['evidence_sha256']['interaction']))
+            partial = any(number is not None for number in counts.values()) or bool(view['context_text'])
+            status = 'available' if available else 'partial' if partial else 'not_observed'
+            _need(view['context_status'] == status and view['scoring_note'] == SCORING_NOTE,
+                  'packet interaction status mismatch')
+    return packet, _sha(raw)
+
+
+def _grade_ask(prompt, spec):
+    while True:
+        try:
+            value = input(prompt + ': ')
+        except (EOFError, KeyboardInterrupt) as error:
+            raise _GradeCancelled() from error
+        if value.strip() == '/cancel':
+            raise _GradeCancelled()
+        try:
+            _check(value, spec)
+        except (ValueError, TypeError):
+            print('Invalid answer; correct it or type /cancel.')
+            continue
+        return value
+
+
+def _grade_display(case, rubric):
+    print('\nCase: ' + case['case_id'])
+    print('Constructed source fixture: ' + str(case['constructed_fixture']).lower())
+    print('Exact brief/source/context (JSON; escapes preserve control characters):')
+    print(json.dumps(case['input'], ensure_ascii=False, indent=2))
+    for side, supplied in case['sides'].items():
+        print('\nAnonymous ' + side + ' (' + supplied['status'] + ')')
+        print('Exact output: ' + json.dumps(supplied['output_text'], ensure_ascii=False))
+        print('Author-visible interaction: ' + _canonical(supplied['author_visible_interaction']).decode('utf-8'))
+    for axis in AXES:
+        print('\n' + axis)
+        for score, anchor in rubric['dimensions'][axis].items():
+            print(score + ': ' + anchor)
+    for instruction in rubric['instructions']:
+        print(instruction)
+
+
+def _grade_case(case, reviewer_id, role, evidence_kind):
+    _grade_display(case, RUBRIC)
+    ratings = {}
+    for side in 'AB':
+        ratings[side] = {}
+        supplied = case['sides'][side]
+        for axis in AXES:
+            unavailable = (supplied['output_text'] is None or
+                           (axis == 'approval_burden' and supplied['author_visible_interaction']['context_status'] != 'available'))
+            if unavailable:
+                print(side + ' ' + axis + ': unobserved; required evidence is absent.')
+                score = None
+            else:
+                value = _grade_ask(side + ' ' + axis + ' score (0..4 or unobserved)',
+                                   _enum('0', '1', '2', '3', '4', 'unobserved', 'null'))
+                score = None if value in {'unobserved', 'null'} else int(value)
+            reason = _grade_ask(side + ' ' + axis + ' reason/passages (or why unobserved)', ('text', 2048))
+            uncertainty = _grade_ask(side + ' ' + axis + ' uncertainty (use none if none)', ('text', 1024))
+            ratings[side][axis] = {'score': score, 'rationale': reason + '\nUncertainty: ' + uncertainty}
+    preference = _grade_ask('Preference', _enum('A', 'B', 'tie', 'not_observed'))
+    errors = []
+    while len(errors) < 32 and _grade_ask('Record an important error? yes/no', _enum('yes', 'no')) == 'yes':
+        side = _grade_ask('Error side', _enum('A', 'B'))
+        source = _grade_ask('Error source (source ID or none)', _enum('none', *case['source_sha256']))
+        errors.append({'side': side, 'source_id': None if source == 'none' else source,
+                       'description': _grade_ask('Error description', TEXT),
+                       'impact': _grade_ask('Error impact', TEXT),
+                       'disposition': _grade_ask('Error disposition', _enum('resolved', 'deferred', 'rejected', 'unresolved')),
+                       'reason': _grade_ask('Error disposition reason', TEXT)})
+    return {'reviewer_id': reviewer_id, 'role': role, 'evidence_kind': evidence_kind,
+            'case_id': case['case_id'], 'ratings': ratings, 'preference': preference,
+            'important_errors': errors, 'evidence': None}
+
+
+def _grade_identity():
+    print('Self-attribution is recorded, not authenticated. Use your own independent participant ID.')
+    reviewer = _grade_ask('Reviewer ID', ID)
+    role = _grade_ask('Reviewer role', _enum('author_intent', 'reader_editor'))
+    blinded = _grade_ask('Have you viewed only anonymous material, without arm/model/cost attribution? yes/no', _enum('yes', 'no'))
+    _grade_ask('Confirm these are your independent judgments: yes', _enum('yes'))
+    return reviewer, role, 'human_blinded' if blinded == 'yes' else 'human_unblinded'
+
+
+def _grade_validate(packet, reviews, packet_sha):
+    _check(reviews, REVIEWS)
+    _need(reviews['comparison_id'] == packet['comparison_id']
+          and reviews['review_packet_sha256'] == packet_sha, 'review packet binding mismatch')
+    _need(len(reviews['reviews']) == 9, 'complete participant review required')
+    _unique([row['case_id'] for row in reviews['reviews']])
+    _need({row['case_id'] for row in reviews['reviews']} == set(CASES), 'review case mismatch')
+    _need(len({(row['reviewer_id'], row['role'], row['evidence_kind']) for row in reviews['reviews']}) == 1,
+          'participant identity changed')
+    indexed = {row['case_id']: row for row in packet['cases']}
+    for review in reviews['reviews']:
+        case = indexed[review['case_id']]
+        for side in 'AB':
+            for axis, rating in review['ratings'][side].items():
+                _need(rating['rationale'] is not None, 'rating reason/uncertainty missing')
+                if rating['score'] is not None:
+                    _need(case['sides'][side]['output_text'] is not None, 'score lacks output')
+                    if axis == 'approval_burden':
+                        _need(case['sides'][side]['author_visible_interaction']['context_status'] == 'available',
+                              'human burden score lacks interaction context')
+        for error in review['important_errors']:
+            _need(error['source_id'] is None or error['source_id'] in case['source_sha256'], 'unknown error source')
+
+
+def _grade(packet_path, directory):
+    print('For later compare ingestion, --out-dir must be a direct child of the capture artifact root.')
+    _need(not directory.exists() and not directory.is_symlink(), 'output directory exists')
+    _need(directory.name not in {'', '.', '..'}, 'invalid output directory name')
+    packet, digest = _grade_packet(packet_path)
+    print('Blinded participant grading. ' + LIMITATION)
+    print('Use /cancel or EOF at any prompt to stop without publishing a complete review.')
+    reviewer, role, kind = _grade_identity()
+    reviews = []
+    for case in packet['cases']:
+        while True:
+            row = _grade_case(case, reviewer, role, kind)
+            choice = _grade_ask('Case review: accept/edit', _enum('accept', 'edit'))
+            if choice == 'accept':
+                reviews.append(row)
+                break
+    while True:
+        print('Recorded all nine cases for ' + reviewer + ' (' + role + ').')
+        choice = _grade_ask('Final review: save/edit/identity', _enum('save', 'edit', 'identity'))
+        if choice == 'save':
+            break
+        if choice == 'identity':
+            reviewer, role, kind = _grade_identity()
+            for row in reviews:
+                row.update(reviewer_id=reviewer, role=role, evidence_kind=kind)
+        else:
+            case_id = _grade_ask('Case to correct', _enum(*CASES))
+            case = next(case for case in packet['cases'] if case['case_id'] == case_id)
+            index = next(index for index, row in enumerate(reviews) if row['case_id'] == case_id)
+            reviews[index] = _grade_case(case, reviewer, role, kind)
+    evidence = {'format_version': 1, 'comparison_id': packet['comparison_id'], 'review_packet_sha256': digest,
+                'reviewer_id': reviewer, 'role': role, 'self_attributed': True, 'identity_authenticated': False,
+                'constructed_fixtures': packet['constructed_fixtures'], 'reviews': reviews}
+    evidence_sha = _sha(_canonical(evidence) + b'\n')
+    # A JSON round-trip keeps the immutable evidence bytes independent of later review references.
+    evidence = json.loads(_canonical(evidence))
+    ref = {'kind': 'review_record', 'path': directory.name + '/review-record.json', 'sha256': evidence_sha}
+    for row in reviews:
+        row['evidence'] = dict(ref)
+    artifact = {'format_version': 1, 'comparison_id': packet['comparison_id'],
+                'review_packet_sha256': digest, 'reviews': reviews}
+    _grade_validate(packet, artifact, digest)
+    _write(directory, {'review-record.json': evidence, 'reviews.json': artifact})
+    print('Complete packet-bound review published. Evidence paths expect this directory under the capture artifact root.')
+    return 0
+
+
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("prepare", "compare"))
+    parser.add_argument("command", choices=("prepare", "compare", "grade"))
     for name in ("dataset", "captures", "out-dir"):
-        parser.add_argument("--" + name, required=True, type=Path)
+        parser.add_argument("--" + name, required=name == "out-dir", type=Path,
+                            help="grade output must be a direct child of the capture artifact root" if name == "out-dir" else None)
     parser.add_argument("--packet", type=Path)
     parser.add_argument("--reviews", type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.command == "grade":
+            _need(args.packet is not None and not (args.dataset or args.captures or args.reviews),
+                  "grade requires only --packet and --out-dir")
+            return _grade(args.packet, args.out_dir)
+        _need(args.dataset is not None and args.captures is not None, "dataset/captures required")
         _need(
             (
                 (args.command == 'compare') == bool(args.packet and args.reviews)
@@ -894,6 +1182,9 @@ def main(argv=None):
         _write(args.out_dir, files)
         print("Generated " + ", ".join(files) + "; no agents or workflow controls executed.")
         return 0
+    except _GradeCancelled:
+        print("Grading cancelled; no complete review was published.", file=sys.stderr)
+        return 3
     except (ValueError, KeyError, TypeError, RecursionError, OverflowError) as error:
         print("Invalid offline input: " + str(error), file=sys.stderr)
         return 2

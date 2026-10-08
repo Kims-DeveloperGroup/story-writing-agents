@@ -59,7 +59,7 @@ CLI / interactive shell
 
 Responsibility: expose APIs and CLI context through `__init__`, `__main__`, `cli`, `cli_context`, and provider-free `smoke`.
 CLI adapters compose runtime, storage, interactive, and workspace facades; those owners never depend on CLI adapters.
-Standalone stdlib-only `tools/evaluate_lead_editorial.py` owns bounded offline capture validation, deterministic blinding,
+Standalone stdlib-only `tools/evaluate_lead_editorial.py` owns bounded offline capture validation, deterministic blinding, blinded participant grading with packet-bound reviews,
 and descriptive paired reports without runtime imports, provider execution, or workflow authority.
 
 ### Core agent and runtime contracts
