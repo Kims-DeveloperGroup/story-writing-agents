@@ -1,5 +1,7 @@
 # Lead editorial evaluation
 
+See the [per-criterion evidence map](lead-editorial-evidence-map.md) for exact test assertions, execution heads, evaluation gaps and update ownership.
+
 This evaluation baseline defines what to observe before changing the Lead's
 editorial behavior. It contains nine constructed cases: all seven cases in
 [Issue #791, section 13](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/791),

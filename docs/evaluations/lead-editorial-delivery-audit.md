@@ -1,5 +1,7 @@
 # Original editorial delivery audit
 
+See the [per-criterion evidence map](lead-editorial-evidence-map.md) for exact test assertions, execution heads, evaluation gaps and update ownership.
+
 The original #791 implementation sequence is #793–#800. The first seven
 deliveries below were natively merged and closed before #800 implementation.
 Their merge commits are ancestors of #800's accepted main base,
