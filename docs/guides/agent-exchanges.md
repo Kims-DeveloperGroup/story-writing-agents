@@ -33,7 +33,7 @@ next page’s first row. Vertical cursor movement preserves its preferred column
 
 Both forms install the required independent `jsonl-viewer` 0.6.0 from its exact
 HTTPS VCS requirement at
-`3bde78bd60d5c42db101ae97a5fa723b730c597a`. A first install normally needs
+`1490d84ac72442414963f73315594c77fa73c344`. A first install normally needs
 Git, network access, and repository access. Installation does not invoke a
 story provider, open an exchange, or enable a service. The historical
 `story-writing-agents[viewer]` and editable `'.[viewer]'` forms remain accepted
@@ -142,8 +142,8 @@ h/j/k/l cursor • Enter fold • ↑/↓ records • PgUp/PgDn • / search •
 This preview shows the renderer's topology, not a retained Story screenshot.
 The external repository owns the byte-tested renderer contract:
 
-- [Terminal design system and Story-hosted scenario](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/3bde78bd60d5c42db101ae97a5fa723b730c597a/docs/design-system.md)
-- [Sixteen deterministic complete sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/3bde78bd60d5c42db101ae97a5fa723b730c597a/docs/samples)
+- [Terminal design system and Story-hosted scenario](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/1490d84ac72442414963f73315594c77fa73c344/docs/design-system.md)
+- [Sixteen deterministic complete sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/1490d84ac72442414963f73315594c77fa73c344/docs/samples)
 
 Expanded records use well-formatted multiline JSON. The left gutter repeats
 the physical JSONL source-record line on continuation rows, so `g` can move to
@@ -460,7 +460,7 @@ Common bounded failures are:
 | No records for the session | Run the intended provider work; do not invoke it merely to manufacture diagnostics. |
 | Viewer 0.1.1, 0.2.0, 0.3.0, 0.4.0, 0.4.1, 0.4.2, 0.5.0, 0.5.1, 0.5.2, 0.5.3, or 0.5.4 remains after updating a checkout | Rerun the normal editable Story install to upgrade it to required 0.6.0; do not force or uninstall. |
 | Required viewer unavailable | Rerun the normal Story installation, then retry. The compatibility extra is not a separate repair path. |
-| Viewer 0.6.0 is installed but incompatible or damaged | Verify the approved exact pin, then use the bounded forced-repair path in Troubleshooting. |
+| Viewer 0.6.1 is installed but incompatible or damaged | Verify the approved exact pin, then use the bounded forced-repair path in Troubleshooting. |
 | Store busy | Retry after the concurrent exchange write completes. |
 | Unsafe, corrupt, or uncorrelatable records | Preserve the workspace and inspect the content-safe runtime diagnostic before retrying. |
 | Selected stream disappeared | Rerun `/exchanges` to refresh retained inventory. |
