@@ -832,11 +832,7 @@ class AgentExchangeStorageFaultTests(unittest.TestCase):
                 "_append_segment_line",
                 side_effect=OSError(errno.ENOSPC, "PRIVATE capacity failure"),
             ),
-            mock.patch.object(
-                storage_module,
-                "_release_advisory_lock",
-                side_effect=release_then_fail,
-            ),
+            mock.patch.object( storage_module, "_release_advisory_lock", side_effect=release_then_fail, ),
         ):
             _assert_storage_failure(
                 self,
@@ -852,11 +848,7 @@ class AgentExchangeStorageFaultTests(unittest.TestCase):
             original_release(descriptor)
             raise OSError(errno.EIO, "PRIVATE cleanup failure")
 
-        with mock.patch.object(
-            storage_module,
-            "_release_advisory_lock",
-            side_effect=release_then_fail,
-        ):
+        with mock.patch.object( storage_module, "_release_advisory_lock", side_effect=release_then_fail, ):
             error = _assert_storage_failure(
                 self,
                 AgentExchangeFailure.IO_FAILED,
@@ -884,11 +876,7 @@ class AgentExchangeStorageFaultTests(unittest.TestCase):
                 "_append_under_guard",
                 side_effect=KeyboardInterrupt("PRIVATE control"),
             ),
-            mock.patch.object(
-                storage_module,
-                "_release_advisory_lock",
-                side_effect=release_then_fail,
-            ),
+            mock.patch.object( storage_module, "_release_advisory_lock", side_effect=release_then_fail, ),
             self.assertRaisesRegex(KeyboardInterrupt, "PRIVATE control"),
         ):
             self.store.append(_input(exchange_id="interrupted"))
@@ -923,11 +911,7 @@ class AgentExchangeStorageFaultTests(unittest.TestCase):
                 raise OSError(errno.EIO, "PRIVATE state")
             original_replace(*args, **kwargs)  # type: ignore[arg-type]
 
-        with mock.patch.object(
-            storage_module,
-            "_atomic_replace_leaf",
-            side_effect=fail_stream_state,
-        ):
+        with mock.patch.object( storage_module, "_atomic_replace_leaf", side_effect=fail_stream_state, ):
             _assert_storage_failure(
                 self,
                 AgentExchangeFailure.IO_FAILED,
@@ -938,26 +922,16 @@ class AgentExchangeStorageFaultTests(unittest.TestCase):
 
         with (
             mock.patch.object(storage_module, "_SEGMENT_MAX_BYTES", 1_100),
-            mock.patch.object(
-                storage_module,
-                "_rotate_stream",
-                side_effect=OSError(errno.EIO, "PRIVATE rotate"),
-            ),
+            mock.patch.object( storage_module, "_rotate_stream", side_effect=OSError(errno.EIO, "PRIVATE rotate"), ),
         ):
             _assert_storage_failure(
                 self,
                 AgentExchangeFailure.IO_FAILED,
-                lambda: self.store.append(
-                    _input(exchange_id="rotation_failed", content="z" * 500)
-                ),
+                lambda: self.store.append( _input(exchange_id="rotation_failed", content="z" * 500) ),
             )
         with mock.patch.object(storage_module, "_SEGMENT_MAX_BYTES", 1_100):
-            recovered = self.store.append(
-                _input(exchange_id="rotation_after", content="z" * 500)
-            )
-            self.assertGreater(
-                recovered.workspace_sequence, after_state.workspace_sequence
-            )
+            recovered = self.store.append( _input(exchange_id="rotation_after", content="z" * 500) )
+            self.assertGreater( recovered.workspace_sequence, after_state.workspace_sequence )
             sequences = [record["sequence"] for record in _decoded_snapshot(self.store)]
             self.assertEqual(sequences, sorted(set(sequences)))
 
@@ -975,16 +949,8 @@ class AgentExchangeStorageFaultTests(unittest.TestCase):
             original_prune(directories, snapshot)  # type: ignore[arg-type]
 
         with (
-            mock.patch.object(
-                storage_module,
-                "AGENT_EXCHANGE_TOTAL_MAX_BYTES",
-                1_400,
-            ),
-            mock.patch.object(
-                storage_module,
-                "_prune_to_total",
-                side_effect=fail_over_capacity,
-            ),
+            mock.patch.object( storage_module, "AGENT_EXCHANGE_TOTAL_MAX_BYTES", 1_400, ),
+            mock.patch.object( storage_module, "_prune_to_total", side_effect=fail_over_capacity, ),
         ):
             _assert_storage_failure(
                 self,
@@ -996,11 +962,7 @@ class AgentExchangeStorageFaultTests(unittest.TestCase):
         raw = _active_path(self.workspace).read_bytes()
         self.assertTrue(raw.endswith(b"\n"))
         self.assertEqual(len(raw.splitlines()), 2)
-        with mock.patch.object(
-            storage_module,
-            "AGENT_EXCHANGE_TOTAL_MAX_BYTES",
-            1_400,
-        ):
+        with mock.patch.object( storage_module, "AGENT_EXCHANGE_TOTAL_MAX_BYTES", 1_400, ):
             self.store.append(_input(exchange_id="prune_after", content="p" * 500))
 
         original_replace = storage_module._atomic_replace_leaf
@@ -1012,16 +974,8 @@ class AgentExchangeStorageFaultTests(unittest.TestCase):
 
         with (
             mock.patch.object(storage_module, "_SEGMENT_MAX_BYTES", 4_000),
-            mock.patch.object(
-                storage_module,
-                "AGENT_EXCHANGE_TOTAL_MAX_BYTES",
-                1_400,
-            ),
-            mock.patch.object(
-                storage_module,
-                "_atomic_replace_leaf",
-                side_effect=fail_suffix,
-            ),
+            mock.patch.object( storage_module, "AGENT_EXCHANGE_TOTAL_MAX_BYTES", 1_400, ),
+            mock.patch.object( storage_module, "_atomic_replace_leaf", side_effect=fail_suffix, ),
         ):
             _assert_storage_failure(
                 self,
@@ -1032,11 +986,7 @@ class AgentExchangeStorageFaultTests(unittest.TestCase):
             )
         with (
             mock.patch.object(storage_module, "_SEGMENT_MAX_BYTES", 4_000),
-            mock.patch.object(
-                storage_module,
-                "AGENT_EXCHANGE_TOTAL_MAX_BYTES",
-                1_400,
-            ),
+            mock.patch.object( storage_module, "AGENT_EXCHANGE_TOTAL_MAX_BYTES", 1_400, ),
         ):
             self.store.append(_input(exchange_id="replace_after", content="q" * 500))
 

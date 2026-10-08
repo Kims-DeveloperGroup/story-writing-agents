@@ -1,10 +1,10 @@
 {
   "format_version": 1,
-  "protocol_id": "lead-editorial-effect-806-v1-draft",
+  "protocol_id": "lead-editorial-effect-806-v2-user-owned-draft",
   "status": "draft_pending_capture_inputs",
   "execution_authorized": false,
   "owning_issue": 806,
-  "technical_delivery_status": "implemented_prior_runtime_and_offline_tool; participant_grade_in_progress",
+  "technical_delivery_status": "participant_grade_under_review; user_participation_not_started",
   "effect_status": "not_run",
   "dataset": {
     "path": "lead-editorial-cases.json",
@@ -14,10 +14,11 @@
   },
   "rules_frozen_before_outputs": false,
   "freeze_gate": [
-    "exact approved provider/model/settings",
+    "exact currently selected provider/model/settings snapshot",
     "matched arms and exact source commits",
     "total call/token/cost limits",
-    "independent actual reviewer IDs and roles",
+    "actual user intent and participant ID with separate role records",
+    "honest participant count/blinding/independence disclosure",
     "protocol hash published before output access"
   ],
   "candidate_arms": {
@@ -49,7 +50,8 @@
     "total_call_cap": null,
     "total_token_cap": null,
     "total_cost_cap": null,
-    "approved_capture_source": null
+    "approved_capture_source": null,
+    "selection_policy": "Use the currently selected Story provider routes and native provider model/settings; snapshot exact values before outputs. User supplies author intent; no substitute model or invented intent."
   },
   "repeats": {
     "per_case_per_arm": 1,
@@ -121,14 +123,16 @@
     "owner": 809
   },
   "reviewers": {
-    "minimum_independent_roles": [
+    "required_role_records": [
       "author_intent",
       "reader_editor"
     ],
-    "minimum_distinct_people": 2,
+    "minimum_distinct_people": 1,
     "identities": [],
-    "role_policy": "Same person with two IDs or two roles does not meet independence. Real self-attribution is evidence, not authentication. Constructed intent is disclosed; intent reviewer evaluates the supplied brief rather than claiming to be its original author.",
-    "blinding": "Independent quality scoring reads only canonical anonymous review packet; mapping, provider/model and cost metadata withheld until quality records are frozen. Record seed and mapping separately."
+    "intent_owner": "user",
+    "review_owner": "user",
+    "role_policy": "The same real user records each perspective separately under the same true participant ID. Different roles or IDs do not establish independent people. Report self-attributed participant count and role coverage; single-person/two-perspective findings are personal pilot observations, not independent human replication. Identity is not authenticated.",
+    "blinding": "Quality collection shows anonymous A/B material without arm/model/cost mappings. Record actual prior knowledge honestly; do not falsely attest blinding. Keep mapping outside scoring until both role records are frozen. Constructed source fixtures remain disclosed."
   },
   "scoring": {
     "axes": [
@@ -154,12 +158,12 @@
     "uncertainty": "Retain explicit unobserved reason and case-level uncertainty in participant evidence."
   },
   "decision_rules": {
-    "case_improved": "Matched actual outputs and complete source-bound workflow observations; two distinct independent author-intent and reader/editor reviews with all five dimensions observed; no unresolved important error/protection breach or failed authority observation. Both reviewers score treatment intent higher, voice/error/restraint/approval burden no lower. Otherwise retain each dimension and classify honestly.",
-    "case_regression": "Any unresolved important error, protection breach or failed authority safeguard, or both reviewers score treatment lower on intent/voice/error/restraint. Disagreement remains visible.",
+    "case_improved": "Matched actual outputs and complete source-bound workflow observations; separate user author-intent and reader/editor records under the same participant ID with all five dimensions observed; no unresolved important error/protection breach or failed authority observation. Both recorded perspectives score treatment intent higher, voice/error/restraint/approval burden no lower. Otherwise retain each dimension and classify honestly.",
+    "case_regression": "Any unresolved important error, protection breach or failed authority safeguard, or both recorded perspectives score treatment lower on intent/voice/error/restraint. Disagreement remains visible.",
     "case_no_improvement": "Eligible complete reviews show equal dimension vectors and neither prefers treatment; no serious error/protection breach.",
     "case_mixed": "Complete eligible evidence has opposing reviewer judgments or gains on one dimension with losses on another, without a rule requiring regression.",
-    "case_insufficient": "Missing/mismatched outputs/settings, unsupported baseline, missing distinct independent author-intent and reader/editor people/rationales, unobserved any of five required dimensions (including approval burden without interaction context), or missing required workflow observations. Keep partial results but no complete effect/improvement claim.",
-    "overall": "No scalar aggregate. Report every case state and five-axis paired differences, disagreement, errors, protection and costs. Limited pilot can report observed improvement only if all nine included cases meet case_improved; any regression is surfaced; heterogeneous complete cases are mixed; missing included cases retain insufficient_data. Not a general literary-quality claim.",
+    "case_insufficient": "Missing/mismatched outputs/settings, unsupported baseline, missing actual user author-intent or reader/editor records/rationales, unobserved any of five required dimensions (including approval burden without interaction context), or missing required workflow observations. Keep partial results but no complete effect/improvement claim.",
+    "overall": "No scalar aggregate. Report every case state and five-axis paired differences, disagreement, errors, protection and costs. Limited pilot can report observed improvement only if all nine included cases meet case_improved; any regression is surfaced; heterogeneous complete cases are mixed; missing included cases retain insufficient_data. Not a general literary-quality claim. The same user supplies both perspectives; explicitly report this single-person design and do not claim independent replication or a population effect.",
     "effect_states": [
       "not_run",
       "insufficient_data",
@@ -168,7 +172,7 @@
       "regression",
       "mixed"
     ],
-    "completion": "Actual negative results can complete evaluation; absent real outputs or independent human records cannot close issue806 or parent791."
+    "completion": "Actual negative user-evaluated results can complete the bounded evaluation. Absent real outputs or genuine user role records cannot close issue806 or parent791. Report single-person limitations and all missing evidence."
   },
   "costs": {
     "retain": [

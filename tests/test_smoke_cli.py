@@ -228,6 +228,8 @@ class SmokeHelpAndTemporaryTests(unittest.TestCase):
                           else "not_observed")
             return answers + [preference] + (error_answers if case is packet["cases"][0] else ["no"])
         collected = []
+        participant = "SYNTHETIC_same_person"
+        shared_collected = []
         for role in ("author_intent", "reader_editor"):
             scripted = ["SYNTHETIC_" + role, "invalid_role", role, "yes", "yes"]
             for case in packet["cases"]:
@@ -268,6 +270,22 @@ class SmokeHelpAndTemporaryTests(unittest.TestCase):
                                 cell["rationale"] == 'SYNTHETIC passage reason\nUncertainty: SYNTHETIC uncertainty'
                                 for r in review["reviews"][1:] for side in r["ratings"].values()
                                 for cell in side.values()))
+            shared_scripted = list(scripted)
+            shared_scripted[0] = participant
+            shared_scripted[-5] = participant
+            shared_output = captures / ("synthetic-same-person-" + role)
+            shared_grade = editorial_run(
+                "grade", "--packet", blind_packet, "--out-dir", shared_output,
+                input_text="\n".join(shared_scripted) + "\n")
+            self.assertEqual(shared_grade.returncode, 0, shared_grade.stderr)
+            shared_review = json.loads((shared_output / "reviews.json").read_bytes())
+            self.assertEqual(
+                (shared_review["reviews"][0]["reviewer_id"], shared_review["reviews"][0]["role"]),
+                (participant, role))
+            self.assertEqual(shared_review["reviews"][0]["evidence"], {"kind": "review_record",
+                "path": shared_output.name + "/review-record.json",
+                "sha256": hashlib.sha256((shared_output / "review-record.json").read_bytes()).hexdigest()})
+            shared_collected.extend(shared_review["reviews"])
             collected.extend(review["reviews"])
         review["reviews"] = collected
         joined_reviews = captures / "synthetic-collected-reviews.json"
@@ -278,6 +296,39 @@ class SmokeHelpAndTemporaryTests(unittest.TestCase):
         self.assertEqual(compared.returncode, 0, compared.stderr)
         self.assertEqual(json.loads((packet_dir.parent / "synthetic-collected-comparison" /
                                     "comparison-report.json").read_bytes())["quality_conclusion"], "INCONCLUSIVE")
+        shared = dict(review, reviews=shared_collected)
+        shared_path = captures / "synthetic-same-person-reviews.json"
+        shared_path.write_text(json.dumps(shared))
+        shared_result = editorial_action(
+            "compare", dataset, captures / "captures.json", packet=blind_packet,
+            reviews=shared_path, output=packet_dir.parent / "synthetic-same-person-comparison")
+        self.assertEqual(shared_result.returncode, 0, shared_result.stderr)
+        shared_report = json.loads((packet_dir.parent / "synthetic-same-person-comparison" /
+                                    "comparison-report.json").read_bytes())
+        self.assertEqual(shared_report["cases"][0]["participants"], {
+            "self_attributed_ids": [participant], "count": 1,
+            "role_coverage": {"author_intent": [participant], "reader_editor": [participant]},
+            "identity_authenticated": False, "single_person_two_perspectives": True})
+        self.assertIn("Single-person, two-perspective evaluation; not independent human replication.",
+                      shared_report["cases"][0]["limitations"])
+        shared["reviews"].append(shared["reviews"][0])
+        shared_path.write_text(json.dumps(shared))
+        duplicate = editorial_action(
+            "compare", dataset, captures / "captures.json", packet=blind_packet,
+            reviews=shared_path, output=packet_dir.parent / "synthetic-same-role-duplicate")
+        self.assertEqual(duplicate.returncode, 2, duplicate.stderr)
+        self.assertFalse((packet_dir.parent / "synthetic-same-role-duplicate").exists())
+        altered = review["reviews"][0]
+        altered["ratings"]["A"]["intent_fulfillment"]["score"] = 0
+        joined_reviews.write_text(json.dumps(review))
+        rejected = editorial_action(
+            "compare", dataset, captures / "captures.json", packet=blind_packet,
+            reviews=joined_reviews, output=packet_dir.parent / "synthetic-altered-comparison")
+        self.assertEqual(rejected.returncode, 2, rejected.stderr)
+        self.assertFalse((packet_dir.parent / "synthetic-altered-comparison").exists())
+        self.assertEqual(
+            hashlib.sha256((captures / altered["evidence"]["path"]).read_bytes()).hexdigest(),
+            altered["evidence"]["sha256"])
 
     def test_real_temporary_cli_is_compact_json_and_provider_free(self) -> None:
         completed = subprocess.run(

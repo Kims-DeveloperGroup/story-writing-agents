@@ -141,7 +141,8 @@ REVIEWS = {
 LIMITATION = (
     'Hashes bind supplied bytes, not provider/human authenticity, audit semantics or '
     'genuine blinding. No automatic improvement assessment; synthetic data is '
-    'mechanics-only.'
+    'mechanics-only. Participant IDs are self-attributed, not authenticated. '
+    'Two perspectives from one person are not independent human replication.'
 )
 SCORING_NOTE = (
     'Required confirmations are safeguards. Missing interaction context requires a '
@@ -535,6 +536,35 @@ def _prepare(data):
     )
 
 
+def _bind_grade_record(raw, review, packet, packet_sha):
+    if raw is None:
+        return
+    try:
+        record = json.loads(raw)
+    except (ValueError, RecursionError):
+        return
+    if type(record) is not dict or not (
+            {'self_attributed', 'identity_authenticated', 'review_packet_sha256'} & record.keys()):
+        return
+    _check(record, {'format_version': VERSION, 'comparison_id': ID, 'review_packet_sha256': SHA,
+                    'reviewer_id': ID, 'role': _enum('author_intent', 'reader_editor'),
+                    'self_attributed': ('any',), 'identity_authenticated': ('any',),
+                    'constructed_fixtures': ('any',), 'reviews': ('list', REVIEW, 9)})
+    _need(raw == _canonical(record) + b'\n', 'participant record is not canonical current JSON')
+    _need(record['self_attributed'] is True and record['identity_authenticated'] is False and
+          type(record['constructed_fixtures']) is bool and
+          record['constructed_fixtures'] == packet['constructed_fixtures'], 'participant record identity/fixture mismatch')
+    _need(record['reviewer_id'] == review['reviewer_id'] and record['role'] == review['role'],
+          'review identity does not match participant record')
+    _grade_validate(packet, {key: record[key] for key in
+                            ('format_version', 'comparison_id', 'review_packet_sha256', 'reviews')}, packet_sha)
+    _need(all(row['evidence'] is None and row['reviewer_id'] == record['reviewer_id'] and
+              row['role'] == record['role'] and row['evidence_kind'] in ('human_blinded', 'human_unblinded')
+              for row in record['reviews']), 'participant record rows are inconsistent')
+    expected = next(row for row in record['reviews'] if row['case_id'] == review['case_id'])
+    _need(dict(review, evidence=None) == expected, 'review does not match immutable participant record')
+
+
 def _reviews(data, packet, reviews_path):
     reviews, raw = _json(reviews_path)
     _check(reviews, REVIEWS)
@@ -545,7 +575,7 @@ def _reviews(data, packet, reviews_path):
         ),
         'review packet binding mismatch',
     )
-    _unique([(item["reviewer_id"], item["case_id"]) for item in reviews["reviews"]])
+    _unique([(item["reviewer_id"], item['role'], item["case_id"]) for item in reviews["reviews"]])
     indexed = {case["case_id"]: case for case in packet["cases"]}
     for review in reviews["reviews"]:
         _need(review["case_id"] in indexed, "unknown review case")
@@ -554,7 +584,8 @@ def _reviews(data, packet, reviews_path):
             sum((item['case_id'] == review['case_id'] for item in reviews['reviews'])) <= 16,
             'reviewer limit exceeded',
         )
-        data["artifacts"].read(review["evidence"], "review_record")
+        evidence = data["artifacts"].read(review["evidence"], "review_record")
+        _bind_grade_record(evidence, review, packet, reviews["review_packet_sha256"])
         for side in "AB":
             for axis, rating in review["ratings"][side].items():
                 if rating["score"] is not None:
@@ -662,6 +693,14 @@ def _compare(data, packet, mapping, reviews, reviews_sha):
             ):
                 eligible.add(review["role"])
         limitations = [LIMITATION]
+        participant_ids = sorted({row['reviewer_id'] for row in rows
+                                  if row['evidence_kind'] in {'human_blinded', 'human_unblinded'}})
+        role_coverage = {role: sorted({row['reviewer_id'] for row in rows
+                                      if row['role'] == role and row['evidence_kind'] in {'human_blinded', 'human_unblinded'}})
+                         for role in ('author_intent', 'reader_editor')}
+        single_person = len(participant_ids) == 1 and all(role_coverage.values())
+        if single_person:
+            limitations.append('Single-person, two-perspective evaluation; not independent human replication.')
         if "repository_commit" in differences and captures["comparison_kind"] == "before_after":
             limitations.append("Declared before/after repository difference is the treatment.")
         if condition_status != "matched":
@@ -746,6 +785,13 @@ def _compare(data, packet, mapping, reviews, reviews_sha):
                 },
                 'cost_missing': cost_missing,
                 'reviews': rows,
+                'participants': {
+                    'self_attributed_ids': participant_ids,
+                    'count': len(participant_ids),
+                    'role_coverage': role_coverage,
+                    'identity_authenticated': False,
+                    'single_person_two_perspectives': single_person,
+                },
                 'disagreements': {'preferences': len(preferences) > 1, 'axes': disagreements},
                 'evidence_status': ('PAIRED_EVIDENCE_AVAILABLE' if complete else 'INCONCLUSIVE'),
                 'limitations': limitations,
