@@ -313,3 +313,8 @@ reports. The [constructed example](lead-editorial-offline-example/comparison/com
 is INCONCLUSIVE about editorial quality; no live provider or human evaluation
 was performed. See the [delivery audit](lead-editorial-delivery-audit.md) for
 integrated software safeguards and separate effect/integration follow-ups.
+
+
+## Actual effect evaluation (#806)
+
+The [effect-evaluation record](lead-editorial-effect-evaluation.md) and [draft preregistration](lead-editorial-effect-plan.json) distinguish implemented mechanics from actual paired outputs and independent human judgment. The protocol remains a draft until capture limits, arms and participants are fixed before output access. Current effect status is not run.
