@@ -228,6 +228,40 @@ An important error or degraded protected voice must remain visible even when
 other dimensions improve. Nine constructed cases do not establish quality
 across novels, genres, authors, languages, or production provider versions.
 
+### State-transition evidence handoff (#812 to #813)
+
+Handoff format version 1 identifies the current source commit and exact runtime
+reports for UC1–UC4. These cases assess state and authority; creative-quality
+claims still require #806's actual matched provider runs and independent human
+author-intent and reader/editor evaluations. The participant tool must provide
+a shell UI. A deterministic fake-provider trace supplies no human evaluation.
+
+| Case | Required trace and pins | Authority observations |
+| --- | --- | --- |
+| UC1: partial A-to-B adoption, condition change, restart | Source report/idea/full digest, exact range/selected digest, owner task/revision, proposal/candidate/source digests, all reviewer domains and per-task call/round counters. | Fresh owner authority; old candidate, Confirm and Apply refused; actual Apply distinguished from recorded direction. |
+| UC2: unresolved owner control | Owner conversation, current state, pending Apply/Commit or recovery control, before/after events and physical calls. | New exploration/adoption refused provider-free; a conversation switch grants no bypass. |
+| UC3: unavailable or changed source | Original source event/digest and selected bytes, changed/missing source evidence, decision outcome and calls. | No substitution, silent reselection or stale authority; a later unrelated report preserves an intact captured pin. |
+| UC4: explicit review-only adoption | Exact USER-supplied selected bytes, REVIEW_ONLY task/revision, confirmed assignments, actual review report and restarted inspection. | Actual report retained; no rewrite, draft, Apply or write authority inherited. |
+
+For each row, record the runner ID, source HEAD/tree, report hash, filesystem and
+SQLite observations where applicable, actual calls, supported and unsupported
+seams, and the related #813 assertion risk. The requirements above and executable
+carrier map below identify what each retained assertion observes. Complete
+current-source CI and its source identity belong in the #812 PR Evidence record.
+No old-version compatibility or migration is part of these cases.
+
+
+The #812 executable carrier map for #800/#813 is:
+
+| Case | Existing canonical test carrier | Trace actually asserted |
+| --- | --- | --- |
+| UC1 | `tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_draft_integrates_exact_all_role_review_apply_and_storage_parity` | Exact partial source-A input, fresh owner-B task@1, all affected draft/review domains, changed source and restart refusing stale Confirm, fresh changed-condition task and current identical final candidate, old/new task budgets retained separately, actual first Apply and rejected later Apply, filesystem/SQLite event parity. |
+| UC2 | `tests.test_lead_artifact_application.LeadArtifactApplicationTests.test_request_is_exact_visible_and_free_form_text_has_no_authority`; `tests.test_lead_story_commit.LeadStoryCommitTests.test_request_is_inspectable_and_reject_is_zero_git_mutation`; `tests.test_lead_orchestration.LeadRecoveryAndAccountingTests.test_unresolved_running_becomes_outcome_unknown_without_provider` | Cross-owner new exploration/adoption cannot bypass pending Apply, pending Commit or unknown running outcome; exact owner history and physical calls remain unchanged on refusal. |
+| UC3 | `tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_cross_conversation_selection_preserves_scope_and_rejects_workflow_relabel`; UC1 carrier above | Foreign-session, wrong-digest and stale-intake sources refused without mutation; later report preserves an intact captured pin, old intake cannot silently reselect it, restarted stale controls fail. |
+| UC4 | `tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_review_rejects_empty_reference_but_accepts_explicit_user_candidate` | Exact selected supplied bytes, explicit Review-only scope, actual specialist report and restarted inspection; no rewrite, artifact objective, Apply or Commit request, and unchanged artifact bytes. |
+
+Observed during #812 implementation: the UC1 carrier passes on runtime-v6/tests-v4 in Diagnostic04, including live original/new task@1 statuses and separate two-round/ten-call histories, current final review and filesystem/SQLite parity. UC4 passes on runtime-v7/tests-v4 in Diagnostic05, including actual review and restarted inspection without rewriting or artifact changes. These are synthetic-provider contract checks. Use the #812 PR Evidence record for their exact source manifests/report hashes and for the later committed source and complete current-source reports. Diagnostic reruns are partial; they cannot be combined with earlier results into full CI. These runtime assertions do not establish provider performance or creative quality. #806 still requires actual matched provider runs and independent author-intent and reader/editor human evaluations through the participant shell UI.
+
 ### Editorial-memory and delivery-capacity boundary (#799, #811)
 
 The delivered #799 editorial memory supports decision discovery and restoration;

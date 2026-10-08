@@ -177,14 +177,31 @@ Existing pending decisions and recovery conditions retain priority. Restart or
 conversation switching preserves the report's attribution without retaining
 exploration as a standing mode.
 
-Adoption selects one whole idea from a durable result in the current focused
-conversation and session, plus the exact target paths. The runtime checks the
-result and idea identity and material digest, preserves the selected text, and
-starts a fresh task at revision 1. It requires ordinary drafting or revision,
-affected specialist duties, complete review of the same final candidate and a
-new proposal confirmation. Adoption grants no draft, review, Apply or Commit
-authority. Stale, foreign or modified selections are rejected; partial-range
-adoption is outside this interface.
+Adoption selects one whole idea or an exact character range from the latest
+typed report in any conversation of the same session. The focused conversation
+owns the new task; the source conversation supplies input only. Range bounds are
+zero-based Unicode code points, start included and end excluded. Selected text
+retains its original whitespace and Unicode bytes.
+
+Choose Authoring or Review only explicitly. Authoring starts fresh drafting or
+revision, affected specialist work and complete review of the final candidate.
+Review only evaluates the exact selected supplied text and persists the actual
+review report without rewriting it. Both begin a fresh task at revision 1 and
+require a new proposal confirmation. Neither imports draft, READ, review,
+Confirm, Apply or Commit authority from the source.
+
+The capture pins the source conversation, report event and digest, idea identity,
+full material digest, selected range and selected-text digest. A later report
+does not replace an already captured source. A missing or changed pinned source
+fails closed on inspection or decision, including after restart. New selections
+must use the latest report. Invalid ranges or unavailable sources are refused
+before a new USER capture or provider submission.
+
+An unresolved Apply, Commit, prepared/executing operation or recovery boundary in
+any session conversation blocks new exploration or adoption. The error names
+the owning conversation and its required control. Resolve that control there;
+switching conversations does not bypass it. This priority applies to explicit
+exploration/adoption admission; ordinary discussion keeps its existing rules.
 
 ## Editorial decisions
 

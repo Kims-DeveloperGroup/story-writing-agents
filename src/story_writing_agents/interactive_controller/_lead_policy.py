@@ -12,7 +12,8 @@ import inspect
 import uuid
 from collections.abc import Awaitable, Callable
 
-from ..lead_exploration import LeadInteractionMode, ExplorationAdoptionSelection
+from ..lead_exploration import LeadInteractionMode, ExplorationAdoptionSelection, material_sha256
+from ..specialist_routing import AuthoringIntent
 from ..lead_premise_decisions import (
     PremiseDecisionSelection, PremiseDecisionAction, PremiseChoicePolicy, PremiseAllowedChoice, PremiseAuthoringTaskRef,
 )
@@ -306,36 +307,84 @@ class InteractiveLeadAdapter:
         write_task_status(self._session.inspect_lead_collaboration(conversation_id))
         return False
 
-    def adopt(self, conversation_id: str) -> bool:
-        """Bind one visible whole idea and explicit targets to a fresh normal task."""
-        events = self._read_events(conversation_id) if self._read_events is not None else ()
-        reports = tuple(event for event in events if type(event.payload) is CollaborationLeadExplorationResultPayload)
-        if not reports or not reports[-1].payload.report.ideas:
-            self._semantic_output.write_component(Notice("Explore ideas in this focused conversation before adopting one.", label="Exploration (provisional)", role=SemanticRole.INFO))
+    def adopt(self, conversation_id: str, *, source_choices: tuple[tuple[str, CollaborationEvent], ...] = ()) -> bool:
+        """Select exact whole or partial same-session idea input for a fresh owner task."""
+        if not source_choices:
+            events = self._read_events(conversation_id) if self._read_events is not None else ()
+            reports = tuple(event for event in events if type(event.payload) is CollaborationLeadExplorationResultPayload)
+            source_choices = ((conversation_id, reports[-1]),) if reports else ()
+        source_choices = tuple((label, event) for label, event in source_choices if event.payload.report.ideas)
+        if not source_choices:
+            self._semantic_output.write_component(Notice("Explore first; no selectable ideas are available.", role=SemanticRole.INFO))
             return False
-        source = reports[-1]
-        outcome = self._picker.read_picker(Prompt("Selected whole idea", instruction="Choose one provisional idea from this focused conversation."),
-            tuple(Choice(idea.idea_id, f"{index + 1}. {idea.kind.value}", description=idea.material_text) for index, idea in enumerate(source.payload.report.ideas)))
-        if outcome.kind is ControlOutcomeKind.EOF:
+        source_pick = self._picker.read_picker(Prompt("Source conversation"), tuple(
+            Choice(event.conversation_id, label, description=event.conversation_id) for label, event in source_choices))
+        if source_pick.kind is ControlOutcomeKind.EOF:
             return True
-        if outcome.kind is not ControlOutcomeKind.COMMIT or outcome.text is None:
+        if source_pick.kind is not ControlOutcomeKind.COMMIT or source_pick.text is None:
             return False
-        idea = next((item for item in source.payload.report.ideas if item.idea_id == outcome.text), None)
+        source = next((event for _, event in source_choices if event.conversation_id == source_pick.text), None)
+        if source is None:
+            raise BackendProtocolError("selected exploration source is unavailable")
+        idea_pick = self._picker.read_picker(Prompt("Selected provisional idea"), tuple(
+            Choice(idea.idea_id, f"{number + 1}. {idea.kind.value}", description=idea.material_text)
+            for number, idea in enumerate(source.payload.report.ideas)))
+        if idea_pick.kind is ControlOutcomeKind.EOF:
+            return True
+        if idea_pick.kind is not ControlOutcomeKind.COMMIT or idea_pick.text is None:
+            return False
+        idea = next((item for item in source.payload.report.ideas if item.idea_id == idea_pick.text), None)
         if idea is None:
-            raise BackendProtocolError("selected idea is unavailable in the focused report")
-        targets = self._prompt.read_prompt(Prompt("Target paths", instruction="Enter canonical relative artifact paths, one per line. Adoption starts fresh author drafting and requires Confirm."))
+            raise BackendProtocolError("selected exploration idea is unavailable")
+        extent = self._picker.read_picker(Prompt("Selected extent"), (
+            Choice("whole", "Whole idea"), Choice("partial", "Exact character range",
+                  description="Zero-based Unicode code points; start included, end excluded.")))
+        if extent.kind is ControlOutcomeKind.EOF:
+            return True
+        if extent.kind is not ControlOutcomeKind.COMMIT or extent.text not in {"whole", "partial"}:
+            return False
+        start = end = None
+        if extent.text == "partial":
+            bounds = self._prompt.read_prompt(Prompt(f"Character range START:END (0 through {len(idea.material_text)})"))
+            if bounds.kind is ControlOutcomeKind.EOF:
+                return True
+            if bounds.kind is not ControlOutcomeKind.COMMIT or bounds.text is None:
+                return False
+            try:
+                start, end = (int(value) for value in bounds.text.split(":"))
+            except (TypeError, ValueError):
+                self._semantic_output.write_component(Notice("Use one explicit START:END range.", label="Adoption refused", role=SemanticRole.ERROR))
+                return False
+        intent_pick = self._picker.read_picker(Prompt("Selected use"), (
+            Choice(AuthoringIntent.AUTHORING.value, "Authoring", description="Fresh confirmed drafting and review."),
+            Choice(AuthoringIntent.REVIEW_ONLY.value, "Review only", description="Evaluate exact supplied text without rewriting it.")))
+        if intent_pick.kind is ControlOutcomeKind.EOF:
+            return True
+        if intent_pick.kind is not ControlOutcomeKind.COMMIT or intent_pick.text not in {item.value for item in AuthoringIntent}:
+            return False
+        targets = self._prompt.read_prompt(Prompt("Target paths (one canonical path per line)"))
         if targets.kind is ControlOutcomeKind.EOF:
             return True
         if targets.kind is not ControlOutcomeKind.COMMIT or targets.text is None:
             return False
         try:
-            selection = ExplorationAdoptionSelection(conversation_id, source.event_id, idea.idea_id, idea.material_digest, tuple(line.strip() for line in targets.text.splitlines() if line.strip()))
+            selection = ExplorationAdoptionSelection(source.conversation_id, source.event_id, idea.idea_id, idea.material_digest,
+                tuple(line.strip() for line in targets.text.splitlines() if line.strip()), start, end, AuthoringIntent(intent_pick.text))
+            selected = selection.select_text(idea.material_text)
         except (TypeError, ValueError) as failure:
-            self._semantic_output.write_component(Notice(str(failure), label="Target paths", role=SemanticRole.ERROR))
+            self._semantic_output.write_component(Notice(str(failure), label="Adoption refused", role=SemanticRole.ERROR))
             return False
-        self._semantic_output.write_component(Panel("Selected whole idea", (Field("Source conversation", conversation_id), Message("Provisional idea", idea.material_text), Field("Target paths", "\n".join(selection.target_paths)))))
+        self._semantic_output.write_component(Panel("Selected idea input", (
+            Field("Source conversation", source.conversation_id), Field("Source result", source.event_id),
+            Field("Owner conversation", conversation_id),
+            Field("Range", "Whole idea" if start is None else f"[{start}, {end}) Unicode code points"),
+            Field("Source material digest", idea.material_digest), Field("Selected text digest", material_sha256(selected)),
+            Message("Exact selected text", selected),
+            Field("Selected use", selection.intent.value), Field("Target paths", "\n".join(selection.target_paths)))))
         try:
-            return self.submit(conversation_id, "Draft the selected whole provisional idea for the exact chosen targets.", adoption=selection)
+            text = ("Review the exact selected supplied text without rewriting it." if selection.intent is AuthoringIntent.REVIEW_ONLY
+                    else "Draft from the exact selected provisional idea for the chosen targets.")
+            return self.submit(conversation_id, text, adoption=selection)
         except ValueError as failure:
             self._semantic_output.write_component(Notice(str(failure), label="Adoption refused", role=SemanticRole.ERROR))
             return False

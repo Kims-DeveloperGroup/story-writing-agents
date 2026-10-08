@@ -3,6 +3,7 @@
 from functools import partial
 from tests.test_collaboration_events import editorial, editorial_request
 import asyncio
+import hashlib
 import json
 import story_writing_agents.lead_task_transitions as task
 from tests.test_lead_orchestration import _discussion_reply
@@ -321,7 +322,11 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
 
     async def test_review_rejects_empty_reference_but_accepts_explicit_user_candidate(self):
         self.workspace.path(OUTLINE).write_bytes(b"")
-        bad = await self.proposal_for(self.conversation(), scoped_proposal(PLOT_ARCHITECT, activity="review", candidate_ids=("reference_1",)), text="Assess the concrete candidate ${core_documents/global_outline.md}.")
+        bad_conversation = self.conversation("Rejected empty review source")
+        bad = await self.proposal_for(
+            bad_conversation, scoped_proposal(PLOT_ARCHITECT, activity="review", candidate_ids=("reference_1",)),
+            text="Assess the concrete candidate ${core_documents/global_outline.md}.",
+        )
         self.assertIsNone(bad.proposal)
         conversation = self.conversation()
         original, before = "완성 원고.\r\nCafé.  \r\n", self.artifact_bytes()
@@ -336,6 +341,44 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(self.artifact_bytes(), before)
         self.assertTrue(all(request is None for request in (reviewed.turn.artifact_application_request, reviewed.turn.story_commit_request)))
         self.assertFalse(any(type(e.payload) in (c.ArtifactObjectivePayload, c.ArtifactObjectivePayloadV2) for e in self.history(conversation)))
+
+        self.backend.enqueue(_visible_outcome("answer", "The rejected empty review remains unexecuted."))
+        await self.runtime.lead_turn(self.session_id, bad_conversation, "Resolve the failed interpretation.")
+        source, owner = self.conversation("Review source A"), self.conversation("Selected review owner B")
+        supplied = "Unused prefix.\n" + original + "\nUnused suffix."
+        self.backend.enqueue(_exploration_outcome(supplied))
+        await self.runtime.lead_turn(self.session_id, source, "Explore supplied review alternatives.",
+                                     interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
+        event = next(e for e in self.history(source) if type(e.payload) is c.CollaborationLeadExplorationResultPayload)
+        start = len("Unused prefix.\n")
+        selection = replace(_adoption_selection(source, event, (OUTLINE,)), start_character=start,
+                            end_character=start + len(original), intent=AuthoringIntent.REVIEW_ONLY)
+        selected = await self.proposal_for(owner, scoped_proposal(PLOT_ARCHITECT, activity="review",
+            intent="review_only", candidate_ids=("adopted_idea",),
+            mutate=lambda value, _material: value["proposal"]["assignments"][0].update(
+                input_ids=["adopted_idea"])), adoption=selection)
+        self.assertIsNotNone(selected.proposal, selected)
+        self.assertEqual(selected.proposal.assignments[0].review_basis.candidate_input_ids, ("adopted_idea",))
+        self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome(message="Selected supplied review findings."))
+        result = await self.runtime.decide_lead_step(_decision(selected, c.CollaborationConfirmationDecision.CONFIRM))
+        delivered = [item["conversation_event"]["capture"]["selected_text"]
+                     for agent, call in self.backend.call_records
+                     if agent == PLOT_ARCHITECT for item in _workflow_material(call.payload)["inputs"]
+                     if item["input_id"] == "adopted_idea"]
+        self.assertEqual(delivered, [original])
+        self.assertEqual((result.turn.message, result.turn.artifact_application_request,
+                          result.turn.story_commit_request),
+                         ("Selected supplied review findings.", None, None))
+        retained = self.history(owner)
+        projection = c.project_collaboration_history(retained)
+        self.assertIsNotNone(projection.execution_result)
+        restarted = StoryRuntime(self.control_workspace, backend=self.backend)
+        self.assertEqual(restarted.conversation_storage_services.event_store.read(self.session_id, owner), retained)
+        self.assertEqual(restarted.inspect_lead_collaboration(self.session_id, owner).execution_result,
+                         projection.execution_result)
+        self.assertEqual(self.artifact_bytes(), before)
+        self.assertFalse(restarted.inspect_lead_collaboration(self.session_id, owner).artifact_objectives)
 
     async def test_wrong_task_pair_rejects_before_dispatch(self):
         def wrong_pair(value, material): value["authoring_scope"]["task_revision"] += 1
@@ -357,16 +400,32 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertIsNotNone(continued.proposal, continued)
         self.assertEqual(continued.proposal.authoring_scope.task_id, selected)
         self.assertEqual(self.history(original_conversation), prefix)
+        self.backend.enqueue(_visible_outcome("answer", "The workflow relabel remains rejected."))
+        await self.runtime.lead_turn(self.session_id, bad.conversation_id, "Resolve the rejected interpretation.")
         source, foreign_focus = self.conversation("Current provisional source"), self.conversation("Foreign focus")
         self.backend.enqueue(_exploration_outcome())
         await self.runtime.lead_turn(self.session_id, source, "Explore alternatives.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
         event = next(event for event in self.history(source) if event.kind is c.CollaborationEventKind.LEAD_EXPLORATION_RESULT)
         selection = _adoption_selection(source, event, (OUTLINE,))
         before = (self.history(source), self.history(foreign_focus), len(self.backend.calls))
-        for focus, choice in ((foreign_focus, selection), (source, replace(selection, material_digest="0" * 64)), (source, replace(selection, result_event_id="stale-current-result"))):
+        for focus, choice in (
+            (foreign_focus, replace(selection, source_conversation_id="foreign-session-source")),
+            (source, replace(selection, material_digest="0" * 64)),
+            (source, replace(selection, result_event_id="stale-current-result")),
+        ):
             with self.assertRaises(ValueError):
                 await self.runtime.lead_turn(self.session_id, focus, "Adopt the selected whole idea.", adoption=choice)
         self.assertEqual((self.history(source), self.history(foreign_focus), len(self.backend.calls)), before)
+
+        adopted = await self.proposal_for(foreign_focus, scoped_proposal(PLOT_ARCHITECT,
+                                          candidate_ids=("adopted_idea",)), adoption=selection)
+        self.assertIsNotNone(adopted.proposal, adopted)
+        capture = next(e.payload.capture for e in self.history(foreign_focus)
+                       if type(e.payload) is c.CollaborationExplorationAdoptionPayload)
+        self.assertEqual((capture.selection.source_conversation_id, capture.fresh_task_id, capture.task_revision),
+                         (source, adopted.proposal.authoring_scope.task_id, 1))
+        self.assertNotEqual(capture.fresh_task_id, selected)
+        self.assertEqual(self.history(source), before[0])
 
     async def test_draft_task_cannot_skip_current_revision_drafting_via_review_artifact_intent(self):
         conversation = self.conversation()
@@ -419,15 +478,20 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         conversation = self.conversation()
         before = self.artifact_bytes()
         premise = "Synthetic tidal city 한글\r\nKeep the stated limit.  "
-        self.backend.enqueue(_exploration_outcome(premise))
-        explored = await self.runtime.lead_turn(self.session_id, conversation, "Explore a provisional setting.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
+        source_conversation = self.conversation("Provisional source A")
+        source_text = "Discarded prefix.\n" + premise + "\nUnselected ending."
+        self.backend.enqueue(_exploration_outcome(source_text))
+        explored = await self.runtime.lead_turn(self.session_id, source_conversation, "Explore a provisional setting.",
+                                                interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
         self.assertIs(explored.kind, c.LeadOutcomeKind.EXPLORATION)
         self.assertEqual(tuple(getattr(explored, key) for key in ("proposal", "artifact_proposal", "artifact_application_request", "story_commit_request", "recommendation_request", "confirmation_request_id")), (None,) * 6)
         self.assertEqual(self.artifact_bytes(), before)
-        exploration_prefix = self.history(conversation)
+        exploration_prefix = self.history(source_conversation)
         self.assertEqual(c.project_collaboration_history(exploration_prefix).artifact_objectives, ())
         result_event = next(e for e in exploration_prefix if type(e.payload) is c.CollaborationLeadExplorationResultPayload)
-        selection = _adoption_selection(conversation, result_event, (path,))
+        start = len("Discarded prefix.\n")
+        selection = replace(_adoption_selection(source_conversation, result_event, (path,)),
+                            start_character=start, end_character=start + len(premise))
         self.assertEqual(tuple((call.call_id, call.invocation_kind) for call in _submitted_calls(exploration_prefix)), ((explored.exploration.provider_call_id, c.CollaborationInvocationKind.LEAD_EXPLORATION),))
         def mixed(value, material):
             scope = value["authoring_scope"]
@@ -448,6 +512,10 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         capture = drafted.proposal.basis.shared_premises
         adoption_event = next(e for e in self.history(conversation) if type(e.payload) is c.CollaborationExplorationAdoptionPayload)
         self.assertEqual(adoption_event.payload.capture.selection, selection)
+        self.assertEqual(adoption_event.payload.capture.source_event_digest,
+                         hashlib.sha256(c.encode_collaboration_event(result_event)).hexdigest())
+        self.assertEqual(adoption_event.payload.capture.selected_material_digest, exploration.material_sha256(premise))
+        self.assertNotEqual(selection.material_digest, adoption_event.payload.capture.selected_material_digest)
         self.assertEqual(adoption_event.payload.capture.selected_text.encode("utf-8"), premise.encode("utf-8"))
         self.assertEqual((drafted.proposal.authoring_scope.task_id, drafted.proposal.authoring_scope.task_revision), (adoption_event.payload.capture.fresh_task_id, 1))
         self.assertIs(drafted.interaction_mode, exploration.LeadInteractionMode.ORCHESTRATION)
@@ -489,7 +557,8 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             self.backend.enqueue_for(assignment.specialist_id, _specialist_outcome("supports", "The exact integrated candidate preserves the assigned domain."))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _artifact_synthesis_outcome())
         reviewed = await self.runtime.decide_lead_step(_decision(proposed,c.CollaborationConfirmationDecision.CONFIRM))
-        self.assertEqual(len(_submitted_calls(self.history(conversation)[len(exploration_prefix):])), 10, [(actor, call.call_kind.value) for actor, call in self.backend.call_records])
+        self.assertEqual(len(_submitted_calls(self.history(conversation))), 10,
+                         [(actor, call.call_kind.value) for actor, call in self.backend.call_records])
         review_frames = [_workflow_material(call.payload) for actor, call in self.backend.call_records if actor in ROSTER][-3:]
         review_candidates = [next(item["artifact_candidate"] for item in frame["inputs"] if item["input_id"] == candidate_inputs[0].input_id) for frame in review_frames]
         self.assertEqual(review_candidates, [review_candidates[0]] * len(ROSTER))
@@ -504,6 +573,10 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertTrue(self.workspace.path(path).read_text().startswith("Summons leads"))
         self.assertIsNotNone(applied.commit_request)
         await self.runtime.decide_story_commit(_commit_decision(applied, StoryCommitDecision.REJECT))
+        completed = self.runtime.inspect_lead_collaboration(self.session_id, conversation)
+        self.assertEqual((completed.rounds_spent, completed.physical_calls_spent), (2, 10))
+        submitted = _submitted_calls(self.history(conversation))
+        self.assertEqual(len({(item.invocation_id, item.call_id) for item in submitted}), 10)
         for failure, code in ((ConnectionError("Known adoption failure"), c.CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED), (asyncio.CancelledError(), c.CollaborationLeadOutcomeFailureCode.CANCELLED)):
             self.backend.enqueue(_SubmittedFailure(failure))
             if code is c.CollaborationLeadOutcomeFailureCode.CANCELLED:
@@ -534,6 +607,90 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.backend.enqueue(status)
         await self.runtime.lead_turn(self.session_id,self.conversation(),"Report the recorded application status.")
         self.assertNotIn(task_id,{item["task_id"] for item in offered})
+        self.backend.enqueue(_exploration_outcome("Changed condition: retain the revised tide boundary."))
+        await self.runtime.lead_turn(self.session_id, source_conversation, "Explore the changed condition.",
+                                     interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
+        restarted = StoryRuntime(self.control_workspace, backend=self.backend)
+        owner_history, calls = self.history(conversation), len(self.backend.calls)
+        self.assertEqual(restarted.inspect_lead_collaboration(self.session_id, conversation),
+                         self.runtime.inspect_lead_collaboration(self.session_id, conversation))
+        with self.assertRaises(ValueError):
+            await restarted.decide_lead_step(_decision(proposed, c.CollaborationConfirmationDecision.CONFIRM))
+        new_owner = self.conversation("Changed-condition fresh task")
+        with self.assertRaisesRegex(ValueError, "latest"):
+            await restarted.lead_turn(self.session_id, new_owner, "Do not reuse the old choice.", adoption=selection)
+        self.assertEqual((self.history(conversation), len(self.backend.calls)), (owner_history, calls))
+        latest = next(e for e in reversed(self.history(source_conversation))
+                      if type(e.payload) is c.CollaborationLeadExplorationResultPayload)
+        fresh_path = "manuscript/part-01/changed-condition.md"
+        fresh_selection = _adoption_selection(source_conversation, latest, (fresh_path,))
+        condition_before = self.artifact_bytes()
+        def changed_recommend(call, provider):
+            material = _workflow_material(call.payload)
+            source_id = next(reply["reply_event_id"] for reply in material["replies"] if reply["mode"] == "draft")
+            return _synthesis_outcome(recommended_action=action(target_paths=(fresh_path,),
+                       source_ids=("user_input", "adopted_idea", source_id)))(call, provider)
+        fresh, fresh_draft = await self.finish_draft(new_owner, response=scoped_proposal(*ROSTER,
+                    paths=(fresh_path,), domains=("plot_structure", "character_world", "tone_execution"),
+                    candidate_ids=("adopted_idea",)), adoption=fresh_selection, synthesis=changed_recommend)
+        self.assertIsNotNone(fresh.proposal, fresh)
+        self.assertNotEqual(fresh.proposal.authoring_scope.task_id, task_id)
+        self.assertEqual((fresh.proposal.authoring_scope.task_revision, fresh.proposal.budget.rounds_spent,
+                          fresh.proposal.budget.physical_calls_spent), (1, 0, 1))
+        changed_response = _artifact_outcome(operations=[{"kind": "create", "suggested_path": fresh_path,
+                           "new_text": "The changed tide preserves the current consequence.\n"}],
+                           evidence_status="incomplete", evidence_ids=lambda call, material:
+                           [call.payload["core_document_statuses"][0]["evidence_id"]])
+        def changed_integrate(call, provider):
+            value = json.loads(changed_response(call, provider))
+            value["action"]["result"]["authoring_scope"] = _compact_scope(
+                c.authoring_scope_to_dict(fresh.proposal.authoring_scope))
+            value["action"]["result"]["artifact_intent"]["objective_intent"] = {
+                "action": "start", "target_paths": [fresh_path], "next_step": "prepare"}
+            return json.dumps(value)
+        self.backend.enqueue(changed_integrate)
+        prepared = await self.runtime.decide_lead_recommendation(recommendation_decision(fresh_draft.turn))
+        self.assertIsNotNone(prepared.proposal, prepared)
+        self.assertEqual(prepared.proposal.participants, ROSTER)
+        self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
+        self.backend.enqueue_for(CHARACTER_CUSTODIAN, _specialist_outcome())
+        self.backend.enqueue_for(EXECUTION_SPECIALIST, _specialist_outcome())
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _artifact_synthesis_outcome())
+        current_review = await self.runtime.decide_lead_step(_decision(prepared,
+                             c.CollaborationConfirmationDecision.CONFIRM))
+        self.assertIs(current_review.turn.artifact_proposal.state, c.ArtifactProposalState.REVIEWED)
+        current_frames = [_workflow_material(call.payload) for actor, call in self.backend.call_records
+                          if actor in ROSTER][-3:]
+        current_candidates = [next(item["artifact_candidate"] for item in frame["inputs"]
+                              if "artifact_candidate" in item) for frame in current_frames]
+        self.assertEqual(current_candidates, [current_candidates[0]] * len(ROSTER))
+        self.assertNotEqual(current_candidates[0], review_candidates[0])
+        await self.runtime.decide_artifact_application(_application_decision(current_review.turn,
+                                                       c.ArtifactApplicationDecisionKind.REJECT))
+        live_old = self.runtime.inspect_lead_collaboration(self.session_id, conversation)
+        live_new = self.runtime.inspect_lead_collaboration(self.session_id, new_owner)
+        old_task = next(view for view in live_old.available_tasks if view.ref.task_id == task_id)
+        new_task = next(view for view in live_new.available_tasks
+                        if view.ref.task_id == fresh.proposal.authoring_scope.task_id)
+        old_history, new_history = self.history(conversation), self.history(new_owner)
+        old_steps = {event.step_id for event in old_history
+                     if type(event.payload) is c.CollaborationProposal and event.payload.authoring_scope is not None
+                     and event.payload.authoring_scope.task_id == old_task.ref.task_id}
+        new_steps = {event.step_id for event in new_history
+                     if type(event.payload) is c.CollaborationProposal and event.payload.authoring_scope is not None
+                     and event.payload.authoring_scope.task_id == new_task.ref.task_id}
+        old_rounds = sum(type(event.payload) is c.CollaborationStepStatePayload
+                         and event.payload.state is c.CollaborationStepState.RUNNING
+                         and event.step_id in old_steps for event in old_history)
+        new_rounds = sum(type(event.payload) is c.CollaborationStepStatePayload
+                         and event.payload.state is c.CollaborationStepState.RUNNING
+                         and event.step_id in new_steps for event in new_history)
+        self.assertEqual((old_task.ref.task_id, old_task.ref.task_revision, old_task.status, old_rounds,
+                          len(old_task.submitted_call_ids)), (task_id, 1, "completed", 2, 10))
+        self.assertEqual((new_task.ref.task_id, new_task.ref.task_revision, new_task.status, new_rounds,
+                          len(new_task.submitted_call_ids)),
+                         (fresh.proposal.authoring_scope.task_id, 1, "active", 2, 10))
+        self.assertEqual(self.artifact_bytes(), condition_before)
         coordinator=WorkspaceConversationStorageMutationCoordinator(self.control_workspace)
         with coordinator.borrow(timeout_seconds=2.0) as lease:
             provision_sqlite_conversation_storage(self.control_workspace,lease=lease)
@@ -543,6 +700,8 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertIs(verified.outcome,ConversationStorageTransferOutcome.COMPLETED)
         persisted=compose_sqlite_conversation_storage(self.control_workspace).event_store.read(self.session_id,conversation)
         self.assertEqual(persisted,history)
+        self.assertEqual(compose_sqlite_conversation_storage(self.control_workspace).event_store.read(
+                         self.session_id, source_conversation), self.history(source_conversation))
         self.assertEqual(tuple(c.encode_collaboration_event(e) for e in persisted),tuple(c.encode_collaboration_event(e) for e in history))
 
     async def test_archived_task_is_context_without_routable_authority(self):

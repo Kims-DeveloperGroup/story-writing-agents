@@ -1613,7 +1613,7 @@ class ControllerContractTests(ControllerTestCase):
         for module_name in graph:
             visit(module_name)
         self.assertEqual(len(modules), 155)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 667)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 670)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -6039,6 +6039,42 @@ class ControllerConversationCommandTests(ControllerTestCase):
             [".gitkeep"],
         )
 
+        from tests.test_lead_orchestration import _task_fixture, _exploration_outcome, _submitted_calls
+        from tests.test_specialist_routing_runtime import scoped_proposal
+        case = _task_fixture(self)
+        source, owner = case.conversation("Installed source A"), case.conversation("Installed owner B")
+        source_text = "Prefix. 한글\r\nSelected.  Suffix."
+        case.backend.enqueue(_exploration_outcome(source_text))
+        runner = asyncio.Runner()
+        self.addCleanup(runner.close)
+        runner.run(case.runtime.lead_turn(case.session_id, source, "Explore alternatives.",
+                   interaction_mode=exploration.LeadInteractionMode.EXPLORATION))
+        report = next(e.payload.report for e in case.history(source)
+                      if type(e.payload) is collaboration.CollaborationLeadExplorationResultPayload)
+        idea = report.ideas[0]
+        case.backend.enqueue(scoped_proposal(PLOT_ARCHITECT, candidate_ids=("adopted_idea",)))
+        controller, _, callbacks = self.make_controller(case.control_workspace,
+                        conversation_storage_services=case.runtime.conversation_storage_services, terminal_width=200)
+        controller._runtime, controller._runner = case.runtime, runner
+        controller._conversation_storage_services = case.runtime.conversation_storage_services
+        controller._attached_session_id = case.session_id
+        controller._focused_conversation = case.runtime.conversation_storage_services.catalog.get(
+                                            case.session_id, owner)
+        commit = InteractiveLeadAdapterTests._commit
+        controller._picker_input = InteractiveLeadAdapterTests._Picker(commit(source), commit(idea.idea_id),
+                              commit("partial"), commit("authoring"), ControlOutcome(ControlOutcomeKind.CANCEL))
+        controller._prompt_input = InteractiveLeadAdapterTests._Prompt(commit("8:23"),
+                                           commit("core_documents/global_outline.md"))
+        self.assertFalse(controller._dispatch_session_lobby_action(
+                         controller_core_module.parse_interactive_line("/adopt"), "/adopt"))
+        captured = next(e.payload.capture for e in case.history(owner)
+                        if type(e.payload) is collaboration.CollaborationExplorationAdoptionPayload)
+        self.assertEqual(captured.selected_text, source_text[8:23])
+        projected = case.runtime.inspect_lead_collaboration(case.session_id, owner)
+        self.assertEqual((captured.fresh_task_id, captured.task_revision),
+                         (projected.current_proposal.authoring_scope.task_id, 1))
+        self.assertEqual(len(_submitted_calls(case.history(source))) + len(_submitted_calls(case.history(owner))), 2)
+
 
 
 
@@ -6340,14 +6376,30 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             history = events_fixture.store_batch((), batch)
             current[:] = [replace(self._terminal_turn(CollaborationStepState.COMPLETED), message=report.message, kind=LeadOutcomeKind.EXPLORATION, state=None, interaction_mode=exploration.LeadInteractionMode.EXPLORATION, exploration=report, evidence=None, next_action=CollaborationNextAction.CONTINUE_WITH_LEAD)]
             output = self._Output()
-            adapter = lead_policy_module.InteractiveLeadAdapter(session, runner, self._Progress(), self._Picker(self._commit(idea.idea_id)), self._Prompt(self._commit("core_documents/global_outline.md")), output, read_events=lambda conversation: history if conversation == _UNIQUE_C else ())
+            adapter = lead_policy_module.InteractiveLeadAdapter(
+                session, runner, self._Progress(),
+                self._Picker(self._commit(_UNIQUE_C), self._commit(idea.idea_id),
+                             self._commit("whole"), self._commit("authoring")),
+                self._Prompt(self._commit("core_documents/global_outline.md")), output,
+                read_events=lambda conversation: history if conversation == _UNIQUE_C else ())
             self.assertFalse(adapter.submit(_UNIQUE_C, "Explore directions.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION))
             self.assertEqual((set(forwarded[-1]), forwarded[-1]["interaction_mode"]), ({"action_progress_sink", "interaction_mode"}, exploration.LeadInteractionMode.EXPLORATION))
             self.assertIn("Exploration (provisional)", "\n".join(render_plain(component, width=120).text for component in output.components))
             current[:] = [self._terminal_turn(CollaborationStepState.COMPLETED)]
             self.assertFalse(adapter.adopt(_UNIQUE_C))
             self.assertEqual((set(forwarded[-1]), forwarded[-1]["adoption"]), ({"action_progress_sink", "adoption"}, exploration.ExplorationAdoptionSelection(_UNIQUE_C, "ui-result", idea.idea_id, idea.material_digest, ("core_documents/global_outline.md",))))
-            self.assertEqual(tuple((component.items[0].label, component.items[0].value, component.items[1].content, component.items[2].value) for component in output.components if isinstance(component, terminal_module.Panel) and component.title == "Selected whole idea"), (("Source conversation", _UNIQUE_C, text, "core_documents/global_outline.md"),))
+            self.assertEqual(tuple((component.items[0].label, component.items[0].value,
+                                    component.items[6].content, component.items[8].value)
+                                   for component in output.components
+                                   if isinstance(component, terminal_module.Panel)
+                                   and component.title == "Selected idea input"),
+                             (("Source conversation", _UNIQUE_C, text, "core_documents/global_outline.md"),))
+            before_adoption_cancel = tuple(forwarded)
+            adapter._picker = self._Picker(ControlOutcome(ControlOutcomeKind.CANCEL))
+            self.assertFalse(adapter.adopt(_UNIQUE_C))
+            adapter._picker = self._Picker(ControlOutcome(ControlOutcomeKind.EOF))
+            self.assertTrue(adapter.adopt(_UNIQUE_C))
+            self.assertEqual(tuple(forwarded), before_adoption_cancel)
 
 
             from tests.test_lead_orchestration import LeadOrchestrationTestCase, _confirmed_premise, _premise_choice, _SubmittedFailure
