@@ -234,7 +234,7 @@ installation:
 python -m pip install --editable .
 ```
 
-That ordinary reinstall upgrades older viewer installations to required 0.6.0.
+That ordinary reinstall upgrades older viewer installations to required 0.6.1.
 It needs no uninstall, `--force-reinstall`, or `--ignore-installed`. A missing required
 viewer should likewise be repaired by rerunning the normal Story installation
 first; the `viewer` extra is not a separate fix.

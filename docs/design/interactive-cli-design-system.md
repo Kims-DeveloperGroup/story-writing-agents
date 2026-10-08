@@ -700,7 +700,7 @@ remains accepted but is behaviorally identical. Checkout developers initialize
 `vendor/jsonl-viewer` only when they need to audit or test the pinned external
 source; Story artifacts omit that source, and runtime imports never use it. A
 source update alone does not mutate the active environment: rerunning the
-ordinary editable Story install upgrades older viewer installations to 0.6.0
+ordinary editable Story install upgrades older viewer installations to 0.6.1
 without force, ignore, or uninstall. A missing viewer uses the same normal installation path;
 forced reinstall is reserved for damaged or incompatible files after the exact
 0.6.1 pin is already selected.
