@@ -146,10 +146,7 @@ class ManifestSurfaceTests(unittest.TestCase):
                 "validate_context_identity",
             ),
         )
-        self.assertEqual(
-            tuple(item.value for item in ContextSubjectKind),
-            ("conversation", "debate", "session"),
-        )
+        self.assertEqual( tuple(item.value for item in ContextSubjectKind), ("conversation", "debate", "session"), )
         self.assertEqual(
             tuple(item.value for item in ContextAuthorityKind),
             (
@@ -208,10 +205,7 @@ class ManifestSurfaceTests(unittest.TestCase):
                 "agent_id",
             ),
         )
-        self.assertEqual(
-            tuple(field.name for field in fields(ContextProvenance)),
-            ("authority_kind", "locator"),
-        )
+        self.assertEqual( tuple(field.name for field in fields(ContextProvenance)), ("authority_kind", "locator"), )
         self.assertEqual(
             tuple(field.name for field in fields(ContextManifestEntry)),
             (
@@ -279,10 +273,7 @@ class ManifestIdentityTests(unittest.TestCase):
                     lambda value=value: validate_context_identity(value),
                     ContextManifestErrorCode.INVALID_VALUE,
                 )
-                self.assertEqual(
-                    str(error),
-                    "context manifest contains an invalid value",
-                )
+                self.assertEqual( str(error), "context manifest contains an invalid value", )
                 self.assertNotIn("private", str(error).lower())
                 self.assertNotIn("private", repr(error).lower())
 
@@ -300,10 +291,7 @@ class ManifestIdentityTests(unittest.TestCase):
         )
         for case in cases:
             with self.subTest(case=case):
-                self.assert_manifest_error(
-                    case,
-                    ContextManifestErrorCode.INVALID_VALUE,
-                )
+                self.assert_manifest_error( case, ContextManifestErrorCode.INVALID_VALUE, )
 
     def test_subject_kind_and_id_exact_grammar(self) -> None:
         for subject_id in ("A", "a" * 64, "A0_-z"):
@@ -330,9 +318,7 @@ class ManifestIdentityTests(unittest.TestCase):
         for subject_kind in ("conversation", 1, True, None):
             with self.subTest(subject_kind=subject_kind):
                 self.assert_manifest_error(
-                    lambda subject_kind=subject_kind: _scope(
-                        subject_kind=subject_kind
-                    ),
+                    lambda subject_kind=subject_kind: _scope( subject_kind=subject_kind ),
                     ContextManifestErrorCode.INVALID_VALUE,
                 )
 
@@ -386,19 +372,13 @@ class ManifestIdentityTests(unittest.TestCase):
         for authority in ("writing_artifact_repository", 1, True, None):
             with self.subTest(authority=authority):
                 self.assert_manifest_error(
-                    lambda authority=authority: ContextProvenance(  # type: ignore[arg-type]
-                        authority,
-                        "relative/path",
-                    ),
+                    lambda authority=authority: ContextProvenance(authority, "relative/path"),  # type: ignore[arg-type]
                     ContextManifestErrorCode.INVALID_VALUE,
                 )
 
     def test_exact_nonboolean_integer_counts(self) -> None:
         self.assertEqual(_entry(ordinal=0, utf8_bytes=0).ordinal, 0)
-        for field_name, value in itertools.product(
-            ("ordinal", "utf8_bytes"),
-            (-1, True, 1.0, "1", None),
-        ):
+        for field_name, value in itertools.product( ("ordinal", "utf8_bytes"), (-1, True, 1.0, "1", None), ):
             with self.subTest(field_name=field_name, value=value):
                 self.assert_manifest_error(
                     lambda field_name=field_name, value=value: _entry(
@@ -444,63 +424,30 @@ class ManifestClassificationTests(unittest.TestCase):
                 ContextSemanticChannel.HISTORY,
             ):
                 expected.add((kind, channel, ContextPriority.P2_WORKING))
-            expected.add(
-                (
-                    kind,
-                    ContextSemanticChannel.OPTIONAL_BACKGROUND,
-                    ContextPriority.P3_OPTIONAL,
-                )
-            )
+            expected.add( ( kind, ContextSemanticChannel.OPTIONAL_BACKGROUND, ContextPriority.P3_OPTIONAL, ) )
         self.assertEqual(len(expected), 23)
-        for kind, channel, priority in itertools.product(
-            ContextSourceKind,
-            ContextSemanticChannel,
-            ContextPriority,
-        ):
+        for kind, channel, priority in itertools.product( ContextSourceKind, ContextSemanticChannel, ContextPriority, ):
             with self.subTest(kind=kind, channel=channel, priority=priority):
                 if (kind, channel, priority) in expected:
-                    entry = _entry(
-                        source_kind=kind,
-                        semantic_channel=channel,
-                        priority=priority,
-                    )
+                    entry = _entry(source_kind=kind, semantic_channel=channel, priority=priority)
                     self.assertIs(entry.source_kind, kind)
                 else:
                     with self.assertRaises(ContextManifestError) as caught:
-                        _entry(
-                            source_kind=kind,
-                            semantic_channel=channel,
-                            priority=priority,
-                        )
-                    self.assertIs(
-                        caught.exception.code,
-                        ContextManifestErrorCode.INVALID_MATRIX,
-                    )
+                        _entry(source_kind=kind, semantic_channel=channel, priority=priority)
+                    self.assertIs( caught.exception.code, ContextManifestErrorCode.INVALID_MATRIX, )
 
     def test_source_kind_has_exactly_one_authority(self) -> None:
-        for kind, authority in itertools.product(
-            ContextSourceKind,
-            ContextAuthorityKind,
-        ):
+        for kind, authority in itertools.product( ContextSourceKind, ContextAuthorityKind, ):
             with self.subTest(kind=kind, authority=authority):
                 if authority is _AUTHORITY_BY_KIND[kind]:
                     self.assertIs(
-                        _entry(
-                            source_kind=kind,
-                            provenance=_provenance(authority),
-                        ).provenance.authority_kind,
+                        _entry(source_kind=kind, provenance=_provenance(authority)).provenance.authority_kind,
                         authority,
                     )
                 else:
                     with self.assertRaises(ContextManifestError) as caught:
-                        _entry(
-                            source_kind=kind,
-                            provenance=_provenance(authority),
-                        )
-                    self.assertIs(
-                        caught.exception.code,
-                        ContextManifestErrorCode.INVALID_MATRIX,
-                    )
+                        _entry( source_kind=kind, provenance=_provenance(authority), )
+                    self.assertIs( caught.exception.code, ContextManifestErrorCode.INVALID_MATRIX, )
 
     def test_searchability_is_exactly_priority_owned(self) -> None:
         valid_cases = (
@@ -511,24 +458,15 @@ class ManifestClassificationTests(unittest.TestCase):
         )
         for kind, searchable in valid_cases:
             with self.subTest(kind=kind):
-                self.assertIs(
-                    _entry(source_kind=kind, searchable=searchable).searchable,
-                    searchable,
-                )
+                self.assertIs( _entry(source_kind=kind, searchable=searchable).searchable, searchable, )
                 with self.assertRaises(ContextManifestError) as caught:
                     _entry(source_kind=kind, searchable=not searchable)
-                self.assertIs(
-                    caught.exception.code,
-                    ContextManifestErrorCode.INVALID_MATRIX,
-                )
+                self.assertIs( caught.exception.code, ContextManifestErrorCode.INVALID_MATRIX, )
         for searchable in (0, 1, "true", None):
             with self.subTest(searchable=searchable):
                 with self.assertRaises(ContextManifestError) as caught:
                     _entry(searchable=searchable)  # type: ignore[arg-type]
-                self.assertIs(
-                    caught.exception.code,
-                    ContextManifestErrorCode.INVALID_VALUE,
-                )
+                self.assertIs( caught.exception.code, ContextManifestErrorCode.INVALID_VALUE, )
 
 
 class ManifestCanonicalizationTests(unittest.TestCase):
@@ -539,54 +477,29 @@ class ManifestCanonicalizationTests(unittest.TestCase):
         second = _entry(revision="r2", provenance=_provenance(locator="other"))
         with self.assertRaises(ContextManifestError) as caught:
             ContextManifest(_scope(), (first, second))
-        self.assertIs(
-            caught.exception.code,
-            ContextManifestErrorCode.DUPLICATE_SOURCE_ID,
-        )
+        self.assertIs( caught.exception.code, ContextManifestErrorCode.DUPLICATE_SOURCE_ID, )
 
     def test_canonical_order_is_permutation_locale_and_hash_independent(self) -> None:
         source_ids = ("a", "e\u0301", "é", "한", "🙂")
-        entries = tuple(
-            _entry(source_id, ordinal=3, revision="same") for source_id in source_ids
-        )
-        expected_ids = tuple(
-            sorted(source_ids, key=lambda value: value.encode("utf-8"))
-        )
+        entries = tuple( _entry(source_id, ordinal=3, revision="same") for source_id in source_ids )
+        expected_ids = tuple( sorted(source_ids, key=lambda value: value.encode("utf-8")) )
         for permutation in itertools.permutations(entries):
             manifest = ContextManifest(_scope(), permutation)
-            self.assertEqual(
-                tuple(entry.source_id for entry in manifest.entries),
-                expected_ids,
-            )
+            self.assertEqual( tuple(entry.source_id for entry in manifest.entries), expected_ids, )
         unordered = {entry.source_id: entry for entry in reversed(entries)}
         self.assertEqual(
             tuple(
                 entry.source_id
-                for entry in ContextManifest(
-                    _scope(),
-                    tuple(unordered.values()),
-                ).entries
+                for entry in ContextManifest( _scope(), tuple(unordered.values()), ).entries
             ),
             expected_ids,
         )
 
     def test_priority_channel_ordinal_and_metadata_key_are_exact(self) -> None:
         entries = (
-            _entry(
-                "optional",
-                source_kind=ContextSourceKind.OWN_AGENT_STATE,
-                ordinal=9,
-            ),
-            _entry(
-                "required",
-                source_kind=ContextSourceKind.RUNTIME_INPUT,
-                ordinal=5,
-            ),
-            _entry(
-                "stable",
-                source_kind=ContextSourceKind.AGENT_DEFINITION,
-                ordinal=2,
-            ),
+            _entry("optional", source_kind=ContextSourceKind.OWN_AGENT_STATE, ordinal=9),
+            _entry("required", source_kind=ContextSourceKind.RUNTIME_INPUT, ordinal=5),
+            _entry("stable", source_kind=ContextSourceKind.AGENT_DEFINITION, ordinal=2),
             _entry("working-later", ordinal=8),
             _entry("working-first", ordinal=1),
         )
@@ -619,9 +532,7 @@ class ManifestCanonicalizationTests(unittest.TestCase):
             with self.subTest(value_type=type(value).__name__):
                 self.assertFalse(hasattr(value, "__dict__"))
                 self.assertNotIn(secret, repr(value))
-                with self.assertRaises(
-                    (FrozenInstanceError, AttributeError, TypeError)
-                ):
+                with self.assertRaises( (FrozenInstanceError, AttributeError, TypeError) ):
                     value.__setattr__("private_body", secret)
 
     def test_module_is_a_standard_library_leaf_and_compiles(self) -> None:
@@ -640,12 +551,7 @@ class ManifestCanonicalizationTests(unittest.TestCase):
             for node in ast.walk(tree)
             if isinstance(node, ast.ImportFrom) and node.module != "__future__"
         }
-        imports.update(
-            alias.name
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Import)
-            for alias in node.names
-        )
+        imports.update( alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names )
         self.assertEqual(imports, {"re", "unicodedata", "dataclasses", "enum"})
 
 

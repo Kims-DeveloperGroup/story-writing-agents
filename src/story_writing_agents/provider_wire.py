@@ -1057,7 +1057,10 @@ ENUM_MEANINGS.update({
     "clarification": "Ask for clarification without creating report material or authority.",
 })
 
-_catalog("selected_text selection fresh_task_id user_event_id material_digest boundary_digest", "Host-captured exact whole provisional idea, source identity and fresh task. Copy the disclosed bytes and targets; this input is not a completed draft, verified artifact fact or write authority.")
+_catalog("selected_text selection fresh_task_id user_event_id material_digest boundary_digest", "Host-captured exact selected idea bytes, full source material digest and fresh task. Input only: no completed draft, READ, review or write authority.")
+_catalog("start_character end_character", "Paired null means whole idea. Otherwise zero-based Unicode code-point half-open bounds select exact source text without trimming or normalization.")
+_catalog("source_event_digest selected_material_digest", "Host-pinned bare SHA-256 of the exact source report event and exact selected UTF-8 text; neither grants artifact evidence or workflow authority.")
+_catalog("adoption_intent adoption_targets adoption_rule", "Explicit USER authoring/review_only intent and exact targets constrain fresh task@1 proposal work; every assignment retains the selected input.")
 
 DYNAMIC_CHOICE_FIELDS = frozenset({"task_id", "task_revision", "agent_id", "input_source_ids", "source_ids", "evidence_id", "document_change_request_id", "target_artifact_paths", "specialist_ids", "reviewed_proposal_id", "reviewed_proposal_digest", "slot_id", "basis_input_ids"})
 
@@ -1070,7 +1073,7 @@ OPAQUE_FIELDS = frozenset("details record_content conversation_event metadata co
 
 INPUT_ENUM_FIELDS = frozenset({
     "workflow_type", "workflow_phase", "consensus_phase", "phase", "input_type", "domain_order", "actor_type", "context_scope", "allowed_action_types", "searchable_source_types",
-    "source_type", "authorized_source_types", "input_source_type", "authority_type", "context_mode", "decision_type", "evidence_scope", "evidence_status", "assignment_type", "assignment_status", "activity_type", "writing_intent", "specialist_domains",
+    "source_type", "authorized_source_types", "input_source_type", "authority_type", "context_mode", "decision_type", "evidence_scope", "evidence_status", "assignment_type", "assignment_status", "activity_type", "writing_intent", "adoption_intent", "specialist_domains",
     "review_outcome", "request_status", "requested_workflow_step", "update_type", "action_type",
     "context_delivery_mode", "conversation_status", "change_type", "document_status", "range_type", "content_delivery", "observation_type", "removal_type",
 })

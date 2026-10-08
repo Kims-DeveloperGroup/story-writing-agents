@@ -1,6 +1,8 @@
 """Focused public-runtime coverage for separately confirmed local story commits."""
 
 from __future__ import annotations
+
+from story_writing_agents.errors import BackendProtocolError
 import story_writing_agents.lead_task_transitions as task
 from tests.test_lead_orchestration import _discussion_reply, _SubmittedFailure, _submitted_calls
 
@@ -295,6 +297,11 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         self.assertIs(redisclosed.next_action, CollaborationNextAction.SUBMIT_COMMIT_DECISION)
         self.assertEqual(redisclosed.story_commit_request, request)
         self.assertEqual(restarted_backend.calls, [])
+        other_owner = self.conversation("Different exploration owner")
+        with self.assertRaisesRegex(BackendProtocolError, applied.request.reviewed_proposal.conversation_id):
+            await restarted.lead_turn(self.session_id, other_owner, "Explore while control is unresolved.",
+                                           interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
+        self.assertEqual(self.history(other_owner), ())
         self.assertEqual(self.session_git_snapshot(), before_git)
 
         self.assertEqual(

@@ -1,6 +1,8 @@
 """Focused public-runtime coverage for exact reviewed artifact application."""
 
 from __future__ import annotations
+
+from story_writing_agents.errors import BackendProtocolError
 from story_writing_agents import editorial_scope as scopes
 from tests.test_collaboration_events import editorial, editorial_request
 
@@ -172,6 +174,11 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.assertEqual(redisclosed.artifact_application_request, request)
         self.assertEqual(len(self.backend.calls), calls)
         self.assertEqual(self.history(turn.conversation_id), history)
+        other_owner = self.conversation("Different exploration owner")
+        with self.assertRaisesRegex(BackendProtocolError, turn.conversation_id):
+            await self.runtime.lead_turn(self.session_id, other_owner, "Explore while control is unresolved.",
+                                           interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
+        self.assertEqual(self.history(other_owner), ())
         self.assertEqual(self.artifact_snapshot(), before)
         self.assertEqual(self.git_snapshot(), git_before)
 

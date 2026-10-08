@@ -906,6 +906,8 @@ def _lead_front_result_contract(
             if "artifact_intent" not in variant.get("properties", {})
             and "objective_intent" not in variant.get("properties", {})
         ]
+    if facts.adoption_intent is not None:
+        variants = [variant for variant in variants if "proposal" in variant.get("properties", {})]
     if facts.premise_question_id is not None:
         variants.append(PremiseDecisionConstraints(facts.premise_question_id,
             facts.input_ids, allow_read_sources=facts.allow_read_sources).front_schema())
@@ -3273,7 +3275,7 @@ class StoryRuntime:
         if (type(payload) is CollaborationSpecialistReplyPayload and payload.premise_analysis is not None) or (type(payload) is CollaborationLeadSynthesisPayload and payload.premise_report is not None):
             raise ValueError("provisional premise analysis is not an authoring source")
         if type(payload) is CollaborationExplorationAdoptionPayload:
-            return "sha256:" + payload.capture.selection.material_digest
+            return "sha256:" + payload.capture.selected_material_digest
         if type(payload) is CollaborationSpecialistReplyPayload:
             return cls._specialist_reply_digest(payload)
         if type(payload) in {CollaborationLeadJudgmentPayload, CollaborationLeadSynthesisPayload}:
@@ -4186,6 +4188,30 @@ class StoryRuntime:
             CollaborationLeadEvidence(LeadOutcomeScope.WORKFLOW_META, LeadEvidenceStatus.NOT_APPLICABLE, ()),
             validation_details=validation_details)
 
+    def _exploration_admission_barrier(self, snapshot: SessionHistorySnapshot) -> None:
+        """Block only new exploration/adoption against an owner's unresolved boundary."""
+        histories: dict[str, list[CollaborationEvent]] = {}
+        for event in snapshot.events():
+            histories.setdefault(event.conversation_id, []).append(event)
+        blocked = {CollaborationNextAction.SUBMIT_APPLICATION_DECISION, CollaborationNextAction.SUBMIT_COMMIT_DECISION,
+                   CollaborationNextAction.REPREPARE_COMMIT_REQUEST, CollaborationNextAction.START_OR_RECONFIRM,
+                   CollaborationNextAction.FINALIZE_RESULT, CollaborationNextAction.FINALIZE_RECOMMENDATION,
+                   CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME, CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY,
+                   CollaborationNextAction.RETRY_LEAD_TURN}
+        for owner, rows in histories.items():
+            events = tuple(rows)
+            projection = project_collaboration_history(events)
+            if (projection.next_safe_action in blocked or projection.current_state in {
+                    CollaborationStepState.RUNNING, CollaborationStepState.OUTCOME_UNKNOWN, CollaborationStepState.RECOVERY_REQUIRED}
+                    or self._unmatched_lead_call_state(events) is not None or self._has_unstarted_lead_request(events)):
+                raise BackendProtocolError(f"Exploration/adoption is blocked by owner conversation {owner}: "
+                                           f"{projection.next_safe_action.value}. Resolve or inspect that exact control first.")
+
+    def _validate_adoption_source(self, session_id: str, capture: ExplorationAdoptionCapture) -> None:
+        source = self._editorial_snapshot(session_id).exploration_source(capture.selection, latest=False)
+        idea = next(item for item in source.payload.report.ideas if item.idea_id == capture.selection.idea_id)
+        capture.validate_source(idea.material_text, hashlib.sha256(encode_collaboration_event(source)).hexdigest())
+
     def _editorial_snapshot(self, session_id: str) -> SessionHistorySnapshot:
         services = self.conversation_storage_services
         return SessionHistorySourceAdapter(services.catalog, services.event_store, session_id).capture()
@@ -4844,21 +4870,15 @@ class StoryRuntime:
             elif projection.next_safe_action is CollaborationNextAction.CHOOSE_PREMISE:
                 return self._premise_report_turn(session_id, conversation_id, events, projection,
                     "Choose, reject or keep undecided the exact reported premise through /premise before dependent authoring.")
-            selected_idea = None
-            if adoption is not None:
-                if adoption.source_conversation_id != conversation_id:
-                    raise ValueError("adoption must select an idea in the current focused conversation")
-                sources = tuple(event for event in events if event.event_id == adoption.result_event_id
-                    and type(event.payload) is CollaborationLeadExplorationResultPayload)
-                if len(sources) != 1:
-                    raise ValueError("adoption result is unavailable in the current focus")
-                ideas = tuple(i for i in sources[0].payload.report.ideas if i.idea_id == adoption.idea_id)
-                if len(ideas) != 1 or ideas[0].material_digest != adoption.material_digest:
-                    raise ValueError("adoption does not select the exact whole idea")
-                current_reports = tuple(event for event in events if type(event.payload) is CollaborationLeadExplorationResultPayload)
-                if not current_reports or current_reports[-1].event_id != adoption.result_event_id:
-                    raise ValueError("adoption result is stale in the current focus")
-                selected_idea = ideas[0]
+            selected_text = None
+            adoption_source = None
+            if interaction_mode is LeadInteractionMode.EXPLORATION or adoption is not None:
+                snapshot = self._editorial_snapshot(session_id)
+                self._exploration_admission_barrier(snapshot)
+                if adoption is not None:
+                    adoption_source = snapshot.exploration_source(adoption)
+                    idea = next(item for item in adoption_source.payload.report.ideas if item.idea_id == adoption.idea_id)
+                    selected_text = adoption.select_text(idea.material_text)
             turn_id = self._new_id("t")
             provider_step_id = self._new_id("s")
             pending_proposal = (
@@ -4929,9 +4949,11 @@ class StoryRuntime:
                 exploration_request_event_id = request.event_id
                 self._append_drafts(projection.last_sequence, (user_event, request))
             elif adoption is not None:
-                assert selected_idea is not None
-                adoption_capture = ExplorationAdoptionCapture(user_event.event_id, adoption,
-                    selected_idea.material_text, provider_step_id)
+                assert selected_text is not None and adoption_source is not None
+                adoption_capture = ExplorationAdoptionCapture(
+                    user_event.event_id, adoption, selected_text, self._new_id("task"),
+                    source_event_digest=hashlib.sha256(encode_collaboration_event(adoption_source)).hexdigest(),
+                    selected_material_digest=hashlib.sha256(selected_text.encode("utf-8")).hexdigest())
                 capture_event = self._draft(session_id=session_id, conversation_id=conversation_id,
                     turn_id=turn_id, step_id=provider_step_id,
                     kind=CollaborationEventKind.EXPLORATION_ADOPTION,
@@ -5253,6 +5275,8 @@ class StoryRuntime:
                 decision.session_id,
                 decision.conversation_id,
             )
+            if any(type(event.payload) is CollaborationExplorationAdoptionPayload for event in events):
+                self._editorial_snapshot(decision.session_id).validate_exploration_adoptions(decision.conversation_id)
             projection = project_collaboration_history(events)
             if (projection.next_safe_action is CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
                     and any(type(event.payload) is CollaborationProviderCallPayload
@@ -5691,6 +5715,8 @@ class StoryRuntime:
             events = self.conversation_storage_services.event_store.read(
                 decision.session_id, decision.conversation_id
             )
+            if any(type(event.payload) is CollaborationExplorationAdoptionPayload for event in events):
+                self._editorial_snapshot(decision.session_id).validate_exploration_adoptions(decision.conversation_id)
             projection = project_collaboration_history(events)
             control_events = self._effective_lead_control_events(events)
             if (projection.next_safe_action is CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
@@ -6190,6 +6216,8 @@ class StoryRuntime:
             events = self.conversation_storage_services.event_store.read(
                 request.session_id, request.conversation_id
             )
+            if any(type(event.payload) is CollaborationExplorationAdoptionPayload for event in events):
+                self._editorial_snapshot(request.session_id).validate_exploration_adoptions(request.conversation_id)
             projection = project_collaboration_history(events)
             control_events = self._effective_lead_control_events(events)
             if (projection.next_safe_action is CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
@@ -6330,6 +6358,8 @@ class StoryRuntime:
             events = self.conversation_storage_services.event_store.read(
                 decision.session_id, decision.conversation_id
             )
+            if any(type(event.payload) is CollaborationExplorationAdoptionPayload for event in events):
+                self._editorial_snapshot(decision.session_id).validate_exploration_adoptions(decision.conversation_id)
             projection = project_collaboration_history(events)
             control_events = self._effective_lead_control_events(events)
             if (projection.next_safe_action is CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
@@ -9742,6 +9772,8 @@ class StoryRuntime:
             )
             if type(events) is not tuple:
                 raise TypeError("collaboration store returned a non-tuple history")
+            if any(type(event.payload) is CollaborationExplorationAdoptionPayload for event in events):
+                self._editorial_snapshot(session_id).validate_exploration_adoptions(conversation_id)
             return events, project_collaboration_history(events), None
         except Exception as failure:
             return None, None, failure
@@ -10516,7 +10548,7 @@ class StoryRuntime:
                     input_id="adopted_idea", kind=CollaborationInputKind.CONVERSATION_EVENT,
                     state=CollaborationInputState.PRESENT,
                     locator=f"conversation/{adoption_event_id}",
-                    revision_digest=f"sha256:{adoption_capture.selection.material_digest}",
+                    revision_digest=f"sha256:{adoption_capture.selected_material_digest}",
                 ))
             if premise_capture is not None:
                 if premise_event_id is None:
@@ -10619,6 +10651,8 @@ class StoryRuntime:
                 preparation_specialists=() if preparation_request is None else preparation_request.specialist_ids,
                 recommendation_only=is_revision,
                 premise_question_id=premise_question_id,
+                adoption_intent=adoption_capture.selection.intent if adoption_capture is not None else None,
+                adoption_targets=adoption_capture.selection.target_paths if adoption_capture is not None else (),
             )
             if interaction_mode is LeadInteractionMode.EXPLORATION:
                 constraints = LeadExplorationConstraints(tuple(item.input_id for item in inputs))
@@ -11175,14 +11209,28 @@ class StoryRuntime:
                         ):
                             raise _LeadOutcomeValidationError("every assignment must receive the exact selected materials")
                     if adoption_capture is not None:
-                        if (decoded.kind is not LeadOutcomeKind.PROPOSAL or authoring_scope.task_id != adoption_capture.fresh_task_id
-                            or authoring_scope.task_revision != 1 or authoring_scope.intent is not AuthoringIntent.AUTHORING
-                            or authoring_scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
-                            or authoring_scope.target_paths != adoption_capture.selection.target_paths
-                            or decoded.artifact_intent is not None or decoded.objective_intent is not None
-                            or decoded.recommended_action is not None or decoded.proposal is None
-                        or any("adopted_idea" not in assignment.input_ids for assignment in decoded.proposal.assignments)):
-                            raise _LeadOutcomeValidationError("adoption requires a fresh TASK@1 AUTHORING DRAFT/REVISE with the exact chosen targets")
+                        self._validate_adoption_source(session_id, adoption_capture)
+                        activities = ({AuthoringActivity.REVIEW} if adoption_capture.selection.intent is AuthoringIntent.REVIEW_ONLY
+                                      else {AuthoringActivity.DRAFT, AuthoringActivity.REVISE})
+                        if (decoded.kind is not LeadOutcomeKind.PROPOSAL or authoring_scope is None
+                                or authoring_scope.task_id != adoption_capture.fresh_task_id or authoring_scope.task_revision != 1
+                                or authoring_scope.intent is not adoption_capture.selection.intent or authoring_scope.activity not in activities
+                                or authoring_scope.target_paths != adoption_capture.selection.target_paths or decoded.artifact_intent is not None
+                                or decoded.objective_intent is not None or decoded.recommended_action is not None or decoded.proposal is None
+                                or any("adopted_idea" not in assignment.input_ids for assignment in decoded.proposal.assignments)):
+                            raise _LeadOutcomeValidationError("adoption requires fresh TASK@1 work with exact selected intent, targets and input")
+                        if adoption_capture.selection.intent is AuthoringIntent.REVIEW_ONLY:
+                            instruction_inputs = tuple(item for item in inputs if item.input_id == "user_input")
+                            if (len(instruction_inputs) != 1 or instruction_inputs[0].kind is not CollaborationInputKind.USER_INPUT
+                                    or instruction_inputs[0].state is not CollaborationInputState.PRESENT):
+                                raise _LeadOutcomeValidationError("review-only adoption requires its actual offered USER instruction")
+                            assignments = tuple(replace(assignment,
+                                input_ids=tuple(dict.fromkeys((*assignment.input_ids, "user_input"))),
+                                review_basis=replace(assignment.review_basis,
+                                    candidate_input_ids=tuple(alias for alias in assignment.review_basis.candidate_input_ids if alias != "user_input")))
+                                if assignment.mode is SpecialistAssignmentMode.REVIEW and assignment.review_basis is not None else assignment
+                                for assignment in decoded.proposal.assignments)
+                            decoded = replace(decoded, proposal=replace(decoded.proposal, assignments=assignments))
                     if premise_capture is not None:
                         if (authoring_scope.task_id, authoring_scope.task_revision, authoring_scope.target_paths) != (premise_capture.authoring_task_id, premise_capture.authoring_task_revision, premise_capture.selection.target_paths) or authoring_scope.intent is not AuthoringIntent.AUTHORING or authoring_scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE} or decoded.kind is not LeadOutcomeKind.PROPOSAL or decoded.proposal is None or any((decoded.artifact_intent, decoded.objective_intent, decoded.recommended_action)) or any("selected_premise" not in item.input_ids for item in decoded.proposal.assignments) or not set(premise_capture.dependent_domains) <= set(required_authoring_domains(authoring_scope)):
                             raise _LeadOutcomeValidationError("selected premise requires fresh authoring drafts, exact targets and complete affected domains")
@@ -14774,6 +14822,27 @@ class StoryRuntime:
                             concrete = reply.get("mode") == SpecialistAssignmentMode.DRAFT.value and (
                                 reply.get("assessment") == CollaborationSpecialistAssessment.DRAFTED.value
                             )
+                            if (not concrete and item.input_id == "adopted_idea" and item.state is CollaborationInputState.PRESENT
+                                    and item.start_line is None and item.end_line is None):
+                                captures = tuple(event for event in events
+                                                 if item.locator == f"conversation/{event.event_id}"
+                                                 and type(event.payload) is CollaborationExplorationAdoptionPayload)
+                                if len(captures) == 1:
+                                    adopted = captures[0]
+                                    capture = adopted.payload.capture
+                                    origins = tuple(event for event in events
+                                                    if event.event_id == capture.user_event_id
+                                                    and type(event.payload) is CollaborationMessagePayload
+                                                    and (event.session_id, event.conversation_id, event.turn_id, event.step_id)
+                                                    == (adopted.session_id, adopted.conversation_id, adopted.turn_id, adopted.step_id))
+                                    if (adopted.session_id == session_id and adopted.sender == _USER_ACTOR and adopted.recipient == _LEAD_ACTOR
+                                            and capture.selection.intent is AuthoringIntent.REVIEW_ONLY and capture.task_revision == 1
+                                            and len(origins) == 1 and origins[0].sender == _USER_ACTOR and origins[0].recipient == _LEAD_ACTOR
+                                            and bool(capture.selected_text.strip())
+                                            and material_sha256(capture.selected_text) == capture.selected_material_digest
+                                            and item.revision_digest == f"sha256:{capture.selected_material_digest}"):
+                                        self._validate_adoption_source(session_id, capture)
+                                        concrete = True
                         else:
                             concrete = bool(value.get("candidate") or str(value.get("text", "")).strip())
                 else:
@@ -15024,6 +15093,10 @@ class StoryRuntime:
         artifact_binding: SessionArtifactBinding | None = None,
     ) -> None:
         """Re-derive every mutable runtime fact before minting start authority."""
+        for event in events:
+            if (type(event.payload) is CollaborationExplorationAdoptionPayload and proposal.authoring_scope is not None
+                    and event.payload.capture.fresh_task_id == proposal.authoring_scope.task_id):
+                self._validate_adoption_source(session_id, event.payload.capture)
         self._validate_editorial_refs(session_id, proposal.basis.editorial_refs, proposal.basis.editorial_context_digest, scope=proposal.authoring_scope)
 
         if artifact_binding is None:
@@ -15736,17 +15809,17 @@ class StoryRuntime:
                     captured = captures[0]
                     capture = captured.payload.capture
                     scope = proposal.authoring_scope
+                    self._validate_adoption_source(captured.session_id, capture)
                     digest = material_sha256(capture.selected_text)
                     if (scope is None or scope.task_id != capture.fresh_task_id
                             or scope.task_revision < capture.task_revision
                             or captured.session_id != proposal_events[0].session_id
                             or captured.conversation_id != proposal_events[0].conversation_id
-                            or capture.selection.source_conversation_id != captured.conversation_id
                             or captured.sender != _USER_ACTOR or captured.recipient != _LEAD_ACTOR
                             or captured.sequence >= proposal_events[0].sequence
                             or expected.state is not CollaborationInputState.PRESENT
                             or expected.start_line is not None or expected.end_line is not None
-                            or digest != capture.selection.material_digest
+                            or digest != capture.selected_material_digest
                             or expected.revision_digest != f"sha256:{digest}"):
                         raise ValueError("adopted input changed its exact task, owner or whole material")
                     current.append(CollaborationInputRevision(

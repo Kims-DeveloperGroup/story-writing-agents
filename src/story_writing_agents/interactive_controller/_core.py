@@ -53,6 +53,7 @@ from ..debug_log import (
     WorkspaceDebugLog,
 )
 from ..conversations import (
+    CollaborationLeadExplorationResultPayload,
     CollaborationHistoryProjection,
     CollaborationNextAction,
     CollaborationReadableFieldKey,
@@ -2145,7 +2146,13 @@ class InteractiveController:
                                      for item in view.selectable_materials)
                 return adapter.task(self._focused_conversation.conversation_id, material_choices=tuple(materials))
             if action.kind is ActionKind.LEAD_ADOPT:
-                return adapter.adopt(self._focused_conversation.conversation_id)
+                sources = []
+                for metadata in self._conversation_storage_services.catalog.list(self._attached_session_id):
+                    events = self._conversation_storage_services.event_store.read(self._attached_session_id, metadata.conversation_id)
+                    reports = tuple(event for event in events if type(event.payload) is CollaborationLeadExplorationResultPayload)
+                    if reports:
+                        sources.append((metadata.subject, reports[-1]))
+                return adapter.adopt(self._focused_conversation.conversation_id, source_choices=tuple(sources))
             if action.kind is ActionKind.PREMISE_DECISION:
                 return adapter.premise(self._focused_conversation.conversation_id)
             return adapter.submit(

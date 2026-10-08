@@ -318,7 +318,7 @@ does not parse or restyle those frames: its host admits only printable text, LF,
 and SGR when color is eligible, rejects every other control, and rejects SGR in
 plain mode. Removing the renderer's allowed decoration preserves the exact
 plain text, gutter markers, JSON, search position, and help. The pinned external
-[design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/1490d84ac72442414963f73315594c77fa73c344/docs/design-system.md)
+[design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/1d3c6f565d454b34f7619a264d9a3b760de14911/docs/design-system.md)
 is authoritative for those roles.
 
 The controller constructs semantic components only from trusted roles/states
@@ -812,7 +812,7 @@ The controller lazily validates the exact required `jsonl_viewer` facade,
 constructor and callable signatures, host/terminal shape, immutable header/field
 projection, primary-field order, and the `input_protocol="semantic"`
 constructor default before asking the terminal to open. It constructs and
-verifies the specification with `input_protocol="keys"`. The exact 0.6.1
+verifies the specification with `input_protocol="keys"`. The exact 0.6.2
 contract includes `ViewerTerminal` and the optional-host, keyword-only
 owned-call parameters. Earlier APIs are rejected.
 Missing or incompatible standard-install packages therefore acquire no raw

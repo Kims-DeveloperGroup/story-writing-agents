@@ -16,6 +16,9 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, replace
 
 from .catalog import ConversationMetadata
+from .events import encode_collaboration_event
+from ..lead_exploration import ExplorationAdoptionSelection
+
 from ..editorial_state import (
     EditorialStateProjection, EditorialRecordRef, bounded_editorial_view,
     editorial_ref_from_dict, editorial_revision_to_dict,
@@ -48,6 +51,8 @@ from .events import (
     CollaborationLeadPublicResponsePayload,
     CollaborationLeadTaskDecisionPayload,
     CollaborationLeadTaskTransitionPayload,
+    CollaborationLeadExplorationResultPayload,
+    CollaborationExplorationAdoptionPayload,
     CollaborationPremiseDecisionPayload,
     CollaborationPremiseFreshWorkAdmissionPayload,
     CollaborationPremiseSelectionPayload,
@@ -538,6 +543,39 @@ class SessionHistorySnapshot:
                 raise ValueError("session history inventory is inconsistent")
             previous = item.metadata.conversation_id
 
+    def exploration_source(self, selection: ExplorationAdoptionSelection, *, latest: bool = True) -> CollaborationEvent:
+        """Qualify a real same-session idea; retained captures keep their exact source."""
+        if type(selection) is not ExplorationAdoptionSelection or type(latest) is not bool:
+            raise TypeError("exploration source selection is invalid")
+        sources = tuple(event for event in self.events() if
+                        event.conversation_id == selection.source_conversation_id
+                        and type(event.payload) is CollaborationLeadExplorationResultPayload)
+        source = next((event for event in sources if event.event_id == selection.result_event_id), None)
+        if source is None or source.session_id != self.session_id:
+            raise ValueError("exploration source is unavailable in this exact session")
+        if latest and sources[-1].event_id != source.event_id:
+            raise ValueError("exploration source is no longer the latest result")
+        ideas = tuple(idea for idea in source.payload.report.ideas if idea.idea_id == selection.idea_id)
+        if len(ideas) != 1:
+            raise ValueError("exploration idea is unavailable or ambiguous")
+        selection.select_text(ideas[0].material_text)
+        return source
+
+    def validate_exploration_adoptions(self, conversation_id: str | None = None) -> None:
+        """Check exact retained input pins without promoting source execution authority."""
+        for row in self.conversations:
+            if conversation_id is not None and row.metadata.conversation_id != conversation_id:
+                continue
+            for record in row.records:
+                if type(record.payload) is not CollaborationExplorationAdoptionPayload:
+                    continue
+                capture = record.payload.capture
+                source = self.exploration_source(capture.selection, latest=False)
+                idea = next(item for item in source.payload.report.ideas
+                            if item.idea_id == capture.selection.idea_id)
+                capture.validate_source(idea.material_text,
+                                        hashlib.sha256(encode_collaboration_event(source)).hexdigest())
+
     @property
     def coverage(self) -> tuple[tuple[str, int, str], ...]:
         return tuple(
@@ -640,6 +678,7 @@ class SessionHistorySnapshot:
                     raise ValueError("selected task material source type changed")
                 if text != capture.selected_text or task_material_sha256(text) != ref.material_digest:
                     raise ValueError("selected task material source bytes changed")
+        self.validate_exploration_adoptions()
         prior = {item[0]: (item[1], item[2]) for item in previous}
         current_ids = {item.metadata.conversation_id for item in self.conversations}
         if set(prior) - current_ids or len(prior) != len(previous):

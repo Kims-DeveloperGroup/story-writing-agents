@@ -238,10 +238,12 @@ class LeadProviderConstraints:
     recommendation_only: bool = False
     continuation: bool = False
     premise_question_id: str | None = None
+    adoption_intent: AuthoringIntent | None = None
+    adoption_targets: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for values in (self.input_ids, self.task_revisions, self.reviewer_inputs,
-                       self.preparation_targets, self.preparation_specialists):
+                       self.preparation_targets, self.preparation_specialists, self.adoption_targets):
             if type(values) is not tuple:
                 raise TypeError("Lead constraint collections must be immutable tuples")
         for values in (self.source_ids, self.objective_ids):
@@ -250,14 +252,22 @@ class LeadProviderConstraints:
         if self.scope is not None and type(self.scope) is not AuthoringScope:
             raise TypeError("Lead constraint scope must be an AuthoringScope")
 
+        if self.adoption_intent is not None and type(self.adoption_intent) is not AuthoringIntent:
+            raise TypeError("adoption intent must be explicit")
+        if self.adoption_intent is None and self.adoption_targets:
+            raise ValueError("adoption targets require an explicit intent")
+
     def prompt_facts(self) -> dict[str, object]:
         return {
+            **({"adoption_intent": self.adoption_intent.value, "adoption_targets": list(self.adoption_targets),
+                "adoption_rule": "Exact selected bytes are USER input only. Propose fresh work at the offered task@1 with the explicit intent and targets; retain adopted_idea in every assignment. Never import draft, READ, review or write authority."}
+               if self.adoption_intent is not None else {}),
             **({"offered_premise_question_id": self.premise_question_id,
                 "premise_analysis_rule": "Only an undecided question needs target-free alternatives analysis. Reuse disclosed resolved inputs. Analysis requires its own Confirm and cannot draft, review a candidate, select a premise, or update an objective."}
                if self.premise_question_id is not None else {}),
             "offered_assignment_input_ids": list(self.input_ids),
-            "required_input_ids": [item for item in self.input_ids
-                                   if not self.preparation_kind or item not in PREPARATION_INPUT_IDS],
+            "required_input_ids": [item for item in self.input_ids if (not self.preparation_kind or item not in PREPARATION_INPUT_IDS)
+                                   and not (self.adoption_intent is AuthoringIntent.REVIEW_ONLY and item == "user_input")],
             "mandatory_reviewer_inputs": [
                 {"agent_id": agent, "input_id": alias} for agent, alias in self.reviewer_inputs
             ],
@@ -318,6 +328,11 @@ class LeadProviderConstraints:
 
     def scope_schema(self) -> dict[str, object]:
         scope = self.scope
+        intent = scope.intent if scope else self.adoption_intent
+        targets = scope.target_paths if scope else self.adoption_targets if intent is not None else None
+        activities = ([scope.activity.value] if scope else [AuthoringActivity.REVIEW.value]
+                      if intent is AuthoringIntent.REVIEW_ONLY else [AuthoringActivity.DRAFT.value, AuthoringActivity.REVISE.value]
+                      if intent is AuthoringIntent.AUTHORING else [item.value for item in AuthoringActivity])
         tokens = tuple(f"{task}@{revision}" for task, revision in self.task_revisions)
         task: dict[str, object] = {"type": "string"}
         if tokens:
@@ -326,7 +341,7 @@ class LeadProviderConstraints:
             **_scope_extensions(scope),
             **({"intent": {
                 "type": "string",
-                "enum": [scope.intent.value] if scope else [item.value for item in AuthoringIntent],
+                "enum": [intent.value] if intent is not None else [item.value for item in AuthoringIntent],
                 "description": (
                     "Disclose review_only only for an explicit request to evaluate the supplied "
                     "original without authoring or artifact authority. Activity review alone does "
@@ -334,13 +349,8 @@ class LeadProviderConstraints:
                     "authoring work."
                 ),
             }} if scope is None or scope.schema_version >= 2 else {}),
-            "activity": {"type": "string", "enum": ([scope.activity.value] if scope else
-                          [item.value for item in AuthoringActivity])},
-            "target_paths": string_array(
-                scope.target_paths if scope else None,
-                minimum=len(scope.target_paths) if scope else 0,
-                maximum=len(scope.target_paths) if scope else None,
-            ),
+            "activity": {"type": "string", "enum": (activities)},
+            "target_paths": string_array(targets, minimum=len(targets) if targets is not None else 0, maximum=len(targets) if targets is not None else None),
             "domains": string_array(
                 tuple(item.value for item in scope.domains) if scope else
                 tuple(item.value for item in ArtifactReviewDomain),
@@ -364,6 +374,8 @@ class LeadProviderConstraints:
             + "Preparation recommendation sources are not assignment inputs unless confirmed preparation has "
             "materialized and offered them here. Preserve all required inputs and each reviewer's own source."
         )
+        if self.adoption_intent is AuthoringIntent.REVIEW_ONLY:
+            input_rule += " USER instruction input is host-wired separately from the exact adopted_idea supplied candidate; preserve every other declared source role."
         assignment_purposes = {
             "plot_architect": (
                 "Assign Plot when plot, causality, pacing, or outline structure is affected; "
@@ -537,6 +549,12 @@ class LeadProviderConstraints:
                 or sorted(domains, key=str) != sorted(item.value for item in self.scope.domains)
                 or raw_scope.get("task") not in {f"{task}@{revision}" for task, revision in self.task_revisions}):
                 rules.append(R.PREPARATION_SCOPE)
+        if self.adoption_intent is not None and type(raw_scope) is dict and (raw_scope.get("intent") != self.adoption_intent.value
+                or raw_scope.get("activity") not in ([AuthoringActivity.REVIEW.value] if self.adoption_intent is AuthoringIntent.REVIEW_ONLY
+                                                     else [AuthoringActivity.DRAFT.value, AuthoringActivity.REVISE.value])
+                or raw_scope.get("target_paths") != list(self.adoption_targets)
+                or raw_scope.get("task") not in {f"{task}@{revision}" for task, revision in self.task_revisions}):
+            rules.append(R.PREPARATION_SCOPE)
         proposal = value.get("next_intent" if self.continuation else "proposal")
         if type(proposal) is dict:
             if self.continuation and not visible_text(proposal.get("purpose")):
@@ -549,6 +567,8 @@ class LeadProviderConstraints:
                 selected: set[str] = set()
                 by_role: dict[str, set[str]] = {}
                 required = set((*self.input_ids, *read_ids))
+                if self.adoption_intent is AuthoringIntent.REVIEW_ONLY:
+                    required.discard("user_input")
                 if self.preparation_kind:
                     required.difference_update(PREPARATION_INPUT_IDS)
                 for item in assignments:
