@@ -13,6 +13,8 @@ import json
 import re
 from typing import Any
 
+from .specialist_routing import AuthoringIntent
+
 
 class LeadInteractionMode(StrEnum):
     ORCHESTRATION = "orchestration"
@@ -168,21 +170,38 @@ class ExplorationAdoptionSelection:
     idea_id: str
     material_digest: str
     target_paths: tuple[str, ...]
+    start_character: int | None = None
+    end_character: int | None = None
+    intent: AuthoringIntent = AuthoringIntent.AUTHORING
 
     def __post_init__(self) -> None:
         for value in (self.source_conversation_id, self.result_event_id, self.idea_id):
             _identifier(value)
         _digest(self.material_digest)
-        if type(self.target_paths) is not tuple or not self.target_paths or (
-            len(set(self.target_paths)) != len(self.target_paths)
-        ):
+        if type(self.intent) is not AuthoringIntent:
+            raise TypeError("adoption intent must be AuthoringIntent")
+        start, end = self.start_character, self.end_character
+        if (start is None) != (end is None) or (start is not None and (
+            type(start) is not int or type(end) is not int or start < 0 or end <= start
+        )):
+            raise ValueError("adoption range must be nonempty code-point offsets")
+        if type(self.target_paths) is not tuple or not self.target_paths or len(set(self.target_paths)) != len(self.target_paths):
             raise ValueError("adoption requires unique exact target paths")
         for path in self.target_paths:
             _text(path)
-            if path.startswith("/") or "\\" in path or any(
-                part in {"", ".", ".."} for part in path.split("/")
-            ):
+            if path.startswith("/") or "\\" in path or any(part in {"", ".", ".."} for part in path.split("/")):
                 raise ValueError("adoption target must be canonical relative POSIX text")
+
+    def select_text(self, material_text: str) -> str:
+        """Select exact supplied code points, retaining the full source digest."""
+        if material_sha256(material_text) != self.material_digest:
+            raise ValueError("adoption source text changed")
+        if self.start_character is None:
+            return material_text
+        if self.end_character > len(material_text):
+            raise ValueError("adoption range exceeds its exact source")
+        return material_text[self.start_character:self.end_character]
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,17 +210,32 @@ class ExplorationAdoptionCapture:
     selection: ExplorationAdoptionSelection
     selected_text: str
     fresh_task_id: str
+    source_event_digest: str
+    selected_material_digest: str
     task_revision: int = 1
 
     def __post_init__(self) -> None:
         _identifier(self.user_event_id)
         _identifier(self.fresh_task_id)
         if type(self.selection) is not ExplorationAdoptionSelection:
-            raise TypeError("adoption capture requires an exact selection")
+            raise TypeError("adoption capture requires exact selection")
         if type(self.task_revision) is not int or self.task_revision != 1:
             raise ValueError("adoption must begin a fresh task at revision one")
-        if material_sha256(self.selected_text) != self.selection.material_digest:
-            raise ValueError("adoption text differs from the selected whole idea")
+        _digest(self.source_event_digest)
+        _digest(self.selected_material_digest)
+        if material_sha256(self.selected_text) != self.selected_material_digest:
+            raise ValueError("adoption selected text digest differs")
+        start, end = self.selection.start_character, self.selection.end_character
+        if start is None:
+            if self.selected_material_digest != self.selection.material_digest:
+                raise ValueError("whole adoption differs from its source material")
+        elif len(self.selected_text) != end - start:
+            raise ValueError("adoption selected text differs from its range")
+
+    def validate_source(self, material_text: str, source_event_digest: str) -> None:
+        if source_event_digest != self.source_event_digest or self.selected_text != self.selection.select_text(material_text):
+            raise ValueError("adoption source identity, text or range changed")
+
 
 
 def exploration_report_to_dict(report: LeadExplorationReport) -> dict[str, Any]:
@@ -242,13 +276,24 @@ def exploration_report_from_dict(value: Any) -> LeadExplorationReport:
 def adoption_capture_to_dict(capture: ExplorationAdoptionCapture) -> dict[str, Any]:
     if type(capture) is not ExplorationAdoptionCapture:
         raise TypeError("expected ExplorationAdoptionCapture")
-    return json.loads(json.dumps(asdict(capture), ensure_ascii=False))
+    value = json.loads(json.dumps(asdict(capture), ensure_ascii=False))
+    value["selection"]["writing_intent"] = value["selection"].pop("intent")
+    return value
+
 
 
 def adoption_capture_from_dict(value: Any) -> ExplorationAdoptionCapture:
-    value = _closed(value, {"user_event_id", "selection", "selected_text", "fresh_task_id", "task_revision"})
-    selection = _closed(value["selection"], {"source_conversation_id", "result_event_id", "idea_id", "material_digest", "target_paths"})
+    value = _closed(value, {"user_event_id", "selection", "selected_text", "fresh_task_id", "task_revision", "source_event_digest", "selected_material_digest"})
+    selection = _closed(value["selection"], {"source_conversation_id", "result_event_id", "idea_id", "material_digest", "target_paths", "start_character", "end_character", "writing_intent"})
     if type(selection["target_paths"]) is not list:
         raise ValueError("adoption targets must be an array")
-    selection = ExplorationAdoptionSelection(selection["source_conversation_id"], selection["result_event_id"], selection["idea_id"], selection["material_digest"], tuple(selection["target_paths"]))
-    return ExplorationAdoptionCapture(value["user_event_id"], selection, value["selected_text"], value["fresh_task_id"], value["task_revision"])
+    selection = ExplorationAdoptionSelection(
+        selection["source_conversation_id"], selection["result_event_id"],
+        selection["idea_id"], selection["material_digest"], tuple(selection["target_paths"]),
+        selection["start_character"], selection["end_character"],
+        AuthoringIntent(selection["writing_intent"]),
+    )
+    return ExplorationAdoptionCapture(
+        value["user_event_id"], selection, value["selected_text"], value["fresh_task_id"],
+        value["source_event_digest"], value["selected_material_digest"], value["task_revision"],
+    )

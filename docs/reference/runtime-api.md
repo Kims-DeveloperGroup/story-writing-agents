@@ -602,15 +602,32 @@ explicit current user choice of `EXPLORATION` enables the provisional path.
 History and provider output cannot select the mode.
 
 `ExplorationAdoptionSelection` contains `source_conversation_id`,
-`result_event_id`, `idea_id`, `material_digest` and `target_paths`.
-It selects one whole idea in the current focused conversation and session.
-Pass it as `adoption=` in an ordinary orchestration turn. Combining adoption
-with exploration rejects. The runtime resolves exact durable material and
-creates a fresh revision-1 authoring task; it retains required drafting, final
-candidate review and independent Confirm, Apply and Commit boundaries.
-No partial-range or foreign-conversation adoption is offered.
-A stale, foreign or tampered typed selection raises `ValueError` before a new
-user/capture append or provider call, after pending-decision priority checks.
+`result_event_id`, `idea_id`, full-source `material_digest`, `target_paths`,
+`start_character`, `end_character` and `intent`. The paired range defaults to
+`None` for a whole idea; otherwise supply strict integer, nonempty, zero-based
+Unicode code-point bounds with an exclusive end. Boolean bounds are invalid.
+`intent` is `AuthoringIntent.AUTHORING` by default; use
+`AuthoringIntent.REVIEW_ONLY` for review of the exact supplied selection.
+Import that enum from `story_writing_agents.specialist_routing`.
+
+Pass `adoption=` in an ordinary orchestration turn. Combining it with exploration
+rejects. The latest typed source report may belong to another conversation in
+the same session. The selected owner receives a fresh task at revision 1 with
+the exact selected input and targets. Authoring retains required drafting and
+final candidate review; review-only retains its actual review report without
+rewriting. Confirm, Apply and Commit remain independent authority boundaries.
+
+`ExplorationAdoptionCapture` adds the exact source-event SHA-256 and selected-text
+SHA-256 to the USER-correlated capture. `material_digest` remains the full idea's
+digest. Its current closed wire selection uses `writing_intent` for `intent`
+and includes both range keys. No older-format reader is provided.
+
+New intake rejects stale, unavailable, foreign-session or tampered selections
+before appending a USER capture or submitting a provider call. Existing captures
+retain their original report pin rather than following later reports; missing
+or changed pinned sources invalidate current authority. Session-wide pending
+decisions, unresolved operations and recovery conditions take priority and name
+the owning conversation. They grant no call or round refund.
 
 A `LeadOutcomeKind.EXPLORATION` result exposes its typed `exploration`
 report and `interaction_mode`. Reports contain a request/call-bound status,

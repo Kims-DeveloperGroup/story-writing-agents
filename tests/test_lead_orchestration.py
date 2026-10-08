@@ -1658,6 +1658,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     "writing_task_scope",
                     correction["response_correction"]["instruction"],
                 )
+                self.backend.enqueue(_visible_outcome("answer", "Scoped workflow answer."))
+                await self.runtime.lead_turn(self.session_id, conversation_id, "Explain collaboration workflow.")
 
         conversation_id = self.conversation("Scoped workflow answer")
         self.backend.enqueue(_visible_outcome("answer", "Scoped workflow answer."))
@@ -1713,11 +1715,15 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 )
                 self.assertIsNone(rejected.proposal)
                 self.assertIn("after one repair attempt", rejected.message)
+                self.backend.enqueue(_visible_outcome("answer", "Scoped workflow answer."))
+                await self.runtime.lead_turn(self.session_id, conversation_id, "Explain collaboration workflow.")
         ordinary_conversation = self.conversation("Mode cannot be provider-selected")
         self.backend.enqueue(_exploration_outcome(), _exploration_outcome())
         ordinary = await self.runtime.lead_turn(self.session_id, ordinary_conversation, "Explore possible directions.")
         self.assertEqual(ordinary.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
         self.assertIsNone(ordinary.exploration)
+        self.backend.enqueue(_visible_outcome("answer", "Scoped workflow answer."))
+        await self.runtime.lead_turn(self.session_id, ordinary_conversation, "Explain collaboration workflow.")
         clarification = json.dumps({"agent_action": {"action_type": "submit_result", "task_result": {"response_type": "lead_exploration", "response_text": "Which ending should we explore?", "status": "clarification"}}})
         self.backend.enqueue(clarification)
         clarified = await self.runtime.lead_turn(self.session_id, self.conversation("Explicit clarification"), "Explore endings.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
@@ -3459,6 +3465,13 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             with self.assertRaises(ValueError):
                 await self.runtime.decide_lead_task(decision)
         self.assertEqual(self.history(conversation_id), prefix)
+        self.assertEqual(self.backend.calls, [])
+
+        other_owner = self.conversation("Exploration cannot replay another owner")
+        with self.assertRaisesRegex(BackendProtocolError, conversation_id):
+            await self.runtime.lead_turn(self.session_id, other_owner, "Explore uncertain work.",
+                                         interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
+        self.assertEqual(self.history(other_owner), ())
         self.assertEqual(self.backend.calls, [])
 
     def test_capability_is_private_nonserializable_and_single_use(self) -> None:

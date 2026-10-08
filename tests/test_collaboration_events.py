@@ -1503,6 +1503,30 @@ class CollaborationWireContractTests(unittest.TestCase):
             exploration.exploration_report_from_dict(tampered)
         self.assertEqual(tuple(tuple(item.value for item in enum) for enum in (exploration.LeadInteractionMode, exploration.ExplorationIdeaKind, exploration.ExplorationReportStatus)), (("orchestration", "exploration"), ("hypothesis", "alternative", "short_example"), ("ideas", "clarification")))
 
+        selection = exploration.ExplorationAdoptionSelection("source", "result", idea.idea_id,
+                    idea.material_digest, ("core_documents/global_outline.md",), 1, len(text) - 1)
+        selected = selection.select_text(text)
+        capture = exploration.ExplorationAdoptionCapture("user", selection, selected, "fresh_task", "a" * 64,
+                                                        exploration.material_sha256(selected))
+        encoded = exploration.adoption_capture_to_dict(capture)
+        self.assertEqual(set(encoded), {"user_event_id", "selection", "selected_text", "fresh_task_id",
+                                       "source_event_digest", "selected_material_digest", "task_revision"})
+        self.assertEqual(set(encoded["selection"]), {"source_conversation_id", "result_event_id", "idea_id",
+                         "material_digest", "target_paths", "start_character", "end_character", "writing_intent"})
+        self.assertEqual(exploration.adoption_capture_from_dict(encoded), capture)
+        self.assertEqual(selected.encode("utf-8"), text[1:-1].encode("utf-8"))
+        self.assertNotEqual(capture.selected_material_digest, selection.material_digest)
+        capture.validate_source(text, "a" * 64)
+        with self.assertRaises(ValueError):
+            replace(selection, start_character=True)
+        with self.assertRaises(ValueError):
+            replace(selection, end_character=len(text) + 1).select_text(text)
+        with self.assertRaises(ValueError):
+            capture.validate_source(text, "b" * 64)
+        with self.assertRaises(ValueError):
+            exploration.adoption_capture_from_dict({key: value for key, value in encoded.items()
+                                                   if key != "source_event_digest"})
+
     def test_unicode_is_not_normalized_and_tampered_digest_is_rejected(self) -> None:
         composed = replace_proposal(make_proposal(), purpose="Café review")
         decomposed = replace_proposal(make_proposal(), purpose="Cafe\u0301 review")

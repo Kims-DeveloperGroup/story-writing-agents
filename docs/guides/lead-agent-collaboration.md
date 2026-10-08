@@ -310,6 +310,26 @@ Ordinary focused shell input now uses this lead path. Terminal completion is
 only presentation evidence: durable runtime state remains the authority for
 whether work committed, needs recovery, or may start another lead turn.
 
+## Exploration, adoption and ownership
+
+The shell and public runtime use the same explicit, one-turn exploration choice.
+See [the selection interface](lead-agent.md#exploration-and-adoption).
+
+| User action or boundary | Owner and retained state | Required next authority |
+| --- | --- | --- |
+| Explore in conversation A | A owns a provisional report; the next ordinary turn uses normal mode. | No specialist, draft, objective or write authority. |
+| Adopt whole or ranged material in B | B captures exact USER input from A and starts a fresh task at revision 1. | Explicit Authoring or Review only intent, exact targets and new Confirm. |
+| Review only | B retains the exact supplied selection and actual review report. | No automatic rewrite or Apply. |
+| Switch conversations | Each task keeps its owner, revision and consumed calls. | Resolve pending Apply/Commit or recovery in its named owner before new exploration/adoption. |
+| Change conditions | The earlier candidate and confirmation remain historical. | Current inputs, fresh affected duties and complete review of the new final candidate. |
+| Restart | Stored captures retain exact source report and selected-text pins. | Revalidate source and current control; no stale Confirm/Apply, replay or counter refund. |
+| Record a direction | Editorial memory records the chosen direction. | An actual matching Apply result is still required to record an artifact effect. |
+
+Rejected provider responses remain selectable answer content through public
+response references, even when their structure or values are invalid. That
+input-only path is separate from typed exploration idea adoption and grants no
+READ, draft, review or approval authority.
+
 ## References and context
 
 An attached reference is an indicator of what the agents should read. It is not

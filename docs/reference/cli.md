@@ -421,12 +421,20 @@ selects exploration for that one turn. Its report is labeled
 `Exploration (provisional)`; the next ordinary line returns to normal Lead
 orchestration.
 
-`/adopt` opens a picker for one whole idea in the current conversation,
-then asks for canonical target paths, one per line. The controller supplies the exact
-durable result/idea identity and digest. Cancellation starts no task or
-provider work. Adoption starts a fresh ordinary authoring task and still
-requires drafting, full candidate review and separate Confirm, Apply and
-Commit controls. Pending decisions and recovery conditions take priority.
+`/adopt` asks for a source conversation, a provisional idea, whole or partial
+extent, Authoring or Review only, and canonical target paths. A partial extent
+uses an explicit `START:END` range of zero-based Unicode code points, with an
+exclusive end. The shell shows the exact selected text, range, source result,
+source and selected-text digests, owner conversation, use and targets before
+submission. Cancel, EOF or an invalid selection starts no task or provider work.
+
+The source can be another conversation of the same session. Adoption starts a
+fresh owner task with new confirmation. Authoring requires drafting and complete
+final candidate review; Review only evaluates the exact supplied text without
+rewriting. Confirm, Apply and Commit remain separate controls. Pending decisions
+and recovery boundaries across the session take priority and identify the owner
+whose control must be resolved.
+
 See [exploration and adoption](../guides/lead-agent.md#exploration-and-adoption).
 
 <a id="runtime-debug-logs"></a>

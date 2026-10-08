@@ -3257,16 +3257,18 @@ def _validate_exploration_history(events: tuple[CollaborationEventV2, ...]) -> N
             source = prior.get(capture.selection.result_event_id)
             if user is None or user.sender.kind.value != 'user' or (user.session_id, user.conversation_id, user.turn_id) != (event.session_id, event.conversation_id, event.turn_id) or (event.sender.kind.value != 'user'):
                 raise ValueError('adoption requires its exact explicit user input')
-            if source is None or type(source.payload) is not CollaborationLeadExplorationResultPayload or source.session_id != event.session_id or (source.conversation_id != event.conversation_id) or (capture.selection.source_conversation_id != event.conversation_id):
-                raise ValueError('adoption source must belong to the current focus')
-            ideas = tuple((i for i in source.payload.report.ideas if i.idea_id == capture.selection.idea_id))
-            if len(ideas) != 1 or ideas[0].material_digest != capture.selection.material_digest or ideas[0].material_text != capture.selected_text:
-                raise ValueError('adoption does not select the exact whole idea')
+            if capture.selection.source_conversation_id == event.conversation_id:
+                if source is None or type(source.payload) is not CollaborationLeadExplorationResultPayload or source.session_id != event.session_id:
+                    raise ValueError('adoption requires an available typed idea result')
+                ideas = tuple(i for i in source.payload.report.ideas if i.idea_id == capture.selection.idea_id)
+                if len(ideas) != 1:
+                    raise ValueError('adoption idea is unavailable or ambiguous')
+                capture.validate_source(ideas[0].material_text, hashlib.sha256(encode_collaboration_event(source)).hexdigest())
+                reports = tuple(item for item in prior.values() if type(item.payload) is CollaborationLeadExplorationResultPayload)
+                if not reports or reports[-1].event_id != source.event_id:
+                    raise ValueError('adoption cannot silently reselect a stale result')
             if any((type(item.payload) is CollaborationExplorationAdoptionPayload and item.payload.capture.fresh_task_id == capture.fresh_task_id for item in prior.values())) or any((getattr(item.payload, 'authoring_scope', None) is not None and item.payload.authoring_scope.task_id == capture.fresh_task_id for item in prior.values())):
                 raise ValueError('adoption cannot reuse a previous task')
-            reports = tuple((item for item in prior.values() if type(item.payload) is CollaborationLeadExplorationResultPayload))
-            if not reports or reports[-1].event_id != source.event_id:
-                raise ValueError('adoption cannot select a stale exploration report')
         if type(payload) is CollaborationProposal and payload.authoring_scope is not None:
             capture_events = tuple((item for item in prior.values() if type(item.payload) is CollaborationExplorationAdoptionPayload and item.payload.capture.fresh_task_id == payload.authoring_scope.task_id))
             if capture_events:
@@ -3275,12 +3277,14 @@ def _validate_exploration_history(events: tuple[CollaborationEventV2, ...]) -> N
                 inputs = tuple((i for i in payload.basis.inputs if i.input_id == 'adopted_idea'))
                 if any(('adopted_idea' not in assignment.input_ids for assignment in payload.assignments)):
                     raise ValueError('every adopted-task assignment must retain the exact chosen idea')
-                if len(inputs) != 1 or inputs[0].locator != f'conversation/{adopted.event_id}' or inputs[0].revision_digest != f'sha256:{capture.selection.material_digest}':
-                    raise ValueError('adopted task must preserve its exact whole-idea input')
+                if len(inputs) != 1 or inputs[0].locator != f'conversation/{adopted.event_id}' or inputs[0].revision_digest != f'sha256:{capture.selected_material_digest}':
+                    raise ValueError('adopted task must preserve its exact selected idea input')
                 scope = payload.authoring_scope
                 if scope.task_revision == 1 and (not any((type(item.payload) is CollaborationProposal and item.payload.authoring_scope is not None and (item.payload.authoring_scope.task_id == scope.task_id) for item in prior.values()))):
-                    if scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE} or scope.intent is not AuthoringIntent.AUTHORING or scope.target_paths != capture.selection.target_paths or (payload.budget.rounds_spent != 0):
-                        raise ValueError('adoption requires fresh authoring drafts and exact targets')
+                    activities = ({AuthoringActivity.REVIEW} if capture.selection.intent is AuthoringIntent.REVIEW_ONLY
+                              else {AuthoringActivity.DRAFT, AuthoringActivity.REVISE})
+                    if scope.activity not in activities or scope.intent is not capture.selection.intent or scope.target_paths != capture.selection.target_paths or (payload.budget.rounds_spent != 0):
+                        raise ValueError('adoption requires fresh work with the exact selected intent and targets')
         prior[event.event_id] = event
 
 
