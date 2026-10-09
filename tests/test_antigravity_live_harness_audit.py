@@ -14,29 +14,47 @@ from unittest import mock
 from tests import antigravity_live_harness as harness
 
 
+def scoped_user_text(mode):
+    return ('Finished candidate: Nara arrives on day 1 and observes the door on day 3.'
+                 + '\nUSER direction: ' + ('Draft from these facts, preserving the stated chronology.'
+                 if mode == 'draft' else 'Review the exact supplied facts without rewriting them.')
+                 + ' Creative latitude is confined to this declared fixture task.')
+
+
 def scoped_proposal(agents=('plot_architect',), *, mode='review', proposal_id='scoped_proposal'):
     from dataclasses import fields, replace
+    import hashlib
     from story_writing_agents import conversations as contracts
+    from story_writing_agents import authoring_admission as admission
     from story_writing_agents.specialist_routing import (ArtifactReviewDomain, AuthoringActivity,
         AuthoringScope, SpecialistAssignmentMode, ReviewBasis)
     from tests import collaboration_contract_fixture as fixture
     domains = dict(zip(harness.BUDGET_REVIEWERS, ArtifactReviewDomain))
     assignment_mode = SpecialistAssignmentMode(mode)
+    user_text = scoped_user_text(mode)
     inputs = (fixture.make_input('candidate', kind=contracts.CollaborationInputKind.USER_INPUT,
-        locator='Finished candidate: Nara arrives on day 1 and observes the door on day 3.',
+        locator=f"conversation/{fixture.TURN_ID}/user_input", revision_digest='sha256:' + hashlib.sha256(user_text.encode()).hexdigest(),
         start_line=None, end_line=None),)
-    assignments = tuple(replace(fixture.make_assignment('assignment_' + agent, specialist_id=agent,
-        input_ids=('candidate',)), mode=assignment_mode,
+    assignments = tuple(replace(fixture.make_assignment('assignment_' + agent,
+        specialist_id=agent, input_ids=('candidate',)), mode=assignment_mode,
         review_basis=ReviewBasis(('candidate',), 'Assess the supplied facts without inventing missing evidence.')
         if mode == 'review' else None) for agent in agents)
     # Build the legacy scaffold, then create one digest-bound current proposal.
     legacy = fixture.make_proposal(proposal_id=proposal_id, inputs=inputs,
         assignments=tuple(replace(a, mode=None, review_basis=None) for a in assignments))
     values = {field.name: getattr(legacy, field.name) for field in fields(legacy)
-              if field.name not in {'proposal_digest', 'authoring_scope', 'assignments'}}
-    return contracts.CollaborationProposal.create(**values, assignments=assignments,
-        authoring_scope=AuthoringScope(AuthoringActivity(mode), (), tuple(domains[a] for a in agents),
-            'Finished supplied candidate.' if mode == 'review' else 'Requested draft.', proposal_id, 1))
+        if field.name not in {'proposal_digest', 'authoring_scope', 'assignments'}}
+    scope = AuthoringScope(AuthoringActivity(mode), (), tuple((domains[a] for a in agents)), 'Finished supplied candidate.' if mode == 'review' else 'Requested draft.', proposal_id, 1)
+    assessment = admission.AuthoringAssessment(admission.AdmissionStatus.SUFFICIENT,
+        (admission.AdmissionEvidence('foundations', ('candidate',), 'The literal fixture supplies Nara and chronology.'),),
+        admission.AdmissionEvidence('direction', ('candidate',), 'The USER direction names this task.'),
+        admission.AdmissionEvidence('creative_scope', ('candidate',), 'The USER text bounds creative latitude.'),
+        ('perform the declared fixture task',), ('preserve the stated chronology',), (admission.AdmissionDecision('Declared task and fixed chronology', admission.DecisionCoverage.SUPPLIED,
+        ('candidate',), 'The literal USER supplies this task and the day-1/day-3 chronology.'),), (),
+        'Constructed source-binding fixture; not human literary adequacy evidence.')
+    values["basis"] = fixture.qualify_fixture_basis(legacy.basis, scope,
+        user_text=user_text, assessment=assessment, user_id="candidate")
+    return contracts.CollaborationProposal.create(**values, assignments=assignments, authoring_scope=scope)
 
 
 def scoped_executed_history(proposal, *, failed_assignment_id=None):
@@ -50,12 +68,10 @@ def scoped_executed_history(proposal, *, failed_assignment_id=None):
         return contracts.CollaborationSpecialistReplyPayload(*args, **kwargs, mode=assignment.mode)
     def synthesis(*args, **kwargs):
         return contracts.CollaborationLeadSynthesisPayload(*args, **kwargs, authoring_scope=proposal.authoring_scope)
-    def judgment(*args, **kwargs):
-        return contracts.CollaborationLeadJudgmentPayload(*args, **kwargs, authoring_scope=proposal.authoring_scope)
     with mock.patch.object(fixture, 'CollaborationSpecialistReplyPayload', side_effect=reply), \
-         mock.patch.object(fixture, 'CollaborationLeadSynthesisPayload', side_effect=synthesis), \
-         mock.patch.object(fixture, 'CollaborationLeadJudgmentPayload', side_effect=judgment):
-        return fixture.executed_history(proposal, failed_assignment_id=failed_assignment_id)
+         mock.patch.object(fixture, 'CollaborationLeadSynthesisPayload', side_effect=synthesis):
+        return fixture.executed_history(proposal, failed_assignment_id=failed_assignment_id,
+            literal_user_text=scoped_user_text(proposal.authoring_scope.activity.value))
 
 
 class LiveHarnessAuditTests(unittest.TestCase):
@@ -63,14 +79,10 @@ class LiveHarnessAuditTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        self.identity = dict(session_id="session", conversation_id="conversation",
-                             turn_id="turn", step_id="step", agent_id="lead_orchestrator")
+        self.identity = dict(session_id="session", conversation_id="conversation", turn_id="turn", step_id="step", agent_id="lead_orchestrator")
         current = dict(identity=self.identity, workflow_type="lead_user_turn", user_request_text="Review once")
-        prelude = lambda ordinal: dict(request_type="writing_artifact_reference_read", correlation={
-            "operation_id": "reference-operation", "invocation_ordinal": ordinal,
-            "agent_id": "lead_orchestrator", "phase": "lead"})
-        correction = dict(current, response_correction={
-            "rejection_code": "answer_validation_failed", "instruction": "Return ANSWER now"})
+        prelude = lambda ordinal: dict(request_type="writing_artifact_reference_read", correlation={'operation_id': 'reference-operation', 'invocation_ordinal': ordinal, 'agent_id': 'lead_orchestrator', 'phase': 'lead'})
+        correction = dict(current, response_correction={ "rejection_code": "answer_validation_failed", "instruction": "Return ANSWER now"})
         self.payloads = [prelude(1), dict(request_correlation_token="correlation", response_contract={"workflow_phase": "lead_user_turn", "allowed_action_types": ["search_context", "submit_result"], "searchable_source_types": ["story_document", "conversation_history", "current_consensus_run", "agent_work_history"]}, task_input=current, untrusted_attached_references=["reference"]), prelude(2), dict(request_correlation_token="correlation", response_contract={"workflow_phase": "lead_user_turn", "allowed_action_types": ["submit_result"], "searchable_source_types": []}, task_input=correction, untrusted_attached_references=["reference"])]
         self.calls = []
         self.exchanges = []
@@ -83,8 +95,7 @@ class LiveHarnessAuditTests(unittest.TestCase):
             schema = {"type": "object"}
             content = {"agent_action": {"action_type": "submit_result", "task_result": {
                 "response_type": "answer", "response_text": "Correct answer" if index == 4 else "Rejected answer"}}}
-            native = dict(status="SUCCESS", conversation_id=thread,
-                          json_schema=schema, structured_output=content)
+            native = dict(status="SUCCESS", conversation_id=thread, json_schema=schema, structured_output=content)
             argv = ["unused-agy", "--json-schema", harness.canonical_provider_json(schema).decode(), "--print", json.dumps(payload)]
             (directory / "command.private.json").write_text(json.dumps({"argv": argv}))
             raw = harness.canonical_provider_json(native)
@@ -101,9 +112,7 @@ class LiveHarnessAuditTests(unittest.TestCase):
             self.calls.append(call)
             outcome = {"outcome": "rejected", "code": "answer_validation_failed"} if index == 2 else {
                 "outcome": "accepted", "code": "accepted"}
-            values = [dict(payload=payload, schema=schema, prior_thread_id=prior),
-                      dict(response_text=json.dumps(content), thread_id=thread,
-                           actual_transport_utf8_bytes=call["payload_bytes"]), outcome]
+            values = [dict(payload=payload, schema=schema, prior_thread_id=prior), dict(response_text=json.dumps(content), thread_id=thread, actual_transport_utf8_bytes=call['payload_bytes']), outcome]
             for kind, value in zip(("request", "response", "outcome"), values):
                 self.exchanges.append(dict(exchange_id=str(index), agent="lead_orchestrator",
                                            agent_id="lead_orchestrator", request_type=kind,
@@ -114,8 +123,7 @@ class LiveHarnessAuditTests(unittest.TestCase):
                     invocation_kind="lead", invocation_id="logical-invocation", ordinal=index,
                     call_id="physical-" + str(index),
                     call_kind="reference_prelude" if index in (1, 3) else "initial")))
-        self.history.append(dict(self.identity, sequence=9, payload=dict(
-            payload_type="lead_judgment", kind="answer", message="Correct answer")))
+        self.history.append(dict(self.identity, sequence=9, payload=dict( payload_type="lead_judgment", kind="answer", message="Correct answer")))
 
     def audit(self):
         return harness.audit_exchanges(self.exchanges, self.calls, self.history)
@@ -317,10 +325,9 @@ class LiveHarnessAuditTests(unittest.TestCase):
                 missing = replace(proposal.basis.inputs[0], state=contracts.CollaborationInputState.ABSENT)
                 values = {field.name: getattr(proposal, field.name) for field in fields(proposal)
                           if field.name not in {'proposal_digest', 'basis'}}
-                unavailable = contracts.CollaborationProposal.create(**values,
-                    basis=replace(proposal.basis, inputs=(missing,)))
-                with self.assertRaisesRegex(AssertionError, 'unavailable'):
-                    harness.assert_review_proposal(unavailable, agents)
+                with self.assertRaisesRegex(ValueError, 'authoring admission sources are not exact captured inputs'):
+                    contracts.CollaborationProposal.create(**values,
+                        basis=replace(proposal.basis, inputs=(missing,)))
                 with self.assertRaisesRegex(AssertionError, 'REVIEW'):
                     harness.assert_review_proposal(scoped_proposal(agents, mode='draft'), agents)
         recovery = harness.selected_spec('F04-FAILURE-RECOVERY')
@@ -402,7 +409,7 @@ class LiveHarnessAuditTests(unittest.TestCase):
         from types import SimpleNamespace
         from story_writing_agents import conversations as contracts
         from story_writing_agents.specialist_routing import ArtifactReviewDomain, AuthoringActivity
-        from tests.recommendation_fixture import RecommendationCase, action, recommendation
+        from tests.recommendation_fixture import RecommendationCase, action, recommendation, task_assessment
 
         runtime_case = RecommendationCase()
         self.addCleanup(runtime_case.doCleanups)
@@ -410,9 +417,8 @@ class LiveHarnessAuditTests(unittest.TestCase):
         conversation_id = runtime_case.conversation('L06C pending Plot recommendation')
         spec = harness.selected_spec('L06C-RECOMMENDATION')
         runtime_case.backend.enqueue(recommendation(message=spec['candidate_text'],
-            recommended_action=action(kind='prepare_consultation',
-                purpose='Prepare a separately confirmed chronology review.',
-                instruction='Prepare a Plot REVIEW proposal for the supplied finished outline.')))
+            recommended_action=action(kind='prepare_consultation', purpose='Prepare a separately confirmed chronology review.', instruction='Prepare a Plot REVIEW proposal for the supplied finished outline.'),
+            authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=("bounded chronology review",))))
         observer = SimpleNamespace(calls=[])
         turns = []
 

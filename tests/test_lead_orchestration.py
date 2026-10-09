@@ -22,7 +22,7 @@ from story_writing_agents.conversations import CollaborationConfirmationPayload
 from story_writing_agents.specialist_routing import SpecialistAssignmentMode
 from collections.abc import Mapping
 from contextlib import asynccontextmanager, contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace, asdict
 from typing import Awaitable, Callable
 from unittest import mock
 
@@ -122,6 +122,13 @@ _Response = (
 
 
 _LIVE_CONTEXT = {}
+
+# Constructed USER bytes for explicit positive fixtures; no real provider/human evidence.
+_STORY_USER_INPUT = (
+    "A courier loses a letter, retraces the route, and returns it. "
+    "Preserve the premise; you may invent supporting motivation and decide missing details."
+)
+_REVIEW_USER_INPUT = "Review complete supplied candidate: " + _STORY_USER_INPUT
 
 
 
@@ -223,7 +230,7 @@ def _history_validation_details(history):
 
 
 
-def _selected_premise_proposal(selection):
+def _selected_premise_proposal(selection, *, authoring_assessment=None):
     from tests.test_specialist_routing_runtime import scoped_proposal
 
     def captured_scope(value, material):
@@ -237,9 +244,17 @@ def _selected_premise_proposal(selection):
             assignment["mode"] = "constraint_assessment" if assignment["agent_id"] == EXECUTION_SPECIALIST else "draft"
 
     revision = None if selection.expected_authoring_task_revision is None else selection.expected_authoring_task_revision + 1
-    return scoped_proposal(PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST, selected=selection.authoring_task_id,
-                          domains=("plot_structure", "character_world", "tone_execution"),
-                          revision=revision, paths=selection.target_paths, mutate=captured_scope)
+    return scoped_proposal(
+        PLOT_ARCHITECT,
+        CHARACTER_CUSTODIAN,
+        EXECUTION_SPECIALIST,
+        selected=selection.authoring_task_id,
+        domains=("plot_structure", "character_world", "tone_execution"),
+        revision=revision,
+        paths=selection.target_paths,
+        mutate=captured_scope,
+        authoring_assessment=authoring_assessment,
+    )
 
 def _object_positional_patch(target, attribute, value):
     return mock.patch.object(target, attribute, value)
@@ -436,10 +451,7 @@ class _LeadContextProvider:
                 except asyncio.CancelledError as failure:
                     record_context_provider_failure(
                         failure,
-                        ContextProviderFailureFacts(
-                            accounting,
-                            taint_existing_thread=True,
-                        ),
+                        ContextProviderFailureFacts(accounting, taint_existing_thread=True,),
                     )
                     raise
         if isinstance(response, BaseException):
@@ -644,9 +656,7 @@ def _live_result(call, value):
                 "assignments": _live_assignments(intent["assignments"]),
             }
         elif type(value.get("recommended_action")) is dict:
-            compact["recommended_action"] = _compact_recommended(
-                value["recommended_action"]
-            )
+            compact["recommended_action"] = _compact_recommended(value["recommended_action"])
         return compact
     if "kind" not in value:
         return value
@@ -704,11 +714,10 @@ def _live_result(call, value):
         "kind": value["kind"],
         "message": value["message"],
         "authoring_scope": _compact_scope(value["authoring_scope"]),
+        **({"authoring_assessment": value["authoring_assessment"]} if "authoring_assessment" in value else {}),
     }
     if type(value.get("recommended_action")) is dict:
-        compact["recommended_action"] = _compact_recommended(
-            value["recommended_action"]
-        )
+        compact["recommended_action"] = _compact_recommended(value["recommended_action"])
     elif type(proposal) is dict:
         compact_proposal = {
             "assignments": _live_assignments(proposal["assignments"]),
@@ -810,6 +819,7 @@ def _proposal_outcome(
     relation: str = "new_step",
     purpose: str = "Check the story evidence before recommending a change.",
     activity: str | None = None,
+    authoring_assessment: dict[str, object] | None = None,
 ):
     def respond(
         call: ContextProviderCallRequest,
@@ -834,16 +844,15 @@ def _proposal_outcome(
                     **({"shared_premises": []} if "contributions" in _live_scope(call) else {}),
                 },
             }
+        if authoring_assessment is not None:
+            value["authoring_assessment"] = authoring_assessment
         if activity is not None:
             value["authoring_scope"] = _live_scope(
                 call,
                 activity=activity,
                 domains=("plot_structure", "character_world", "tone_execution"),
             )
-        return _provider_envelope(
-            call,
-            value,
-        )
+        return _provider_envelope(call, value,)
 
     return respond
 
@@ -882,13 +891,7 @@ def _specialist_outcome(
         call: ContextProviderCallRequest,
         _provider: _LeadContextProvider,
     ) -> str:
-        return _provider_envelope(
-            call,
-            {
-                "assessment": assessment,
-                "message": message,
-            },
-        )
+        return _provider_envelope(call, {"assessment": assessment, "message": message,},)
 
     return respond
 
@@ -958,12 +961,7 @@ def _read_history_hit(
     assert isinstance(observation, dict) and observation["observation_type"] == "context_search_results"
     handle = observation["search_results"][0]["read_handle"]
     provider.used_handles = (handle,)
-    return json.dumps(
-        {
-            "action": {"kind": "read", "handles": [handle]},
-        },
-        separators=(",", ":"),
-    )
+    return json.dumps({"action": {"kind": "read", "handles": [handle]},}, separators=(",", ":"),)
 
 
 def _answer_from_history(
@@ -1021,10 +1019,7 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(temporary.cleanup)
         self.control_workspace = materialize_pristine_initialized_workspace(f"{temporary.name}/story")
         self.session_id = "story_session"
-        ready = provision_session_resources(
-            self.control_workspace.root,
-            self.session_id,
-        )
+        ready = provision_session_resources(self.control_workspace.root, self.session_id,)
         self.session_resources = ready
         self.workspace = Workspace(ready.identity.worktree_root).require_ready()
         self.workspace.path("core_documents/global_outline.md").write_text(
@@ -1037,10 +1032,7 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
         )
         part = self.workspace.path("manuscript/part-01")
         part.mkdir(parents=True, exist_ok=True)
-        (part / "opening.md").write_text(
-            "Opening one.\nOpening two.\nOpening three.\n",
-            encoding="utf-8",
-        )
+        (part / "opening.md").write_text("Opening one.\nOpening two.\nOpening three.\n", encoding="utf-8",)
         self.backend = _LeadBackend()
         # This orchestration fake has no native provider process or role file.
         boundary_patch = mock.patch(
@@ -1056,16 +1048,10 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
 
 
     def conversation(self, subject: str = "Lead collaboration") -> str:
-        return self.runtime.conversation_storage_services.catalog.create(
-            self.session_id,
-            subject,
-        ).conversation_id
+        return self.runtime.conversation_storage_services.catalog.create(self.session_id, subject,).conversation_id
 
     def history(self, conversation_id: str):
-        return self.runtime.conversation_storage_services.event_store.read(
-            self.session_id,
-            conversation_id,
-        )
+        return self.runtime.conversation_storage_services.event_store.read(self.session_id, conversation_id,)
 
     async def proposal(
         self,
@@ -1074,25 +1060,17 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
         text: str = "Please check the story direction.",
         assignments: list[dict[str, object]] | None = None,
         relation: str = "new_step",
+        authoring_assessment: dict[str, object] | None = None,
     ):
         self.backend.enqueue(
             _proposal_outcome(
                 assignments
-                or [
-                    {
-                        "agent_id": PLOT_ARCHITECT,
-                        "instruction": "Check the story direction against the request.",
-                        "input_ids": ["user_input"],
-                    }
-                ],
+                or [ { "agent_id" : PLOT_ARCHITECT , "instruction" : "Check the story direction against the request." , "input_ids" : [ "user_input" ] , } ],
                 relation=relation,
+                authoring_assessment=authoring_assessment,
             )
         )
-        return await self.runtime.lead_turn(
-            self.session_id,
-            conversation_id,
-            text,
-        )
+        return await self.runtime.lead_turn(self.session_id, conversation_id, text,)
 
 
 def _discussion_reply(text, kind="answer"):
@@ -1112,11 +1090,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.backend.context_threads = {}
         conversation_id = self.conversation("Searchable lead history")
         self.backend.enqueue(_visible_outcome("answer"))
-        await self.runtime.lead_turn(
-            self.session_id,
-            conversation_id,
-            "Create one prior visible answer.",
-        )
+        await self.runtime.lead_turn(self.session_id, conversation_id, "Create one prior visible answer.",)
         session_definition = self.backend.definitions[-1]
         control_policy = self.control_workspace.path(behavior_policy_files(LEAD_ORCHESTRATOR)[-1])
         legacy_build = self.runtime.prompts.build_contextual_definition
@@ -1146,26 +1120,15 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             tuple(call.payload["response_contract"]["allowed_action_types"] for call in calls),
             (["search_context", "submit_result"], ["search_context", "read_context", "submit_result"], ["search_context", "read_context", "submit_result"]),
         )
-        self.assertIn(
-            "Visible lead response.",
-            json.dumps(dict(calls[0].payload), ensure_ascii=False),
-        )
-        self.assertIn(
-            "visible lead response",
-            json.dumps(dict(calls[1].payload), ensure_ascii=False).lower(),
-        )
-        self.assertEqual(
-            project_collaboration_history(
-                self.history(conversation_id)
-            ).physical_calls_spent,
-            3,
-        )
-        self.assertEqual(
-            len(_submitted_calls(self.history(conversation_id))),
-            4,
-        )
+        self.assertIn("Visible lead response.", json.dumps(dict(calls[0].payload), ensure_ascii=False),)
+        self.assertIn("visible lead response", json.dumps(dict(calls[1].payload), ensure_ascii=False).lower(),)
+        self.assertEqual(project_collaboration_history(self.history(conversation_id)).physical_calls_spent, 3,)
+        self.assertEqual(len(_submitted_calls(self.history(conversation_id))), 4,)
 
     async def test_all_five_outcomes_have_exact_visible_next_actions(self) -> None:
+        from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
+        assessment = asdict(_fixture_assessment())
+        qualified_request = _ADMISSION_BRIEF + "\nPlease check story direction."
         from tests.recommendation_fixture import action
         cases = (
             ("answer", CollaborationNextAction.CONTINUE_WITH_LEAD),
@@ -1178,17 +1141,15 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 conversation_id = self.conversation(f"Outcome {kind}")
                 from tests.recommendation_fixture import recommendation
                 self.backend.enqueue(recommendation(recommended_action=action(
-                    kind="prepare_consultation",
-                    source_ids=("user_input",),
-                    specialist_ids=(
-                        PLOT_ARCHITECT,
-                        CHARACTER_CUSTODIAN,
-                        EXECUTION_SPECIALIST,
-                    ),
-                ))
+                    kind="prepare_consultation", source_ids=("user_input",),
+                    specialist_ids=( PLOT_ARCHITECT , CHARACTER_CUSTODIAN , EXECUTION_SPECIALIST , ),
+                ),
+                    mutate=lambda value: value.update(authoring_assessment=assessment),
+                )
                     if kind == "recommendation" else _visible_outcome(kind))
                 result = await self.runtime.session(self.session_id).lead_turn(
                     conversation_id,
+                    (_ADMISSION_BRIEF + "\n" if kind == "recommendation" else "") +
                     f"Return a {kind}. Finished candidate: a summons causes a choice and its consequence.",
                 )
                 self.assertIs(result.kind, LeadOutcomeKind(kind))
@@ -1206,19 +1167,13 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         CollaborationEventKind.MESSAGE,
                     ) + ((CollaborationEventKind.LEAD_RECOMMENDATION_REQUEST,) if kind == "recommendation" else ()),
                 )
-                self.assertEqual(
-                    project_collaboration_history(history).physical_calls_spent,
-                    1,
-                )
+                self.assertEqual(project_collaboration_history(history).physical_calls_spent, 1,)
 
         proposal_id = self.conversation("Proposal")
-        proposed = await self.proposal(proposal_id)
+        proposed = await self.proposal(proposal_id, text=qualified_request, authoring_assessment=assessment,)
         self.assertIs(proposed.kind, LeadOutcomeKind.PROPOSAL)
         self.assertIs(proposed.state, CollaborationStepState.AWAITING_CONFIRMATION)
-        self.assertIs(
-            proposed.next_action,
-            CollaborationNextAction.SUBMIT_CONFIRMATION,
-        )
+        self.assertIs(proposed.next_action, CollaborationNextAction.SUBMIT_CONFIRMATION,)
 
     async def test_strict_provider_outcomes_reject_unknown_private_mixed_and_duplicate(
         self,
@@ -1248,18 +1203,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         **result,
                         "authoring_scope": _compact_scope(_live_scope(call)),
                     }
-                return json.dumps({
-                    "action": {
-                        "kind": "answer",
-                        "result": result,
-                        "used_handles": [],
-                    }
-                })
+                return json.dumps({"action": {"kind": "answer", "result": result, "used_handles": [],}})
             return respond
 
-        scripts: tuple[_Response, ...] = tuple(
-            invalid_response(value) for value in invalid_values
-        ) + (duplicate,)
+        scripts: tuple[_Response, ...] = tuple(invalid_response(value) for value in invalid_values) + (duplicate,)
         for index, script in enumerate(scripts):
             with self.subTest(index=index):
                 conversation_id = self.conversation(f"Invalid {index}")
@@ -1271,26 +1218,14 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     "Reject a noncanonical outcome.",
                 )
                 self.assertIsNone(result.state)
-                self.assertIs(
-                    result.next_action,
-                    CollaborationNextAction.CONTINUE_WITH_LEAD,
-                    result.message,
-                )
+                self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD, result.message,)
                 self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
                 self.assertIn("no action was taken", result.message)
                 history = self.history(conversation_id)
-                self.assertFalse(
-                    any(
-                        type(event.payload) is CollaborationProposal
-                        for event in history
-                    )
-                )
+                self.assertFalse(any(type(event.payload) is CollaborationProposal for event in history))
                 failures = _event_payloads(history, CollaborationLeadOutcomeFailurePayload)
                 self.assertEqual(len(failures), 1)
-                self.assertIs(
-                    failures[0].code,
-                    CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED,
-                )
+                self.assertIs(failures[0].code, CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED,)
                 visible = tuple(
                     event.payload
                     for event in history
@@ -1379,8 +1314,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     self.assertIs(node["additionalProperties"], False)
                 for key, value in node.items():
                     premise_properties = node.get("specialist_consultation_proposal", {}).get("properties", {})
-                    nullable = key == "selected_premise" or (
-                        key == "writing_task_scope" and "premise_decision" in premise_properties)
+                    nullable = (key == "writing_task_scope" and "premise_decision" in premise_properties) or (
+                        key in ("selected_premise", "authoring_assessment", "direction", "creative_scope"))
                     assert_strict(value, allow_null if key in ("anyOf", "type") else nullable)
             elif type(node) in (list, tuple):
                 for value in node:
@@ -1418,7 +1353,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             rules = guided["contract_guidance"]["response_rules"]
             offered = sorted({value for branch in stage.get("anyOf", (stage,)) for value in branch["properties"]["response_type"]["enum"]})
             action_rules = ["Current schema offers action_type: " + ", ".join(actions) + "."] if actions else []
-            self.assertEqual(rules[4:], action_rules + ["Current schema offers response_type: " + ", ".join(offered) + "."])
+            self.assertEqual(rules[5:], action_rules + ["Current schema offers response_type: " + ", ".join(offered) + "."])
             self.assertEqual(guided["contract_guidance"]["input_fields"].keys(), {"$.task_input"})
             self.assertEqual(add_contract_guidance(guided, stage), guided)
             self.assertEqual(guided["task_input"], source["task_input"])
@@ -1440,7 +1375,13 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             "activity": "review", "intent": "authoring", "domains": ["plot_structure"], "target_paths": [], "task": "task@1"},
             "proposal": {"shared_premises": [], "assignments": [{"agent_id": PLOT_ARCHITECT, "mode": "review",
                 "instruction": "Review sources.", "input_ids": ["user_input", "outline"]}]}}
-        self.assertEqual(diagnose_json_text(json.dumps(wire_result(value, "lead-response-v7")), contract), ())
+        from tests.test_specialist_routing_runtime import _fixture_assessment
+        assessment = asdict(_fixture_assessment(foundation_ids=("user_input",), user_id="user_input"))
+        native_authoring_value = {**value, "authoring_assessment": assessment}
+        self.assertEqual(
+            diagnose_json_text(json.dumps(wire_result(native_authoring_value, "lead-response-v7")), contract),
+            (),
+        )
         self.assertEqual(facts.diagnose(json.dumps(value)), ())
         from story_writing_agents.provider_wire import project_runtime_object
         from story_writing_agents.writing_artifacts.catalog import canonical_artifact_kind
@@ -1463,7 +1404,11 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 for agent in (PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST)]}}
         read_contract = orchestrator_module._lead_front_result_contract(
             orchestrator_module.LeadProposalRelation.NEW_STEP, read_facts.input_ids, constraints=read_facts).schema_value()
-        self.assertEqual(diagnose_json_text(json.dumps(wire_result(legacy, "lead-response-v7")), read_contract), ())
+        native_read_value = {**legacy, "authoring_assessment": None}
+        self.assertEqual(
+            diagnose_json_text(json.dumps(wire_result(native_read_value, "lead-response-v7")), read_contract),
+            (),
+        )
         self.assertEqual(read_facts.diagnose(json.dumps(legacy)), (Rule.INPUT_NOT_OFFERED,))
         recommendation_value = {"kind": "recommendation", "message": "Prepare approved material.",
             "recommended_action": {"kind": "prepare_artifact", "instruction": "Use the approved draft.",
@@ -1522,9 +1467,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
 
         limit = COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES
         def recover(raw):
-            return wire.recover_lead_public_response(
-                raw, "lead-discussion-response-v1", maximum_utf8_bytes=limit,
-            )
+            return wire.recover_lead_public_response(raw, "lead-discussion-response-v1", maximum_utf8_bytes=limit,)
         public = _discussion_reply("Literal e\u0301\r\n")
         exact = public + " " * (limit - len(public.encode("utf-8")))
         self.assertEqual(recover(exact), "Literal e\u0301\r\n")
@@ -1620,10 +1563,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 _call: ContextProviderCallRequest,
                 _provider: _LeadContextProvider,
             ) -> str:
-                return json.dumps(
-                    {"action": {"kind": "answer", "result": value}},
-                    separators=(",", ":"),
-                )
+                return json.dumps({"action": {"kind": "answer", "result": value}}, separators=(",", ":"),)
 
             return respond
 
@@ -1654,10 +1594,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 )
                 correction = _workflow_material(self.backend.calls[-1].payload)
                 self.assertIn("response_correction", correction)
-                self.assertIn(
-                    "writing_task_scope",
-                    correction["response_correction"]["instruction"],
-                )
+                self.assertIn("writing_task_scope", correction["response_correction"]["instruction"],)
                 self.backend.enqueue(_visible_outcome("answer", "Scoped workflow answer."))
                 await self.runtime.lead_turn(self.session_id, conversation_id, "Explain collaboration workflow.")
 
@@ -1709,10 +1646,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     "Draft core_documents/global_outline.md as three beats.",
                 )
                 self.assertEqual(len(self.backend.calls) - before, 2)
-                self.assertIs(
-                    rejected.trace.origin,
-                    ReplyTraceOrigin.RUNTIME_FALLBACK,
-                )
+                self.assertIs(rejected.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK,)
                 self.assertIsNone(rejected.proposal)
                 self.assertIn("after one repair attempt", rejected.message)
                 self.backend.enqueue(_visible_outcome("answer", "Scoped workflow answer."))
@@ -1732,24 +1666,19 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
     async def test_runtime_constructs_complete_ordered_content_free_proposal(
         self,
     ) -> None:
+        from tests.test_specialist_routing_runtime import _fixture_assessment
+        assessment = asdict(_fixture_assessment(foundation_ids=("user_input",), user_id="user_input"))
         conversation_id = self.conversation("Cross-domain proposal")
         text = (
-            "Check these sources in order: "
-            "${core_documents/global_outline.md} "
-            "${core_documents/character_sheets.md} "
-            "${manuscript/part-01/opening.md}#L2-L3"
+            (
+            _REVIEW_USER_INPUT + "\n"
+            + "Check sources in order: ${core_documents/global_outline.md} "
+            + "${core_documents/character_sheets.md} ${manuscript/part-01/opening.md}#L2-L3"
+        )
         )
         assignments = [
-            {
-                "agent_id": PLOT_ARCHITECT,
-                "instruction": "Check outline causality and the opening range.",
-                "input_ids": ["user_input", "reference_1", "reference_3"],
-            },
-            {
-                "agent_id": CHARACTER_CUSTODIAN,
-                "instruction": "Check the established character motivation.",
-                "input_ids": ["reference_2"],
-            },
+            { "agent_id" : PLOT_ARCHITECT , "instruction" : "Check outline causality and the opening range." , "input_ids" : [ "user_input" , "reference_1" , "reference_3" ] , },
+            { "agent_id" : CHARACTER_CUSTODIAN , "instruction" : "Check the established character motivation." , "input_ids" : [ "reference_2" ] , },
             {"agent_id": EXECUTION_SPECIALIST, "instruction": "Assess the supplied opening prose.",
              "input_ids": ["reference_3"]},
         ]
@@ -1758,6 +1687,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             conversation_id,
             text=text,
             assignments=assignments,
+            authoring_assessment=assessment,
         )
 
         proposal = result.proposal
@@ -1787,9 +1717,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 CollaborationInputKind.MANUSCRIPT,
             ),
         )
-        self.assertEqual(
-            proposal.side_effects, (CollaborationSideEffect.PROVIDER_INVOCATION,)
-        )
+        self.assertEqual(proposal.side_effects, (CollaborationSideEffect.PROVIDER_INVOCATION,))
         self.assertIn("cannot change writing artifacts", proposal.user_impact.lower())
         self.assertEqual(proposal.budget.physical_calls_spent, 1)
         self.assertLessEqual(
@@ -1803,9 +1731,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         )
         self.assertEqual(len(self.backend.reference_contexts), 1)
         self.assertEqual(len(self.backend.reference_contexts[0]), 3)
-        self.assertIn(
-            "Outline first line", self.backend.reference_contexts[0][0]["content"]
-        )
+        self.assertIn("Outline first line", self.backend.reference_contexts[0][0]["content"])
         self.assertNotIn("Outline first line", repr(proposal))
         history = self.history(conversation_id)
         call_payloads = _event_payloads(history, CollaborationProviderCallPayload)
@@ -1822,6 +1748,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         )
 
     async def test_runtime_repairs_then_safely_ignores_invalid_proposals(self) -> None:
+        from tests.recommendation_fixture import task_assessment
         assignment = {"agent_id": PLOT_ARCHITECT, "instruction": "Review the input.", "input_ids": ["user_input"]}
         rules = {
             "duplicate-specialist": ("$.agent_action.task_result.specialist_consultation_proposal.assignments: agent_id values must be unique before canonical ordering (also applies to follow_up_consultation)",),
@@ -1841,11 +1768,16 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         for label, text, assignments in cases:
             with self.subTest(label=label):
                 conversation_id = self.conversation(label)
-                response = _proposal_outcome(assignments)
+                response = _proposal_outcome(assignments, authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded story-direction review judgments',))))
                 self.backend.enqueue(response)
                 self.backend.enqueue(response)
                 calls = len(self.backend.calls)
-                result = await self.runtime.lead_turn(self.session_id, conversation_id, text)
+                result = await self.runtime.lead_turn(self.session_id, conversation_id, (text + (
+                '\nSupplied story facts: Mara wants safety and fears exposure. Review the story direction against '
+                'those facts and the exact requested references. You may give bounded story-direction review '
+                'judgments; preserve supplied facts and do not write files. Execution requires separate exact '
+                'confirmation.'
+            )))
                 self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
                 self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
                 self.assertEqual(len(self.backend.calls) - calls, 2)
@@ -1865,8 +1797,14 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
     async def test_confirm_is_exact_single_use_and_executes_without_artifact_effect(
         self,
     ) -> None:
+        from tests.test_specialist_routing_runtime import _fixture_assessment
+        assessment = asdict(_fixture_assessment(foundation_ids=("user_input",), user_id="user_input"))
         conversation_id = self.conversation("Confirm")
-        proposed = await self.proposal(conversation_id)
+        proposed = await self.proposal(
+            conversation_id,
+            text=_REVIEW_USER_INPUT,
+            authoring_assessment=assessment,
+        )
         calls_before = len(self.backend.calls)
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
@@ -1877,15 +1815,9 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         confirmed = await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
 
         self.assertIs(confirmed.turn.state, CollaborationStepState.COMPLETED)
-        self.assertIs(
-            confirmed.turn.next_action,
-            CollaborationNextAction.CONTINUE_WITH_LEAD,
-        )
+        self.assertIs(confirmed.turn.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD,)
         self.assertEqual(len(self.backend.calls), calls_before + 2)
-        self.assertEqual(
-            {path: path.read_bytes() for path in artifacts_before},
-            artifacts_before,
-        )
+        self.assertEqual({path: path.read_bytes() for path in artifacts_before}, artifacts_before,)
         history = self.history(conversation_id)
         self.assertTrue(
             {
@@ -1902,8 +1834,11 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
     async def test_mismatch_reject_revise_and_free_text_are_non_authorizing(
         self,
     ) -> None:
+        from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
+        assessment = asdict(_fixture_assessment())
+        qualified_request = _ADMISSION_BRIEF + "\nPlease check story direction."
         mismatch_id = self.conversation("Mismatch")
-        mismatch = await self.proposal(mismatch_id)
+        mismatch = await self.proposal(mismatch_id, text=qualified_request, authoring_assessment=assessment,)
         calls = len(self.backend.calls)
         for changes in (
             {"confirmation_request_id": "wrong_request"},
@@ -1914,53 +1849,40 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
             with self.subTest(changes=changes):
                 with self.assertRaises(ValueError):
                     await self.runtime.decide_lead_step(
-                        _decision(
-                            mismatch,
-                            CollaborationConfirmationDecision.CONFIRM,
-                            **changes,
-                        )
+                        _decision(mismatch, CollaborationConfirmationDecision.CONFIRM, **changes,)
                     )
                 self.assertEqual(len(self.backend.calls), calls)
 
         reject_id = self.conversation("Reject")
-        rejected_proposal = await self.proposal(reject_id)
+        rejected_proposal = await self.proposal(
+            reject_id,
+            text=qualified_request,
+            authoring_assessment=assessment,
+        )
         calls = len(self.backend.calls)
         rejected = await self._decide(rejected_proposal, CollaborationConfirmationDecision.REJECT)
         self.assertIs(rejected.turn.state, CollaborationStepState.REJECTED)
         self.assertEqual(len(self.backend.calls), calls)
 
         revise_id = self.conversation("Revise")
-        revised_source = await self.proposal(revise_id)
+        revised_source = await self.proposal(revise_id, text=qualified_request, authoring_assessment=assessment,)
         self.backend.enqueue(
             _proposal_outcome(
-                [
-                    {
-                        "agent_id": PLOT_ARCHITECT,
-                        "instruction": "Perform the revised plot check.",
-                        "input_ids": ["user_input"],
-                    }
-                ],
+                [ { "agent_id" : PLOT_ARCHITECT , "instruction" : "Perform the revised plot check." , "input_ids" : [ "user_input" ] , } ],
                 relation="revise_pending",
+                authoring_assessment=assessment,
             )
         )
         revised = await self._decide(revised_source, CollaborationConfirmationDecision.REVISE)
         replacement = revised.turn.proposal
         assert replacement is not None
         self.assertEqual(replacement.step_id, revised_source.step_id)
-        self.assertEqual(
-            replacement.proposal_revision,
-            revised_source.proposal.proposal_revision + 1,
-        )
-        self.assertNotEqual(
-            replacement.proposal_id, revised_source.proposal.proposal_id
-        )
-        self.assertNotEqual(
-            replacement.proposal_digest,
-            revised_source.proposal.proposal_digest,
-        )
+        self.assertEqual(replacement.proposal_revision, revised_source.proposal.proposal_revision + 1,)
+        self.assertNotEqual(replacement.proposal_id, revised_source.proposal.proposal_id)
+        self.assertNotEqual(replacement.proposal_digest, revised_source.proposal.proposal_digest,)
 
         free_id = self.conversation("Free text")
-        pending = await self.proposal(free_id)
+        pending = await self.proposal(free_id, text=qualified_request, authoring_assessment=assessment,)
         self.backend.enqueue(_visible_outcome("answer", "Yes is ordinary prose."))
         answered = await self.runtime.lead_turn(self.session_id, free_id, "Yes")
         self.assertIs(answered.kind, LeadOutcomeKind.ANSWER)
@@ -1989,7 +1911,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
 
         memory_id = self.conversation("Editorial pending proposal")
         selected = await self.runtime.record_editorial_decision(self.session_id, memory_id, editorial_request("proposal_selected_memory"))
-        stale = await self.proposal(memory_id)
+        stale = await self.proposal(memory_id, text=qualified_request, authoring_assessment=assessment,)
         self.assertEqual(stale.proposal.basis.editorial_refs, (selected.record_ref,))
         other = self.conversation("Changed editorial choice")
         await self.runtime.record_editorial_decision(self.session_id, other, editorial.EditorialRecordRequest("reject_proposal_memory", editorial.EditorialAction.REJECT, "Changed explicitly.", expected_ref=selected.record_ref))
@@ -2001,7 +1923,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         from tests.test_specialist_routing_runtime import scoped_proposal
         case = _task_fixture(self)
         conversation = case.conversation("Explicit task lifecycle")
-        pending = await case.proposal(conversation)
+        pending = await case.proposal(conversation, text=qualified_request, authoring_assessment=assessment,)
         view = case.runtime.inspect_lead_collaboration(case.session_id, conversation)
         original = next(item for item in view.available_tasks if item.ref.task_id == pending.proposal.authoring_scope.task_id)
         hold = task.LeadTaskDecision.from_task(original.ref, task.LeadTaskAction.HOLD)
@@ -2023,7 +1945,9 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         case.backend.enqueue(_discussion_reply("Which direction should the resumed task pursue?", "clarification_question"))
         case.backend.enqueue(scoped_proposal(
             PLOT_ARCHITECT, paths=(), domains=("plot_structure",),
-            mutate=lambda value, _: value.update(message=original.goal)))
+            mutate=lambda value, _: value.update(message=original.goal),
+            authoring_assessment=_fixture_assessment(),
+        ))
         resumed = await case.runtime.decide_lead_task(resume)
         self.assertIsNone(resumed.turn.proposal)
         receipt = case.runtime.inspect_lead_collaboration(case.session_id, conversation).discussion_context
@@ -2035,7 +1959,8 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         self.assertEqual(case.history(conversation), question_prefix)
         self.assertEqual(len(case.backend.calls), spent + 1)
         resumed = replace(resumed, turn=await case.runtime.lead_turn(
-            case.session_id, conversation, "The selected direction stays on this same fresh revision.",
+            case.session_id, conversation,
+            _ADMISSION_BRIEF + "\n" + "The selected direction stays on this same fresh revision.",
         ))
         self.assertEqual(len(_submitted_calls(case.history(conversation)[len(unchanged):])), 2)
         self.assertEqual({event.step_id for event in case.history(conversation)[len(unchanged):]
@@ -2067,9 +1992,13 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         with self.assertRaises(ValueError):
             await case.runtime.decide_lead_task(task.LeadTaskDecision.from_task(retired.ref, task.LeadTaskAction.RESUME,
                                                                              text="Cannot revive discarded authority."))
-        case.backend.enqueue(scoped_proposal(EXECUTION_SPECIALIST, paths=(), domains=("tone_execution",)))
-        created = await case.runtime.decide_lead_task(task.LeadTaskDecision.from_task(retired.ref, task.LeadTaskAction.NEW_TASK,
-                                                                                   text="Start separate prose work."))
+        case.backend.enqueue(scoped_proposal(
+            EXECUTION_SPECIALIST, paths=(), domains=("tone_execution",),
+            authoring_assessment=_fixture_assessment(),
+        ))
+        created = await case.runtime.decide_lead_task(task.LeadTaskDecision.from_task(
+            retired.ref, task.LeadTaskAction.NEW_TASK,
+            text=_ADMISSION_BRIEF + "\n" + "Start separate prose work."))
         self.assertNotEqual(created.turn.proposal.authoring_scope.task_id, retired.ref.task_id)
         self.assertEqual(created.turn.proposal.authoring_scope.task_revision, 1)
         self.assertEqual(created.turn.proposal.authoring_scope.domains, (ArtifactReviewDomain.TONE_EXECUTION,))
@@ -2080,18 +2009,19 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
             case.session_id, conversation), case.runtime.inspect_lead_collaboration(case.session_id, conversation))
 
     async def test_reference_drift_blocks_confirmation_without_calls(self) -> None:
+        from tests.recommendation_fixture import task_assessment
         conversation_id = self.conversation("Drift")
         proposed = await self.proposal(
             conversation_id,
-            text="Check ${core_documents/global_outline.md}",
-            assignments=[
-                {
-                    "agent_id": PLOT_ARCHITECT,
-                    "instruction": "Check the exact outline revision.",
-                    "input_ids": ["user_input", "reference_1"],
-                }
-            ],
-        )
+            text=("Check ${core_documents/global_outline.md}" + (
+                '\nSupplied story facts: Mara wants safety and fears exposure. Review the story direction against '
+                'those facts and the exact requested references. You may give bounded story-direction review '
+                'judgments; preserve supplied facts and do not write files. Execution requires separate exact '
+                'confirmation.'
+            )),
+            assignments=[ { "agent_id" : PLOT_ARCHITECT , "instruction" : "Check the exact outline revision." , "input_ids" : [ "user_input" , "reference_1" ] , } ],
+        authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded story-direction review judgments',))),
+                         )
         calls = len(self.backend.calls)
         self.workspace.path("core_documents/global_outline.md").write_text(
             "A different outline revision.\n",
@@ -2110,11 +2040,17 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
     async def test_revision_direct_workflow_cannot_erase_selected_story_scope(
         self,
     ) -> None:
+        from tests.test_specialist_routing_runtime import _fixture_assessment
+        assessment = asdict(_fixture_assessment(foundation_ids=("user_input",), user_id="user_input"))
         from tests.recommendation_fixture import action
         for kind in ("answer", "question", "critique", "recommendation"):
             with self.subTest(kind=kind):
                 conversation_id = self.conversation(f"Direct {kind} revision outcome")
-                proposed = await self.proposal(conversation_id)
+                proposed = await self.proposal(
+                    conversation_id,
+                    text=_REVIEW_USER_INPUT,
+                    authoring_assessment=assessment,
+                )
                 self.backend.enqueue(
                     _visible_outcome(
                         kind,
@@ -2126,25 +2062,21 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
 
                 revised = await self._decide(proposed, CollaborationConfirmationDecision.REVISE)
 
-                self.assertIs(
-                    revised.turn.next_action,
-                    CollaborationNextAction.CONTINUE_WITH_LEAD,
-                )
-                self.assertIs(
-                    revised.turn.state,
-                    CollaborationStepState.SUPERSEDED,
-                )
+                self.assertIs(revised.turn.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD,)
+                self.assertIs(revised.turn.state, CollaborationStepState.SUPERSEDED,)
                 self.assertIn("after one repair attempt", revised.turn.message)
                 self.assertIsNone(revised.turn.proposal)
-                projection = project_collaboration_history(
-                    self.history(conversation_id)
-                )
+                projection = project_collaboration_history(self.history(conversation_id))
                 self.assertIs(projection.current_state, CollaborationStepState.SUPERSEDED)
                 self.assertIsNone(revised.turn.recommendation_request)
 
         case = _task_fixture(self)
         conversation = case.conversation("Independent Revise discussion")
-        pending = await case.proposal(conversation)
+        pending = await case.proposal(
+            conversation,
+            text=_REVIEW_USER_INPUT,
+            authoring_assessment=assessment,
+        )
         prefix, scope = case.history(conversation), pending.proposal.authoring_scope
         case.backend.enqueue(_discussion_reply("Plot owns outlines; the selected draft remains unchanged."))
         revised = await case._decide(pending, CollaborationConfirmationDecision.REVISE)
@@ -2175,9 +2107,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         conversation_id = self.conversation("Direct lead domain rejection")
         self.backend.enqueue(_visible_outcome("answer", ""))
         with _object_positional_patch(orchestrator_module, "COLLABORATION_PHYSICAL_CALL_LIMIT", 1):
-            result = await self.runtime.lead_turn(
-                self.session_id, conversation_id, "Reject an empty answer.",
-            )
+            result = await self.runtime.lead_turn(self.session_id, conversation_id, "Reject an empty answer.",)
         self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
         self.assertEqual(len(self.backend.calls), 1)
         self.assertTrue(result.validation_details)
@@ -2230,8 +2160,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             ("domains", ["PRIVATE_domain"], "domains[0]",
              'expected one of ["plot_structure", "character_world", "tone_execution"]; got string'),
         ):
-            rejected({**base, "authoring_scope": {**scope, field: value}},
-                     ".authoring_scope." + path, requirement)
+            rejected({**base, "authoring_scope": {**scope, field: value}}, ".authoring_scope." + path, requirement)
         action = {"kind": "prepare_consultation", "instruction": "Review.",
                   "source_ids": ["user_input"], "specialist_ids": [PLOT_ARCHITECT]}
         for field, value, requirement in (
@@ -2287,9 +2216,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         with _object_positional_patch(orchestrator_module._AccountingContextProvider,
                  "publish_validation_messages",
                  publish_twice):
-            result = await self.runtime.lead_turn(
-                self.session_id, conversation_id, "Repair an empty answer.",
-            )
+            result = await self.runtime.lead_turn(self.session_id, conversation_id, "Repair an empty answer.",)
         self.assertEqual(publish_attempts, 1)
         self.assertEqual(result.message, "Accepted after repair.")
         self.assertEqual(len(self.backend.calls), 2)
@@ -2314,8 +2241,11 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         )
 
     async def test_confirmed_restart_preserves_evidence_and_requires_fresh_authority(self) -> None:
+        from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
+        assessment = asdict(_fixture_assessment())
+        qualified_request = _ADMISSION_BRIEF + "\nPlease check story direction."
         conversation_id = self.conversation("Confirmed restart evidence")
-        proposed = await self.proposal(conversation_id)
+        proposed = await self.proposal(conversation_id, text=qualified_request, authoring_assessment=assessment,)
         self.assertIsNotNone(proposed.proposal.basis.evidence)
         before_calls = len(self.backend.calls)
         artifacts = {path: path.read_bytes() for path in self.workspace.root.rglob("*.md")}
@@ -2335,9 +2265,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         restored_history = self.history(conversation_id)
         self.assertEqual(restored_history[:len(confirmed_history)], confirmed_history)
         with self.assertRaises(ValueError):
-            await restarted.decide_lead_step(
-                _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-            )
+            await restarted.decide_lead_step(_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
         self.assertEqual(self.history(conversation_id), restored_history)
         self.assertEqual(restart_backend.calls, [])
         restart_backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
@@ -2349,14 +2277,18 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertEqual(len(restart_backend.calls), 2)
         self.assertEqual({path: path.read_bytes() for path in artifacts}, artifacts)
         with self.assertRaises(ValueError):
-            await restarted.decide_lead_step(
-                _decision(restored, CollaborationConfirmationDecision.CONFIRM)
-            )
+            await restarted.decide_lead_step(_decision(restored, CollaborationConfirmationDecision.CONFIRM))
         self.assertEqual(len(restart_backend.calls), 2)
 
     async def test_confirmed_live_capability_preserves_exact_evidence_without_dispatch(self) -> None:
+        from tests.recommendation_fixture import task_assessment
         conversation_id = self.conversation("Live confirmation evidence")
-        proposed = await self.proposal(conversation_id)
+        proposed = await self.proposal(conversation_id, text=(
+                'Please check the story direction.\nSupplied story facts: Mara wants safety and fears exposure. '
+                'Review the story direction against those facts and the exact requested references. You may give '
+                'bounded story-direction review judgments; preserve supplied facts and do not write files. Execution '
+                'requires separate exact confirmation.'
+            ), authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded story-direction review judgments',))))
         await self._leave_genuine_confirmation_before_dispatch(proposed)
         history = self.history(conversation_id)
         calls = len(self.backend.calls)
@@ -2375,6 +2307,9 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             self.assertEqual(self.runtime._confirmed_capabilities, capabilities)
 
     async def test_restored_results_keep_strict_evidence_and_provider_free_compatibility(self) -> None:
+        from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
+        assessment = asdict(_fixture_assessment())
+        qualified_request = _ADMISSION_BRIEF + "\nPlease check story direction."
         for advisory in (False, True):
             with self.subTest(provider_free=advisory):
                 conversation_id = self.conversation(f"Evidence contract {advisory}")
@@ -2382,9 +2317,10 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 if advisory:
                     proposed = await self.runtime.propose_specialist_advisory(
                         self.session_id, conversation_id, PLOT_ARCHITECT,
-                        "Draft from the current synthetic causal brief.",
+                        _ADMISSION_BRIEF + "\n" + "Draft from the current synthetic causal brief.",
                         authoring_scope=AuthoringScope(AuthoringActivity.DRAFT, (), (ArtifactReviewDomain.PLOT_STRUCTURE,),
                                                       "Draft from a synthetic causal brief.", "advisory_task", 1),
+                        authoring_assessment=_fixture_assessment(),
                     )
                     self.assertEqual(len(self.backend.calls), calls_before)
                     self.assertIsNone(proposed.proposal.basis.evidence)
@@ -2408,17 +2344,17 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                     self.assertEqual(len(self.backend.calls), calls_before)
                     continue
                 else:
-                    proposed = await self.proposal(conversation_id)
+                    proposed = await self.proposal(
+                        conversation_id,
+                        text=qualified_request,
+                        authoring_assessment=assessment,
+                    )
                 await self._leave_genuine_confirmation_before_dispatch(proposed)
                 calls = len(self.backend.calls)
-                retained = await self.runtime.lead_turn(
-                    self.session_id, conversation_id, "Inspect confirmation."
-                )
+                retained = await self.runtime.lead_turn(self.session_id, conversation_id, "Inspect confirmation.")
                 restart_backend = _LeadBackend()
                 restarted = StoryRuntime(self.control_workspace, restart_backend)  # type: ignore[arg-type]
-                restored = await restarted.lead_turn(
-                    self.session_id, conversation_id, "Resume confirmation."
-                )
+                restored = await restarted.lead_turn(self.session_id, conversation_id, "Resume confirmation.")
                 self.assertEqual(len(self.backend.calls), calls)
                 self.assertEqual(restart_backend.calls, [])
                 for result, state in ((retained, CollaborationStepState.CONFIRMED),
@@ -2441,6 +2377,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
 
+        from tests.test_specialist_routing_runtime import _ADOPTION_DIRECTION, _fixture_assessment
         def complete_value(message: str) -> dict[str, object]:
             return {
                 "recommended_action": None,
@@ -2458,21 +2395,16 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             return json.dumps(
                 {
                     "action": {
-                        "kind": "answer",
-                        "result": [complete_value(rejected_body)],
-                        "used_handles": [],
+                        "kind": "answer", "result": [complete_value(rejected_body)], "used_handles": [],
                     },
-                },
-                separators=(",", ":"),
+                }, separators=(",", ":"),
             )
 
         def correlation_mismatch(
             call: ContextProviderCallRequest,
             _provider: object,
         ) -> str:
-            response = json.loads(
-                _provider_envelope(call, complete_value(rejected_body))
-            )
+            response = json.loads(_provider_envelope(call, complete_value(rejected_body)))
             response["correlation"] = "wrong_correlation"
             return json.dumps(response, separators=(",", ":"))
 
@@ -2486,11 +2418,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                         "kind": "answer",
                         "result": {
                             "authoring_scope": _compact_scope(
-                                _live_scope(
-                                    call,
-                                    activity="review",
-                                    domains=("plot_structure",),
-                                )
+                                _live_scope(call, activity="review", domains=("plot_structure",),)
                             ),
                             "message": rejected_body,
                         },
@@ -2538,17 +2466,10 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                             call.payload["response_contract"]["allowed_action_types"],  # type: ignore[index]
                         )
                     )
-                    return _provider_envelope(
-                        call,
-                        complete_value(f"Corrected {label} answer."),
-                    )
+                    return _provider_envelope(call, complete_value(f"Corrected {label} answer."),)
 
                 backend.enqueue(corrected)
-                result = await runtime.lead_turn(
-                    self.session_id,
-                    conversation_id,
-                    "One ordinary user message.",
-                )
+                result = await runtime.lead_turn(self.session_id, conversation_id, "One ordinary user message.",)
 
                 history = self.history(conversation_id)
                 call_events = _event_payloads(history, CollaborationProviderCallPayload)
@@ -2564,24 +2485,15 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 )
                 self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
                 self.assertEqual(result.message, f"Corrected {label} answer.")
-                self.assertIs(
-                    result.next_action,
-                    CollaborationNextAction.CONTINUE_WITH_LEAD,
-                )
+                self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD,)
                 self.assertEqual(len(backend.calls), len(initial_script) + 1)
                 self.assertEqual(len(backend.providers), 2)
                 self.assertIn("Return submit_result now", correction_records[0][1])
                 self.assertIsNone(backend.calls[-1].expected_thread_id)
-                self.assertEqual(
-                    backend.finalizers[-2].calls,
-                    [("rejected", rejection_code)],
-                )
+                self.assertEqual(backend.finalizers[-2].calls, [("rejected", rejection_code)],)
                 self.assertEqual(backend.finalizers[-1].calls, [("accepted", None)])
                 self.assertEqual(backend.tainted_thread_ids, ["thread-lead-1"])
-                self.assertEqual(
-                    tuple(event.ordinal for event in submitted),
-                    tuple(range(1, len(submitted) + 1)),
-                )
+                self.assertEqual(tuple(event.ordinal for event in submitted), tuple(range(1, len(submitted) + 1)),)
                 self.assertEqual(len({event.invocation_id for event in submitted}), 1)
                 self.assertEqual(
                     tuple(
@@ -2601,10 +2513,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                     (f"Corrected {label} answer.",),
                 )
                 self.assertFalse(
-                    any(
-                        type(event.payload) is CollaborationLeadOutcomeFailurePayload
-                        for event in history
-                    )
+                    any(type(event.payload) is CollaborationLeadOutcomeFailurePayload for event in history)
                 )
                 self.assertNotIn(rejected_body, repr(tuple(
                     event for event in history
@@ -2617,20 +2526,13 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 )
                 self.assertNotIn(rejected_body, repr(tuple(
                     item.response.validation_details for item in result.public_responses)))
-                self.assertNotIn(
-                    rejected_body,
-                    json.dumps(dict(backend.calls[-1].payload), ensure_ascii=False),
-                )
+                self.assertNotIn(rejected_body, json.dumps(dict(backend.calls[-1].payload), ensure_ascii=False),)
 
         backend = _LeadBackend()
         runtime = StoryRuntime(self.control_workspace, backend)  # type: ignore[arg-type]
         conversation_id = self.conversation("No correction needed")
         backend.enqueue(_visible_outcome("answer", "First response accepted."))
-        result = await runtime.lead_turn(
-            self.session_id,
-            conversation_id,
-            "Accept the first valid answer.",
-        )
+        result = await runtime.lead_turn(self.session_id, conversation_id, "Accept the first valid answer.",)
         self.assertEqual(result.message, "First response accepted.")
         self.assertEqual(len(backend.calls), 1)
         self.assertEqual(backend.finalizers[0].calls, [("accepted", None)])
@@ -2664,8 +2566,17 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             renewed = replace(selection, request_id="renew-" + failure.__class__.__name__)
             if isinstance(failure.failure, asyncio.CancelledError):
                 renewed = replace(renewed, choice_policy=premise.PremiseChoicePolicy.DELEGATED_MINOR, option_id=None, material_digest=None, allowed_choices=(premise.PremiseAllowedChoice(reported.premise_report.options[0].option_id, reported.premise_report.options[0].material_digest),))
-            self.backend.enqueue(_selected_premise_proposal(renewed))
-            recovered = await self.runtime.lead_turn(self.session_id, conversation, "Fresh proposal from the same whole report.", premise_selection=renewed)
+            self.backend.enqueue(_selected_premise_proposal(renewed, authoring_assessment=_fixture_assessment(
+                foundation_ids=(
+                    "selected_premise",
+                ),
+            )))
+            recovered = await self.runtime.lead_turn(
+                self.session_id,
+                conversation,
+                "Fresh proposal from the same whole report." + "\n" + _ADOPTION_DIRECTION,
+                premise_selection=renewed,
+            )
             self.assertIs(recovered.kind, LeadOutcomeKind.PROPOSAL, recovered)
             self.assertIsNotNone(recovered.confirmation_request_id)
             capture = project_collaboration_history(self.history(conversation)).premise_selection
@@ -2699,12 +2610,9 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             return json.dumps(
                 {
                     "action": {
-                        "kind": "answer",
-                        "result": [{"message": rejected_body}],
-                        "used_handles": [],
+                        "kind": "answer", "result": [{"message": rejected_body}], "used_handles": [],
                     },
-                },
-                separators=(",", ":"),
+                }, separators=(",", ":"),
             )
 
         backend.enqueue(malformed)
@@ -2740,10 +2648,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         )
         self.assertEqual(failures[0].invocation_id, submitted[0].invocation_id)
         self.assertEqual(failures[0].call_id, submitted[0].call_id)
-        self.assertEqual(
-            project_collaboration_history(history).physical_calls_spent,
-            1,
-        )
+        self.assertEqual(project_collaboration_history(history).physical_calls_spent, 1,)
         self.assertEqual(
             tuple(finalizer.calls for finalizer in backend.finalizers),
             (
@@ -2759,11 +2664,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertNotIn(rejected_body, repr(history))
 
         backend.enqueue(_visible_outcome("answer", "Fresh turn accepted."))
-        fresh_result = await runtime.lead_turn(
-            self.session_id,
-            conversation_id,
-            "Proceed with one fresh turn.",
-        )
+        fresh_result = await runtime.lead_turn(self.session_id, conversation_id, "Proceed with one fresh turn.",)
         fresh_history = self.history(conversation_id)
         self.assertIs(fresh_result.kind, LeadOutcomeKind.ANSWER)
         self.assertEqual(fresh_result.message, "Fresh turn accepted.")
@@ -2784,10 +2685,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             ),
         )
         self.assertNotIn(rejected_body, repr(fresh_history))
-        self.assertNotIn(
-            rejected_body,
-            json.dumps(dict(backend.calls[-1].payload), ensure_ascii=False),
-        )
+        self.assertNotIn(rejected_body, json.dumps(dict(backend.calls[-1].payload), ensure_ascii=False),)
 
     async def test_second_returned_rejection_closes_against_last_call(self) -> None:
         backend = _LeadBackend(persist_context_threads=True)
@@ -2799,12 +2697,9 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 return json.dumps(
                     {
                         "action": {
-                            "kind": "answer",
-                            "result": [{"message": message}],
-                            "used_handles": [],
+                            "kind": "answer", "result": [{"message": message}], "used_handles": [],
                         },
-                    },
-                    separators=(",", ":"),
+                    }, separators=(",", ":"),
                 )
 
             return respond
@@ -2850,10 +2745,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 ],
             ),
         )
-        self.assertEqual(
-            backend.tainted_thread_ids,
-            ["thread-lead-1", "thread-lead-2"],
-        )
+        self.assertEqual(backend.tainted_thread_ids, ["thread-lead-1", "thread-lead-2"],)
         self.assertNotIn("FIRST_REJECTED_BODY", repr(history))
         self.assertNotIn("SECOND_REJECTED_BODY", repr(history))
 
@@ -2896,8 +2788,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         for before, after in zip(prepared, submitted, strict=True):
             self.assertEqual(
                 before,
-                replace(after, state=CollaborationProviderCallState.PREPARED,
-                        validation_details=()),
+                replace(after, state=CollaborationProviderCallState.PREPARED, validation_details=()),
             )
         self.assertTrue(submitted[0].validation_details[0].startswith("Original response"))
         self.assertTrue(submitted[1].validation_details[0].startswith("Repair response"))
@@ -3001,16 +2892,13 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 self.assertEqual(len(backend.calls), 3)
                 self.assertEqual(len(submitted), 3)
                 self.assertEqual(submitted[0].validation_details, ())
-                self.assertTrue(submitted[1].validation_details[0].startswith(
-                    "Original response"))
+                self.assertTrue(submitted[1].validation_details[0].startswith("Original response"))
                 if rejected_repair:
-                    self.assertTrue(submitted[2].validation_details[0].startswith(
-                        "Repair response"))
+                    self.assertTrue(submitted[2].validation_details[0].startswith("Repair response"))
                 else:
                     self.assertEqual(submitted[2].validation_details, ())
                     self.assertEqual(result.message, "Accepted after search.")
-                expected = tuple(chunk for payload in submitted
-                                 for chunk in payload.validation_details)
+                expected = tuple(chunk for payload in submitted for chunk in payload.validation_details)
                 self.assertEqual(result.validation_details, expected)
                 notices = _history_validation_details(history)
                 self.assertEqual(notices, expected)
@@ -3021,22 +2909,14 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         conversation_id = self.conversation("Diagnostics grant no authority")
 
         def invalid_proposal(call: ContextProviderCallRequest, _provider: object) -> str:
-            response = json.loads(_proposal_outcome([
-                {
-                    "agent_id": PLOT_ARCHITECT,
-                    "instruction": "Review the request.",
-                    "input_ids": ["user_input"],
-                },
-            ])(call, _provider))
+            response = json.loads(_proposal_outcome([ { "agent_id" : PLOT_ARCHITECT , "instruction" : "Review the request." , "input_ids" : [ "user_input" ] , } , ])(call, _provider))
             response["action"]["result"]["proposal"]["assignments"] = []
             response["action"]["result"]["message"] = "PRIVATE_PROPOSAL_TEXT"
             return json.dumps(response, separators=(",", ":"))
 
         self.backend.enqueue(invalid_proposal)
         self.backend.enqueue(invalid_proposal)
-        result = await self.runtime.lead_turn(
-            self.session_id, conversation_id, "Propose specialist work.",
-        )
+        result = await self.runtime.lead_turn(self.session_id, conversation_id, "Propose specialist work.",)
         self.assertTrue(result.validation_details)
         self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
         history = self.history(conversation_id)
@@ -3083,8 +2963,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertEqual(result.message, "Accepted after repair.")
         self.assertGreater(len(result.validation_details), 1)
         self.assertGreater(sum(len(item.encode()) for item in result.validation_details), 32_768)
-        self.assertTrue(all(len(item.encode()) < 32_768
-                            for item in result.validation_details))
+        self.assertTrue(all(len(item.encode()) < 32_768 for item in result.validation_details))
         reopened = compose_filesystem_conversation_storage(self.control_workspace).event_store
         history = reopened.read(self.session_id, conversation_id)
         submitted = _submitted_calls(history)
@@ -3146,8 +3025,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                   for item in result.public_responses),
             (("rejected", secret), ("accepted", "Accepted after repair.")),
         )
-        self.assertNotIn(secret, repr(tuple(
-            item.response.validation_details for item in result.public_responses)))
+        self.assertNotIn(secret, repr(tuple(item.response.validation_details for item in result.public_responses)))
 
     async def test_minimal_reference_answer_needs_no_provider_correction(self) -> None:
         backend = _LeadBackend(persist_context_threads=True)
@@ -3158,12 +3036,8 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             return _provider_envelope(
                 call,
                 {
-                    "kind": "answer",
-                    "message": "Incomplete referenced result.",
-                    "scope": "workflow_meta",
-                    "evidence_status": "not_applicable",
-                    "artifact_intent": None,
-                    "objective_intent": None,
+                    "kind": "answer", "message": "Incomplete referenced result.", "scope": "workflow_meta",
+                    "evidence_status": "not_applicable", "artifact_intent": None, "objective_intent": None,
                 },
             )
 
@@ -3184,24 +3058,16 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertEqual(len({event.invocation_id for event in submitted}), 1)
         self.assertEqual(len(backend.reference_calls), 1)
         self.assertEqual(backend.finalizers[0].calls, [("accepted", None)])
-        self.assertFalse(
-            any(
-                type(event.payload) is CollaborationLeadOutcomeFailurePayload
-                for event in history
-            )
-        )
+        self.assertFalse(any(type(event.payload) is CollaborationLeadOutcomeFailurePayload for event in history))
 
     async def test_response_correction_requires_capacity(self) -> None:
         def malformed(call: ContextProviderCallRequest, _provider: object) -> str:
             return json.dumps(
                 {
                     "action": {
-                        "kind": "answer",
-                        "result": [],
-                        "used_handles": [],
+                        "kind": "answer", "result": [], "used_handles": [],
                     },
-                },
-                separators=(",", ":"),
+                }, separators=(",", ":"),
             )
 
         cases = (
@@ -3228,16 +3094,10 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                         conversation_id,
                         "Do not exceed the remaining capacity.",
                     )
-                self.assertIs(
-                    result.next_action,
-                    CollaborationNextAction.RETRY_LEAD_TURN,
-                )
+                self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN,)
                 self.assertEqual(len(backend.calls), 1)
                 self.assertEqual(len(backend.providers), 1)
-                self.assertEqual(
-                    backend.finalizers[0].calls,
-                    [("rejected", expected_code)],
-                )
+                self.assertEqual(backend.finalizers[0].calls, [("rejected", expected_code)],)
                 failures = tuple(
                     event.payload
                     for event in self.history(conversation_id)
@@ -3283,15 +3143,20 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         messages = tuple(event.payload.content for event in history
                          if type(event.payload) is CollaborationMessagePayload)
         self.assertTrue(any("Original response" in message for message in messages))
-        self.assertFalse(any(type(event.payload) is CollaborationProposal
-                             for event in history))
+        self.assertFalse(any(type(event.payload) is CollaborationProposal for event in history))
         self.assertNotIn(private, repr(history))
 
     async def test_restart_after_completed_execution_accepts_a_new_lead_turn(
         self,
     ) -> None:
+        from tests.recommendation_fixture import task_assessment
         conversation_id = self.conversation("Restart completed")
-        proposed = await self.proposal(conversation_id)
+        proposed = await self.proposal(conversation_id, text=(
+                'Please check the story direction.\nSupplied story facts: Mara wants safety and fears exposure. '
+                'Review the story direction against those facts and the exact requested references. You may give '
+                'bounded story-direction review judgments; preserve supplied facts and do not write files. Execution '
+                'requires separate exact confirmation.'
+            ), authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded story-direction review judgments',))))
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
         await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
@@ -3430,26 +3295,13 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         for name in ("proposal", "confirmation", "running", "calls"):
             batch = batches[name]
             store.append_batch(
-                replace(
-                    batch,
-                    events=tuple(
-                        replace(event, session_id=self.session_id)
-                        for event in batch.events
-                    ),
-                )
+                replace(batch, events=tuple(replace(event, session_id=self.session_id) for event in batch.events),)
             )
 
-        result = await self.runtime.lead_turn(
-            self.session_id,
-            conversation_id,
-            "Never replay running work.",
-        )
+        result = await self.runtime.lead_turn(self.session_id, conversation_id, "Never replay running work.",)
 
         self.assertIs(result.state, CollaborationStepState.OUTCOME_UNKNOWN)
-        self.assertIs(
-            result.next_action,
-            CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
-        )
+        self.assertIs(result.next_action, CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,)
         self.assertEqual(self.backend.calls, [])
         self.assertIs(
             project_collaboration_history(self.history(conversation_id)).current_state,
@@ -3501,30 +3353,33 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
 
     async def _budget_consultation(self, *, message="Completed budget-bound review.",
                                    pause_before_finalization=False, build_failure=None, infeasible=False):
+        from tests.test_specialist_routing_runtime import _fixture_assessment
+        assessment = asdict(_fixture_assessment(foundation_ids=("user_input",), user_id="user_input"))
         previous_calls = len(self.backend.calls)
         previous_references = len(self.backend.reference_calls)
         conversation_id = self.conversation("Budget finalization")
         agents = (PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST)
         aliases = ["user_input", "reference_1", "reference_2", "reference_3"]
         assignments = [
-            {
-                "agent_id": agent,
-                "instruction": "Review every supplied input.",
-                "input_ids": aliases,
-                "mode": "draft" if infeasible else "review",
-            }
+            { "agent_id" : agent , "instruction" : "Review every supplied input." , "input_ids" : aliases , "mode" : "draft" if infeasible else "review" , }
             for agent in agents
         ]
         self.backend.enqueue_for(
-            LEAD_ORCHESTRATOR,
-            _search_history,
-            _proposal_outcome(assignments, activity="draft" if infeasible else "review"),
+            LEAD_ORCHESTRATOR, _search_history,
+            _proposal_outcome(
+                assignments, activity="draft" if infeasible else "review",
+                authoring_assessment=assessment,
+            ),
         )
         proposed = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
-            ("Review once. " if infeasible else "Review this complete supplied candidate: A finished story.\n") + "${core_documents/global_outline.md} "
-            "${core_documents/character_sheets.md} ${manuscript/part-01/opening.md}",
+            (
+                ("Draft from this story. " if infeasible else "Review complete supplied candidate: ")
+                + _STORY_USER_INPUT + "\n"
+                + "${core_documents/global_outline.md} ${core_documents/character_sheets.md} "
+                + "${manuscript/part-01/opening.md}"
+            ),
         )
         if infeasible:
             self.assertIs(proposed.kind, LeadOutcomeKind.ANSWER)
@@ -3544,11 +3399,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
         self.assertIs(proposed.kind, LeadOutcomeKind.PROPOSAL)
         expected = {}
         for agent in agents:
-            self.backend.enqueue_for(
-                agent,
-                _search_history,
-                _specialist_outcome("insufficient_evidence"),
-            )
+            self.backend.enqueue_for(agent, _search_history, _specialist_outcome("insufficient_evidence"),)
 
         def synthesis(call, _provider):
             material = _workflow_material(call.payload)
@@ -3565,10 +3416,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
                     ],
                 },
             }
-            expected.update(
-                reply_event_ids=reply_event_ids,
-                unresolved_input_ids=input_ids,
-            )
+            expected.update(reply_event_ids=reply_event_ids, unresolved_input_ids=input_ids,)
             return _provider_envelope(call, value)
 
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, synthesis)
@@ -3589,10 +3437,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
             decision_result = await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
         history = self.history(conversation_id)
         self.assertEqual(len(_submitted_calls(history)), 9)
-        self.assertEqual(
-            len(self.backend.calls) - previous_calls,
-            9,
-        )
+        self.assertEqual(len(self.backend.calls) - previous_calls, 9,)
         self.assertEqual(len(self.backend.reference_calls) - previous_references, 5)
         syntheses = [event for event in history
                      if type(event.payload) is CollaborationLeadSynthesisPayload]
@@ -3643,11 +3488,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
         complete = self.history(conversation)
         self.assertEqual(complete[:len(known)], known)
         self.assertEqual(len(complete), len(known) + 2)
-        repeated = restarted._finalize_known_result_locked(
-            self.session_id,
-            known,
-            projection,
-        )
+        repeated = restarted._finalize_known_result_locked(self.session_id, known, projection,)
         self.assertEqual(repeated, restored)
         self.assertEqual(self.history(conversation), complete)
         self.assertEqual(backend.calls, [])
@@ -3734,8 +3575,7 @@ class LeadReferenceFailurePrecedenceTests(LeadOrchestrationTestCase):
             ReferenceAuthorizationErrorCode.CAPABILITY_CONSUMED,
             ReferenceAuthorizationErrorCode.EVIDENCE_CORRUPT,
         )]
-        errors.extend((SessionContextCapacityError(),
-                       asyncio.CancelledError(), StopControl()))
+        errors.extend((SessionContextCapacityError(), asyncio.CancelledError(), StopControl()))
         for failure in errors:
             with self.subTest(failure=type(failure).__name__, code=getattr(failure, "code", None)):
                 runtime, backend, conversation_id = self.reference_case("Primary reference failure")

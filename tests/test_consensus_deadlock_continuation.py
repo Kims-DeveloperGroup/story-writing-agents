@@ -1,6 +1,13 @@
 """Provider-free acceptance tests for durable deadlock continuation."""
 
 from __future__ import annotations
+from story_writing_agents.specialist_routing import AuthoringIntent
+import hashlib
+from tests.test_consensus_projection import (
+    _ADMISSION_BRIEF, _FIXTURE_DRAFT, _FIXTURE_RULING, _FIXTURE_TEXTS, _UNIT_DIRECTION,
+    _USER_ASSESSMENT, _MATERIAL_ASSESSMENT, _RULING_ASSESSMENT, _unit_basis,
+    _qualify_fixture_port, _capture_fixture_direction, _validate_fixture_port,
+)
 
 from dataclasses import replace
 import unittest
@@ -28,15 +35,19 @@ from story_writing_agents.consensus import (
 from story_writing_agents.consensus.contracts import candidate_material_handle
 
 
-_PROMPT = candidate_material_handle("1" * 64)
+_PROMPT = candidate_material_handle(hashlib.sha256(_ADMISSION_BRIEF.encode()).hexdigest())
 _CANDIDATE = candidate_material_handle("2" * 64)
 _REPAIRED = candidate_material_handle("3" * 64)
-_RULING = candidate_material_handle("4" * 64)
+_RULING = candidate_material_handle(hashlib.sha256(_FIXTURE_RULING.encode()).hexdigest())
 _CONFLICTS = tuple(candidate_material_handle(str(index) * 64) for index in (5, 6, 7))
 
 
 class _Port:
+    qualify_consensus_authoring = _qualify_fixture_port
+    capture_consensus_direction = _capture_fixture_direction
+    validate_consensus_authoring = _validate_fixture_port
     def __init__(self) -> None:
+        self.fixture_materials = dict(_FIXTURE_TEXTS)
         self.counter = 0
         self.workflows: dict[tuple[str, str, str], ConsensusStoredWorkflow] = {}
         self.provider_calls = []
@@ -76,27 +87,16 @@ class _Port:
         stored = self.workflows[key]
         if expected_tail != len(stored.events):
             raise ValueError("stale append")
-        self.workflows[key] = ConsensusStoredWorkflow(
-            stored.submission,
-            stored.events + (event,),
-        )
+        self.workflows[key] = ConsensusStoredWorkflow(stored.submission, stored.events + (event,),)
 
     async def invoke_provider(self, invocation):
         self.provider_calls.append(invocation)
         if self.invoke_hook is not None:
             return await self.invoke_hook(invocation)
         if invocation.phase is ConsensusPhase.DRAFT:
-            return ConsensusProviderResult(
-                ConsensusPhaseOutputKind.CANDIDATE,
-                "8" * 64,
-                _CANDIDATE,
-            )
+            return ConsensusProviderResult(ConsensusPhaseOutputKind.CANDIDATE, "8" * 64, _CANDIDATE,)
         if invocation.phase is ConsensusPhase.REPAIR:
-            return ConsensusProviderResult(
-                ConsensusPhaseOutputKind.CANDIDATE,
-                "9" * 64,
-                _REPAIRED,
-            )
+            return ConsensusProviderResult(ConsensusPhaseOutputKind.CANDIDATE, "9" * 64, _REPAIRED,)
         if invocation.phase in {ConsensusPhase.AUDIT, ConsensusPhase.REAUDIT}:
             conflict = (
                 invocation.phase is ConsensusPhase.AUDIT or self.reaudit_conflicts
@@ -144,9 +144,7 @@ class _Port:
         workflow_id,
         phase_request_id,
     ) -> bool:
-        self.interrupt_calls.append(
-            (session_id, conversation_id, workflow_id, phase_request_id)
-        )
+        self.interrupt_calls.append((session_id, conversation_id, workflow_id, phase_request_id))
         return True
 
     def verify_consensus_material(self, material) -> bool:
@@ -160,11 +158,7 @@ def _decision(
     choice: ConsensusDecision = ConsensusDecision.CONFIRM,
 ) -> ConsensusRuntimeDecision:
     submission = inspection.submission
-    stored = port.load_workflow(
-        submission.session_id,
-        submission.conversation_id,
-        submission.workflow_id,
-    )
+    stored = port.load_workflow(submission.session_id, submission.conversation_id, submission.workflow_id,)
     request_event = stored.events[-1]
     request = request_event.payload
     assert type(request) is ConsensusPhaseRequest
@@ -200,35 +194,28 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def _confirm(self, inspection):
-        return await self.adapter.confirm(
-            _decision(self.adapter, self.port, inspection)
-        )
+        return await self.adapter.confirm(_decision(self.adapter, self.port, inspection))
 
     async def _deadlock(self):
         inspection = self.adapter.submit_prompt(
             session_id="session-1",
             conversation_id="conversation-1",
             input_material=_PROMPT,
+
+            authoring_assessment=_USER_ASSESSMENT,
         )
         draft = await self._confirm(inspection)
         audit_request = self._next(draft.inspection)
         self.assertEqual(len(self.port.provider_calls), 1)
         audit = await self._confirm(audit_request)
         self.assertEqual(
-            tuple(
-                item.verdict for item in audit.execution.terminal_event.payload.audits
-            ),
+            tuple(item.verdict for item in audit.execution.terminal_event.payload.audits),
             (ConsensusAuditVerdict.CONFLICT,) * 3,
         )
         synthesis_request = self._next(audit.inspection)
         synthesis = await self._confirm(synthesis_request)
-        self.assertIs(
-            synthesis.inspection.projection.state, ConsensusPhaseState.DEADLOCKED
-        )
-        self.assertIs(
-            synthesis.inspection.projection.next_action,
-            ConsensusNextAction.CONTINUE_DEADLOCK,
-        )
+        self.assertIs(synthesis.inspection.projection.state, ConsensusPhaseState.DEADLOCKED)
+        self.assertIs(synthesis.inspection.projection.next_action, ConsensusNextAction.CONTINUE_DEADLOCK,)
         self.assertFalse(synthesis.inspection.projection.publication_allowed)
         return synthesis.inspection
 
@@ -248,6 +235,8 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
             mode=mode,
             ruling_material=_RULING,
             added_revision_rounds=rounds,
+
+            authoring_assessment=_RULING_ASSESSMENT,
         )
 
     async def test_resume_in_place_binds_exact_lineage_and_requires_fresh_confirmation(
@@ -255,33 +244,19 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         deadlocked = await self._deadlock()
         calls_before = len(self.port.provider_calls)
-        continued = self._continue(
-            deadlocked,
-            ConsensusContinuationMode.RESUME_IN_PLACE,
-            rounds=2,
-        )
-        self.assertEqual(
-            continued.submission.workflow_id, deadlocked.submission.workflow_id
-        )
-        self.assertEqual(
-            continued.submission.proposal_id, deadlocked.submission.proposal_id
-        )
+        continued = self._continue(deadlocked, ConsensusContinuationMode.RESUME_IN_PLACE, rounds=2,)
+        self.assertEqual(continued.submission.workflow_id, deadlocked.submission.workflow_id)
+        self.assertEqual(continued.submission.proposal_id, deadlocked.submission.proposal_id)
         self.assertIs(continued.projection.phase, ConsensusPhase.REPAIR)
-        self.assertIs(
-            continued.projection.state, ConsensusPhaseState.AWAITING_CONFIRMATION
-        )
+        self.assertIs(continued.projection.state, ConsensusPhaseState.AWAITING_CONFIRMATION)
         self.assertTrue(continued.capability_available)
         self.assertEqual(len(self.port.provider_calls), calls_before)
-        self.assertEqual(
-            continued.projection.source_candidate_digest, _CANDIDATE.digest
-        )
+        self.assertEqual(continued.projection.source_candidate_digest, _CANDIDATE.digest)
         self.assertEqual(continued.projection.ruling_digest, _RULING.digest)
         self.assertEqual(continued.projection.added_revision_rounds, 2)
         self.assertEqual(continued.projection.remaining_revision_rounds, 2)
 
-        stored = self.port.load_workflow(
-            "session-1", "conversation-1", continued.submission.workflow_id
-        )
+        stored = self.port.load_workflow("session-1", "conversation-1", continued.submission.workflow_id)
         request = stored.events[-1].payload
         self.assertEqual(request.candidate_material, _CANDIDATE)
         self.assertEqual(request.continuation.conflict_materials, _CONFLICTS)
@@ -292,22 +267,14 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
             {"added_revision_rounds": 3},
         ):
             with self.subTest(digest_bound=changed):
-                with self.assertRaisesRegex(
-                    ValueError,
-                    "linked continuation|request digest",
-                ):
-                    replace(
-                        request,
-                        continuation=replace(request.continuation, **changed),
-                    )
+                with self.assertRaisesRegex(ValueError, "linked continuation|request digest",):
+                    replace(request, continuation=replace(request.continuation, **changed),)
         encoded = serialize_consensus_workflow(stored)
         self.assertEqual(deserialize_consensus_workflow(encoded), stored)
         self.assertIn(b'"schema_version":4', encoded)
         self.assertNotIn(b"operator ruling", encoded)
         with self.assertRaisesRegex(ValueError, "schema version"):
-            deserialize_consensus_workflow(
-                encoded.replace(b'"schema_version":4', b'"schema_version":2', 1)
-            )
+            deserialize_consensus_workflow(encoded.replace(b'"schema_version":4', b'"schema_version":2', 1))
 
         exact = _decision(self.adapter, self.port, continued)
         restarted = ConsensusRuntimeAdapter(self.port)
@@ -345,29 +312,16 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
         calls_before = len(self.port.provider_calls)
         linked = self._continue(deadlocked, ConsensusContinuationMode.LINKED_WORKFLOW)
 
-        self.assertNotEqual(
-            linked.submission.workflow_id, deadlocked.submission.workflow_id
-        )
-        self.assertNotEqual(
-            linked.submission.proposal_id, deadlocked.submission.proposal_id
-        )
+        self.assertNotEqual(linked.submission.workflow_id, deadlocked.submission.workflow_id)
+        self.assertNotEqual(linked.submission.proposal_id, deadlocked.submission.proposal_id)
         self.assertIs(linked.submission.input_kind, ConsensusInputKind.CONTINUATION)
-        self.assertIs(
-            linked.projection.continuation_mode,
-            ConsensusContinuationMode.LINKED_WORKFLOW,
-        )
-        self.assertEqual(
-            linked.projection.source_workflow_id, deadlocked.submission.workflow_id
-        )
-        self.assertEqual(
-            linked.projection.source_result_event_id, source.events[-1].event_id
-        )
+        self.assertIs(linked.projection.continuation_mode, ConsensusContinuationMode.LINKED_WORKFLOW,)
+        self.assertEqual(linked.projection.source_workflow_id, deadlocked.submission.workflow_id)
+        self.assertEqual(linked.projection.source_result_event_id, source.events[-1].event_id)
         self.assertEqual(linked.projection.source_candidate_digest, _CANDIDATE.digest)
         self.assertEqual(len(self.port.provider_calls), calls_before)
         self.assertEqual(
-            self.port.load_workflow(
-                "session-1", "conversation-1", deadlocked.submission.workflow_id
-            ).events,
+            self.port.load_workflow("session-1", "conversation-1", deadlocked.submission.workflow_id).events,
             source_events,
         )
 
@@ -380,12 +334,7 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
         )
         calls_before = len(self.port.provider_calls)
         revised = await self.adapter.decide(
-            _decision(
-                self.adapter,
-                self.port,
-                continued,
-                ConsensusDecision.REVISE,
-            )
+            _decision(self.adapter, self.port, continued, ConsensusDecision.REVISE,)
         )
         self.assertEqual(len(self.port.provider_calls), calls_before)
         self.assertEqual(revised.inspection.projection.remaining_revision_rounds, 1)
@@ -426,10 +375,7 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.port.provider_calls), calls_before_request)
         reaudit = await self._confirm(reaudit_request)
         self.assertEqual(
-            tuple(
-                item.specialist_id
-                for item in reaudit.execution.terminal_event.payload.audits
-            ),
+            tuple(item.specialist_id for item in reaudit.execution.terminal_event.payload.audits),
             CONSENSUS_AUDITORS,
         )
         self.assertTrue(reaudit.execution.terminal_event.payload.unanimous)
@@ -441,27 +387,15 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
         synthesis = await self._confirm(synthesis_request)
         calls_before_request = len(self.port.provider_calls)
         finalization_request = self._next(synthesis.inspection)
-        self.assertIs(
-            finalization_request.projection.phase, ConsensusPhase.FINALIZATION
-        )
+        self.assertIs(finalization_request.projection.phase, ConsensusPhase.FINALIZATION)
         self.assertEqual(len(self.port.provider_calls), calls_before_request)
         calls = len(self.port.provider_calls)
         finalization = await self._confirm(finalization_request)
         self.assertEqual(len(self.port.provider_calls), calls + 1)
-        self.assertIs(
-            finalization.inspection.projection.state, ConsensusPhaseState.COMPLETED
-        )
-        self.assertIs(
-            finalization.inspection.projection.next_action, ConsensusNextAction.NONE
-        )
+        self.assertIs(finalization.inspection.projection.state, ConsensusPhaseState.COMPLETED)
+        self.assertIs(finalization.inspection.projection.next_action, ConsensusNextAction.NONE)
         self.assertFalse(finalization.inspection.projection.publication_allowed)
-        self.assertEqual(
-            sum(
-                item.phase is ConsensusPhase.FINALIZATION
-                for item in self.port.provider_calls
-            ),
-            1,
-        )
+        self.assertEqual(sum(item.phase is ConsensusPhase.FINALIZATION for item in self.port.provider_calls), 1,)
 
     async def test_invalid_sources_and_material_fail_before_provider_or_workflow_mutation(
         self,
@@ -493,13 +427,17 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
         for override in invalid:
             with self.subTest(override=override):
                 with self.assertRaises(ValueError):
-                    self.adapter.continue_deadlock(**(base | override))
+                    self.adapter.continue_deadlock(**(base | override),
+                        authoring_assessment=_RULING_ASSESSMENT,
+                    )
                 self.assertEqual(len(self.port.provider_calls), calls_before)
                 self.assertEqual(set(self.port.workflows), baseline_keys)
 
         self.port.materials.remove(_CONFLICTS[0])
         with self.assertRaisesRegex(ValueError, "material is unavailable"):
-            self.adapter.continue_deadlock(**base)
+            self.adapter.continue_deadlock(**base,
+                authoring_assessment=_RULING_ASSESSMENT,
+            )
         self.assertEqual(len(self.port.provider_calls), calls_before)
         self.assertEqual(set(self.port.workflows), baseline_keys)
 
@@ -508,29 +446,31 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
             session_id="session-active",
             conversation_id="conversation-active",
             input_material=_PROMPT,
+
+            authoring_assessment=_USER_ASSESSMENT,
         )
         completed_submission = self.adapter.submit_prompt(
             session_id="session-completed",
             conversation_id="conversation-completed",
             input_material=_PROMPT,
+
+            authoring_assessment=_USER_ASSESSMENT,
         )
-        completed = await self.adapter.confirm(
-            _decision(self.adapter, self.port, completed_submission)
-        )
+        completed = await self.adapter.confirm(_decision(self.adapter, self.port, completed_submission))
 
         failed_submission = self.adapter.submit_prompt(
             session_id="session-failed",
             conversation_id="conversation-failed",
             input_material=_PROMPT,
+
+            authoring_assessment=_USER_ASSESSMENT,
         )
 
         async def fail(_invocation):
             raise RuntimeError("definite provider failure")
 
         self.port.invoke_hook = fail
-        failed = await self.adapter.confirm(
-            _decision(self.adapter, self.port, failed_submission)
-        )
+        failed = await self.adapter.confirm(_decision(self.adapter, self.port, failed_submission))
         self.port.invoke_hook = None
         calls_before = len(self.port.provider_calls)
         keys_before = set(self.port.workflows)
@@ -552,6 +492,8 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
                         mode=ConsensusContinuationMode.LINKED_WORKFLOW,
                         ruling_material=_RULING,
                         added_revision_rounds=1,
+
+                        authoring_assessment=_RULING_ASSESSMENT,
                     )
         self.assertEqual(len(self.port.provider_calls), calls_before)
         self.assertEqual(set(self.port.workflows), keys_before)
@@ -590,13 +532,8 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
         self.port.reaudit_conflicts = True
         reaudit = await self._confirm(self._next(repaired.inspection))
         second_deadlock = await self._confirm(self._next(reaudit.inspection))
-        self.assertIs(
-            second_deadlock.inspection.projection.state, ConsensusPhaseState.DEADLOCKED
-        )
-        self.assertIs(
-            second_deadlock.inspection.projection.next_action,
-            ConsensusNextAction.CONTINUE_DEADLOCK,
-        )
+        self.assertIs(second_deadlock.inspection.projection.state, ConsensusPhaseState.DEADLOCKED)
+        self.assertIs(second_deadlock.inspection.projection.next_action, ConsensusNextAction.CONTINUE_DEADLOCK,)
         self.assertFalse(second_deadlock.inspection.projection.publication_allowed)
 
     def test_malformed_continuation_contracts_fail_closed(self) -> None:
@@ -614,9 +551,7 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
             {"conflict_materials": ()},
             {"conflict_materials": (_CONFLICTS[0], _CONFLICTS[0])},
             {
-                "ruling_material": ConsensusMaterialHandle(
-                    "artifact:core_documents/global_outline.md", "8" * 64
-                )
+                "ruling_material": ConsensusMaterialHandle("artifact:core_documents/global_outline.md", "8" * 64)
             },
             {"added_revision_rounds": 0},
         ):

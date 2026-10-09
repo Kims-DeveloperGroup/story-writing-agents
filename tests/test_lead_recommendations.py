@@ -8,7 +8,7 @@ import asyncio
 import json
 import os
 import traceback
-from dataclasses import replace
+from dataclasses import asdict, replace
 from types import SimpleNamespace
 from unittest import mock
 
@@ -27,6 +27,7 @@ from story_writing_agents.writing_artifacts._storage import ArtifactRootSecurity
 from tests.recommendation_fixture import (
     DRAFT, OUTLINE, RecommendationCase, action, decision, digest,
     preparation, recommendation, rewrite_history,
+    task_assessment,
 )
 from tests import test_lead_orchestration as lead
 from tests import test_artifact_proposal_orchestration as artifact
@@ -109,8 +110,10 @@ class LeadRecommendationTests(RecommendationCase):
                                      (("recommendation_request", "recommendation_decision"), True)):
             cid = self.conversation("Raw confirmed drafting consultation")
             self.backend.enqueue(recommendation(recommended_action=action(kind="prepare_consultation", source_ids=("user_input",)),
-                authoring_scope=lambda call: lead._live_scope(call, activity="review", domains=("plot_structure",))))
-            offered = await self.runtime.lead_turn(self.session_id, cid, "Recommend Plot review of this complete supplied candidate: " + DRAFT)
+                authoring_scope=lambda call: lead._live_scope(call, activity="review", domains=("plot_structure",)),
+                authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=('bounded review judgments', 'separate proposal preparation'))))
+            offered = await self.runtime.lead_turn(self.session_id, cid,
+                ("Recommend Plot review of this complete supplied candidate: " + DRAFT + "\nYou may make bounded Plot review judgments and prepare a separate Plot review proposal; preserve the supplied candidate facts."))
             self.assertIs(offered.kind, c.LeadOutcomeKind.RECOMMENDATION, offered)
             request = offered.recommendation_request
             source_ids = [item.input_id for item in request.basis.inputs]
@@ -119,7 +122,7 @@ class LeadRecommendationTests(RecommendationCase):
             raw_observations = []
             def raw(call, _provider):
                 selected = ([] if omit_source else source_ids) + list(aliases)
-                body = {"kind": "proposal", "message": request.purpose,
+                body = {"kind": "proposal", "message": request.purpose, "authoring_assessment": asdict(request.basis.authoring_admission.assessment),
                     "authoring_scope": lead._compact_scope(c.authoring_scope_to_dict(request.authoring_scope)),
                     "proposal": {"shared_premises": [], "assignments": [{"agent_id": agent, "mode": mode,
                         "instruction": request.instruction, "input_ids": selected} for agent in request.specialist_ids]}}
@@ -356,8 +359,7 @@ class LeadRecommendationTests(RecommendationCase):
 
 class LeadRecommendationRecoveryTests(RecommendationCase):
     async def reference_offer(self, *, kind="prepare_consultation", objective_id=None):
-        return await self.recommend(recommended_action=action(kind=kind,
-            source_ids=("reference_1", "current_response"), objective_id=objective_id),
+        return await self.recommend(recommended_action=action(kind=kind, source_ids=("reference_1", "current_response"), objective_id=objective_id),
             text=f"Inspect ${{{OUTLINE}}} and recommend exactly one preparation.")
 
 

@@ -8,7 +8,7 @@ import asyncio
 import json
 import unittest
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import asdict, replace
 from unittest import mock
 
 from story_writing_agents.workspace import initialization as workspace_initialization
@@ -60,20 +60,29 @@ from tests.test_lead_orchestration import (
     _submitted_calls,
     _workflow_material,
 )
+from tests.recommendation_fixture import task_assessment
 
 
 _SYNCHRONIZATION_TIMEOUT_SECONDS = 60
+
+
+_REVIEW_DIRECTION = "Check the story direction against supplied facts/material within each assigned domain."
+_REVIEW_LATITUDE = "Make bounded review judgments only; preserve supplied facts and wait for separate execution confirmation."
+_REVIEW_BRIEF = ("Story facts for this constructed review: a courier must recover her brother's letter before the last ferry; "
+    "her brother hid it to protect a witness. Keep these facts and all supplied material fixed. " + _REVIEW_DIRECTION + "\n" + _REVIEW_LATITUDE)
+
+
+def _review_assessment():
+    return task_assessment(foundation_ids=("user_input",), actions=("bounded review judgments",))
 
 
 def _three_way_proposal_fixture(case, conversation_id):
     return case.proposal(
         conversation_id,
         assignments=_assignments(
-            PLOT_ARCHITECT,
-            CHARACTER_CUSTODIAN,
+            PLOT_ARCHITECT, CHARACTER_CUSTODIAN,
             EXECUTION_SPECIALIST,
-        ),
-    )
+        ), text=_REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(_review_assessment()))
 
 def _confirmed_execution_task_fixture(runtime, proposed):
     return asyncio.create_task(
@@ -312,7 +321,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         conversation_id = self.conversation("Start append failure")
-        proposed = await self.proposal(conversation_id)
+        proposed = await self.proposal(conversation_id, text=_REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(_review_assessment()))
         calls_before = len(self.backend.calls)
         original = self.runtime.conversation_storage_services
         failing = _FailingEventStore(
@@ -408,8 +417,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         conversation_id = self.conversation("Cancellation")
         proposed = await self.proposal(
             conversation_id,
-            assignments=_assignments(PLOT_ARCHITECT, CHARACTER_CUSTODIAN),
-        )
+            assignments=_assignments(PLOT_ARCHITECT, CHARACTER_CUSTODIAN), text=_REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(_review_assessment()))
         both_started = asyncio.Event()
         count = 0
 
@@ -479,8 +487,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 )
                 proposed = await self.proposal(
                     conversation_id,
-                    assignments=_assignments(*specialist_ids),
-                )
+                    assignments=_assignments(*specialist_ids), text=_REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(_review_assessment()))
                 entered = 0
                 release = asyncio.Event()
                 ready = asyncio.Event()
@@ -509,7 +516,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
 
     async def test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it(self):
         conversation = self.conversation("Cancelled synthesis")
-        proposed = await self.proposal(conversation)
+        proposed = await self.proposal(conversation, text=_REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(_review_assessment()))
         entered = asyncio.Event()
 
         async def blocked(_call, _provider):
@@ -552,7 +559,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         proposed = await self.proposal(
             conversation_id,
             text=(
-                "Check ${core_documents/global_outline.md}, "
+                _REVIEW_BRIEF + "\n\n" + "Check ${core_documents/global_outline.md}, "
                 "${core_documents/character_sheets.md}, and "
                 "${manuscript/part-01/opening.md}#L2-L3."
             ),
@@ -569,8 +576,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 },
                 {"agent_id": EXECUTION_SPECIALIST, "instruction": "Assess the supplied prose.",
                  "input_ids": ["reference_3"]},
-            ],
-        )
+            ], authoring_assessment=asdict(_review_assessment()))
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
         self.backend.enqueue_for(EXECUTION_SPECIALIST, _specialist_outcome())
         self.backend.enqueue_for(CHARACTER_CUSTODIAN, _specialist_outcome("concern"))
@@ -641,7 +647,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         for ordinal, (value, issue) in enumerate(invalid_values, start=1):
             with self.subTest(ordinal=ordinal):
                 conversation_id = self.conversation(f"Strict specialist {ordinal}")
-                proposed = await self.proposal(conversation_id)
+                proposed = await self.proposal(conversation_id, text=_REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(_review_assessment()))
                 response = _raw_outcome(value)
                 self.backend.enqueue_for(PLOT_ARCHITECT, response)
                 self.backend.enqueue_for(PLOT_ARCHITECT, response)
@@ -687,7 +693,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         conversation_id = self.conversation("Rejected synthesis details")
-        proposed = await self.proposal(conversation_id)
+        proposed = await self.proposal(conversation_id, text=_REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(_review_assessment()))
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
         rejected = _raw_outcome({
             "message": "", "PRIVATE_SYNTHESIS_KEY": "PRIVATE_SYNTHESIS_VALUE",
@@ -717,7 +723,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         conversation_id = self.conversation("Restart diagnostic finalization")
-        proposed = await self.proposal(conversation_id)
+        proposed = await self.proposal(conversation_id, text=_REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(_review_assessment()))
         private = "PRIVATE_RESTARTED_SPECIALIST_VALUE"
         self.backend.enqueue_for(
             PLOT_ARCHITECT,
@@ -763,7 +769,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 conversation_id = self.conversation(
                     f"Restart domain rejection from {rejected_role}"
                 )
-                proposed = await self.proposal(conversation_id)
+                proposed = await self.proposal(conversation_id, text=_REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(_review_assessment()))
                 if rejected_role == PLOT_ARCHITECT:
                     self.backend.enqueue_for(
                         PLOT_ARCHITECT,
@@ -888,7 +894,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         conversation_id = self.conversation("Retry failed specialist diagnostic append")
-        proposed = await self.proposal(conversation_id)
+        proposed = await self.proposal(conversation_id, text=_REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(_review_assessment()))
         private = "PRIVATE_SPECIALIST_PROVIDER_FAILURE_한🙂"
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome(message=""))
         self.backend.enqueue_for(
@@ -959,7 +965,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 conversation_id = self.conversation(
                     f"Retry recovered diagnostic append {rejected_role}"
                 )
-                proposed = await self.proposal(conversation_id)
+                proposed = await self.proposal(conversation_id, text=_REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(_review_assessment()))
                 calls_before = len(self.backend.calls)
                 if rejected_role == PLOT_ARCHITECT:
                     self.backend.enqueue_for(
@@ -1025,7 +1031,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         conversation_id = self.conversation("Persistent diagnostic append failure")
-        proposed = await self.proposal(conversation_id)
+        proposed = await self.proposal(conversation_id, text=_REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(_review_assessment()))
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome(message=""))
         self.backend.enqueue_for(
             PLOT_ARCHITECT,
@@ -1069,7 +1075,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 self.assertEqual(LeadProviderConstraints(continuation=True).diagnose(json.dumps({"message": message})), ())
             return _provider_envelope(call, {"message": "The concerns remain visible."})
         conversation_id = self.conversation("Strict synthesis")
-        proposed = await self.proposal(conversation_id, assignments=_assignments(PLOT_ARCHITECT, CHARACTER_CUSTODIAN))
+        proposed = await self.proposal(conversation_id, assignments=_assignments(PLOT_ARCHITECT, CHARACTER_CUSTODIAN), text=_REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(_review_assessment()))
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome("concern"))
         self.backend.enqueue_for(CHARACTER_CUSTODIAN, _specialist_outcome("insufficient_evidence"))
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, minimal_synthesis)
@@ -1099,7 +1105,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         conversation_id = self.conversation("Unresolved concern")
-        proposed = await self.proposal(conversation_id)
+        proposed = await self.proposal(conversation_id, text=_REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(_review_assessment()))
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome("concern"))
         self.backend.enqueue_for(
             LEAD_ORCHESTRATOR,
@@ -1124,7 +1130,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
 
     async def test_submitted_uncertainty_enters_unknown_and_never_replays(self) -> None:
         conversation_id = self.conversation("Uncertain specialist")
-        proposed = await self.proposal(conversation_id)
+        proposed = await self.proposal(conversation_id, text=_REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(_review_assessment()))
         self.backend.enqueue_for(
             PLOT_ARCHITECT,
             _SubmittedFailure(
@@ -1160,11 +1166,10 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         ).propose_specialist_advisory(
             conversation_id,
             PLOT_ARCHITECT,
-            "Candidate: a choice precedes its consequence. Assess the plot chronology.",
+            "Candidate: a choice precedes its consequence. Assess the plot chronology." + "\n\n" + _REVIEW_LATITUDE,
             authoring_scope=AuthoringScope(AuthoringActivity.REVIEW, (), (ArtifactReviewDomain.PLOT_STRUCTURE,),
                                           "Assess the current user-supplied candidate.", "advisory_task", 1),
-            review_basis=ReviewBasis(("user_input",), "Assess chronology."),
-        )
+            review_basis=ReviewBasis(("user_input",), "Assess chronology."), authoring_assessment=_review_assessment())
 
         self.assertEqual(len(self.backend.calls), calls_before)
         assert proposed.proposal is not None
@@ -1200,20 +1205,20 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         mismatch_id = self.conversation("Advisory owner mismatch")
         with self.assertRaisesRegex(ValueError, "required story specialist|owned by another reviewer"):
             await self.runtime.propose_specialist_advisory(
-                self.session_id,
-                mismatch_id,
+                self.session_id, mismatch_id,
                 CHARACTER_CUSTODIAN,
-                "Check ${core_documents/global_outline.md}.",
+                _REVIEW_BRIEF + "\n\n" + "Check ${core_documents/global_outline.md}.",
                 authoring_scope=AuthoringScope(AuthoringActivity.REVIEW, (), (ArtifactReviewDomain.CHARACTER_WORLD,),
                                               "Assess the current candidate.", "advisory_other", 1),
                 review_basis=ReviewBasis(("user_input",), "Assess the supplied candidate."),
+                authoring_assessment=_review_assessment(),
             )
         self.assertFalse(self.history(mismatch_id))
 
     async def test_second_round_uses_reply_events_fresh_authority_and_cannot_chain_again(self) -> None:
         conversation_id = self.conversation("Second round")
-        first = await self.proposal(conversation_id, text="Check ${core_documents/global_outline.md}",
-            assignments=[{**_assignments(PLOT_ARCHITECT)[0], "input_ids": ["user_input", "reference_1"]}])
+        first = await self.proposal(conversation_id, text=_REVIEW_BRIEF + "\n\n" + "Check ${core_documents/global_outline.md}",
+            assignments=[{**_assignments(PLOT_ARCHITECT)[0], "input_ids": ["user_input", "reference_1"]}], authoring_assessment=asdict(_review_assessment()))
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome("concern"))
         def continue_lineage(call, _provider):
             material = _workflow_material(call.payload)
@@ -1305,15 +1310,14 @@ class SpecialistAccountingAcceptanceTests(LeadOrchestrationTestCase):
         )
         proposed = await self.proposal(
             conversation_id,
-            text="Check ${core_documents/global_outline.md}#L1-L2.",
+            text=_REVIEW_BRIEF + "\n\n" + "Check ${core_documents/global_outline.md}#L1-L2.",
             assignments=[
                 {
                     "agent_id": PLOT_ARCHITECT,
                     "instruction": "Search only the bounded assignment context.",
                     "input_ids": ["user_input", "reference_1"],
                 }
-            ],
-        )
+            ], authoring_assessment=asdict(_review_assessment()))
 
         assignment = proposed.proposal.assignments[0]
 
@@ -1409,7 +1413,7 @@ class SpecialistAccountingAcceptanceTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         conversation_id = self.conversation("Result persistence failure")
-        proposed = await self.proposal(conversation_id)
+        proposed = await self.proposal(conversation_id, text=_REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(_review_assessment()))
         original = self.runtime.conversation_storage_services
         failing = _FailingEventStore(
             original.event_store,

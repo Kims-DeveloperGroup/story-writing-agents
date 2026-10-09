@@ -1,6 +1,9 @@
 """Focused integration tests for the StoryRuntime consensus provider bridge."""
 
 from __future__ import annotations
+from tests.test_consensus_projection import (
+    _ADMISSION_BRIEF, _FIXTURE_DRAFT, _USER_ASSESSMENT, _MATERIAL_ASSESSMENT, _RULING_ASSESSMENT,
+)
 
 import asyncio
 from dataclasses import replace
@@ -97,11 +100,7 @@ class _BoundAgent:
                 AgentReplyNextPhase.REVIEW_COMPLETION if request.review_only else AgentReplyNextPhase.FINALIZATION,
             )
         if request.phase is Phase.FINALIZE:
-            return AgentReply.finalization(
-                request.revision_id,
-                "reviewed-proposal",
-                f"sha256:{'a' * 64}",
-            )
+            return AgentReply.finalization(request.revision_id, "reviewed-proposal", f"sha256:{'a' * 64}",)
         raise AssertionError(f"unexpected phase: {request.phase}")
 
 
@@ -130,11 +129,7 @@ def _decision(
     choice: ConsensusDecision = ConsensusDecision.CONFIRM,
 ) -> ConsensusRuntimeDecision:
     submission = inspection.submission
-    stored = runtime.load_workflow(
-        submission.session_id,
-        submission.conversation_id,
-        submission.workflow_id,
-    )
+    stored = runtime.load_workflow(submission.session_id, submission.conversation_id, submission.workflow_id,)
     assert stored is not None
     request_event = stored.events[-1]
     assert type(request_event.payload) is ConsensusPhaseRequest
@@ -153,34 +148,72 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.session = self.runtime.session("story_session")
         self.materials = ConsensusMaterialStore(self.workspace.root)
 
+    def pending_invocation(self, inspection, agent_id=EXECUTION_SPECIALIST, ordinal=1):
+        stored = self.runtime.load_workflow(
+            inspection.submission.session_id,
+            inspection.submission.conversation_id,
+            inspection.submission.workflow_id,
+        )
+        request = stored.events[-1].payload
+        return ConsensusPhaseInvocation(
+            workflow_id=request.workflow_id,
+            phase_request_id=request.phase_request_id,
+            proposal_id=request.proposal_id,
+            execution_identity=request.execution_identity,
+            phase=request.phase,
+            revision_id=request.revision_id,
+            input_material=request.input_material,
+            candidate_material=request.candidate_material,
+            agent_id=agent_id,
+            ordinal=ordinal,
+            continuation=request.continuation,
+            intent=request.intent,
+            authoring_admission=request.authoring_admission,
+            authoring_direction=request.authoring_direction,
+        )
+
+    async def reach_phase(self, inspection, phase):
+        for _ in range(8):
+            if inspection.projection.phase is phase:
+                return inspection
+            result = await self.session.confirm_consensus(_decision(self.runtime, inspection))
+            self.assertIs(result.execution.state, ConsensusPhaseState.COMPLETED)
+            inspection = self.session.request_next_consensus_phase(
+                inspection.submission.conversation_id, inspection.submission.workflow_id,
+            )
+        self.fail("The bounded public fixture did not reach its disclosed phase.")
+
     async def test_prompt_and_supplied_draft_are_execution_authored_before_audit(
         self,
     ) -> None:
         cases = (
-            ("prompt", self.session.submit_consensus_prompt, ConsensusInputKind.PROMPT),
+            (_ADMISSION_BRIEF, self.session.submit_consensus_prompt, ConsensusInputKind.PROMPT),
             (
-                "supplied complete draft",
+                _FIXTURE_DRAFT,
                 self.session.submit_consensus_draft,
                 ConsensusInputKind.SUPPLIED_DRAFT,
             ),
         )
         for source, submit, expected_kind in cases:
             with self.subTest(kind=expected_kind):
-                inspection = submit("conversation", source)
-                self.assertIs(inspection.submission.input_kind, expected_kind)
-                result = await self.session.confirm_consensus(
-                    _decision(self.runtime, inspection)
+                inspection = submit(
+                    "conversation", source, authoring_assessment=(
+                        _USER_ASSESSMENT if expected_kind is ConsensusInputKind.PROMPT else _MATERIAL_ASSESSMENT
+                    ), authoring_direction=None if expected_kind is ConsensusInputKind.PROMPT else _ADMISSION_BRIEF,
                 )
+                self.assertIs(inspection.submission.input_kind, expected_kind)
+                expected_payload = source + (
+                "\n\nExplicit USER authoring direction:\n" + _ADMISSION_BRIEF
+                    if expected_kind is ConsensusInputKind.SUPPLIED_DRAFT else ""
+                )
+                result = await self.session.confirm_consensus(_decision(self.runtime, inspection))
                 self.assertIs(result.execution.state, ConsensusPhaseState.COMPLETED)
                 output = result.execution.provider_results[0]
-                self.assert_material(output.candidate_material, f'authored::{source}'.encode())
-                self.assertNotEqual(
-                    output.candidate_material.digest,
-                    inspection.submission.input_digest,
-                )
+                self.assert_material(output.candidate_material, f'authored::{expected_payload}'.encode())
+                self.assertNotEqual(output.candidate_material.digest, inspection.submission.input_digest,)
                 request = self.backend.requests[-1]
                 self.assertIs(request.phase, Phase.DRAFT)
-                self.assertEqual(request.user_payload, source)
+                self.assertEqual(request.user_payload, expected_payload)
                 self.assertIsNone(request.candidate_payload)
 
                 audit = self.session.request_next_consensus_phase(
@@ -188,10 +221,7 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
                     inspection.submission.workflow_id,
                 )
                 self.assertIs(audit.projection.phase, ConsensusPhase.AUDIT)
-                self.assertEqual(
-                    audit.projection.candidate_digest,
-                    output.candidate_material.digest,
-                )
+                self.assertEqual(audit.projection.candidate_digest, output.candidate_material.digest,)
 
     async def test_reject_revise_restart_and_session_ownership_fail_before_provider(
         self,
@@ -199,21 +229,20 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
         for choice in (ConsensusDecision.REJECT, ConsensusDecision.REVISE):
             inspection = self.session.submit_consensus_prompt(
                 f"conversation-{choice.value}",
-                "write a scene",
+                _ADMISSION_BRIEF,
+
+                authoring_assessment=_USER_ASSESSMENT,
             )
-            result = await self.session.decide_consensus(
-                _decision(self.runtime, inspection, choice)
-            )
+            result = await self.session.decide_consensus(_decision(self.runtime, inspection, choice))
             self.assertIsNone(result.execution)
         self.assertEqual(self.backend.requests, [])
 
-        pending = self.session.submit_consensus_prompt("conversation-restart", "prompt")
+        pending = self.session.submit_consensus_prompt("conversation-restart", _ADMISSION_BRIEF,
+            authoring_assessment=_USER_ASSESSMENT,
+        )
         foreign = replace(
             _decision(self.runtime, pending),
-            execution_identity=ConsensusExecutionIdentity(
-                "other_session",
-                "conversation-restart",
-            ),
+            execution_identity=ConsensusExecutionIdentity("other_session", "conversation-restart",),
         )
         with self.assertRaisesRegex(ValueError, "does not belong"):
             await self.session.confirm_consensus(foreign)
@@ -235,7 +264,9 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(restarted_backend.requests, [])
 
         unready_session = self.runtime.session("unready_session")
-        unready = unready_session.submit_consensus_prompt("conversation-unready", "prompt")
+        unready = unready_session.submit_consensus_prompt("conversation-unready", _ADMISSION_BRIEF,
+            authoring_assessment=_USER_ASSESSMENT,
+        )
         unready_result = await unready_session.confirm_consensus(_decision(self.runtime, unready))
         self.assertIs(unready_result.execution.state, ConsensusPhaseState.FAILED)
         self.assertEqual(self.backend.requests, [])
@@ -246,44 +277,45 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
         ready = provision_session_resources(self.workspace.root, "story_session")
         path = "core_documents/global_outline.md"
         artifact = ready.identity.worktree_root / path
-        artifact.write_bytes("검토할 원고.\r\nCafé.  \r\n".encode("utf-8"))
+        artifact.write_bytes((_FIXTURE_DRAFT + "\r\n검토할 원고.\r\nCafé.  \r\n").encode("utf-8"))
         original = artifact.read_bytes()
         handle = artifact_material_handle(path, hashlib.sha256(original).hexdigest())
-        invocation = ConsensusPhaseInvocation(
-            workflow_id="workflow-artifact",
-            phase_request_id="request-artifact",
-            proposal_id="proposal-artifact",
-            execution_identity=ConsensusExecutionIdentity(
-                "story_session", "conversation-artifact"
-            ),
-            phase=ConsensusPhase.DRAFT,
-            revision_id="r0",
-            input_material=handle,
-            candidate_material=None,
-            agent_id=EXECUTION_SPECIALIST,
-            ordinal=1,
+        inspection = self.runtime.consensus.submit_prompt(
+            session_id="story_session", conversation_id='conversation-artifact', input_material=handle,
+            authoring_assessment=_MATERIAL_ASSESSMENT, authoring_direction=_ADMISSION_BRIEF,
         )
+        invocation = self.pending_invocation(inspection)
+        with self.assertRaisesRegex(ValueError, "confirmed running phase"):
+            await self.runtime.invoke_provider(invocation)
 
         with mock.patch.object(
             self.runtime,
             "_reconcile_reference_operations_at_boundary",
             wraps=self.runtime._reconcile_reference_operations_at_boundary,
         ) as reconciled:
-            result = await self.runtime.invoke_provider(invocation)
+            confirmed = await self.session.confirm_consensus(_decision(self.runtime, inspection))
+            result = confirmed.execution.provider_results[0]
         reconciled.assert_called_once()
         self.assertEqual(self.backend.reference_contents, [(original,)])
         self.assertIsNotNone(self.backend.reference_reads[-1])
         request = self.backend.requests[-1]
-        self.assertEqual(request.user_payload, f"${{{path}}}")
+        expected_payload = f"${{{path}}}\n\nExplicit USER authoring direction:\n" + _ADMISSION_BRIEF
+        self.assertEqual(request.user_payload, expected_payload)
         self.assertNotIn(original.decode(), request.user_payload)
-        self.assert_material(result.candidate_material, f'authored::${{{path}}}'.encode())
+        self.assert_material(result.candidate_material, f'authored::{expected_payload}'.encode())
 
+        stale = self.runtime.consensus.submit_prompt(
+            session_id="story_session", conversation_id='conversation-stale-artifact', input_material=handle,
+            authoring_assessment=_MATERIAL_ASSESSMENT, authoring_direction=_ADMISSION_BRIEF,
+        )
+        stale_calls = len(self.backend.requests)
         artifact.write_text("drifted outline\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "^consensus authoring admission or source changed;"):
+            await self.session.confirm_consensus(_decision(self.runtime, stale))
+        self.assertEqual(len(self.backend.requests), stale_calls)
         calls_before = len(self.backend.requests)
-        with self.assertRaisesRegex(ValueError, "authorization is stale"):
-            await self.runtime.invoke_provider(
-                replace(invocation, phase_request_id="stale")
-            )
+        with self.assertRaisesRegex(ValueError, '^consensus invocation request is unavailable$'):
+            await self.runtime.invoke_provider(replace(invocation, phase_request_id="stale"))
         self.assertEqual(len(self.backend.requests), calls_before)
         before = len(self.backend.requests)
         review = self.session.submit_consensus_draft("review", original.decode(), intent=AuthoringIntent.REVIEW_ONLY)
@@ -317,7 +349,12 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
                     for a in audit_event.payload.audits]
         self.assertEqual(facts, expected)
         self.assertEqual(tuple(m.sender for m in calls[-1].messages), CONSENSUS_AUDITORS)
-        fresh = self.session.submit_consensus_draft("review", original.decode())
+        fresh = self.session.submit_consensus_draft(
+            "review",
+            original.decode(),
+            authoring_assessment=_MATERIAL_ASSESSMENT,
+            authoring_direction=_ADMISSION_BRIEF,
+        )
         self.assertEqual((fresh.submission.intent, fresh.projection.phase, fresh.projection.review_findings), (AuthoringIntent.AUTHORING, ConsensusPhase.DRAFT, None))
         self.assertNotEqual(fresh.submission.workflow_id, review.submission.workflow_id)
         encoded = serialize_consensus_workflow(self.runtime.load_workflow("story_session", "review", review.submission.workflow_id))
@@ -338,6 +375,7 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
         provision_session_resources(self.workspace.root, "story_session")
         self.backend = _Backend(vendor="codex")
         self.runtime = StoryRuntime(self.workspace, self.backend)  # type: ignore[arg-type]
+        self.session = self.runtime.session("story_session")
         self.materials = ConsensusMaterialStore(self.workspace.root)
         execution_workspaces = []
 
@@ -347,8 +385,22 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
             execution_workspaces.append(execution_workspace)
             return await bound_agent.invoke(request, reference_read=reference_read)
 
-        input_material = self.materials.put_text("source request")
+        async def route_reply(request):
+            if request.phase in {Phase.DRAFT, Phase.PROPOSE_REVISION}:
+                text = "candidate revision" if request.phase is Phase.DRAFT else repaired_text
+                return AgentReply.candidate(request.revision_id, text)
+            if request.phase is Phase.AUDIT:
+                return AgentReply.approval(request.revision_id)
+            if request.phase is Phase.SYNTHESIZE:
+                return AgentReply.synthesis(request.revision_id, "ready", (
+                    AgentReplyNextPhase.REPAIR if request.revision_id == "r0" else AgentReplyNextPhase.FINALIZATION
+                ))
+            return AgentReply.finalization(request.revision_id, "reviewed-proposal", f"sha256:{'a' * 64}")
+        self.backend.handler = route_reply
+        input_material = self.materials.put_text(_ADMISSION_BRIEF)
+        repaired_text = "repaired candidate revision"
         candidate = self.materials.put_text("candidate revision")
+        repaired = self.materials.put_text(repaired_text)
         expected = {
             ConsensusPhase.DRAFT: (EXECUTION_SPECIALIST, 1, Phase.DRAFT, None),
             ConsensusPhase.AUDIT: (PLOT_ARCHITECT, 1, Phase.AUDIT, candidate),
@@ -362,7 +414,7 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
                 CHARACTER_CUSTODIAN,
                 2,
                 Phase.AUDIT,
-                candidate,
+                repaired,
             ),
             ConsensusPhase.SYNTHESIS: (
                 LEAD_ORCHESTRATOR,
@@ -374,7 +426,7 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
                 LEAD_ORCHESTRATOR,
                 1,
                 Phase.FINALIZE,
-                candidate,
+                repaired,
             ),
         }
         core_before = {
@@ -403,29 +455,28 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
                 phase_candidate,
             ) in expected.items():
                 with self.subTest(phase=phase):
-                    invocation = ConsensusPhaseInvocation(
-                        workflow_id="workflow-routes",
-                        phase_request_id=f"request-{phase.value}",
-                        proposal_id="proposal-routes",
-                        execution_identity=ConsensusExecutionIdentity(
-                            "story_session", "conversation-routes"
-                        ),
-                        phase=phase,
-                        revision_id="r0",
-                        input_material=input_material,
-                        candidate_material=phase_candidate,
-                        agent_id=agent_id,
-                        ordinal=ordinal,
+                    case_before = len(self.backend.requests)
+                    inspection = self.session.submit_consensus_prompt(
+                        "conversation-routes", _ADMISSION_BRIEF, authoring_assessment=_USER_ASSESSMENT,
                     )
-                    await self.runtime.invoke_provider(invocation)
-                    request = self.backend.requests[-1]
+                    with self.assertRaisesRegex(ValueError, "confirmed running phase"):
+                        await self.runtime.invoke_provider(self.pending_invocation(inspection))
+                    inspection = await self.reach_phase(inspection, phase)
+                    target_before = len(self.backend.requests)
+                    await self.session.confirm_consensus(_decision(self.runtime, inspection))
+                    request = self.backend.requests[target_before:][ordinal - 1]
+                    self.assertEqual(len(self.backend.requests) - case_before, {
+                        ConsensusPhase.DRAFT: 1, ConsensusPhase.AUDIT: 4, ConsensusPhase.REPAIR: 6,
+                        ConsensusPhase.REAUDIT: 9, ConsensusPhase.SYNTHESIS: 5, ConsensusPhase.FINALIZATION: 11,
+                    }[phase])
                     self.assertIs(request.phase, expected_phase)
+                    expected_candidate = repaired_text if phase_candidate is repaired else "candidate revision"
                     self.assertEqual(
                         request.candidate_payload,
-                        None if phase_candidate is None else "candidate revision",
+                        None if phase_candidate is None else expected_candidate,
                     )
-        self.assertEqual(len(execution_workspaces), len(expected))
-        self.assertEqual(len({id(item) for item in execution_workspaces}), len(expected))
+        self.assertEqual(len(execution_workspaces), 36)
+        self.assertEqual(len({id(item) for item in execution_workspaces}), 36)
         for execution_workspace in execution_workspaces:
             with self.assertRaises(SessionArtifactBindingError):
                 execution_workspace.require_current()
@@ -448,81 +499,81 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
     async def test_continuation_repair_receives_ruling_and_conflicts_and_wrapper_binds_session(
         self,
     ) -> None:
-        source = self.materials.put_text("source request")
-        candidate = self.materials.put_text("exact deadlocked candidate")
-        ruling = self.materials.put_text("keep the reveal in chapter three")
-        conflicts = (
-            self.materials.put_text("timeline conflict"),
-            self.materials.put_text("character motivation conflict"),
-            self.materials.put_text("scene execution conflict"),
+        async def deadlock_then_repair(request):
+            if request.phase is Phase.DRAFT:
+                return AgentReply.candidate(request.revision_id, "exact deadlocked candidate")
+            if request.phase is Phase.AUDIT:
+                return AgentReply.conflict(request.revision_id, {
+                    PLOT_ARCHITECT: "timeline conflict", CHARACTER_CUSTODIAN: "character motivation conflict",
+                    EXECUTION_SPECIALIST: "scene execution conflict",
+                }[request.agent_id])
+            if request.phase is Phase.SYNTHESIZE:
+                return AgentReply.deadlock(request.revision_id, "Resolve the three supplied critiques.")
+            return AgentReply.candidate(request.revision_id, "repaired candidate")
+        self.backend.handler = deadlock_then_repair
+        source = self.materials.put_text(_ADMISSION_BRIEF)
+        original = self.session.submit_consensus_prompt(
+            "conversation-continuation", _ADMISSION_BRIEF, authoring_assessment=_USER_ASSESSMENT,
         )
-        continuation = ConsensusContinuation(
+        with self.assertRaisesRegex(ValueError, "confirmed running phase"):
+            await self.runtime.invoke_provider(self.pending_invocation(original))
+        synthesis = await self.reach_phase(original, ConsensusPhase.SYNTHESIS)
+        deadlocked = await self.session.confirm_consensus(_decision(self.runtime, synthesis))
+        source_event = deadlocked.execution.terminal_event
+        ruling_text = "keep reveal in chapter three; preserve the motive and world rules. " + _ADMISSION_BRIEF
+        ruling = self.materials.put_text(ruling_text)
+        fresh = self.session.continue_consensus_deadlock(
+            "conversation-continuation",
+            original.submission.workflow_id,
+            source_event.event_id,
+            source_event.sequence,
+            ruling=ruling_text,
             mode=ConsensusContinuationMode.RESUME_IN_PLACE,
-            source_workflow_id="workflow-source",
-            source_result_event_id="result-source",
-            source_revision_id="r0",
-            source_candidate_material=candidate,
-            conflict_materials=conflicts,
-            ruling_material=ruling,
             added_revision_rounds=2,
+            authoring_assessment=_RULING_ASSESSMENT,
         )
-        invocation = ConsensusPhaseInvocation(
-            workflow_id="workflow-source",
-            phase_request_id="request-continuation",
-            proposal_id="proposal-source",
-            execution_identity=ConsensusExecutionIdentity(
-                "story_session", "conversation-continuation"
-            ),
-            phase=ConsensusPhase.REPAIR,
-            revision_id="r0",
-            input_material=source,
-            candidate_material=candidate,
-            agent_id=EXECUTION_SPECIALIST,
-            ordinal=1,
-            continuation=continuation,
-        )
-        await self.runtime.invoke_provider(invocation)
+        continuation = self.pending_invocation(fresh).continuation
+        candidate = continuation.source_candidate_material
+        conflicts = continuation.conflict_materials
+        before_calls = len(self.backend.requests)
+        with self.assertRaisesRegex(ValueError, "original input lineage changed"):
+            self.runtime.qualify_consensus_authoring(
+                original.submission.execution_identity,
+                original.submission.workflow_id,
+                candidate,
+                _RULING_ASSESSMENT,
+                input_kind=ConsensusInputKind.CONTINUATION,
+                ruling_material=ruling,
+                source_workflow_id=original.submission.workflow_id,
+            )
+        with self.assertRaisesRegex(ValueError, "original input lineage changed"):
+            self.runtime.qualify_consensus_authoring(
+                original.submission.execution_identity, original.submission.workflow_id, source, _RULING_ASSESSMENT,
+                input_kind=ConsensusInputKind.CONTINUATION, direction_material=self.materials.put_text(
+                    _ADMISSION_BRIEF,
+                ),
+                ruling_material=ruling, source_workflow_id=original.submission.workflow_id,
+            )
+        self.assertEqual(len(self.backend.requests), before_calls)
+        await self.session.confirm_consensus(_decision(self.runtime, fresh))
         request = self.backend.requests[-1]
         self.assertEqual(request.candidate_payload, "exact deadlocked candidate")
-        self.assertIn(
-            "Continuation ruling:\nkeep the reveal in chapter three",
-            request.user_payload,
-        )
-        for conflict in (
-            "timeline conflict",
-            "character motivation conflict",
-            "scene execution conflict",
-        ):
+        self.assertIn("Continuation ruling:\n" + ruling_text, request.user_payload)
+        for conflict in ("timeline conflict", "character motivation conflict", "scene execution conflict"):
             self.assertIn(conflict, request.user_payload)
-
         sentinel = object()
-        with mock.patch.object(
-            StoryRuntime,
-            "continue_consensus_deadlock",
-            autospec=True,
-            return_value=sentinel,
-        ) as continued:
+        with mock.patch.object(StoryRuntime, "continue_consensus_deadlock", return_value=sentinel) as delegated:
             result = self.session.continue_consensus_deadlock(
-                "conversation-continuation",
-                "workflow-source",
-                "result-source",
-                12,
-                mode=ConsensusContinuationMode.RESUME_IN_PLACE,
-                ruling="operator ruling",
-                added_revision_rounds=2,
+                "conversation-continuation", original.submission.workflow_id, source_event.event_id,
+                source_event.sequence, ruling=ruling_text, mode=ConsensusContinuationMode.RESUME_IN_PLACE,
+                added_revision_rounds=2, authoring_assessment=_RULING_ASSESSMENT,
             )
-        self.assertIs(result, sentinel)
-        continued.assert_called_once_with(
-            self.runtime,
-            "story_session",
-            "conversation-continuation",
-            "workflow-source",
-            "result-source",
-            12,
-            mode=ConsensusContinuationMode.RESUME_IN_PLACE,
-            ruling="operator ruling",
-            added_revision_rounds=2,
-        )
+            self.assertIs(result, sentinel)
+            delegated.assert_called_once_with(
+                "story_session", "conversation-continuation", original.submission.workflow_id, source_event.event_id,
+                source_event.sequence, ruling=ruling_text, mode=ConsensusContinuationMode.RESUME_IN_PLACE,
+                added_revision_rounds=2, authoring_assessment=_RULING_ASSESSMENT,
+            )
 
     async def test_interrupt_cancels_all_matching_auditors_and_cleans_registry(
         self,
@@ -531,56 +582,46 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
         arrivals = []
 
         async def block(request):
+            if request.phase is Phase.DRAFT:
+                return AgentReply.candidate(request.revision_id, "candidate")
             arrivals.append(request.agent_id)
-            if len(arrivals) == 3:
+            if len(arrivals) == 1:
                 arrived.set()
             await asyncio.Event().wait()
             raise AssertionError("blocking provider unexpectedly resumed")
 
         runtime = StoryRuntime(self.workspace, _Backend(block))  # type: ignore[arg-type]
-        input_material = self.materials.put_text("input")
-        candidate = self.materials.put_text("candidate")
-        agents = (PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST)
-        invocations = tuple(
-            ConsensusPhaseInvocation(
-                workflow_id="workflow-interrupt",
-                phase_request_id="request-interrupt",
-                proposal_id="proposal-interrupt",
-                execution_identity=ConsensusExecutionIdentity(
-                    "story_session", "conversation-interrupt"
-                ),
-                phase=ConsensusPhase.AUDIT,
-                revision_id="r0",
-                input_material=input_material,
-                candidate_material=candidate,
-                agent_id=agent_id,
-                ordinal=ordinal,
-            )
-            for ordinal, agent_id in enumerate(agents, start=1)
+        self.runtime = runtime
+        self.session = runtime.session("story_session")
+        inspection = self.session.submit_consensus_prompt(
+            "conversation-interrupt", _ADMISSION_BRIEF, authoring_assessment=_USER_ASSESSMENT,
         )
-        tasks = tuple(
-            asyncio.create_task(runtime.invoke_provider(item)) for item in invocations
-        )
+        with self.assertRaisesRegex(ValueError, "confirmed running phase"):
+            await runtime.invoke_provider(self.pending_invocation(inspection))
+        inspection = await self.reach_phase(inspection, ConsensusPhase.AUDIT)
+        audit_request = self.pending_invocation(inspection, PLOT_ARCHITECT)
+        agents = (PLOT_ARCHITECT,)
+        tasks = (asyncio.create_task(self.session.confirm_consensus(_decision(runtime, inspection))),)
         await asyncio.wait_for(arrived.wait(), timeout=5)
         self.assertCountEqual(arrivals, agents)
         self.assertTrue(
             runtime.interrupt_provider(
                 "story_session",
                 "conversation-interrupt",
-                "workflow-interrupt",
-                "request-interrupt",
+                inspection.submission.workflow_id,
+                audit_request.phase_request_id,
             )
         )
         outcomes = await asyncio.gather(*tasks, return_exceptions=True)
         self.assertTrue(
-            all(isinstance(item, asyncio.CancelledError) for item in outcomes)
+            all(item.execution.state is ConsensusPhaseState.INTERRUPTED for item in outcomes)
         )
         self.assertFalse(
             runtime.interrupt_provider(
                 "story_session",
                 "conversation-interrupt",
-                "workflow-interrupt",
-                "request-interrupt",
+                inspection.submission.workflow_id,
+                audit_request.phase_request_id,
             )
         )
 

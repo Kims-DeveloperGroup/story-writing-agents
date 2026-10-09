@@ -13,7 +13,7 @@ import os
 import subprocess
 import unittest
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import asdict, replace
 from unittest import mock
 
 from story_writing_agents import StoryRuntime, Workspace
@@ -147,8 +147,9 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
 
     async def reviewed_create(
         self, subject: str = "Reviewed update", *,
-        new_text: str = "Use restrained close-third narration.\n",
+        new_text: str = "Use restrained close-third narration.\n", user_brief: str | None = None,
     ):
+        from tests.recommendation_fixture import task_assessment
         conversation_id = self.conversation(subject)
         self.backend.enqueue(
             _artifact_outcome(
@@ -160,12 +161,14 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
                     }
                 ],
                 evidence_status="empty",
+                authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
             )
         )
+        user_material = "\nSupplied replacement:\n" + new_text if user_brief is None else "\nSupplied narrative-style brief:\n" + user_brief
         proposed = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
-            f"Update ${{{_RULES}}} with an exact narrative rule.",
+            ((f"Update ${{{_RULES}}} with an exact narrative rule." + user_material + '\nYou may give bounded artifact review judgments and prepare a separate exact replacement proposal; preserve supplied facts and require separate execution confirmation.')),
         )
         for assignment in proposed.proposal.assignments:
             self.backend.enqueue_for(

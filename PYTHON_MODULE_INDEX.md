@@ -70,7 +70,7 @@ errors/configuration. These are stable inputs to orchestration and adapters; the
 depend on terminal presentation or concrete persistence.
 
 - `agents`, `models`, `errors`, `config`, `prompts`, `directives`, `artifact_proposals`
-- `specialist_routing`, `reply_trace`, `run_inputs`
+- `specialist_routing`, `authoring_admission`, `reply_trace`, `run_inputs`
 
 Primary access is the root facade. `specialist_routing` owns pure shared `AuthoringIntent`, independent of activity; conversation codecs preserve its immutable task lineage. `config` owns configuration loading. Scope-v3 contribution/dependency declarations and consistent per-specialist roles remain pure routing contracts; historical scope constructors retain default version 2. Historical drafting-input eligibility is pure routing policy; current execution proof remains host-owned.
 `prompts` owns captured policy bytes, stable fingerprints and runtime authority invariants; stages remain invocation data without provider execution.
@@ -181,12 +181,12 @@ runtime collaborators, and persist event/material records. `consensus` is the su
 facade; contracts and projections remain infrastructure-neutral.
 
 - `consensus`, `consensus.contracts`, `consensus.execution`, `consensus.projection`
-- `consensus.serialization`, `consensus.runtime_adapter`
+- `consensus.serialization`, `consensus.runtime_adapter` Source-bound authoring admission is preserved in phase/submission codecs and requalified by the owning runtime port before Confirm/dispatch; new USER rulings require fresh semantic input.
 - `consensus.event_store`, `consensus.material_store`
 
 Execution and serialization depend on contracts/projection; stores own durable workspace records. Contracts must not import execution or stores.
 Consensus contracts bind shared pure intent and INPUT_ADOPTION/REVIEW_COMPLETION phases; execution uses existing material ports and confirmation capabilities without providers. The supported facade re-exports the owned intent enum. Review-only audit report handles retain approving observations for ordered synthesis through existing immutable material storage; older missing reports remain explicitly unavailable.
-Serialization writes v4 and strictly admits historical v3 AUTHORING shapes/digests. Existing result/projection owners retain review-only synthesis reports for inspection without granting authority.
+Serialization writes v4; AUTHORING requires current typed admission. Historical AUTHORING bytes lacking it are rejected without compatibility or backfill. Existing result/projection owners retain review-only synthesis reports for inspection without granting authority.
 Results may carry ordered provider validation details; historical serialized results without the optional field remain valid.
 
 ### Writing artifacts and references

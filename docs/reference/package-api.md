@@ -574,6 +574,10 @@ Both runtime advisory facades accept keyword-only `authoring_scope` and
 `review_basis`. Missing/workflow scope raises `ValueError`; a selected single
 specialist must cover every affected domain. Use the complete
 [advisory migration example](runtime-api.md#propose_specialist_advisory).
+Official drafting adds keyword-only `authoring_assessment: AuthoringAssessment |
+None = None` and may return `AuthoringAdmissionNeeded`. Import those pure values
+from `story_writing_agents.authoring_admission`; they add no package-root exports
+or execution authority. See [official authoring admission](runtime-api.md#official-authoring-admission).
 
 The lead and specialist values are strict public inputs and results. Every
 fresh provider lead judgment carries exact runtime-issued evidence; the runtime

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..authoring_admission import AuthoringAssessment, AuthoringAdmissionBasis, AuthoringAdmissionNeeded
+
 import re
 from dataclasses import dataclass
 from typing import Protocol
@@ -100,6 +102,18 @@ class ConsensusRuntimePort(Protocol):
         /,
     ) -> bool: ...
 
+    def qualify_consensus_authoring(
+        self, identity: ConsensusExecutionIdentity, workflow_id: str,
+        material: ConsensusMaterialHandle, assessment: AuthoringAssessment | None, *,
+        input_kind: ConsensusInputKind, direction_material: ConsensusMaterialHandle | None = None,
+        ruling_material: ConsensusMaterialHandle | None = None, source_revision_id: str = "r0",
+        source_workflow_id: str | None = None,
+    ) -> AuthoringAdmissionBasis | AuthoringAdmissionNeeded: ...
+
+    def capture_consensus_direction(self, direction: str, /) -> ConsensusMaterialHandle: ...
+
+    def validate_consensus_authoring(self, request: ConsensusPhaseRequest, /) -> None: ...
+
 
 @dataclass(frozen=True, slots=True)
 class ConsensusRuntimeDecision:
@@ -179,6 +193,9 @@ class ConsensusRuntimeAdapter:
             "invoke_provider",
             "interrupt_provider",
             "verify_consensus_material",
+            "qualify_consensus_authoring",
+            "capture_consensus_direction",
+            "validate_consensus_authoring",
         )
         if port is None or any(not callable(getattr(port, name, None)) for name in required):
             raise TypeError("consensus runtime port is incomplete")
@@ -193,7 +210,9 @@ class ConsensusRuntimeAdapter:
         session_id: str,
         conversation_id: str,
         input_material: ConsensusMaterialHandle,
-    ) -> ConsensusRuntimeInspection:
+        authoring_assessment: AuthoringAssessment | None = None,
+        authoring_direction: str | None = None,
+    ) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded:
         """Submit prompt input for an execution-authored draft revision zero."""
 
         return self._submit(
@@ -201,6 +220,8 @@ class ConsensusRuntimeAdapter:
             conversation_id=conversation_id,
             input_kind=ConsensusInputKind.PROMPT,
             input_material=input_material,
+            authoring_assessment=authoring_assessment,
+            authoring_direction=authoring_direction,
         )
 
     def submit_supplied_draft(
@@ -210,7 +231,9 @@ class ConsensusRuntimeAdapter:
         conversation_id: str,
         draft_material: ConsensusMaterialHandle,
         intent: AuthoringIntent = AuthoringIntent.AUTHORING,
-    ) -> ConsensusRuntimeInspection:
+        authoring_assessment: AuthoringAssessment | None = None,
+        authoring_direction: str | None = None,
+    ) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded:
         """Disclose authoring transformation or provider-free exact-input adoption."""
 
         return self._submit(
@@ -218,6 +241,8 @@ class ConsensusRuntimeAdapter:
             conversation_id=conversation_id,
             input_kind=ConsensusInputKind.SUPPLIED_DRAFT,
             input_material=draft_material,
+            authoring_assessment=authoring_assessment,
+            authoring_direction=authoring_direction,
             intent=intent,
         )
 
@@ -233,6 +258,8 @@ class ConsensusRuntimeAdapter:
         stored = self._load(session_id, conversation_id, workflow_id)
         projection = project_consensus(stored.events)
         request = _current_request(stored.events)
+        if request.intent is AuthoringIntent.AUTHORING:
+            self._port.validate_consensus_authoring(request)
         key = self._capability_key(stored.submission, request.phase_request_id)
         return ConsensusRuntimeInspection(
             submission=stored.submission,
@@ -285,6 +312,8 @@ class ConsensusRuntimeAdapter:
         ):
             raise ValueError("consensus confirmation authority is unavailable; submit a fresh phase")
 
+        if decision.decision is ConsensusDecision.CONFIRM and request.intent is AuthoringIntent.AUTHORING:
+            self._port.validate_consensus_authoring(request)
         if decision.decision is ConsensusDecision.CONFIRM and request.intent is AuthoringIntent.REVIEW_ONLY:
             if self._port.verify_consensus_material(request.input_material) is not True:
                 raise ValueError("review-only original material is unavailable")
@@ -601,7 +630,8 @@ class ConsensusRuntimeAdapter:
         mode: ConsensusContinuationMode,
         ruling_material: ConsensusMaterialHandle,
         added_revision_rounds: int,
-    ) -> ConsensusRuntimeInspection:
+        authoring_assessment: AuthoringAssessment | None = None,
+    ) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded:
         """Prepare a fresh confirmed repair from one exact durable deadlock."""
 
         if type(mode) is not ConsensusContinuationMode:
@@ -651,7 +681,24 @@ class ConsensusRuntimeAdapter:
             proposal_id = self._new_id("consensus-proposal")
             base_tail = 0
             previous_result = None
+        qualified = self._port.qualify_consensus_authoring(
+            source.submission.execution_identity,
+            workflow_id,
+            source.submission.input_material,
+            authoring_assessment,
+            input_kind=source.submission.input_kind,
+            direction_material=source.submission.authoring_direction,
+            ruling_material=ruling_material,
+            source_revision_id=source_request.revision_id,
+            source_workflow_id=source.submission.workflow_id,
+        )
+        if type(qualified) is AuthoringAdmissionNeeded:
+            return qualified
+        if type(qualified) is not AuthoringAdmissionBasis:
+            raise TypeError("consensus continuation host did not qualify admission")
         request, capability = prepare_consensus_phase(
+            authoring_admission=qualified,
+            authoring_direction=source.submission.authoring_direction,
             owner=self,
             workflow_id=workflow_id,
             phase_request_id=self._new_id("consensus-request"),
@@ -683,6 +730,8 @@ class ConsensusRuntimeAdapter:
             if current.events[-1] != terminal_event:
                 raise ValueError("consensus continuation source tail changed")
             submission = ConsensusWorkflowSubmission(
+                authoring_admission=qualified,
+                authoring_direction=source.submission.authoring_direction,
                 execution_identity=source.submission.execution_identity,
                 workflow_id=workflow_id,
                 proposal_id=proposal_id,
@@ -786,7 +835,9 @@ class ConsensusRuntimeAdapter:
         input_kind: ConsensusInputKind,
         input_material: ConsensusMaterialHandle,
         intent: AuthoringIntent = AuthoringIntent.AUTHORING,
-    ) -> ConsensusRuntimeInspection:
+        authoring_assessment: AuthoringAssessment | None = None,
+        authoring_direction: str | None = None,
+    ) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded:
         _identifier(session_id)
         _identifier(conversation_id)
         if type(input_material) is not ConsensusMaterialHandle:
@@ -799,11 +850,26 @@ class ConsensusRuntimeAdapter:
             or self._port.verify_consensus_material(input_material) is not True
         ):
             raise ValueError("review-only adoption requires verified supplied material")
+        if authoring_direction is not None and (type(authoring_direction) is not str or not authoring_direction.strip() or intent is AuthoringIntent.REVIEW_ONLY):
+            raise ValueError("consensus authoring direction requires nonempty USER input")
+        direction_material = (None if authoring_direction is None else self._port.capture_consensus_direction(authoring_direction))
         workflow_id = self._new_id("consensus-workflow")
         proposal_id = self._new_id("consensus-proposal")
         phase_request_id = self._new_id("consensus-request")
         execution_identity = ConsensusExecutionIdentity(session_id, conversation_id)
+        authoring_admission = None
+        if intent is AuthoringIntent.AUTHORING:
+            qualified = self._port.qualify_consensus_authoring(
+                execution_identity, workflow_id, input_material, authoring_assessment,
+                input_kind=input_kind, direction_material=direction_material)
+            if type(qualified) is AuthoringAdmissionNeeded:
+                return qualified
+            if type(qualified) is not AuthoringAdmissionBasis:
+                raise TypeError("consensus host did not qualify authoring admission")
+            authoring_admission = qualified
         request, capability = prepare_consensus_phase(
+            authoring_admission=authoring_admission,
+            authoring_direction=direction_material,
             owner=self,
             workflow_id=workflow_id,
             phase_request_id=phase_request_id,
@@ -818,6 +884,8 @@ class ConsensusRuntimeAdapter:
         )
         request_event = ConsensusEvent(self._new_id("consensus-event"), 1, request)
         submission = ConsensusWorkflowSubmission(
+            authoring_admission=authoring_admission,
+            authoring_direction=direction_material,
             intent=intent,
             execution_identity=execution_identity,
             workflow_id=workflow_id,

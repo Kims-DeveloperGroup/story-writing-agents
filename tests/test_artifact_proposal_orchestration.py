@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import unittest
-from dataclasses import replace
+from dataclasses import asdict, replace
 from unittest import mock
 
 from story_writing_agents import ReplyTraceOrigin, StoryRuntime
@@ -112,6 +112,7 @@ def _artifact_outcome(
     additional_review_domains: tuple[str, ...] = (),
     message: str = "I prepared an exact candidate for specialist review.",
     objective_intent: object = None,
+    authoring_assessment: object = None,
 ):
     def respond(call, _provider):
         material = _live_material(call)
@@ -143,6 +144,7 @@ def _artifact_outcome(
                     objective_intent(call, material)
                     if callable(objective_intent) else objective_intent
                 ),
+                **({"authoring_assessment": authoring_assessment(call, material) if callable(authoring_assessment) else authoring_assessment} if authoring_assessment is not None else {}),
             },
         )
 
@@ -190,24 +192,21 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         assessment: str = "supports",
         decision: str = "propose",
     ):
+        from tests.recommendation_fixture import task_assessment
         self.workspace.path(_RULES).unlink(missing_ok=True)
         self.backend.enqueue(
             _artifact_outcome(
-                operations=[
-                    {
-                        "kind": "create",
-                        "new_text": "Use restrained close-third narration.\n",
-                        "suggested_path": _RULES,
-                    }
-                ],
+                operations=[ { "kind" : "create" , "new_text" : "Use restrained close-third narration.\n" , "suggested_path" : _RULES , } ],
                 evidence_status="missing",
                 evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
+                authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
             )
         )
         proposed = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
-            "Complete the missing narrative rules.",
+            ("Complete the missing narrative rules." + '\nSupplied requested candidate content:\n' + json.dumps(['Use restrained close-third narration.\n'])
+             + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
         )
         self.backend.enqueue_for(
             EXECUTION_SPECIALIST,
@@ -225,27 +224,24 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
     async def test_incomplete_core_workflow_is_reviewed_only_after_confirmation(
         self,
     ) -> None:
+        from tests.recommendation_fixture import task_assessment
         conversation_id = self.conversation("Complete missing core")
         self.workspace.path(_RULES).unlink(missing_ok=True)
         before = self.artifact_snapshot()
         self.backend.enqueue(
             _artifact_outcome(
-                operations=[
-                    {
-                        "kind": "create",
-                        "new_text": "Use restrained close-third narration.\n",
-                        "suggested_path": _RULES,
-                    }
-                ],
+                operations=[ { "kind" : "create" , "new_text" : "Use restrained close-third narration.\n" , "suggested_path" : _RULES , } ],
                 evidence_status="missing",
                 evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
+                authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
             )
         )
 
         proposed = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
-            "The narrative rules are incomplete; propose a consistent rule.",
+            ("The narrative rules are incomplete; propose a consistent rule." + '\nSupplied requested candidate content:\n' + json.dumps(['Use restrained close-third narration.\n'])
+             + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
         )
 
         self.assertIs(proposed.kind, LeadOutcomeKind.PROPOSAL)
@@ -339,6 +335,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
     async def test_core_conflict_revision_and_manuscript_atomic_rename_workflows(
         self,
     ) -> None:
+        from tests.recommendation_fixture import task_assessment
         rules = self.workspace.path(_RULES)
         rules.write_text("Always use past tense.\n", encoding="utf-8")
         conflict_id = self.conversation("Conflicting core edit")
@@ -353,12 +350,14 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                     }
                 ],
                 evidence_status="verified",
+                authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
             )
         )
         proposed = await self.runtime.lead_turn(
             self.session_id,
             conflict_id,
-            f"Edit ${{{_RULES}}} even though the existing rule conflicts.",
+            (f"Edit ${{{_RULES}}} even though the existing rule conflicts." + '\nSupplied requested candidate content:\n' + json.dumps(['Use present tense in dream passages.\n'])
+             + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
         )
         self.backend.enqueue_for(EXECUTION_SPECIALIST, _specialist_outcome("conflict"))
         self.backend.enqueue_for(
@@ -393,13 +392,15 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                         "kind": "rename",
                         "suggested_destination": _THIRD,
                     },
-                ]
+                ],
+                authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
             )
         )
         manuscript = await self.runtime.lead_turn(
             self.session_id,
             rename_id,
-            f"Repair ${{{_INDEX}}} and rename ${{{_SECOND}}} atomically.",
+            (f"Repair ${{{_INDEX}}} and rename ${{{_SECOND}}} atomically." + '\nSupplied requested candidate content:\n' + json.dumps(['[next](third.md)\n'])
+             + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
         )
         self.assertIs(
             manuscript.artifact_proposal.state,
@@ -476,25 +477,22 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
     async def test_stale_confirmation_and_revision_require_fresh_authority(
         self,
     ) -> None:
+        from tests.recommendation_fixture import task_assessment
         stale_id = self.conversation("Stale candidate")
         self.workspace.path(_RULES).unlink(missing_ok=True)
         self.backend.enqueue(
             _artifact_outcome(
-                operations=[
-                    {
-                        "kind": "create",
-                        "new_text": "A narrative rule.\n",
-                        "suggested_path": _RULES,
-                    }
-                ],
+                operations=[ { "kind" : "create" , "new_text" : "A narrative rule.\n" , "suggested_path" : _RULES , } ],
                 evidence_status="missing",
                 evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
+                authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
             )
         )
         stale_proposal = await self.runtime.lead_turn(
             self.session_id,
             stale_id,
-            "Create the missing narrative rules.",
+            ("Create the missing narrative rules." + '\nSupplied requested candidate content:\n' + json.dumps(['A narrative rule.\n'])
+             + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
         )
         call_count = len(self.backend.call_records)
         self.workspace.path(_RULES).write_text(
@@ -513,21 +511,17 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         revise_id = self.conversation("Revise candidate")
         self.backend.enqueue(
             _artifact_outcome(
-                operations=[
-                    {
-                        "kind": "create",
-                        "new_text": "First candidate.\n",
-                        "suggested_path": _RULES,
-                    }
-                ],
+                operations=[ { "kind" : "create" , "new_text" : "First candidate.\n" , "suggested_path" : _RULES , } ],
                 evidence_status="missing",
                 evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
+                authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
             )
         )
         first = await self.runtime.lead_turn(
             self.session_id,
             revise_id,
-            "Prepare the first candidate.",
+            ("Prepare the first candidate." + '\nSupplied requested candidate content:\n' + json.dumps(['First candidate.\n'])
+             + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
         )
         first_digest = first.artifact_proposal.candidate.candidate.candidate_digest
         before_revision_calls = len(self.backend.call_records)
@@ -537,14 +531,9 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 call,
                 {
                     "recommended_action": {
-                        "kind": "prepare_artifact",
-                        "purpose": "Prepare a fresh candidate.",
-                        "instruction": "Prepare a new candidate for the narrative rules.",
-                        "expected_result": "An exact separately reviewable candidate.",
-                        "source_ids": ["current_response"],
-                        "target_paths": [_RULES],
-                        "specialist_ids": [],
-                        "objective_id": None,
+                        "kind": "prepare_artifact", "purpose": "Prepare a fresh candidate.",
+                        "instruction": "Prepare a new candidate for the narrative rules.", "expected_result": "An exact separately reviewable candidate.",
+                        "source_ids": ["current_response"], "target_paths": [_RULES], "specialist_ids": [], "objective_id": None,
                     },
                     "kind": "recommendation",
                     "message": "The old candidate is superseded; request a fresh candidate.",
@@ -557,9 +546,9 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                     "authoring_scope": _live_scope(
                         call,
                         activity="review",
-                        paths=(_RULES,),
-                        domains=("tone_execution",),
+                        paths=(_RULES,), domains=("tone_execution",),
                     ),
+                    "authoring_assessment": asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
                 },
             )
 
@@ -568,7 +557,11 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             fresh_recommendation,
         )
         revised = await self.runtime.decide_lead_step(
-            _decision(first, CollaborationConfirmationDecision.REVISE)
+            _decision(first, CollaborationConfirmationDecision.REVISE, revision_request=(
+                'Revise proposed review.\nSupplied narrative-rule candidate:\n'
+                + first.artifact_proposal.candidate.candidate.change_set.operations[0].content.decode("utf-8")
+                + '\nYou may give bounded artifact review judgments and prepare a separate proposal; preserve supplied facts. Execution requires separate exact confirmation.'
+            ))
         )
         history = self.history(revise_id)
         self.assertIsNone(project_collaboration_history(history).current_artifact_state)
@@ -598,21 +591,17 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
 
         self.backend.enqueue(
             _artifact_outcome(
-                operations=[
-                    {
-                        "kind": "create",
-                        "new_text": "Second candidate.\n",
-                        "suggested_path": _RULES,
-                    }
-                ],
+                operations=[ { "kind" : "create" , "new_text" : "Second candidate.\n" , "suggested_path" : _RULES , } ],
                 evidence_status="missing",
                 evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
+                authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
             )
         )
         second = await self.runtime.lead_turn(
             self.session_id,
             revise_id,
-            "Prepare the revised candidate.",
+            ("Prepare the revised candidate." + '\nSupplied requested candidate content:\n' + json.dumps(['Second candidate.\n'])
+             + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
         )
         self.assertNotEqual(
             second.artifact_proposal.candidate.candidate.candidate_digest,
@@ -625,38 +614,30 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
     async def test_revised_artifact_intent_replaces_candidate_in_the_same_step(
         self,
     ) -> None:
+        from tests.recommendation_fixture import task_assessment
         conversation_id = self.conversation("Replace artifact candidate")
         self.workspace.path(_RULES).unlink(missing_ok=True)
         self.backend.enqueue(
             _artifact_outcome(
-                operations=[
-                    {
-                        "kind": "create",
-                        "new_text": "First candidate.\n",
-                        "suggested_path": _RULES,
-                    }
-                ],
+                operations=[ { "kind" : "create" , "new_text" : "First candidate.\n" , "suggested_path" : _RULES , } ],
                 evidence_status="missing",
                 evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
+                authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
             )
         )
         first = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
-            "Prepare the first narrative-rule candidate.",
+            ("Prepare the first narrative-rule candidate." + '\nSupplied requested candidate content:\n' + json.dumps(['First candidate.\n'])
+             + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
         )
         self.backend.enqueue_for(
             LEAD_ORCHESTRATOR,
             _artifact_outcome(
-                operations=[
-                    {
-                        "kind": "create",
-                        "new_text": "Revised candidate.\n",
-                        "suggested_path": _RULES,
-                    }
-                ],
+                operations=[ { "kind" : "create" , "new_text" : "Revised candidate.\n" , "suggested_path" : _RULES , } ],
                 evidence_status="missing",
                 evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
+                authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
             ),
         )
         replacement = await self.runtime.decide_lead_step(
@@ -707,6 +688,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
     async def test_all_assessments_are_preserved_and_partial_failure_never_reviews(
         self,
     ) -> None:
+        from tests.recommendation_fixture import task_assessment
         assessments = (
             "supports",
             "concern",
@@ -745,22 +727,18 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         failed_id = self.conversation("Partial reviewer failure")
         self.backend.enqueue(
             _artifact_outcome(
-                operations=[
-                    {
-                        "kind": "create",
-                        "new_text": "New scene.\n",
-                        "suggested_path": "manuscript/part-02/new.md",
-                    }
-                ],
+                operations=[ { "kind" : "create" , "new_text" : "New scene.\n" , "suggested_path" : "manuscript/part-02/new.md" , } ],
                 evidence_status="incomplete",
                 evidence_ids=lambda call, _material: [_status_id(call, _OUTLINE)],
                 additional_review_domains=("plot_structure",),
+                authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
             )
         )
         proposed = await self.runtime.lead_turn(
             self.session_id,
             failed_id,
-            "Prepare a new scene candidate.",
+            ("Prepare a new scene candidate." + '\nSupplied requested candidate content:\n' + json.dumps(['New scene.\n'])
+             + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
         )
         for assignment in proposed.proposal.assignments:
             response = (
@@ -813,27 +791,24 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
     async def test_missing_synthesis_message_fails_and_reviewed_restart_has_no_authority(
         self,
     ) -> None:
+        from tests.recommendation_fixture import task_assessment
         failure_events = []
         for ordinal, malformed in enumerate(("omit_rationale",), start=1):
             mismatch_id = self.conversation(f"Synthesis mismatch {ordinal}")
             self.workspace.path(_RULES).unlink(missing_ok=True)
             self.backend.enqueue(
                 _artifact_outcome(
-                    operations=[
-                        {
-                            "kind": "create",
-                            "new_text": "Rule candidate.\n",
-                            "suggested_path": _RULES,
-                        }
-                    ],
+                    operations=[ { "kind" : "create" , "new_text" : "Rule candidate.\n" , "suggested_path" : _RULES , } ],
                     evidence_status="missing",
                     evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
+                    authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
                 )
             )
             proposed = await self.runtime.lead_turn(
                 self.session_id,
                 mismatch_id,
-                "Prepare a rule candidate.",
+                ("Prepare a rule candidate." + '\nSupplied requested candidate content:\n' + json.dumps(['Rule candidate.\n'])
+                 + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
             )
             self.backend.enqueue_for(
                 EXECUTION_SPECIALIST,
@@ -990,6 +965,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.assertIs(projection.current_artifact_state, ArtifactProposalState.REVIEWED)
 
     async def test_search_read_answer_can_add_an_artifact_candidate(self) -> None:
+        from tests.recommendation_fixture import task_assessment
         reference_ids = []
         core_paths = ("core_documents/character_sheets.md", _OUTLINE, _RULES, "core_documents/part_outlines.md")
         for path in (_RULES, "core_documents/part_outlines.md"):
@@ -1027,6 +1003,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                     "proposal": None,
                     "scope": "story_specific",
                 "objective_intent": None,
+                    "authoring_assessment": asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
                 },
                 used_handles=provider.used_handles,
             )
@@ -1056,8 +1033,10 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         result = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
-            "Search and read the prior answer before proposing a scene." + "".join(f" ${{{path}}}" + ("#L1-L1" if path in core_paths[2:] else "") for path in reversed(core_paths)) + "".join(f" ${{{path}}}#L2-L2" for path in reversed(core_paths[2:])),
+            ("Search and read the prior answer before proposing a scene." + "".join(f" ${{{path}}}" + ("#L1-L1" if path in core_paths[2:] else "") for path in reversed(core_paths)) + "".join(f" ${{{path}}}#L2-L2" for path in reversed(core_paths[2:])) + '\nSupplied requested candidate content:\n' + json.dumps(['A searched scene candidate.\n'])
+             + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
         )
+        self.assertIsNotNone(result.artifact_proposal, result)
         self.assertIs(
             result.artifact_proposal.state,
             ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION,
@@ -1092,14 +1071,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
     ) -> None:
         conversation_id = self.conversation("Reject provider authority")
         invalid = _artifact_outcome(
-            operations=[
-                {
-                    "apply_authority_granted": True,
-                    "kind": "create",
-                    "new_text": "Must not survive.\n",
-                    "suggested_path": _RULES,
-                }
-            ],
+            operations=[ { "apply_authority_granted" : True , "kind" : "create" , "new_text" : "Must not survive.\n" , "suggested_path" : _RULES , } ],
             evidence_status="missing",
             evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
         )

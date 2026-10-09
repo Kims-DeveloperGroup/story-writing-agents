@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..authoring_admission import AdmissionSourceKind, AuthoringAdmissionBasis
+
 from ..lead_task_transitions import (
     LeadTaskAction, LeadTaskDecision, LeadTaskRef, LeadMaterialRef,
     LeadMaterialKind, LeadTaskTransitionReceipt, LeadMaterialCapture,
@@ -3638,6 +3640,52 @@ def _public_response_omission_call(
     return None
 
 
+def _validate_authoring_admission_provenance(
+    proposal: CollaborationProposal, prior: dict[str, CollaborationEvent],
+) -> None:
+    """Validate immutable USER/material origins on original physical history."""
+    basis = proposal.basis.authoring_admission
+    if basis is None:
+        return
+    if type(basis) is not AuthoringAdmissionBasis:
+        raise ValueError("authoring admission basis is invalid")
+    for source in basis.sources:
+        if source.kind is AdmissionSourceKind.USER:
+            prefix, suffix = "conversation/", "/user_input"
+            if not source.source_identity.startswith(prefix) or not source.source_identity.endswith(suffix):
+                raise ValueError("authoring admission USER source identity is invalid")
+            turn_id = source.source_identity[len(prefix):-len(suffix)]
+            origins = tuple(event for event in prior.values()
+                if event.turn_id == turn_id and type(event.payload) is CollaborationMessagePayload
+                and event.sender.kind is CollaborationActorKind.USER
+                and event.recipient.kind is CollaborationActorKind.LEAD)
+            if len(origins) != 1:
+                raise ValueError("authoring admission USER origin is missing or ambiguous")
+            digest = "sha256:" + hashlib.sha256(origins[0].payload.content.encode("utf-8")).hexdigest()
+            if (digest != source.revision_digest
+                    or len(origins[0].payload.content.encode("utf-8")) != source.utf8_bytes):
+                raise ValueError("authoring admission USER bytes changed")
+        elif source.kind is AdmissionSourceKind.MATERIAL:
+            text = None
+            if source.source_identity.startswith("conversation/"):
+                origin = prior.get(source.source_identity.removeprefix("conversation/"))
+                if origin is None:
+                    raise ValueError("authoring admission material origin is unavailable")
+                payload = origin.payload
+                if type(payload) in {CollaborationLeadMaterialCapturePayload,
+                        CollaborationPremiseSelectionPayload, CollaborationExplorationAdoptionPayload}:
+                    text = payload.capture.selected_text
+                elif type(payload) in {CollaborationSpecialistReplyPayload, CollaborationLeadSynthesisPayload}:
+                    text = payload.message
+                elif type(payload) is CollaborationLeadPublicResponsePayload:
+                    text = payload.response.response_text
+                elif type(payload) is CollaborationLeadDiscussionPayload:
+                    text = payload.report.response_text
+            length = None if type(text) is not str else len(text.encode("utf-8"))
+            if length != source.utf8_bytes:
+                raise ValueError("authoring admission material byte observation changed")
+
+
 def _project_task_context(
     events: tuple[CollaborationEvent, ...], projection: CollaborationHistoryProjection,
 ) -> CollaborationHistoryProjection:
@@ -3778,6 +3826,8 @@ def _project_task_context(
                 and _public_response_omission_call(event, tuple(prior.values())) is None):
             raise ValueError("public omission notice requires exact submitted-call display facts")
         scope = getattr(payload, "authoring_scope", None)
+        if type(payload) is CollaborationProposal:
+            _validate_authoring_admission_provenance(payload, prior)
         if type(payload) is CollaborationProposal and scope is not None:
             planning = next((control.payload.receipt for control in reversed(tuple(transitions.values()))
                              if (control.payload.receipt.target_task_id,

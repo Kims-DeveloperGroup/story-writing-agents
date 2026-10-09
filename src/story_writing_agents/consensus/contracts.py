@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from ..authoring_admission import (
+    AuthoringAdmissionBasis,
+    admission_basis_to_dict,
+)
+
 import hashlib
 import json
 import os
@@ -228,7 +233,20 @@ class ConsensusPhaseRequest:
     continuation: ConsensusContinuation | None = None
     intent: AuthoringIntent = field(default=AuthoringIntent.AUTHORING, kw_only=True)
 
+    authoring_admission: AuthoringAdmissionBasis | None = field(default=None, kw_only=True)
+    authoring_direction: ConsensusMaterialHandle | None = field(default=None, kw_only=True)
+
     def __post_init__(self) -> None:
+        if self.authoring_direction is not None and (
+            type(self.authoring_direction) is not ConsensusMaterialHandle
+            or not self.authoring_direction.locator.startswith("candidate:")
+            or self.intent is AuthoringIntent.REVIEW_ONLY
+        ):
+            raise ValueError("consensus USER direction requires actual authoring input")
+        if self.intent is AuthoringIntent.AUTHORING and type(self.authoring_admission) is not AuthoringAdmissionBasis:
+            raise ValueError("consensus authoring requires qualified admission")
+        if self.intent is AuthoringIntent.REVIEW_ONLY and self.authoring_admission is not None:
+            raise ValueError("review-only consensus cannot acquire authoring admission")
         for value in (self.workflow_id, self.phase_request_id, self.proposal_id):
             _identifier(value)
         if type(self.execution_identity) is not ConsensusExecutionIdentity:
@@ -281,27 +299,29 @@ class ConsensusPhaseRequest:
                 raise ValueError("linked continuation reused source workflow identity")
         _digest(self.request_digest)
         if self.request_digest != consensus_request_digest(
+            **(
+                {'authoring_admission': admission_basis_to_dict(self.authoring_admission)}
+                if self.authoring_admission is not None else {}
+            ),
+            **(
+                {'authoring_direction': {'locator': self.authoring_direction.locator, 'digest': self.authoring_direction.digest}}
+                if self.authoring_direction is not None else {}
+            ),
             workflow_id=self.workflow_id,
             phase_request_id=self.phase_request_id,
             proposal_id=self.proposal_id,
             session_id=self.execution_identity.session_id,
             conversation_id=self.execution_identity.conversation_id,
-            **({"intent": self.intent.value} if self.intent is AuthoringIntent.REVIEW_ONLY else {}),
+            **{'intent': self.intent.value} if self.intent is AuthoringIntent.REVIEW_ONLY else {},
             phase=self.phase,
             revision_id=self.revision_id,
             input_material_locator=self.input_material.locator,
             input_digest=self.input_material.digest,
-            candidate_material_locator=(
-                None if self.candidate_material is None else self.candidate_material.locator
-            ),
+            candidate_material_locator=None if self.candidate_material is None else self.candidate_material.locator,
             candidate_digest=self.candidate_digest,
             base_tail_sequence=self.base_tail_sequence,
             previous_result_event_id=self.previous_result_event_id,
-            **(
-                {}
-                if self.continuation is None
-                else {"continuation": _continuation_digest_value(self.continuation)}
-            ),
+            **{} if self.continuation is None else {'continuation': _continuation_digest_value(self.continuation)},
         ):
             raise ValueError("consensus phase request digest is invalid")
 
@@ -532,6 +552,8 @@ def prepare_consensus_phase(
     previous_result_event_id: str | None = None,
     continuation: ConsensusContinuation | None = None,
     intent: AuthoringIntent = AuthoringIntent.AUTHORING,
+    authoring_admission: AuthoringAdmissionBasis | None = None,
+    authoring_direction: ConsensusMaterialHandle | None = None,
 ) -> tuple[ConsensusPhaseRequest, ConsensusConfirmationCapability]:
     """Create one durable request and its separate process-local capability."""
 
@@ -546,6 +568,8 @@ def prepare_consensus_phase(
         raise TypeError("consensus material handles are invalid")
     revision_number = int(revision_id.removeprefix("r")) if _REVISION.fullmatch(revision_id) else -1
     request = ConsensusPhaseRequest(
+        authoring_admission=authoring_admission,
+        authoring_direction=authoring_direction,
         intent=intent,
         workflow_id=workflow_id,
         phase_request_id=phase_request_id,
@@ -560,29 +584,29 @@ def prepare_consensus_phase(
         previous_result_event_id=previous_result_event_id,
         continuation=continuation,
         request_digest=consensus_request_digest(
+            **(
+                {'authoring_admission': admission_basis_to_dict(authoring_admission)}
+                if authoring_admission is not None else {}
+            ),
+            **(
+                {'authoring_direction': {'locator': authoring_direction.locator, 'digest': authoring_direction.digest}}
+                if authoring_direction is not None else {}
+            ),
             workflow_id=workflow_id,
             phase_request_id=phase_request_id,
             proposal_id=proposal_id,
             session_id=execution_identity.session_id,
             conversation_id=execution_identity.conversation_id,
-            **({"intent": intent.value} if intent is AuthoringIntent.REVIEW_ONLY else {}),
+            **{'intent': intent.value} if intent is AuthoringIntent.REVIEW_ONLY else {},
             phase=phase,
             revision_id=revision_id,
             input_material_locator=input_material.locator,
             input_digest=input_material.digest,
-            candidate_material_locator=(
-                None if candidate_material is None else candidate_material.locator
-            ),
-            candidate_digest=(
-                None if candidate_material is None else candidate_material.digest
-            ),
+            candidate_material_locator=None if candidate_material is None else candidate_material.locator,
+            candidate_digest=None if candidate_material is None else candidate_material.digest,
             base_tail_sequence=base_tail_sequence,
             previous_result_event_id=previous_result_event_id,
-            **(
-                {}
-                if continuation is None
-                else {"continuation": _continuation_digest_value(continuation)}
-            ),
+            **{} if continuation is None else {'continuation': _continuation_digest_value(continuation)},
         ),
     )
     return request, ConsensusConfirmationCapability(_AUTHORITY_SENTINEL, owner, request)
@@ -642,6 +666,8 @@ def prepare_next_consensus_phase(
     else:
         raise ValueError("consensus terminal result cannot advance")
     return prepare_consensus_phase(
+        authoring_admission=current_request.authoring_admission,
+        authoring_direction=current_request.authoring_direction,
         owner=owner,
         intent=current_request.intent,
         workflow_id=current_request.workflow_id,

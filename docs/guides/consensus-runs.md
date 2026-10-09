@@ -47,7 +47,15 @@ submit prompt or supplied draft
   -> separately propose and Confirm Git Commit
 ```
 
-Both default AUTHORING input forms begin with a DRAFT confirmation. A supplied draft is not
+AUTHORING input forms begin with DRAFT confirmation after a source-bound
+assessment qualifies. Missing or inadequate assessments return
+`AuthoringAdmissionNeeded`, exposing the questions and actual offered source IDs
+without starting a provider call. Supply only the missing facts or choices, then
+resubmit with `authoring_assessment`. The examples below use application-populated
+assessments of their literal input and actual offered material. See
+[official authoring admission](../reference/runtime-api.md#official-authoring-admission).
+
+Both qualified AUTHORING input forms begin with a DRAFT confirmation. A supplied draft is not
 silently accepted as `r0`: the Execution Specialist transforms it before any
 audit. Audits always call all three voters against the same candidate digest.
 Synthesis is a nonvoting lead judgment. Repair creates a new unpublished
@@ -98,7 +106,10 @@ runtime = StoryRuntime(Workspace("/path/to/story"), backend=backend)
 session = runtime.session("novel")
 view = session.submit_consensus_prompt(
     conversation_id,
-    "Draft an opening that follows the canonical outline.",
+    "Draft an opening: Mara carries a sealed letter, discovers its seal is "
+    "broken, and decides to find who opened it. Preserve those events; invent "
+    "setting details and dialogue.",
+    authoring_assessment=prompt_assessment,
 )
 print(view.projection.phase.value, view.projection.state.value)
 # draft awaiting_confirmation
@@ -137,7 +148,15 @@ decision only after an explicit choice.
 ## Supplied draft, Reject, and Revise
 
 ```python
-view = session.submit_consensus_draft(conversation_id, complete_draft_text)
+view = session.submit_consensus_draft(
+    conversation_id,
+    complete_draft_text,
+    authoring_direction=(
+        "Rewrite this draft in close third person. Preserve its events and "
+        "character decisions; you may invent dialogue and setting details."
+    ),
+    authoring_assessment=draft_assessment,
+)
 print(view.submission.input_kind.value, view.projection.phase.value)
 # supplied_draft draft
 ```
@@ -278,6 +297,7 @@ continued = session.continue_consensus_deadlock(
     mode=ConsensusContinuationMode.RESUME_IN_PLACE,
     ruling="Preserve the midpoint reveal; move the disputed clue to chapter 3.",
     added_revision_rounds=2,
+    authoring_assessment=continuation_assessment,
 )
 print(
     continued.projection.phase.value,
@@ -331,6 +351,7 @@ linked = session.continue_consensus_deadlock(
     mode=ConsensusContinuationMode.LINKED_WORKFLOW,
     ruling="Treat the timeline constraint as canonical and revise the scene order.",
     added_revision_rounds=1,
+    authoring_assessment=continuation_assessment,
 )
 print(linked.submission.workflow_id == workflow_id)
 # False

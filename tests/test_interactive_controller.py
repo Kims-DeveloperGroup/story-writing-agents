@@ -19,7 +19,7 @@ import tempfile
 import unittest
 from collections.abc import Callable
 from contextlib import contextmanager
-from dataclasses import FrozenInstanceError, fields, replace
+from dataclasses import asdict, FrozenInstanceError, fields, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import get_type_hints
@@ -1612,8 +1612,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 155)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 670)
+        self.assertEqual(len(modules), 156)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 680)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -5972,6 +5972,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
     def test_bare_create_prompts_once_and_duplicate_subjects_stay_distinct(
         self,
     ) -> None:
+        from tests.recommendation_fixture import task_assessment
         workspace, _backend, catalog, controller, callbacks = self.prepared_controller(
             "/conversation new",
             "Opening scene",
@@ -6052,7 +6053,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         report = next(e.payload.report for e in case.history(source)
                       if type(e.payload) is collaboration.CollaborationLeadExplorationResultPayload)
         idea = report.ideas[0]
-        case.backend.enqueue(scoped_proposal(PLOT_ARCHITECT, candidate_ids=("adopted_idea",)))
+        case.backend.enqueue(scoped_proposal(PLOT_ARCHITECT, candidate_ids=("adopted_idea",), authoring_assessment=task_assessment(foundation_ids=('adopted_idea',), actions=('draft from the exact selected provisional idea for the chosen targets',))))
         controller, _, callbacks = self.make_controller(case.control_workspace,
                         conversation_storage_services=case.runtime.conversation_storage_services, terminal_width=200)
         controller._runtime, controller._runner = case.runtime, runner
@@ -6214,6 +6215,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         )
 
     def test_literal_lead_turn_and_consultation_decisions_are_exact(self) -> None:
+        from tests.recommendation_fixture import task_assessment
         session = RuntimeSession.__new__(RuntimeSession)
         from tests.test_collaboration_events import editorial, editorial_request
         record = editorial.build_editorial_revision(
@@ -6445,7 +6447,12 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         from tests.test_lead_orchestration import _task_fixture, _discussion_reply
         case = _task_fixture(self)
         task_conversation = case.conversation("Shell task choices")
-        runner.run(case.proposal(task_conversation))
+        runner.run(case.proposal(task_conversation, text=(
+                'Please check the story direction.\nSupplied story facts: Mara wants safety and fears exposure. '
+                'Review the story direction against those facts and the exact requested references. You may give '
+                'bounded story-direction review judgments; preserve supplied facts and do not write files. Execution '
+                'requires separate exact confirmation.'
+            ), authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded story-direction review judgments',)))))
         case.backend.enqueue(_discussion_reply("Whole shell material e\u0301\r\n"))
         runner.run(case.runtime.decide_lead_task(task.LeadTaskDecision.for_conversation(
             case.session_id, task_conversation, task.LeadTaskAction.DISCUSS, text="Discuss role responsibilities.",

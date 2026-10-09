@@ -8,6 +8,8 @@ session-wide event sequence.
 
 from __future__ import annotations
 
+from ..authoring_admission import admission_basis_to_dict
+
 from ..lead_task_transitions import LeadMaterialKind, task_material_sha256, task_value_to_dict
 
 import hashlib
@@ -252,7 +254,9 @@ def _legacy_visible_details(payload: object) -> dict[str, object]:
                 "branch": None if payload.result is None else payload.result.branch,
                 "commit_id": None if payload.result is None else payload.result.commit_id}
     if type(payload) is CollaborationProposal:
-        return {"side_effects": [item.value for item in payload.side_effects],
+        return {
+            **({"authoring_admission": admission_basis_to_dict(payload.basis.authoring_admission)}
+               if payload.basis.authoring_admission is not None else {}),"side_effects": [item.value for item in payload.side_effects],
                 "sources": [
                     {"input_id": item.input_id, "locator": item.locator,
                      "kind": item.kind.value, "state": item.state.value,

@@ -72,7 +72,7 @@ def result(value, contract_id):
                 name, child = "update_type", _UPDATES.get(child, child)
             elif isinstance(child, str):
                 child = _VALUES.get(key, {}).get(child, child)
-            output[name] = project(child, key)
+            output[name] = copy.deepcopy(child) if key == "authoring_assessment" else project(child, key)
         return output
 
     output = project(value)

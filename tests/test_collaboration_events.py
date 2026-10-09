@@ -135,9 +135,7 @@ def editorial_request(request_id, *, kind=editorial.EditorialRecordKind.DIRECTIO
                       action=editorial.EditorialAction.DIRECTIVE, provenance_refs=()):
     draft = editorial.EditorialRecordDraft(
         kind, EDITORIAL_TEXT, EDITORIAL_REASON,
-        alternatives=(editorial.EditorialAlternative(
-            "discarded", "Resolve the allegiance now.", "USER rejected this explanation.",
-            editorial.EditorialApprovalState.REJECTED),), provenance_refs=provenance_refs)
+        alternatives=(editorial.EditorialAlternative('discarded', 'Resolve the allegiance now.', 'USER rejected this explanation.', editorial.EditorialApprovalState.REJECTED),), provenance_refs=provenance_refs)
     return editorial.EditorialRecordRequest(request_id, action, EDITORIAL_REASON, draft=draft)
 
 
@@ -153,9 +151,7 @@ def editorial_history(kind=editorial.EditorialRecordKind.DIRECTION, provenance_r
 def editorial_append(history, request):
     previous = history[-1].payload.record
     event_id = f"memory_revision_{len(history) + 1}"
-    record = editorial.build_editorial_revision(request, session_id=SESSION_ID,
-        conversation_id=CONVERSATION_ID, event_id=event_id,
-        record_id=previous.record_id, previous=previous)
+    record = editorial.build_editorial_revision(request, session_id=SESSION_ID, conversation_id=CONVERSATION_ID, event_id=event_id, record_id=previous.record_id, previous=previous)
     draft = make_draft(event_id, CollaborationEventKind.EDITORIAL_RECORD, USER, LEAD,
                       events_owner.CollaborationEditorialRecordPayload(record))
     return store_batch(history, make_batch(history, event_id + "_batch", draft))
@@ -164,16 +160,11 @@ def editorial_append(history, request):
 def scoped_editorial_history(history=(), *, relation_kind=editorial.EditorialRelationKind.REPLACE,
     relation_scope=None):
     outline = "core_documents/global_outline.md"
-    declared = scopes.EditorialScope(scopes.EditorialScopeKind.KNOWN, targets=(
-        scopes.EditorialScopeTarget(outline),
-            scopes.EditorialScopeTarget("core_documents/character_sheets.md"),
-    ))
+    declared = scopes.EditorialScope(scopes.EditorialScopeKind.KNOWN, targets=(scopes.EditorialScopeTarget(outline), scopes.EditorialScopeTarget('core_documents/character_sheets.md')))
     for index, scope in enumerate((declared, scopes.EditorialScope.whole(outline),
                                    scopes.EditorialScope.whole("core_documents/narrative_rules.md"))):
         draft = replace(editorial_request(f"scoped_fixture_{index}").draft, scope=scope)
-        request = editorial.EditorialRecordRequest.directive(
-            draft, transition_reason="Explicit USER direction.", request_id=f"scoped_request_{index}",
-        )
+        request = editorial.EditorialRecordRequest.directive(draft, transition_reason='Explicit USER direction.', request_id=f'scoped_request_{index}')
         refs = ()
         if index == 1:
             state = project_editorial_state(SESSION_ID, history)
@@ -184,9 +175,7 @@ def scoped_editorial_history(history=(), *, relation_kind=editorial.EditorialRel
             request = replace(request, relation_decisions=(relation,),
                               expected_editorial_context_digest=state.context_digest((other,)))
         event_id = f"scoped_event_{index}"
-        record = editorial.build_editorial_revision(request, session_id=SESSION_ID,
-            conversation_id=CONVERSATION_ID, event_id=event_id, record_id=f"scoped_record_{index}",
-                previous=None, context_refs=refs)
+        record = editorial.build_editorial_revision(request, session_id=SESSION_ID, conversation_id=CONVERSATION_ID, event_id=event_id, record_id=f'scoped_record_{index}', previous=None, context_refs=refs)
         event = make_draft(event_id, CollaborationEventKind.EDITORIAL_RECORD, USER, LEAD,
                            events_owner.CollaborationEditorialRecordPayload(record))
         history = store_batch(history, make_batch(history, event_id + "_batch", event))
@@ -194,13 +183,7 @@ def scoped_editorial_history(history=(), *, relation_kind=editorial.EditorialRel
 
 
 def _canonical_json(value: object) -> bytes:
-    return json.dumps(
-        value,
-        allow_nan=False,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
+    return json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(',', ':'), sort_keys=True).encode("utf-8")
 
 
 def _exception_graph(exception: BaseException) -> tuple[BaseException, ...]:
@@ -241,12 +224,7 @@ def _reviewed_artifact_proposal() -> ArtifactReviewedProposal:
         mandatory_specialist_ids=mandatory,
         disclosed_specialist_ids=disclosed,
         reviews=tuple(
-            ArtifactReviewReply(
-                specialist_id=specialist_id,
-                assignment_id=f"assignment_{ordinal}",
-                reply_event_id=f"artifact_reply_{ordinal}",
-                assessment=CollaborationSpecialistAssessment.SUPPORTS,
-            )
+            ArtifactReviewReply(specialist_id=specialist_id, assignment_id=f'assignment_{ordinal}', reply_event_id=f'artifact_reply_{ordinal}', assessment=CollaborationSpecialistAssessment.SUPPORTS)
             for ordinal, specialist_id in enumerate(disclosed, start=1)
         ),
         unresolved_input_ids=(),
@@ -569,7 +547,7 @@ class CollaborationValueContractTests(unittest.TestCase):
             (lead_evidence, ("scope", "status", "receipts")),
             (
                 lead_judgment,
-                ("kind", "message", "evidence", "authoring_scope", "trace"),
+                ("kind", "message", "evidence", "authoring_scope", "trace", "authoring_admission"),
             ),
             (lead_failure, ("code", "invocation_id", "call_id")),
             (
@@ -605,7 +583,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                     "schema_version",
                     "shared_premises",
                     "editorial_refs",
-                    "editorial_context_digest",
+                    "editorial_context_digest", "authoring_admission",
                 ),
             ),
             (
@@ -718,7 +696,8 @@ class CollaborationValueContractTests(unittest.TestCase):
             ),
             (
                 lead_intent,
-                ("relation", "purpose", "assignments", "authoring_scope", "shared_premises", 'premise_decision'),
+                ("relation", "purpose", "assignments", "authoring_scope", "shared_premises",
+                 'premise_decision', "authoring_admission"),
             ),
             (
                 lead_outcome,
@@ -733,7 +712,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                     "objective_intent",
                     "recommended_action",
                     "authoring_scope",
-                    "trace",
+                    "trace", "authoring_assessment", "authoring_admission",
                 ),
             ),
             (
@@ -1552,9 +1531,10 @@ class CollaborationWireContractTests(unittest.TestCase):
         self.assertIs(scope.activity, AuthoringActivity.REVIEW)
         self.assertIs(scope.intent, AuthoringIntent.AUTHORING)
         self.assertEqual(_canonical_json(conversations.authoring_scope_to_dict(scope)), frozen["scope_utf8"].encode())
-        proposal = decode_collaboration_proposal(frozen["proposal_utf8"].encode())
-        self.assertEqual(proposal.proposal_digest, "sha256:0c4c3d0d9279e767b974a143b8cbff20d17a2fec649091fe00bcbcaed6d88c0a")
-        self.assertEqual(encode_collaboration_proposal(proposal), frozen["proposal_utf8"].encode())
+        self.assertEqual(json.loads(frozen["proposal_utf8"])["proposal"]["proposal_digest"],
+                         "sha256:0c4c3d0d9279e767b974a143b8cbff20d17a2fec649091fe00bcbcaed6d88c0a")
+        with self.assertRaises(ValueError):
+            decode_collaboration_proposal(frozen["proposal_utf8"].encode())
         with self.assertRaises(ValueError):
             conversations.authoring_scope_from_dict(dict(scope_wire, intent="review_only"))
         explicit = conversations.authoring_scope_from_dict(dict(scope_wire, schema_version=2, intent="review_only"))
@@ -1599,11 +1579,13 @@ class CollaborationWireContractTests(unittest.TestCase):
             "task_codec", 1, schema_version=3,
             contributions=tuple(AuthoringContribution(domain, AuthoringContributionRole.DRAFT_OWNER)
                                 for domain in domains))
-        assignments = tuple(replace(item, mode=SpecialistAssignmentMode.REVIEW,
+        assignments = tuple(replace(item, input_ids=(*item.input_ids, 'user_input'), mode=SpecialistAssignmentMode.REVIEW,
                                    review_basis=ReviewBasis(item.input_ids, "Review selected current inputs.", 1))
                             for item in make_proposal().assignments)
-        pinned = replace_proposal(make_proposal(), basis=basis, authoring_scope=current_scope,
-                                  assignments=assignments)
+        from tests.collaboration_contract_fixture import qualify_fixture_basis
+        from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
+        basis = qualify_fixture_basis(basis, current_scope, user_text=_ADMISSION_BRIEF, assessment=_fixture_assessment())
+        pinned = replace_proposal(make_proposal(), basis=basis, authoring_scope=current_scope, assignments=assignments)
         self.assertEqual(decode_collaboration_proposal(encode_collaboration_proposal(pinned)), pinned)
         wire = json.loads(encode_collaboration_proposal(pinned))
         self.assertEqual(wire["proposal"]["basis"]["editorial_context_digest"], pin)

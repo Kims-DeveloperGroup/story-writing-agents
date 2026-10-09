@@ -525,6 +525,30 @@ def make_assignment(
     )
 
 
+def qualify_fixture_basis(basis, scope, *, user_text, assessment, user_id="user_input", user_locator=None):
+    """Bind explicitly supplied constructed USER bytes; never imply dispatch authority."""
+    from dataclasses import replace
+    import hashlib
+    from story_writing_agents import authoring_admission as admission
+    from story_writing_agents.conversations.events import authoring_source_facts, authoring_scope_to_dict
+    raw = user_text.encode("utf-8")
+    old = next((item for item in basis.inputs if item.input_id == user_id), None)
+    assert old is None or old.kind is CollaborationInputKind.USER_INPUT
+    user = make_input(user_id, kind=CollaborationInputKind.USER_INPUT,
+                      locator=user_locator if user_locator is not None else old.locator if old else "constructed-fixture/" + user_id,
+                      revision_digest="sha256:" + hashlib.sha256(raw).hexdigest(), start_line=None, end_line=None)
+    inputs = tuple(user if item.input_id == user_id else item for item in basis.inputs)
+    if old is None:
+        inputs = (*inputs, user)
+    sources = authoring_source_facts(inputs, basis.evidence, selected_utf8_bytes={user.input_id: len(raw)})
+    qualified = admission.qualify_authoring_assessment(
+        assessment, sources=sources, request_digest=user.revision_digest,
+        task_id=scope.task_id, task_revision=scope.task_revision,
+        scope_digest=admission.admission_digest(authoring_scope_to_dict(scope)))
+    assert type(qualified) is admission.AuthoringAdmissionBasis
+    return replace(basis, inputs=inputs, authoring_admission=qualified)
+
+
 def make_proposal(
     *,
     proposal_id: str = PROPOSAL_ID,
@@ -769,6 +793,7 @@ def store_batch(
 
 def awaiting_history(
     proposal: CollaborationProposal | None = None,
+    *, literal_user_text: str | None = None,
 ) -> tuple[tuple[CollaborationEvent, ...], CollaborationProposal]:
     """Return proposal disclosure plus an exact awaiting-confirmation tail."""
 
@@ -779,6 +804,11 @@ def awaiting_history(
         confirmation_request_id=REQUEST_ID,
     )
     drafts: list[CollaborationEventDraft] = []
+    if proposal.basis.authoring_admission is not None:
+        if literal_user_text is None:
+            raise ValueError("Constructed authoring history requires its exact USER literal.")
+        drafts.append(make_draft("fixture_user_input", CollaborationEventKind.MESSAGE, USER, LEAD,
+                                 CollaborationMessagePayload(literal_user_text)))
     if proposal.step_kind is CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION:
         if proposal.basis.evidence is None:
             raise ValueError("confirmed lead proposals require evidence")
@@ -793,31 +823,25 @@ def awaiting_history(
         )
         drafts.append(
             make_draft(
-                "judgment_event",
-                CollaborationEventKind.MESSAGE,
-                LEAD,
-                USER,
+                "judgment_event", CollaborationEventKind.MESSAGE,
+                LEAD, USER,
                 CollaborationLeadJudgmentPayload(
-                    LeadOutcomeKind.PROPOSAL,
-                    "Specialist review is recommended before the next action.",
-                    proposal.basis.evidence,
+                    LeadOutcomeKind.PROPOSAL, "Specialist review is recommended before the next action.",
+                    proposal.basis.evidence, authoring_scope=proposal.authoring_scope,
+                    authoring_admission=proposal.basis.authoring_admission,
                 ),
             )
         )
     drafts.extend(
         (
             make_draft(
-                "proposal_event",
-                CollaborationEventKind.MESSAGE,
-                LEAD,
-                USER,
+                "proposal_event", CollaborationEventKind.MESSAGE,
+                LEAD, USER,
                 proposal,
             ),
             make_draft(
-                REQUEST_EVENT_ID,
-                CollaborationEventKind.STEP_STATE,
-                RUNTIME,
-                USER,
+                REQUEST_EVENT_ID, CollaborationEventKind.STEP_STATE,
+                RUNTIME, USER,
                 awaiting,
             ),
         )
@@ -828,10 +852,11 @@ def awaiting_history(
 
 def confirmed_history(
     proposal: CollaborationProposal | None = None,
+    *, literal_user_text: str | None = None,
 ) -> tuple[tuple[CollaborationEvent, ...], CollaborationProposal]:
     """Return history through exact structured confirmation."""
 
-    history, proposal = awaiting_history(proposal)
+    history, proposal = awaiting_history(proposal, literal_user_text=literal_user_text)
     decision = CollaborationConfirmationPayload(
         confirmation_request_id=REQUEST_ID,
         confirmation_request_event_id=REQUEST_EVENT_ID,
@@ -844,17 +869,13 @@ def confirmed_history(
         history,
         "batch_confirmation",
         make_draft(
-            "confirmation_event",
-            CollaborationEventKind.CONFIRMATION,
-            USER,
-            RUNTIME,
+            "confirmation_event", CollaborationEventKind.CONFIRMATION,
+            USER, RUNTIME,
             decision,
         ),
         make_draft(
-            "confirmed_event",
-            CollaborationEventKind.STEP_STATE,
-            RUNTIME,
-            USER,
+            "confirmed_event", CollaborationEventKind.STEP_STATE,
+            RUNTIME, USER,
             proposal_state(proposal, CollaborationStepState.CONFIRMED),
         ),
     )
@@ -864,20 +885,18 @@ def confirmed_history(
 def running_history(
     proposal: CollaborationProposal | None = None,
     *,
+    literal_user_text: str | None = None,
     include_synthesis_call: bool = True,
 ) -> tuple[tuple[CollaborationEvent, ...], CollaborationProposal]:
     """Return an atomic start followed by durable physical-call facts."""
 
-    history, proposal = confirmed_history(proposal)
+    history, proposal = confirmed_history(proposal, literal_user_text=literal_user_text)
     start_drafts: list[CollaborationEventDraft] = [
         make_draft(
-            "running_event",
-            CollaborationEventKind.STEP_STATE,
-            RUNTIME,
-            USER,
+            "running_event", CollaborationEventKind.STEP_STATE,
+            RUNTIME, USER,
             proposal_state(
-                proposal,
-                CollaborationStepState.RUNNING,
+                proposal, CollaborationStepState.RUNNING,
                 execution_attempt_id=ATTEMPT_ID,
             ),
         )
@@ -888,15 +907,11 @@ def running_history(
     for assignment in proposal.assignments:
         start_drafts.append(
             make_draft(
-                f"dispatch_{assignment.assignment_id}",
-                CollaborationEventKind.ASSIGNMENT_DISPATCH,
-                RUNTIME,
-                actors[assignment.specialist_id],
+                f"dispatch_{assignment.assignment_id}", CollaborationEventKind.ASSIGNMENT_DISPATCH,
+                RUNTIME, actors[assignment.specialist_id],
                 CollaborationAssignmentDispatchPayload(
-                    proposal.proposal_id,
-                    proposal.proposal_revision,
-                    proposal.proposal_digest,
-                    ATTEMPT_ID,
+                    proposal.proposal_id, proposal.proposal_revision,
+                    proposal.proposal_digest, ATTEMPT_ID,
                     assignment,
                 ),
             )
@@ -1079,6 +1094,7 @@ def result_batch(
 def executed_history(
     proposal: CollaborationProposal | None = None,
     *,
+    literal_user_text: str | None = None,
     failed_assignment_id: str | None = None,
 ) -> tuple[
     tuple[CollaborationEvent, ...],
@@ -1089,7 +1105,7 @@ def executed_history(
 
     history, proposal = running_history(
         proposal,
-        include_synthesis_call=failed_assignment_id is None,
+        include_synthesis_call=failed_assignment_id is None, literal_user_text=literal_user_text,
     )
     batch, result = result_batch(
         history,
@@ -1148,29 +1164,8 @@ def contract_batches(
         ),
     )
     unknown = make_batch(
-        running,
-        "batch_unknown",
-        make_draft(
-            "unknown_interruption",
-            CollaborationEventKind.INTERRUPTION,
-            RUNTIME,
-            USER,
-            CollaborationInterruptionPayload(
-                ATTEMPT_ID,
-                "No authoritative result exists after restart.",
-            ),
-        ),
-        make_draft(
-            "unknown_state",
-            CollaborationEventKind.STEP_STATE,
-            RUNTIME,
-            USER,
-            proposal_state(
-                proposal,
-                CollaborationStepState.OUTCOME_UNKNOWN,
-                execution_attempt_id=ATTEMPT_ID,
-            ),
-        ),
+        running, 'batch_unknown', make_draft('unknown_interruption', CollaborationEventKind.INTERRUPTION, RUNTIME, USER, CollaborationInterruptionPayload(ATTEMPT_ID, 'No authoritative result exists after restart.')),
+        make_draft('unknown_state', CollaborationEventKind.STEP_STATE, RUNTIME, USER, proposal_state(proposal, CollaborationStepState.OUTCOME_UNKNOWN, execution_attempt_id=ATTEMPT_ID)),
     )
     return {
         "proposal": retarget_batch(
@@ -1248,6 +1243,7 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
     from dataclasses import fields, is_dataclass
 
     from story_writing_agents import artifact_proposals as artifacts
+    from tests.recommendation_fixture import task_assessment
     from story_writing_agents.conversations import events as payloads
     from story_writing_agents.conversations.context import project_collaboration_history
     from story_writing_agents.specialist_routing import (
@@ -1272,8 +1268,7 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
             evidence_paths = ("core_documents/global_outline.md",)
         evidence = tuple(artifacts.ArtifactIntentEvidence(
             evidence_id=(f"reference_{index + 1}" if path.startswith("core_documents/") else f"{prefix}_evidence_{index}"), path=path,
-            source_digest=digest(base[path]), boundary_digest=digest(base[path]),
-            start_line=None, end_line=None,
+            source_digest=digest(base[path]), boundary_digest=digest(base[path]), start_line=None, end_line=None,
         ) for index, path in enumerate(evidence_paths))
         by_path = {item.path: item.evidence_id for item in evidence}
         intents = tuple(
@@ -1285,8 +1280,7 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
         candidate = artifacts.build_artifact_review_candidate(
             candidate_id=prefix + "_candidate", candidate_revision=1,
             intent=artifacts.ArtifactProposalIntent(intents), evidence=evidence,
-            grounding_evidence_ids=tuple(item.evidence_id for item in evidence),
-            base_state=base,
+            grounding_evidence_ids=tuple(item.evidence_id for item in evidence), base_state=base,
             attached_core_paths=tuple(sorted({item.path for item in evidence if item.evidence_id.startswith("reference_") and item.path.startswith("core_documents/")}, key=lambda path: path.encode("utf-8"))),
         )
         manifest = digest(json.dumps(
@@ -1314,8 +1308,7 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
         disclosed = artifacts.artifact_review_specialists(candidate.disclosed_review_domains)
         mandatory = artifacts.artifact_review_specialists(candidate.mandatory_review_domains)
         assignments = tuple(make_assignment(
-            f"{prefix}_a{index}", specialist_id=specialist,
-            input_ids=(input_id,), max_physical_calls=1,
+            f"{prefix}_a{index}", specialist_id=specialist, input_ids=(input_id,), max_physical_calls=1,
         ) for index, specialist in enumerate(disclosed))
         generic = make_proposal(
             proposal_id=prefix + "_consultation", assignments=assignments,
@@ -1326,23 +1319,25 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
         scope_paths = tuple(dict.fromkeys((*paths, *(value for kind, _, value in operations if kind == "rename"))))
         scope = AuthoringScope(
             AuthoringActivity.REVIEW, scope_paths, candidate.disclosed_review_domains,
-            "Review the exact fixture candidate.", prefix + "_task", 1,
-            schema_version=3 if editorial_refs else 2,
+            "Review the exact fixture candidate.", prefix + "_task", 1, schema_version=3 if editorial_refs else 2,
             contributions=tuple(AuthoringContribution(domain, AuthoringContributionRole.DRAFT_OWNER)
                                 for domain in candidate.disclosed_review_domains) if editorial_refs else (),
         )
         live_assignments = tuple(replace(
-            item, mode=SpecialistAssignmentMode.REVIEW,
+            item, input_ids=(*item.input_ids, 'user_input'), mode=SpecialistAssignmentMode.REVIEW,
             review_basis=ReviewBasis((input_id,), "Review the exact candidate.", 1),
         ) for item in assignments)
+        user_text = ("Review exact supplied operations. You may give bounded artifact review judgments; preserve supplied " "facts and paths. Execution requires separate confirmation.\nOperations: " + json.dumps(operations))
         proposal = replace_proposal(
             generic, step_id=prefix + "_step", assignments=live_assignments,
-            basis=replace(generic.basis, inputs=(make_input(
+            basis=qualify_fixture_basis(replace(generic.basis, inputs=(make_input(
                 input_id, kind=CollaborationInputKind.ARTIFACT_CANDIDATE,
                 locator=f"artifact-candidate/{candidate.candidate_id}",
                 revision_digest=candidate.candidate_digest, start_line=None, end_line=None,
             ),), evidence=live_evidence, schema_version=2 if editorial_refs else 1,
-                editorial_refs=editorial_refs, editorial_context_digest=editorial_context_digest), authoring_scope=scope,
+                editorial_refs=editorial_refs, editorial_context_digest=editorial_context_digest), scope,
+                user_text=user_text, assessment=task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments',)),
+                user_locator=f"conversation/{turn_id}/user_input"), authoring_scope=scope,
         )
         history, _ = running_history(generic)
         result, _ = result_batch(history, generic)
@@ -1382,9 +1377,12 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
                 updated = replace(value, **{field.name: remap(getattr(value, field.name))
                                             for field in fields(value)})
                 if type(updated) in {CollaborationLeadJudgmentPayload, CollaborationLeadSynthesisPayload}:
-                    return replace(updated, authoring_scope=scope)
+                    changes = {"authoring_scope": scope}
+                    if type(updated) is CollaborationLeadJudgmentPayload:
+                        changes["authoring_admission"] = proposal.basis.authoring_admission
+                    return replace(updated, **changes)
                 if type(updated) is CollaborationSpecialistReplyPayload:
-                    return replace(updated, mode=SpecialistAssignmentMode.REVIEW)
+                    return replace(updated, mode=SpecialistAssignmentMode.REVIEW, input_ids=next(item.input_ids for item in live_assignments if item.assignment_id == updated.assignment_id))
                 return updated
             return value
 
@@ -1402,7 +1400,9 @@ async def seed_reviewed_artifact(case, conversation_id, operations, *, extra_cor
         batches.append((result.batch_id, list(result.events)))
         sequence = 0
         for _, batch in batches:
-            drafts = []
+            drafts = [runtime._draft(session_id=session_id, conversation_id=conversation_id,
+                turn_id=turn_id, step_id=proposal.step_id, kind=CollaborationEventKind.MESSAGE,
+                sender=USER, recipient=LEAD, payload=CollaborationMessagePayload(user_text))] if sequence == 0 else []
             for record in batch:
                 payload = remap(record.payload)
                 kind = record.kind
