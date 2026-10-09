@@ -31,9 +31,9 @@ the preceding page’s last. Page Up also opens the previous record’s final
 page when the current record’s beginning is visible. Page Down lands on the
 next page’s first row. Vertical cursor movement preserves its preferred column.
 
-Both forms install the required independent `jsonl-viewer` 0.6.0 from its exact
+Both forms install the required independent `jsonl-viewer` 0.6.2 from its exact
 HTTPS VCS requirement at
-`3bde78bd60d5c42db101ae97a5fa723b730c597a`. A first install normally needs
+`1d3c6f565d454b34f7619a264d9a3b760de14911`. A first install normally needs
 Git, network access, and repository access. Installation does not invoke a
 story provider, open an exchange, or enable a service. The historical
 `story-writing-agents[viewer]` and editable `'.[viewer]'` forms remain accepted
@@ -47,7 +47,7 @@ pulling updated Story source, rerun the normal editable installation:
 python -m pip install --editable .
 ```
 
-That ordinary reinstall upgrades older viewer installations to required 0.6.0
+That ordinary reinstall upgrades older viewer installations to required 0.6.2
 without an uninstall, `--force-reinstall`, or `--ignore-installed`. Reserve a forced
 reinstall for a genuinely damaged same-version installation, as described in
 [Troubleshooting](troubleshooting.md#exchanges-does-not-open-the-expected-response).
@@ -69,7 +69,7 @@ the vendored repository, while installed metadata retains the required VCS
 dependency. The external package is Python 3.11+, MIT licensed, has no runtime
 dependencies, and has no Story import. Story loads and validates its exact
 four-name API and physical-input capability only when `/exchanges` prepares a
-view. Earlier viewer versions lack the required 0.6.0 owned-terminal contract and are
+view. Versions before 0.6.0 lack the required owned-terminal contract and are
 rejected before Story opens the viewer terminal. Required installation does
 not create a static Story-to-viewer import.
 
@@ -142,8 +142,8 @@ h/j/k/l cursor • Enter fold • ↑/↓ records • PgUp/PgDn • / search •
 This preview shows the renderer's topology, not a retained Story screenshot.
 The external repository owns the byte-tested renderer contract:
 
-- [Terminal design system and Story-hosted scenario](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/3bde78bd60d5c42db101ae97a5fa723b730c597a/docs/design-system.md)
-- [Sixteen deterministic complete sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/3bde78bd60d5c42db101ae97a5fa723b730c597a/docs/samples)
+- [Terminal design system and Story-hosted scenario](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/1d3c6f565d454b34f7619a264d9a3b760de14911/docs/design-system.md)
+- [Sixteen deterministic complete sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/1d3c6f565d454b34f7619a264d9a3b760de14911/docs/samples)
 
 Expanded records use well-formatted multiline JSON. The left gutter repeats
 the physical JSONL source-record line on continuation rows, so `g` can move to
@@ -458,9 +458,9 @@ Common bounded failures are:
 | --- | --- |
 | No attached session | Attach the intended session, then retry bare `/exchanges`. |
 | No records for the session | Run the intended provider work; do not invoke it merely to manufacture diagnostics. |
-| Viewer 0.1.1, 0.2.0, 0.3.0, 0.4.0, 0.4.1, 0.4.2, 0.5.0, 0.5.1, 0.5.2, 0.5.3, or 0.5.4 remains after updating a checkout | Rerun the normal editable Story install to upgrade it to required 0.6.0; do not force or uninstall. |
+| Viewer 0.1.1, 0.2.0, 0.3.0, 0.4.0, 0.4.1, 0.4.2, 0.5.0, 0.5.1, 0.5.2, 0.5.3, 0.5.4, or 0.6.0 remains after updating a checkout | Rerun the normal editable Story install to upgrade it to required 0.6.2; do not force or uninstall. |
 | Required viewer unavailable | Rerun the normal Story installation, then retry. The compatibility extra is not a separate repair path. |
-| Viewer 0.6.0 is installed but incompatible or damaged | Verify the approved exact pin, then use the bounded forced-repair path in Troubleshooting. |
+| Viewer 0.6.2 is installed but incompatible or damaged | Verify the approved exact pin, then use the bounded forced-repair path in Troubleshooting. |
 | Store busy | Retry after the concurrent exchange write completes. |
 | Unsafe, corrupt, or uncorrelatable records | Preserve the workspace and inspect the content-safe runtime diagnostic before retrying. |
 | Selected stream disappeared | Rerun `/exchanges` to refresh retained inventory. |

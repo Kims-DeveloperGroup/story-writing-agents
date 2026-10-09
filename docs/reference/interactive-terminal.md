@@ -169,7 +169,7 @@ insert `${path}` or `${path}#Lstart-Lend`; file bytes are read later through
 runtime authorization rather than embedded by the control.
 
 `/exchanges` uses the installed isolated JSONL viewer after Story chooses an
-immutable scope/agent snapshot. Story validates the pinned 0.6.0 four-name API,
+immutable scope/agent snapshot. Story validates the pinned 0.6.2 four-name API,
 the `ViewerTerminal` transport constructor, and owned-call keyword arguments
 before terminal acquisition. The low-level handoff borrows streams and Story's
 persistent character reader under the existing input latch; it preserves the
