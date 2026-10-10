@@ -1942,6 +1942,10 @@ class LeadRecommendationRequestPayload:
             if any(by_id.get(source.input_revision.input_id) != source.input_revision
                    for premise in self.basis.shared_premises for source in premise.sources):
                 raise ValueError("recommendation capture must retain exact selected source revisions")
+        _validate_captured_admission(
+            self.authoring_scope, self.basis,
+            required=self.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT,
+        )
         value = {
             item.name: getattr(self, item.name)
             for item in self.__dataclass_fields__.values()
@@ -4272,28 +4276,39 @@ def authoring_source_facts(
     return tuple(facts)
 
 
+def _validate_captured_admission(
+    scope: AuthoringScope | None, basis: CollaborationProposalBasis, *, required: bool = False,
+) -> None:
+    if not required and (scope is None or scope.intent is not AuthoringIntent.AUTHORING):
+        return
+    admission = basis.authoring_admission
+    if scope is None or type(admission) is not AuthoringAdmissionBasis:
+        raise ValueError("official drafting requires qualified authoring admission")
+    if ((admission.task_id, admission.task_revision) != (scope.task_id, scope.task_revision)
+            or admission.scope_digest != admission_digest(authoring_scope_to_dict(scope))):
+        raise ValueError("authoring admission changed its exact task or scope")
+    facts = {v.source_id: v for v in authoring_source_facts(basis.inputs, basis.evidence)}
+    for source in admission.sources:
+        expected = source if source.kind is AdmissionSourceKind.READ else replace(
+            source, utf8_bytes=None,
+            original_authority="input_only" if source.kind is AdmissionSourceKind.MATERIAL
+            else source.original_authority,
+        )
+        if facts.get(source.source_id) != expected:
+            raise ValueError("authoring admission sources are not exact captured inputs")
+    user = tuple(v for v in basis.inputs if v.kind is CollaborationInputKind.USER_INPUT)
+    if not any(v.revision_digest == admission.request_digest for v in user):
+        raise ValueError("authoring admission lacks its actual USER request")
+
+
 def validate_captured_authoring_basis(proposal: CollaborationProposal) -> None:
     """Reject unbound selections and dependent authors missing declared sources."""
     scope, basis = proposal.authoring_scope, proposal.basis
-    admission = basis.authoring_admission
     if any(item.mode is SpecialistAssignmentMode.DRAFT for item in proposal.assignments) and (
             scope is None or scope.intent is not AuthoringIntent.AUTHORING
             or scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}):
         raise ValueError("official draft assignment requires explicit authoring task admission")
-    official = scope is not None and scope.intent is AuthoringIntent.AUTHORING
-    if official:
-        if type(admission) is not AuthoringAdmissionBasis:
-            raise ValueError("official drafting requires qualified authoring admission")
-        if ((admission.task_id, admission.task_revision) != (scope.task_id, scope.task_revision)
-                or admission.scope_digest != admission_digest(authoring_scope_to_dict(scope))):
-            raise ValueError("authoring admission changed its exact task or scope")
-        facts = {v.source_id: v for v in authoring_source_facts(basis.inputs, basis.evidence)}
-        if any((facts.get(v.source_id) != v if v.kind is AdmissionSourceKind.READ
-                else facts.get(v.source_id) != replace(v, utf8_bytes=None)) for v in admission.sources):
-            raise ValueError("authoring admission sources are not exact captured inputs")
-        user = tuple(v for v in basis.inputs if v.kind is CollaborationInputKind.USER_INPUT)
-        if not any(v.revision_digest == admission.request_digest for v in user):
-            raise ValueError("authoring admission lacks its actual USER request")
+    _validate_captured_admission(scope, basis)
     if scope is None or scope.schema_version < 3:
         if basis.schema_version != 1:
             raise ValueError("historical scope cannot acquire a version2 capture")

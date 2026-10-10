@@ -3950,7 +3950,8 @@ class StoryRuntime:
         qualified_admission = None
         if admission is not None and scope is not None:
             qualified_admission = self._qualify_authoring_inputs(admission.assessment,
-                inputs=selected_inputs, evidence=evidence, scope=scope, events=events)
+                inputs=selected_inputs, evidence=evidence, scope=scope, events=events,
+                pending_material=source)
             if type(qualified_admission) is not AuthoringAdmissionBasis:
                 raise _LeadOutcomeValidationError("recommendation lost its current authoring admission")
         if (self._official_authoring_scope(scope) or action.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT) and qualified_admission is None:
@@ -4172,6 +4173,10 @@ class StoryRuntime:
                         evidence_inputs=evidence_inputs,
                         artifact_binding=artifact_binding,
                     )
+                    if (scope.intent is AuthoringIntent.AUTHORING
+                            or request.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT):
+                        if type(request.basis.authoring_admission) is not AuthoringAdmissionBasis:
+                            raise ValueError("official preparation requires qualified authoring admission")
                     if request.basis.authoring_admission is not None:
                         if request.authoring_scope is None:
                             raise ValueError("official recommendation admission has no authoring scope")
@@ -10039,6 +10044,8 @@ class StoryRuntime:
                 raise TypeError("collaboration store returned a non-tuple history")
             if any(type(event.payload) is CollaborationExplorationAdoptionPayload for event in events):
                 self._editorial_snapshot(session_id).validate_exploration_adoptions(conversation_id)
+            elif any(type(event.payload) is CollaborationLeadMaterialCapturePayload for event in events):
+                self._editorial_snapshot(session_id)
             return events, project_collaboration_history(events), None
         except Exception as failure:
             return None, None, failure
@@ -15186,11 +15193,46 @@ class StoryRuntime:
         inputs: tuple[CollaborationInputRevision, ...],
         evidence: CollaborationLeadEvidence | None, scope: AuthoringScope,
         events: tuple[CollaborationEvent, ...], pending_user_text: str | None = None,
+        pending_material: CollaborationEventDraft | None = None,
     ) -> AuthoringAdmissionBasis | AuthoringAdmissionNeeded:
         user = tuple(v for v in inputs if v.kind is CollaborationInputKind.USER_INPUT
                      and v.state is CollaborationInputState.PRESENT)
         if len(user) != 1:
             raise ValueError("authoring admission requires one actual originating USER input")
+        def pending_origin(item: CollaborationInputRevision) -> CollaborationEvent | CollaborationEventDraft | None:
+            if pending_material is None:
+                return None
+            if type(pending_material) is not CollaborationEventDraft:
+                raise ValueError("authoring admission pending material must be an exact typed draft")
+            if item.locator != f"conversation/{pending_material.event_id}":
+                return None
+            source = pending_material
+            header = (source.session_id, source.conversation_id, source.turn_id, source.step_id)
+            expected_kind = (CollaborationEventKind.MESSAGE
+                             if type(source.payload) is CollaborationLeadJudgmentPayload
+                             else CollaborationEventKind.LEAD_SYNTHESIS)
+            if (type(source.payload) not in {CollaborationLeadJudgmentPayload, CollaborationLeadSynthesisPayload}
+                    or source.kind is not expected_kind or source.sender != _LEAD_ACTOR
+                    or source.recipient != _USER_ACTOR
+                    or not any((event.session_id, event.conversation_id, event.turn_id, event.step_id)
+                               == header for event in events)
+                    or item.kind is not CollaborationInputKind.CONVERSATION_EVENT
+                    or item.state is not CollaborationInputState.PRESENT
+                    or item.start_line is not None or item.end_line is not None
+                    or item.revision_digest != self._recommendation_event_digest(source)):
+                raise ValueError("authoring admission pending material is not exact host input")
+            stored = tuple(event for event in events if event.event_id == source.event_id)
+            if len(stored) > 1:
+                raise ValueError("authoring admission material origin is ambiguous")
+            if stored:
+                original = stored[0]
+                if ((original.session_id, original.conversation_id, original.turn_id, original.step_id) != header
+                        or original.kind is not source.kind or original.sender != source.sender
+                        or original.recipient != source.recipient or original.payload != source.payload):
+                    raise ValueError("authoring admission pending material conflicts with stored origin")
+                return original
+            return source
+
         lengths = {}
         for item in inputs:
             text = None
@@ -15203,20 +15245,51 @@ class StoryRuntime:
                 text = value.get("text")
             elif item.kind is CollaborationInputKind.CONVERSATION_EVENT:
                 matches = tuple(v for v in events if v.event_id == item.locator.removeprefix("conversation/"))
-                if len(matches) == 1:
-                    payload = matches[0].payload
+                pending = pending_origin(item)
+                if pending is not None or len(matches) == 1:
+                    payload = pending.payload if pending is not None else matches[0].payload
                     if type(payload) in {CollaborationLeadMaterialCapturePayload,
                             CollaborationPremiseSelectionPayload, CollaborationExplorationAdoptionPayload}:
                         text = payload.capture.selected_text
-                    elif type(payload) in {CollaborationSpecialistReplyPayload, CollaborationLeadSynthesisPayload}:
+                    elif type(payload) in {CollaborationSpecialistReplyPayload, CollaborationLeadSynthesisPayload,
+                                          CollaborationLeadJudgmentPayload}:
                         text = payload.message
                     elif type(payload) is CollaborationLeadPublicResponsePayload:
                         text = payload.response.response_text
                     elif type(payload) is CollaborationLeadDiscussionPayload:
                         text = payload.report.response_text
             lengths[item.input_id] = None if type(text) is not str else len(text.encode("utf-8", errors="strict"))
+        facts = authoring_source_facts(inputs, evidence, selected_utf8_bytes=lengths)
+        qualified_sources = []
+        snapshots = {}
+        for source in facts:
+            authority = source.original_authority
+            if source.kind is AdmissionSourceKind.MATERIAL and source.source_identity.startswith("conversation/"):
+                matches = tuple(event for event in events
+                                if event.event_id == source.source_identity.removeprefix("conversation/"))
+                item = next(value for value in inputs if value.input_id == source.source_id)
+                pending = pending_origin(item)
+                if pending is None and len(matches) != 1:
+                    raise ValueError("authoring admission material origin missing or ambiguous")
+                payload = pending.payload if pending is not None else matches[0].payload
+                if type(payload) is CollaborationLeadMaterialCapturePayload:
+                    capture = payload.capture
+                    ref = capture.source
+                    if ref.kind is LeadMaterialKind.PUBLIC_RESPONSE:
+                        if ref.session_id not in snapshots:
+                            snapshots[ref.session_id] = self._editorial_snapshot(ref.session_id)
+                        snapshot = snapshots[ref.session_id]
+                        if self._selected_task_material(snapshot, ref) != capture.selected_text:
+                            raise ValueError("authoring admission selected public bytes changed")
+                        payload = next(record.payload for row in snapshot.conversations
+                                       if row.metadata.conversation_id == ref.conversation_id
+                                       for record in row.records if record.event_id == ref.event_id)
+                if (type(payload) is CollaborationLeadPublicResponsePayload
+                        and payload.response.acceptance is LeadPublicResponseAcceptance.REJECTED):
+                    authority = "rejected_public_response"
+            qualified_sources.append(replace(source, original_authority=authority))
         return qualify_authoring_assessment(assessment,
-            sources=authoring_source_facts(inputs, evidence, selected_utf8_bytes=lengths),
+            sources=tuple(qualified_sources),
             request_digest=user[0].revision_digest, task_id=scope.task_id,
             task_revision=scope.task_revision, scope_digest=admission_digest(authoring_scope_to_dict(scope)))
 

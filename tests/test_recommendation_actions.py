@@ -7,7 +7,7 @@ import json
 import pickle
 from dataclasses import replace
 
-from story_writing_agents import conversations as c
+from story_writing_agents import authoring_admission as admission, conversations as c
 from tests.recommendation_fixture import (
     DRAFT, OUTLINE, RecommendationCase, action, decision, digest,
     preparation, recommendation, rewrite_history,
@@ -69,14 +69,30 @@ class RecommendationActionContractTests(RecommendationCase):
         self.assertEqual(c.decode_collaboration_event(scoped_wire), event)
         self.assertTrue(next(field for field in dataclasses.fields(request)
                              if field.name == "authoring_scope").kw_only)
-        changed = replace(request, authoring_scope=replace(request.authoring_scope, interpretation="Another concrete candidate review interpretation."))
+        changed_scope = replace(request.authoring_scope, interpretation="Another concrete candidate review interpretation.")
+        self.assertRaisesRegex(ValueError, "changed its exact task or scope", replace, request, authoring_scope=changed_scope)
+        original_admission = request.basis.authoring_admission
+        changed_admission = admission.qualify_authoring_assessment( original_admission.assessment, sources=original_admission.sources,
+            request_digest=original_admission.request_digest, task_id=changed_scope.task_id, task_revision=changed_scope.task_revision,
+            scope_digest=admission.admission_digest(c.authoring_scope_to_dict(changed_scope)), )
+        changed = replace(request, authoring_scope=changed_scope, basis=replace(request.basis, authoring_admission=changed_admission))
         self.assertNotEqual(changed.action_digest, request.action_digest)
         with self.assertRaises(ValueError):
             replace(request, authoring_scope=None)
+        missing_admission = replace(request.basis, authoring_admission=None)
+        self.assertRaisesRegex(ValueError, "qualified authoring admission", replace, request, basis=missing_admission)
+        unqualified_event = json.loads(scoped_wire)
+        unqualified_event["payload"]["basis"].pop("authoring_admission")
+        self.assertRaisesRegex(ValueError, "qualified authoring admission", c.decode_collaboration_event,
+            json.dumps(unqualified_event, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8", errors="strict"))
         current_draft = event.to_draft()
         current_wire = c.encode_collaboration_event_draft(current_draft)
         self.assertIn("authoring_scope", json.loads(current_wire)["payload"])
         self.assertEqual(c.encode_collaboration_event_draft(c.decode_collaboration_event_draft(current_wire)), current_wire)
+        unqualified_draft = json.loads(current_wire)
+        unqualified_draft["payload"]["basis"].pop("authoring_admission")
+        self.assertRaisesRegex(ValueError, "qualified authoring admission", c.decode_collaboration_event_draft,
+            json.dumps(unqualified_draft, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8", errors="strict"))
         self.assertEqual((request.authoring_scope.schema_version, request.basis.schema_version), (3, 2))
         self.assertEqual(replace(request).action_digest, request.action_digest)
         self.assertEqual(self.history(conversation_id)[-1], event)
