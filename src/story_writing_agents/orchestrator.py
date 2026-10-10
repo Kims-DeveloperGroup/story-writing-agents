@@ -3949,9 +3949,10 @@ class StoryRuntime:
         _bound_editorial_refs, _bound_editorial_digest = self._editorial_context_for_scope(source.session_id, scope, session_history)
         qualified_admission = None
         if admission is not None and scope is not None:
-            qualified_admission = self._qualify_authoring_inputs(admission.assessment,
-                inputs=selected_inputs, evidence=evidence, scope=scope, events=events,
-                pending_material=source)
+            qualified_admission = self._qualify_authoring_inputs(
+                admission.assessment, inputs=selected_inputs, evidence=evidence, scope=scope,
+                events=events, pending_material=source, pending_replies=preview_replies,
+            )
             if type(qualified_admission) is not AuthoringAdmissionBasis:
                 raise _LeadOutcomeValidationError("recommendation lost its current authoring admission")
         if (self._official_authoring_scope(scope) or action.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT) and qualified_admission is None:
@@ -15194,18 +15195,93 @@ class StoryRuntime:
         evidence: CollaborationLeadEvidence | None, scope: AuthoringScope,
         events: tuple[CollaborationEvent, ...], pending_user_text: str | None = None,
         pending_material: CollaborationEventDraft | None = None,
+        pending_replies: tuple[CollaborationSpecialistReplyPayload, ...] = (),
     ) -> AuthoringAdmissionBasis | AuthoringAdmissionNeeded:
         user = tuple(v for v in inputs if v.kind is CollaborationInputKind.USER_INPUT
                      and v.state is CollaborationInputState.PRESENT)
         if len(user) != 1:
             raise ValueError("authoring admission requires one actual originating USER input")
+        if type(pending_replies) is not tuple or any(type(reply) is not CollaborationSpecialistReplyPayload for reply in pending_replies):
+            raise ValueError("authoring admission pending replies must be exact typed results")
+
+        def pending_reply_origin(item: CollaborationInputRevision) -> CollaborationEvent | CollaborationEventDraft | None:
+            source = pending_material
+            if source is None or type(source.payload) is not CollaborationLeadSynthesisPayload:
+                return None
+            matches = tuple(reply for reply in pending_replies
+                            if item.locator == f"conversation/{self._deterministic_id('e', reply.execution_attempt_id, reply.assignment_id, 'reply')}")
+            if not matches:
+                return None
+            if len(matches) != 1:
+                raise ValueError("authoring admission pending reply is ambiguous")
+            reply = matches[0]
+            identity = self._deterministic_id("e", reply.execution_attempt_id, reply.assignment_id, "reply")
+            header = (source.session_id, source.conversation_id, source.turn_id, source.step_id)
+            dispatches = tuple(event for event in events if event.event_id == reply.dispatch_event_id)
+            if len(dispatches) != 1 or type(dispatches[0].payload) is not CollaborationAssignmentDispatchPayload:
+                raise ValueError("authoring admission pending reply lacks exact dispatch")
+            dispatch_event, dispatch = dispatches[0], dispatches[0].payload
+            key = (reply.proposal_id, reply.proposal_revision, reply.proposal_digest)
+            proposals = tuple(event.payload for event in events
+                              if type(event.payload) is CollaborationProposal
+                              and (event.session_id, event.conversation_id, event.step_id) == (header[0], header[1], header[3])
+                              and (event.payload.proposal_id, event.payload.proposal_revision, event.payload.proposal_digest) == key)
+            if (len(proposals) != 1 or proposals[0] not in confirmed_authoring_proposals(scope, events)
+                or proposals[0].authoring_scope != source.payload.authoring_scope
+                or source.kind is not CollaborationEventKind.LEAD_SYNTHESIS
+                or source.sender != _LEAD_ACTOR or source.recipient != _USER_ACTOR
+                or dispatch_event.kind is not CollaborationEventKind.ASSIGNMENT_DISPATCH
+                or (dispatch_event.session_id, dispatch_event.conversation_id, dispatch_event.turn_id, dispatch_event.step_id) != header
+                or dispatch_event.sender != _RUNTIME_ACTOR
+                or dispatch_event.recipient != CollaborationActor(CollaborationActorKind.SPECIALIST, dispatch.assignment.specialist_id)
+                or key != (dispatch.proposal_id, dispatch.proposal_revision, dispatch.proposal_digest)
+                or key != (source.payload.proposal_id, source.payload.proposal_revision, source.payload.proposal_digest)
+                or reply.execution_attempt_id != dispatch.execution_attempt_id
+                or reply.execution_attempt_id != source.payload.execution_attempt_id
+                or dispatch.assignment not in proposals[0].assignments
+                or reply.assignment_id != dispatch.assignment.assignment_id
+                or reply.mode is not dispatch.assignment.mode
+                or any(input_id not in dispatch.assignment.input_ids for input_id in reply.input_ids)
+                or identity not in source.payload.reply_event_ids
+                or item.input_id != identity or item.kind is not CollaborationInputKind.CONVERSATION_EVENT
+                or item.state is not CollaborationInputState.PRESENT
+                or item.start_line is not None or item.end_line is not None
+                or item.revision_digest != self._specialist_reply_digest(reply)):
+                raise ValueError("authoring admission pending reply is not exact host input")
+            running = tuple(event for event in events
+                            if type(event.payload) is CollaborationStepStatePayload
+                            and (event.session_id, event.conversation_id, event.turn_id, event.step_id) == header
+                            and event.payload.state is CollaborationStepState.RUNNING
+                            and event.payload.execution_attempt_id == reply.execution_attempt_id
+                            and (event.payload.proposal_id, event.payload.proposal_revision, event.payload.proposal_digest) == key)
+            if len(running) != 1:
+                raise ValueError("authoring admission pending reply lacks exact running attempt")
+            pending = self._draft_with_id(
+                event_id=identity, session_id=source.session_id, conversation_id=source.conversation_id,
+                turn_id=source.turn_id, step_id=source.step_id, kind=CollaborationEventKind.SPECIALIST_REPLY,
+                sender=CollaborationActor(CollaborationActorKind.SPECIALIST, dispatch.assignment.specialist_id),
+                recipient=_USER_ACTOR if proposals[0].step_kind is CollaborationStepKind.SPECIALIST_ADVISORY else _LEAD_ACTOR,
+                payload=reply,
+            )
+            stored = tuple(event for event in events if event.event_id == identity)
+            if len(stored) > 1:
+                raise ValueError("authoring admission material origin is ambiguous")
+            if stored:
+                original = stored[0]
+                if ((original.session_id, original.conversation_id, original.turn_id, original.step_id) != header
+                    or original.kind is not pending.kind or original.sender != pending.sender
+                    or original.recipient != pending.recipient or original.payload != reply):
+                    raise ValueError("authoring admission pending reply conflicts with stored origin")
+                return original
+            return pending
+
         def pending_origin(item: CollaborationInputRevision) -> CollaborationEvent | CollaborationEventDraft | None:
             if pending_material is None:
                 return None
             if type(pending_material) is not CollaborationEventDraft:
                 raise ValueError("authoring admission pending material must be an exact typed draft")
             if item.locator != f"conversation/{pending_material.event_id}":
-                return None
+                return pending_reply_origin(item)
             source = pending_material
             header = (source.session_id, source.conversation_id, source.turn_id, source.step_id)
             expected_kind = (CollaborationEventKind.MESSAGE
