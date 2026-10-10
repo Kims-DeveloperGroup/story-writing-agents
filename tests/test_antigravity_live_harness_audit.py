@@ -455,25 +455,25 @@ class LiveHarnessAuditTests(unittest.TestCase):
         profiles = tuple(replace(profile, agent_id='execution_specialist')
                          if profile.agent_id == 'plot_architect' else profile
                          for profile in request.basis.agent_profiles)
-        nonplot = replace(request, specialist_ids=('execution_specialist',),
+        nonplot = lambda: replace(request, specialist_ids=('execution_specialist',),
             basis=replace(request.basis, agent_profiles=profiles),
             authoring_scope=replace(scope, target_paths=(), domains=(ArtifactReviewDomain.TONE_EXECUTION,), contributions=(replace(scope.contributions[0], domain=ArtifactReviewDomain.TONE_EXECUTION),)))
         invalid = (
-            ('absent request', returned(recommendation_request=None), 'typed recommendation'),
-            ('non-review scope', returned(recommendation_request=replace(request, authoring_scope=replace(scope, activity=AuthoringActivity.DRAFT))), 'REVIEW scope'),
-            ('missing Plot', returned(recommendation_request=nonplot), 'required Plot'),
-            ('foreign task', returned(recommendation_request=replace(request,
-                authoring_scope=replace(scope, task_id='foreign_task'))), 'durable tail'),
-            ('fabricated request', returned(recommendation_request=replace(request,
-                request_id='fabricated_request')), 'durable tail'),
-            ('foreign conversation', returned(conversation_id='foreign_conversation'), 'durable tail'),
-            ('fabricated proposal', returned(proposal=object()), 'downstream proposal'),
-            ('fabricated Apply', returned(artifact_application_request=object()), 'downstream proposal'),
-            ('fabricated Commit', returned(story_commit_request=object()), 'downstream proposal'),
+            ('absent request', lambda: returned(recommendation_request=None), AssertionError, 'typed recommendation'),
+            ('non-review scope', lambda: returned(recommendation_request=replace(request, authoring_scope=replace(scope, activity=AuthoringActivity.DRAFT))), ValueError, 'authoring admission changed its exact task or scope'),
+            ('missing Plot', lambda: returned(recommendation_request=nonplot()), ValueError, 'authoring admission changed its exact task or scope'),
+            ('foreign task', lambda: returned(recommendation_request=replace(request,
+                authoring_scope=replace(scope, task_id='foreign_task'))), ValueError, 'authoring admission changed its exact task or scope'),
+            ('fabricated request', lambda: returned(recommendation_request=replace(request,
+                request_id='fabricated_request')), AssertionError, 'durable tail'),
+            ('foreign conversation', lambda: returned(conversation_id='foreign_conversation'), AssertionError, 'durable tail'),
+            ('fabricated proposal', lambda: returned(proposal=object()), AssertionError, 'downstream proposal'),
+            ('fabricated Apply', lambda: returned(artifact_application_request=object()), AssertionError, 'downstream proposal'),
+            ('fabricated Commit', lambda: returned(story_commit_request=object()), AssertionError, 'downstream proposal'),
         )
-        for name, corrupted, message in invalid:
-            with self.subTest(case=name), self.assertRaisesRegex(AssertionError, message):
-                harness.assert_pending_plot_recommendation(history, corrupted, observer.calls)
+        for (name, corrupted, error, message) in invalid:
+            with self.subTest(case=name), self.assertRaisesRegex(error, message):
+                harness.assert_pending_plot_recommendation(history, corrupted(), observer.calls)
         with self.assertRaisesRegex(AssertionError, 'unconfirmed downstream'):
             harness.assert_pending_plot_recommendation(history, turn,
                 [*observer.calls, {'agent': 'plot_architect'}])
