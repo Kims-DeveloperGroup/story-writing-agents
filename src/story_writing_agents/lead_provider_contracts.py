@@ -265,6 +265,16 @@ class LeadProviderConstraints:
             **({"offered_premise_question_id": self.premise_question_id,
                 "premise_analysis_rule": "Only an undecided question needs target-free alternatives analysis. Reuse disclosed resolved inputs. Analysis requires its own Confirm and cannot draft, review a candidate, select a premise, or update an objective."}
                if self.premise_question_id is not None else {}),
+            "offered_admission_source_ids": list(self.input_ids),
+            "authoring_admission_rule": (
+                "Before official drafting or document-change preparation, assess the actual supplied story foundations, "
+                "USER direction, bounded creative permissions/protected constraints and required decisions. "
+                "Use exact offered USER/material IDs or completed READ evidence IDs; a file indicator, summary or "
+                "confidence is not a READ or semantic sufficiency. A detailed literal USER brief may suffice with "
+                "empty targets. Identify only actual missing decisions; do not ask again for already supplied facts. "
+                "Use needs_information/analysis_only and grounded questions when inadequate. Rejected public "
+                "answers stay input-only. The assessment grants no confirmation, write or budget authority."
+            ),
             "offered_assignment_input_ids": list(self.input_ids),
             "required_input_ids": [item for item in self.input_ids if (not self.preparation_kind or item not in PREPARATION_INPUT_IDS)
                                    and not (self.adoption_intent is AuthoringIntent.REVIEW_ONLY and item == "user_input")],

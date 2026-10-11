@@ -8,7 +8,7 @@ import asyncio
 import json
 import os
 import traceback
-from dataclasses import replace
+from dataclasses import asdict, replace
 from types import SimpleNamespace
 from unittest import mock
 
@@ -27,6 +27,7 @@ from story_writing_agents.writing_artifacts._storage import ArtifactRootSecurity
 from tests.recommendation_fixture import (
     DRAFT, OUTLINE, RecommendationCase, action, decision, digest,
     preparation, recommendation, rewrite_history,
+    task_assessment,
 )
 from tests import test_lead_orchestration as lead
 from tests import test_artifact_proposal_orchestration as artifact
@@ -73,8 +74,15 @@ class LeadRecommendationTests(RecommendationCase):
             return producer(call, provider)
         self.backend.enqueue(observed)
         calls = len(self.backend.calls)
-        with mock.patch.object(self.runtime, "lead_turn", side_effect=AssertionError("recursive public Lead")):
+        original_qualifier = self.runtime._qualify_authoring_inputs
+        qualification_starts = []
+        def checked_qualifier(*args, **kwargs):
+            qualification_starts.append(bool(self.payload_events(conversation_id, c.LeadRecommendationStartedPayload)))
+            return original_qualifier(*args, **kwargs)
+        with mock.patch.object(self.runtime, "lead_turn", side_effect=AssertionError("recursive public Lead")), \
+                mock.patch.object(self.runtime, "_qualify_authoring_inputs", side_effect=checked_qualifier):
             prepared = await self.runtime.session(self.session_id).decide_lead_recommendation(decision(turn))
+        self.assertEqual(qualification_starts[:1], [False])
         self.assertIs(type(prepared), c.LeadTurnResult)
         self.assertEqual(len(self.backend.calls) - calls, 1)
         self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL)
@@ -109,8 +117,10 @@ class LeadRecommendationTests(RecommendationCase):
                                      (("recommendation_request", "recommendation_decision"), True)):
             cid = self.conversation("Raw confirmed drafting consultation")
             self.backend.enqueue(recommendation(recommended_action=action(kind="prepare_consultation", source_ids=("user_input",)),
-                authoring_scope=lambda call: lead._live_scope(call, activity="review", domains=("plot_structure",))))
-            offered = await self.runtime.lead_turn(self.session_id, cid, "Recommend Plot review of this complete supplied candidate: " + DRAFT)
+                authoring_scope=lambda call: lead._live_scope(call, activity="review", domains=("plot_structure",)),
+                authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=('bounded review judgments', 'separate proposal preparation'))))
+            offered = await self.runtime.lead_turn(self.session_id, cid,
+                ("Recommend Plot review of this complete supplied candidate: " + DRAFT + "\nYou may make bounded Plot review judgments and prepare a separate Plot review proposal; preserve the supplied candidate facts."))
             self.assertIs(offered.kind, c.LeadOutcomeKind.RECOMMENDATION, offered)
             request = offered.recommendation_request
             source_ids = [item.input_id for item in request.basis.inputs]
@@ -119,7 +129,7 @@ class LeadRecommendationTests(RecommendationCase):
             raw_observations = []
             def raw(call, _provider):
                 selected = ([] if omit_source else source_ids) + list(aliases)
-                body = {"kind": "proposal", "message": request.purpose,
+                body = {"kind": "proposal", "message": request.purpose, "authoring_assessment": asdict(request.basis.authoring_admission.assessment),
                     "authoring_scope": lead._compact_scope(c.authoring_scope_to_dict(request.authoring_scope)),
                     "proposal": {"shared_premises": [], "assignments": [{"agent_id": agent, "mode": mode,
                         "instruction": request.instruction, "input_ids": selected} for agent in request.specialist_ids]}}
@@ -214,10 +224,8 @@ class LeadRecommendationTests(RecommendationCase):
 
         from story_writing_agents import editorial_scope as scopes
         memory_source = self.conversation("Scoped USER decisions")
-        scope = scopes.EditorialScope(scopes.EditorialScopeKind.KNOWN, targets=(
-            scopes.EditorialScopeTarget(OUTLINE),
-            scopes.EditorialScopeTarget("core_documents/character_sheets.md"),
-        ))
+        scope = scopes.EditorialScope(scopes.EditorialScopeKind.KNOWN, targets=( scopes.EditorialScopeTarget(OUTLINE),
+            scopes.EditorialScopeTarget("core_documents/character_sheets.md"), ))
         draft = replace(editorial_request("scoped_public_draft").draft, scope=scope)
         selected = await self.runtime.record_editorial_decision(self.session_id, memory_source,
             editorial.EditorialRecordRequest.directive(draft, transition_reason="Retain both exact targets."))
@@ -238,11 +246,9 @@ class LeadRecommendationTests(RecommendationCase):
         self.assertEqual(prepared.proposal.basis.editorial_context_digest, pin)
         before, calls = self.history(work), len(self.backend.calls)
         changed = replace(draft, scope=scopes.EditorialScope.whole(OUTLINE))
-        relation = editorial.EditorialRelationDecision(a_ref, editorial.EditorialRelationKind.REPLACE,
-                       "Replace only the outline direction.")
+        relation = editorial.EditorialRelationDecision(a_ref, editorial.EditorialRelationKind.REPLACE, "Replace only the outline direction.")
         replacement = await self.runtime.record_editorial_decision(self.session_id, peer_source,
-            editorial.EditorialRecordRequest.directive(changed,
-                transition_reason="Explicit partial replacement.",
+            editorial.EditorialRecordRequest.directive(changed, transition_reason="Explicit partial replacement.",
                 relation_decisions=(relation,), expected_editorial_context_digest=pin))
         self.assertIs(replacement.status, editorial.EditorialRecordStatus.RECORDED)
         state = self.runtime.inspect_editorial_state(self.session_id)
@@ -276,12 +282,9 @@ class LeadRecommendationTests(RecommendationCase):
         whole = replace(draft, scope=scopes.EditorialScope.whole(OUTLINE))
         state = self.runtime.inspect_editorial_state(self.session_id)
         prior_relation = editorial.EditorialRelationDecision(replacement.record_ref,
-            editorial.EditorialRelationKind.REPLACE,
-                                                            "Replace the earlier whole outline direction.")
+            editorial.EditorialRelationKind.REPLACE, "Replace the earlier whole outline direction.")
         whole_result = await self.runtime.record_editorial_decision(self.session_id, anchored,
-            editorial.EditorialRecordRequest.directive(whole,
-                transition_reason="Retain the complete outline.",
-                relation_decisions=(prior_relation,),
+            editorial.EditorialRecordRequest.directive(whole, transition_reason="Retain the complete outline.", relation_decisions=(prior_relation,),
                 expected_editorial_context_digest=state.context_digest((replacement.record_ref,))))
         state = self.runtime.inspect_editorial_state(self.session_id)
         self.assertEqual(state.scope_state(replacement.record_ref).status, "replaced")
@@ -301,12 +304,9 @@ class LeadRecommendationTests(RecommendationCase):
         finite_draft = replace(draft, scope=finite)
         state = self.runtime.inspect_editorial_state(self.session_id)
         relation = editorial.EditorialRelationDecision(whole_result.record_ref,
-            editorial.EditorialRelationKind.REPLACE,
-                       "Replace this exact source-bound line only.", scope=finite)
+            editorial.EditorialRelationKind.REPLACE, "Replace this exact source-bound line only.", scope=finite)
         replaced = await self.runtime.record_editorial_decision(self.session_id, anchored,
-            editorial.EditorialRecordRequest.directive(finite_draft,
-                transition_reason="Explicit finite replacement.",
-                relation_decisions=(relation,),
+            editorial.EditorialRecordRequest.directive(finite_draft, transition_reason="Explicit finite replacement.", relation_decisions=(relation,),
                     expected_editorial_context_digest=state.context_digest((whole_result.record_ref,))))
         self.assertIs(replaced.status, editorial.EditorialRecordStatus.RECORDED)
         state = self.runtime.inspect_editorial_state(self.session_id)
@@ -314,9 +314,7 @@ class LeadRecommendationTests(RecommendationCase):
         drift_work, offered = await self.recommend(self.conversation("Range anchor drift"))
         def search_outline(call, _provider):
             return json.dumps({"action": {
-                "kind": "search", "path_prefix": "core_documents/",
-                "queries": [{"text": "Source-bound outline line.", "source_kinds": ["writing_artifact"]}],
-            }})
+                "kind": "search", "path_prefix": "core_documents/", "queries": [{"text": "Source-bound outline line.", "source_kinds": ["writing_artifact"]}], }})
         self.backend.enqueue(
             search_outline, lead._read_history_hit, preparation(offered, read_evidence=True))
         drift_plan = await self.runtime.decide_lead_recommendation(decision(offered))
@@ -356,8 +354,7 @@ class LeadRecommendationTests(RecommendationCase):
 
 class LeadRecommendationRecoveryTests(RecommendationCase):
     async def reference_offer(self, *, kind="prepare_consultation", objective_id=None):
-        return await self.recommend(recommended_action=action(kind=kind,
-            source_ids=("reference_1", "current_response"), objective_id=objective_id),
+        return await self.recommend(recommended_action=action(kind=kind, source_ids=("reference_1", "current_response"), objective_id=objective_id),
             text=f"Inspect ${{{OUTLINE}}} and recommend exactly one preparation.")
 
 

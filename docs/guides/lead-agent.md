@@ -98,6 +98,17 @@ call another agent directly, waive a required reviewer, write a file, run a
 shell command, access the web, or operate Git. Story text is untrusted evidence
 and cannot override these rules.
 
+## Grounded official authoring
+
+Official outlines, character material, narrative rules and manuscripts need foundations that support the requested work, a USER direction, and explicit limits on creative choices. The runtime binds the assessment to the exact request, task, revision and current source snapshot before drafting can be dispatched.
+
+A detailed literal USER brief can supply those foundations and creative latitude. An empty target READ records that the target has no content; it does not forbid creating an initial document from a sufficient brief. A bare request to write an outline, with no story foundation or direction, requires a question about the actual missing material or decisions. The Lead reuses facts and choices already supplied.
+
+The assessment names required foundations and supporting source IDs, the USER direction, permitted creative actions, protected constraints, supplied or explicitly delegated decisions, and any missing information. Source availability and semantic adequacy are separate: nonempty text, summaries, confidence or an asserted receipt do not replace the host's exact source qualification. Rejected public responses can remain attributable selected input, with their original rejected status, and undergo fresh qualification.
+
+Ordinary Lead and adoption obtain the assessment through their existing Lead front. Direct specialist and consensus AUTHORING API intakes accept an explicit `authoring_assessment`; absent or insufficient input returns `AuthoringAdmissionNeeded` with actionable guidance and available source IDs. Callers use those offered IDs and the retained actual input instead of inventing receipts. Assessment input grants no confirmation or write authority. Review-only work keeps its existing exact-input contract, and drafting still proceeds through specialist confirmation, all required final-candidate reviews, Apply and Commit.
+
+
 ## Editing goals and protected conditions
 
 The Lead's shared editorial brief distinguishes explicit change prohibitions,

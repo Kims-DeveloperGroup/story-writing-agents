@@ -10,7 +10,7 @@ from story_writing_agents import lead_exploration as exploration
 import asyncio
 import json
 import unittest
-from dataclasses import replace
+from dataclasses import asdict, replace
 from unittest import mock
 
 from story_writing_agents import ReplyTraceOrigin, StoryRuntime
@@ -90,12 +90,18 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         return service._ledger.inspect(ContextLedgerKey(identity.checkpoint_scope(), "codex"))
 
     async def test_confirmed_plan_survives_three_followups_and_conversation_switch(self):
+        from tests.recommendation_fixture import task_assessment
         first = self.conversation("Synthetic planning")
         second = self.conversation("Synthetic follow-up")
         retained = []
         for kind in (editorial.EditorialRecordKind.DIRECTION, editorial.EditorialRecordKind.PROTECTED_AMBIGUITY, editorial.EditorialRecordKind.SETUP_OBLIGATION):
             retained.append(await self.runtime.record_editorial_decision(self.session_id, first, editorial_request("retain_" + kind.value, kind=kind)))
-        proposed = await self.proposal(first)
+        proposed = await self.proposal(first, text=(
+                'Please check the story direction.\nSupplied story facts: Mara wants safety and fears exposure. '
+                'Review the story direction against those facts and the exact requested references. You may give '
+                'bounded story-direction review judgments; preserve supplied facts and do not write files. Execution '
+                'requires separate exact confirmation.'
+            ), authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded story-direction review judgments',))))
         prior = self.snapshot()
         refusal = await self.runtime.record_editorial_decision(self.session_id, first, editorial_request("pending_memory"))
         self.assertIs(refusal.status, editorial.EditorialRecordStatus.PENDING_CONTROL_REQUIRED)

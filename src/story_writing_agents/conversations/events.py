@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
+from ..authoring_admission import (
+    AdmissionSource, AdmissionSourceKind, AuthoringAssessment, AuthoringAdmissionBasis,
+    admission_digest, assessment_from_dict, admission_basis_from_dict, admission_basis_to_dict,
+)
+
 from ..lead_task_transitions import (
     LeadTaskDecision, LeadTaskTransitionReceipt, LeadMaterialCapture,
     LeadDiscussionReport, LeadPublicResponse, task_value_to_dict,
@@ -509,6 +516,8 @@ class CollaborationLeadJudgmentPayload:
     evidence: CollaborationLeadEvidence
     authoring_scope: AuthoringScope | None = None
     trace: ReplyTrace | None = None
+
+    authoring_admission: AuthoringAdmissionBasis | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         if self.kind in {LeadOutcomeKind.EXPLORATION, LeadOutcomeKind.DISCUSSION}:
@@ -1289,6 +1298,8 @@ class LeadProposalIntent:
     shared_premises: tuple[LeadSharedPremiseIntent, ...] = field(default=(), kw_only=True)
     premise_decision: PremiseQuestionIntent | None = field(default=None, kw_only=True)
 
+    authoring_admission: AuthoringAdmissionBasis | None = field(default=None, kw_only=True)
+
     def __post_init__(self) -> None:
         validation_call(
             '$.relation',
@@ -1355,6 +1366,8 @@ class LeadProviderOutcome:
     recommended_action: LeadRecommendedAction | None = None
     authoring_scope: AuthoringScope | None = field(default=None, kw_only=True)
     trace: ReplyTrace | None = field(default=None, kw_only=True)
+    authoring_assessment: AuthoringAssessment | None = field(default=None, kw_only=True)
+    authoring_admission: AuthoringAdmissionBasis | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         validation_call('$.kind', _require_enum, self.kind, LeadOutcomeKind, 'lead outcome kind')
@@ -1780,6 +1793,8 @@ class CollaborationProposalBasis:
     editorial_refs: tuple[EditorialRecordRef, ...] = field(default=(), kw_only=True)
     editorial_context_digest: str | None = field(default=None, kw_only=True)
 
+    authoring_admission: AuthoringAdmissionBasis | None = field(default=None, kw_only=True)
+
     def __post_init__(self) -> None:
         if type(self.schema_version) is not int or self.schema_version not in {1, 2}:
             raise ValueError("proposal basis version is unsupported")
@@ -1927,6 +1942,10 @@ class LeadRecommendationRequestPayload:
             if any(by_id.get(source.input_revision.input_id) != source.input_revision
                    for premise in self.basis.shared_premises for source in premise.sources):
                 raise ValueError("recommendation capture must retain exact selected source revisions")
+        _validate_captured_admission(
+            self.authoring_scope, self.basis,
+            required=self.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT,
+        )
         value = {
             item.name: getattr(self, item.name)
             for item in self.__dataclass_fields__.values()
@@ -4197,9 +4216,99 @@ def authoring_capture_identity(scope: AuthoringScope, basis: CollaborationPropos
                       ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
+def authoring_source_facts(
+    inputs: tuple[CollaborationInputRevision, ...],
+    evidence: CollaborationLeadEvidence | None,
+    *, selected_utf8_bytes: dict[str, int | None] | None = None,
+) -> tuple[AdmissionSource, ...]:
+    """Describe already host-qualified inputs; file indicators are not READs."""
+    facts = []
+    lengths = {} if selected_utf8_bytes is None else selected_utf8_bytes
+    for item in inputs:
+        if item.state is not CollaborationInputState.PRESENT:
+            continue
+        if item.kind is CollaborationInputKind.USER_INPUT:
+            facts.append(AdmissionSource(item.input_id, AdmissionSourceKind.USER,
+                item.locator, item.revision_digest, "literal_user", lengths.get(item.input_id)))
+        elif item.kind in {CollaborationInputKind.CONVERSATION_EVENT,
+                           CollaborationInputKind.ARTIFACT_CANDIDATE}:
+            reads = () if evidence is None else tuple(
+                receipt for receipt in evidence.receipts
+                if receipt.acquisition is CollaborationEvidenceAcquisition.READ
+                and receipt.evidence_id == item.input_id
+            )
+            if reads:
+                if len(reads) != 1 or sum(
+                    other.input_id == item.input_id for other in inputs
+                ) != 1:
+                    raise ValueError("authoring admission source identities collide")
+                receipt = reads[0]
+                if (
+                    receipt.source_state is not CollaborationInputState.PRESENT
+                    or receipt.source_kind is not item.kind
+                    or receipt.locator != item.locator
+                    or receipt.content_digest != item.revision_digest
+                    or receipt.start_line != item.start_line
+                    or receipt.end_line != item.end_line
+                    or receipt.boundary_kind not in {"whole", "records", "artifact_lines"}
+                    or (
+                        receipt.boundary_kind == "artifact_lines"
+                        and (receipt.boundary_start, receipt.boundary_end)
+                        != (item.start_line, item.end_line)
+                    )
+                ):
+                    raise ValueError("authoring admission READ input is unbound")
+            else:
+                facts.append(AdmissionSource(item.input_id, AdmissionSourceKind.MATERIAL,
+                    item.locator, item.revision_digest, "input_only", lengths.get(item.input_id)))
+    if evidence is not None:
+        for receipt in evidence.receipts:
+            if (receipt.acquisition in {CollaborationEvidenceAcquisition.READ,
+                                        CollaborationEvidenceAcquisition.ATTACHED_REFERENCE}
+                    and receipt.source_state is CollaborationInputState.PRESENT
+                    and receipt.content_digest is not None):
+                facts.append(AdmissionSource(receipt.evidence_id, AdmissionSourceKind.READ,
+                    receipt.operation_id + "/" + receipt.result_correlation_id + "/" + receipt.evidence_id,
+                    admission_digest(_evidence_receipt_value(receipt)), "actual_read", receipt.utf8_bytes))
+    by_id = {item.source_id: item for item in facts}
+    if len(by_id) != len(facts):
+        raise ValueError("authoring admission source identities collide")
+    return tuple(facts)
+
+
+def _validate_captured_admission(
+    scope: AuthoringScope | None, basis: CollaborationProposalBasis, *, required: bool = False,
+) -> None:
+    if not required and (scope is None or scope.intent is not AuthoringIntent.AUTHORING):
+        return
+    admission = basis.authoring_admission
+    if scope is None or type(admission) is not AuthoringAdmissionBasis:
+        raise ValueError("official drafting requires qualified authoring admission")
+    if ((admission.task_id, admission.task_revision) != (scope.task_id, scope.task_revision)
+            or admission.scope_digest != admission_digest(authoring_scope_to_dict(scope))):
+        raise ValueError("authoring admission changed its exact task or scope")
+    facts = {v.source_id: v for v in authoring_source_facts(basis.inputs, basis.evidence)}
+    for source in admission.sources:
+        expected = source if source.kind is AdmissionSourceKind.READ else replace(
+            source, utf8_bytes=None,
+            original_authority="input_only" if source.kind is AdmissionSourceKind.MATERIAL
+            else source.original_authority,
+        )
+        if facts.get(source.source_id) != expected:
+            raise ValueError("authoring admission sources are not exact captured inputs")
+    user = tuple(v for v in basis.inputs if v.kind is CollaborationInputKind.USER_INPUT)
+    if not any(v.revision_digest == admission.request_digest for v in user):
+        raise ValueError("authoring admission lacks its actual USER request")
+
+
 def validate_captured_authoring_basis(proposal: CollaborationProposal) -> None:
     """Reject unbound selections and dependent authors missing declared sources."""
     scope, basis = proposal.authoring_scope, proposal.basis
+    if any(item.mode is SpecialistAssignmentMode.DRAFT for item in proposal.assignments) and (
+            scope is None or scope.intent is not AuthoringIntent.AUTHORING
+            or scope.activity not in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}):
+        raise ValueError("official draft assignment requires explicit authoring task admission")
+    _validate_captured_admission(scope, basis)
     if scope is None or scope.schema_version < 3:
         if basis.schema_version != 1:
             raise ValueError("historical scope cannot acquire a version2 capture")
@@ -4696,6 +4805,8 @@ def _lead_evidence_value(evidence: CollaborationLeadEvidence) -> dict[str, objec
 
 def _basis_value(basis: CollaborationProposalBasis) -> dict[str, object]:
     return {
+        **({"authoring_admission": admission_basis_to_dict(basis.authoring_admission)}
+           if basis.authoring_admission is not None else {}),
         **({"editorial_refs": [editorial_ref_to_dict(item) for item in basis.editorial_refs],
             "editorial_context_digest": basis.editorial_context_digest} if basis.editorial_refs else {}),
         **({'schema_version': 2, 'shared_premises': shared_premises_to_dict(basis.shared_premises)} if basis.schema_version == 2 else {}),
@@ -4934,6 +5045,8 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
         return value
     if type(payload) is CollaborationLeadJudgmentPayload:
         return {
+            **({"authoring_admission": admission_basis_to_dict(payload.authoring_admission)}
+               if payload.authoring_admission is not None else {}),
             "evidence": _lead_evidence_value(payload.evidence),
             "kind": payload.kind.value,
             "message": payload.message,
@@ -5503,12 +5616,14 @@ def _decode_basis(value: object) -> CollaborationProposalBasis:
             "inputs",
             "route",
             "route_fingerprint",
-        } | ({"schema_version", "shared_premises"} if type(value) is dict and value.get("schema_version") == 2 else set())
+        } | ({"authoring_admission"} if type(value) is dict and "authoring_admission" in value else set()) | ({"schema_version", "shared_premises"} if type(value) is dict and value.get("schema_version") == 2 else set())
           | ({"editorial_refs"} if type(value) is dict and "editorial_refs" in value else set())
         | ({"editorial_context_digest"} if type(value) is dict and value.get("editorial_refs") else set()),
         label="proposal basis",
     )
     return CollaborationProposalBasis(
+        authoring_admission=(admission_basis_from_dict(item["authoring_admission"])
+                             if "authoring_admission" in item else None),
         editorial_refs=tuple(editorial_ref_from_dict(entry) for entry in _array(item.get("editorial_refs", []), label="editorial references")),
         editorial_context_digest=item.get("editorial_context_digest"),
         schema_version=item.get('schema_version', 1),
@@ -6040,13 +6155,16 @@ def _decode_payload(value: object) -> CollaborationPayload:
             ),
         )
     if payload_type == "lead_judgment":
+        admission = value.get("authoring_admission") if type(value) is dict else None
+        base = {k: v for k, v in value.items() if k != "authoring_admission"} if type(value) is dict else value
         item = _object_with_optional_extensions(
-            value,
+            base,
             {"evidence", "kind", "message", "payload_type"},
             {"authoring_scope", "trace"},
             label="lead judgment payload",
         )
         return CollaborationLeadJudgmentPayload(
+            authoring_admission=(admission_basis_from_dict(admission) if admission is not None else None),
             kind=_enum(LeadOutcomeKind, item["kind"], label="lead judgment kind"),
             message=_string(item["message"], label="lead judgment message"),
             evidence=_decode_lead_evidence(item["evidence"]),

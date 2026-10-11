@@ -184,10 +184,8 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 "conversation_id",
                 "specialist_id",
                 "text",
-                "context_event_sink",
-                "action_progress_sink",
-                "authoring_scope",
-                "review_basis",
+                "context_event_sink", "action_progress_sink",
+                "authoring_scope", "review_basis", "authoring_assessment",
             ),
             RuntimeSession.lead_turn: (
                 "self",
@@ -205,10 +203,8 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 "conversation_id",
                 "specialist_id",
                 "text",
-                "context_event_sink",
-                "action_progress_sink",
-                "authoring_scope",
-                "review_basis",
+                "context_event_sink", "action_progress_sink",
+                "authoring_scope", "review_basis", "authoring_assessment",
             ),
         }
         for function, parameters in expected.items():
@@ -224,7 +220,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                     self.assertEqual(
                         tuple(name for name, parameter in signature.parameters.items()
                               if parameter.kind is inspect.Parameter.KEYWORD_ONLY),
-                        ("action_progress_sink", "authoring_scope", "review_basis"),
+                        ("action_progress_sink", "authoring_scope", "review_basis", "authoring_assessment"),
                     )
 
 

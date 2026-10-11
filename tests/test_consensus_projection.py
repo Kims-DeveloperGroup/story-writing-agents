@@ -43,7 +43,115 @@ from story_writing_agents.consensus.serialization import (
 )
 
 
-_INPUT = "1" * 64
+from story_writing_agents import authoring_admission as admission
+from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
+
+_FIXTURE_DRAFT = _ADMISSION_BRIEF + "\nSupplied opening: Nora discovers the letter is missing before the oath."
+_FIXTURE_RULING = _ADMISSION_BRIEF + "\nKeep the reveal in chapter three and preserve the supplied motive."
+_FIXTURE_TEXTS = {hashlib.sha256(v.encode()).hexdigest(): v for v in (
+    _ADMISSION_BRIEF, _FIXTURE_DRAFT, _FIXTURE_RULING,
+)}
+_UNIT_DIRECTION = candidate_material_handle(hashlib.sha256(_ADMISSION_BRIEF.encode()).hexdigest())
+_USER_ASSESSMENT = _fixture_assessment()
+_MATERIAL_ASSESSMENT = _fixture_assessment(foundation_ids=("input_material",), user_id="user_direction")
+_RULING_ASSESSMENT = _fixture_assessment(user_id="ruling_input")
+
+def _fixture_qualification(texts, identity, workflow_id, material, assessment, *, input_kind,
+                           direction_material=None, ruling_material=None, source_revision_id="r0"):
+    user_input = input_kind is ConsensusInputKind.PROMPT and material.locator.startswith("candidate:")
+    rows = (("user_input" if user_input else "input_material", material,
+        admission.AdmissionSourceKind.USER if user_input else admission.AdmissionSourceKind.MATERIAL),
+        ("user_direction", direction_material, admission.AdmissionSourceKind.USER),
+        ("ruling_input", ruling_material, admission.AdmissionSourceKind.USER))
+    facts = []
+    for alias, handle, kind in rows:
+        if handle is None:
+            continue
+        text = texts.get(handle.digest)
+        if text is None or hashlib.sha256(text.encode()).hexdigest() != handle.digest:
+            return admission.AuthoringAdmissionNeeded(
+                admission.AdmissionStatus.NEEDS_INFORMATION, ("Supply registered concrete fixture material.",), (),
+            )
+        facts.append(admission.AdmissionSource(
+            alias, kind, handle.locator, "sha256:" + handle.digest,
+            "literal_user" if kind is admission.AdmissionSourceKind.USER else "input_only", len(text.encode()),
+        ))
+    request = {
+        "input": material.digest,
+        "direction": None if direction_material is None else direction_material.digest,
+        "ruling": None if ruling_material is None else ruling_material.digest,
+    }
+    scope = {"session_id": identity.session_id, "conversation_id": identity.conversation_id,
+        "workflow_id": workflow_id, "input_kind": input_kind.value, "input_locator": material.locator,
+        "direction_locator": None if direction_material is None else direction_material.locator,
+        "ruling_locator": None if ruling_material is None else ruling_material.locator,
+        "source_revision_id": source_revision_id, "intent": "authoring"}
+    return admission.qualify_authoring_assessment(
+        assessment, sources=tuple(facts), request_digest=admission.admission_digest(request), task_id=workflow_id,
+        task_revision=int(source_revision_id.removeprefix("r")) + (2 if ruling_material is not None else 1),
+        scope_digest=admission.admission_digest(scope),
+    )
+
+def _unit_basis(identity, workflow_id, material, assessment, *, input_kind):
+    return _fixture_qualification(
+        _FIXTURE_TEXTS, identity, workflow_id, material, assessment,
+        input_kind=input_kind, direction_material=_UNIT_DIRECTION,
+    )
+
+def _qualify_fixture_port(self, identity, workflow_id, material, assessment, *, input_kind,
+                          direction_material=None, ruling_material=None, source_revision_id="r0",
+                          source_workflow_id=None):
+    if input_kind is ConsensusInputKind.CONTINUATION:
+        original = self.load_workflow(
+            identity.session_id,
+            identity.conversation_id,
+            source_workflow_id or workflow_id,
+        )
+        if original is None or original.submission.input_material != material:
+            raise ValueError("fixture continuation original material differs")
+        if original.submission.authoring_direction != direction_material:
+            raise ValueError("fixture continuation original direction differs")
+        original_sources = original.submission.authoring_admission.sources
+        input_kind = (ConsensusInputKind.PROMPT if any(v.source_id == "user_input" for v in original_sources)
+                      else ConsensusInputKind.SUPPLIED_DRAFT)
+    return _fixture_qualification(
+        self.fixture_materials, identity, workflow_id, material, assessment, input_kind=input_kind,
+        direction_material=direction_material, ruling_material=ruling_material, source_revision_id=source_revision_id,
+    )
+
+def _capture_fixture_direction(self, text):
+    handle = candidate_material_handle(hashlib.sha256(text.encode()).hexdigest())
+    self.fixture_materials[handle.digest] = text
+    return handle
+
+def _validate_fixture_port(self, request):
+    if request.intent is AuthoringIntent.REVIEW_ONLY:
+        return
+    stored = self.load_workflow(
+        request.execution_identity.session_id,
+        request.execution_identity.conversation_id,
+        request.workflow_id,
+    )
+    if stored is None or stored.submission.input_material != request.input_material:
+        raise ValueError("fixture current original material differs")
+    if stored.submission.authoring_direction != request.authoring_direction:
+        raise ValueError("fixture current original direction differs")
+    continuation = request.continuation
+    qualified = self.qualify_consensus_authoring(
+        request.execution_identity,
+        request.workflow_id,
+        request.input_material,
+        request.authoring_admission.assessment,
+        input_kind=stored.submission.input_kind,
+        direction_material=request.authoring_direction,
+        ruling_material=None if continuation is None else continuation.ruling_material,
+        source_revision_id="r0" if continuation is None else continuation.source_revision_id,
+        source_workflow_id=None if continuation is None else continuation.source_workflow_id,
+    )
+    if qualified != request.authoring_admission:
+        raise ValueError("fixture captured authoring basis differs")
+
+_INPUT = hashlib.sha256(_ADMISSION_BRIEF.encode()).hexdigest()
 _CANDIDATE = "2" * 64
 _REPAIRED = "3" * 64
 _IDENTITY = ConsensusExecutionIdentity("session-1", "conversation-1")
@@ -99,6 +207,14 @@ class ConsensusProjectionTests(unittest.TestCase):
             candidate_material=candidate_material,
             base_tail_sequence=tail,
             previous_result_event_id=previous,
+
+            authoring_admission=None if intent is AuthoringIntent.REVIEW_ONLY else _unit_basis(
+                _IDENTITY,
+                "workflow-1",
+                candidate_material if intent is AuthoringIntent.REVIEW_ONLY else _INPUT_MATERIAL,
+                _MATERIAL_ASSESSMENT, input_kind=ConsensusInputKind.PROMPT,
+            ),
+            authoring_direction=None if intent is AuthoringIntent.REVIEW_ONLY else _UNIT_DIRECTION,
         )
 
     decision = staticmethod(_phase_decision)
@@ -183,17 +299,11 @@ class ConsensusProjectionTests(unittest.TestCase):
                 previous=previous_result_event_id,
                 request_id=f"request-{current_phase.value}-{len(events) + 1}",
             )
-            request_event = ConsensusEvent(
-                f"request-event-{len(events) + 1}", len(events) + 1, request
-            )
+            request_event = ConsensusEvent(f"request-event-{len(events) + 1}", len(events) + 1, request)
             decision_event = ConsensusEvent(
                 f"decision-event-{len(events) + 2}",
                 len(events) + 2,
-                self.decision(
-                    request,
-                    request_event,
-                    confirmation_id=f"confirmation-{len(events) + 2}",
-                ),
+                self.decision(request, request_event, confirmation_id=f"confirmation-{len(events) + 2}",),
             )
             result = self.result(
                 request,
@@ -207,9 +317,7 @@ class ConsensusProjectionTests(unittest.TestCase):
                 ),
                 next_phase=next_phase,
             )
-            result_event = ConsensusEvent(
-                result.result_id, len(events) + 3, result
-            )
+            result_event = ConsensusEvent(result.result_id, len(events) + 3, result)
             events.extend((request_event, decision_event, result_event))
             previous_result_event_id = result_event.event_id
             return result
@@ -219,17 +327,9 @@ class ConsensusProjectionTests(unittest.TestCase):
             ConsensusPhaseState.COMPLETED,
             next_phase=ConsensusPhase.AUDIT,
         )
-        append_terminal(
-            ConsensusPhase.AUDIT,
-            ConsensusPhaseState.COMPLETED,
-            next_phase=ConsensusPhase.SYNTHESIS,
-        )
+        append_terminal(ConsensusPhase.AUDIT, ConsensusPhaseState.COMPLETED, next_phase=ConsensusPhase.SYNTHESIS,)
         if phase is not ConsensusPhase.SYNTHESIS:
-            append_terminal(
-                ConsensusPhase.SYNTHESIS,
-                ConsensusPhaseState.COMPLETED,
-                next_phase=phase,
-            )
+            append_terminal(ConsensusPhase.SYNTHESIS, ConsensusPhaseState.COMPLETED, next_phase=phase,)
         deadlock = append_terminal(phase, ConsensusPhaseState.DEADLOCKED)
         return deadlock, project_consensus(tuple(events))
 
@@ -240,6 +340,11 @@ class ConsensusProjectionTests(unittest.TestCase):
         self.assertEqual(
             request.request_digest,
             consensus_request_digest(
+                authoring_admission=admission.admission_basis_to_dict(_unit_basis(
+                    _IDENTITY, "workflow-1", _INPUT_MATERIAL, _MATERIAL_ASSESSMENT,
+                    input_kind=ConsensusInputKind.PROMPT,
+                )),
+                authoring_direction={"locator": _UNIT_DIRECTION.locator, "digest": _UNIT_DIRECTION.digest},
                 workflow_id="workflow-1",
                 phase_request_id="request-1",
                 proposal_id="proposal-1",
@@ -257,13 +362,9 @@ class ConsensusProjectionTests(unittest.TestCase):
         )
         request_event = ConsensusEvent("event-request", 1, request)
         decision = self.decision(request, request_event)
-        projected = project_consensus(
-            (request_event, ConsensusEvent("event-decision", 2, decision))
-        )
+        projected = project_consensus((request_event, ConsensusEvent("event-decision", 2, decision)))
         self.assertEqual(projected.state, ConsensusPhaseState.CONFIRMED)
-        self.assertEqual(
-            projected.next_action, ConsensusNextAction.START_CONFIRMED_PHASE
-        )
+        self.assertEqual(projected.next_action, ConsensusNextAction.START_CONFIRMED_PHASE)
         self.assertFalse(projected.publication_allowed)
 
     def test_projection_rejects_stale_free_form_duplicate_and_reordered_history(
@@ -285,19 +386,13 @@ class ConsensusProjectionTests(unittest.TestCase):
             project_consensus(
                 (
                     request_event,
-                    ConsensusEvent(
-                        "event-decision",
-                        2,
-                        replace(decision, request_event_id="other-event"),
-                    ),
+                    ConsensusEvent("event-decision", 2, replace(decision, request_event_id="other-event"),),
                 )
             )
         with self.assertRaisesRegex(ValueError, "reordered or duplicated"):
             project_consensus((decision_event, request_event))
         with self.assertRaisesRegex(ValueError, "reordered or duplicated"):
-            project_consensus(
-                (request_event, ConsensusEvent("event-request", 2, decision))
-            )
+            project_consensus((request_event, ConsensusEvent("event-request", 2, decision)))
 
     def test_every_visible_result_state_has_one_safe_next_action(self) -> None:
         request, _ = self.request()
@@ -387,12 +482,7 @@ class ConsensusProjectionTests(unittest.TestCase):
         )
         for index, (choice, result_state, visible, action) in enumerate(cases):
             with self.subTest(choice=choice, result_state=result_state):
-                decision = self.decision(
-                    request,
-                    request_event,
-                    choice,
-                    confirmation_id=f"confirmation-{index}",
-                )
+                decision = self.decision(request, request_event, choice, confirmation_id=f"confirmation-{index}",)
                 events = [request_event, ConsensusEvent("decision-event", 2, decision)]
                 if result_state is not None:
                     candidate = (
@@ -423,9 +513,7 @@ class ConsensusProjectionTests(unittest.TestCase):
                         )
                     )
                 projected = project_consensus(tuple(events))
-                self.assertEqual(
-                    (projected.state, projected.next_action), (visible, action)
-                )
+                self.assertEqual((projected.state, projected.next_action), (visible, action))
                 self.assertFalse(projected.publication_allowed)
 
     def test_audit_completion_requires_three_ordered_current_revision_audits(
@@ -433,9 +521,7 @@ class ConsensusProjectionTests(unittest.TestCase):
     ) -> None:
         draft, _ = self.request()
         draft_event = ConsensusEvent("draft-request", 1, draft)
-        draft_decision = ConsensusEvent(
-            "draft-decision", 2, self.decision(draft, draft_event)
-        )
+        draft_decision = ConsensusEvent("draft-decision", 2, self.decision(draft, draft_event))
         draft_result = self.result(
             draft,
             draft_decision,
@@ -483,9 +569,7 @@ class ConsensusProjectionTests(unittest.TestCase):
             (replace(self.audits()[0], revision_id="r1"), *self.audits()[1:]),
         ):
             with self.subTest(invalid_audits=invalid_audits):
-                with self.assertRaisesRegex(
-                    ValueError, "three current audits|every specialist|stale"
-                ):
+                with self.assertRaisesRegex(ValueError, "three current audits|every specialist|stale"):
                     self.result(
                         audit,
                         audit_decision,
@@ -533,10 +617,7 @@ class ConsensusProjectionTests(unittest.TestCase):
                     continuation_phases.append(phase)
                 self.assertFalse(deadlock.publication_allowed)
                 self.assertFalse(projection.publication_allowed)
-                self.assertNotIn(
-                    "candidate",
-                    {item.name for item in fields(deadlock)} - {"candidate_digest"},
-                )
+                self.assertNotIn("candidate", {item.name for item in fields(deadlock)} - {"candidate_digest"},)
 
         # Continuation authority remains exposed only for synthesis deadlocks.
         self.assertEqual(continuation_phases, [ConsensusPhase.SYNTHESIS])
@@ -552,6 +633,14 @@ class ConsensusProjectionTests(unittest.TestCase):
                 proposal_id=request.proposal_id,
                 input_kind=ConsensusInputKind.PROMPT,
                 input_material=_INPUT_MATERIAL,
+
+                authoring_admission=_unit_basis(
+                    _IDENTITY,
+                    request.workflow_id,
+                    _INPUT_MATERIAL,
+                    _MATERIAL_ASSESSMENT, input_kind=ConsensusInputKind.PROMPT,
+                ),
+                authoring_direction=_UNIT_DIRECTION,
             ),
             (ConsensusEvent("request-event", 1, request),),
         )
@@ -572,15 +661,12 @@ class ConsensusProjectionTests(unittest.TestCase):
             )
         golden = (Path(__file__).parent / "fixtures/consensus_compatibility/authoring_v3_c20dc40.json").read_bytes()
         self.assertEqual(hashlib.sha256(golden).hexdigest(), "173023d5484c9e85c3ddf2fb2a08bcf3294c85e9a39c0ded51dc4bb96d554d2c")
-        historical = deserialize_consensus_workflow(golden)
-        self.assertEqual(tuple(a.report_material for e in historical.events if type(e.payload) is ConsensusPhaseResult for a in e.payload.audits), (None,) * 3)
+        with self.assertRaises(ValueError):
+            deserialize_consensus_workflow(golden)
+        self.assertEqual(workflow.submission.authoring_admission, request.authoring_admission)
+        self.assertIn(b'"authoring_admission":', encoded)
         for material in (object(), _INPUT_MATERIAL):
             with self.assertRaises((TypeError, ValueError)): replace(self.audits()[0], report_material=material)
-        expected = json.loads(golden)
-        expected["schema_version"] = 4
-        self.assertEqual(json.loads(serialize_consensus_workflow(historical)), expected)
-        self.assertEqual(str(historical.submission.intent), "authoring")
-        self.assertTrue(all(str(event.payload.intent) == "authoring" for event in historical.events if type(event.payload) is ConsensusPhaseRequest))
         report_key = b'"report_material":' + json.dumps({"digest": _CANDIDATE, "locator": f"candidate:{_CANDIDATE}"}, separators=(",", ":")).encode() + b',"audit_digest":'
         for wrong in (golden.replace(b'"input_kind":', b'"intent":"review_only","input_kind":', 1),
                       golden.replace(b'"phase":"draft"', b'"phase":"input_adoption"', 1),
@@ -618,9 +704,7 @@ class ConsensusProjectionTests(unittest.TestCase):
     ) -> None:
         draft, _ = self.request()
         draft_request_event = ConsensusEvent("draft-request", 1, draft)
-        draft_decision = ConsensusEvent(
-            "draft-decision", 2, self.decision(draft, draft_request_event)
-        )
+        draft_decision = ConsensusEvent("draft-decision", 2, self.decision(draft, draft_request_event))
         draft_result = self.result(
             draft,
             draft_decision,
@@ -663,9 +747,7 @@ class ConsensusProjectionTests(unittest.TestCase):
             request_id="request-repair",
         )
         repair_request_event = ConsensusEvent("repair-request", 9, repair)
-        repair_decision = ConsensusEvent(
-            "repair-decision", 10, self.decision(repair, repair_request_event)
-        )
+        repair_decision = ConsensusEvent("repair-decision", 10, self.decision(repair, repair_request_event))
         repair_result = self.result(
             repair,
             repair_decision,
@@ -682,9 +764,7 @@ class ConsensusProjectionTests(unittest.TestCase):
             phase_request_id="request-reaudit",
         )
         self.assertEqual(reaudit.revision_id, "r1")
-        self.assertEqual(
-            reaudit.candidate_material, candidate_material_handle(_REPAIRED)
-        )
+        self.assertEqual(reaudit.candidate_material, candidate_material_handle(_REPAIRED))
         _, review = self.deadlocked_projection(ConsensusPhase.SYNTHESIS, intent=AuthoringIntent.REVIEW_ONLY)
         self.assertEqual((review.next_action, review.publication_allowed, review.review_findings), (ConsensusNextAction.INSPECT_FAILURE, False, "Retained deadlock findings."))
 

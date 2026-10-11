@@ -1,6 +1,12 @@
 """Provider-free tests for typed backend-to-consensus correlation."""
 
 from __future__ import annotations
+from story_writing_agents.specialist_routing import AuthoringIntent
+from tests.test_consensus_projection import (
+    _ADMISSION_BRIEF, _FIXTURE_DRAFT, _FIXTURE_RULING, _FIXTURE_TEXTS, _UNIT_DIRECTION,
+    _USER_ASSESSMENT, _MATERIAL_ASSESSMENT, _RULING_ASSESSMENT, _unit_basis,
+    _qualify_fixture_port, _capture_fixture_direction, _validate_fixture_port,
+)
 
 from dataclasses import replace
 import hashlib
@@ -17,7 +23,7 @@ from story_writing_agents.agents import (
 )
 from story_writing_agents.consensus import (
     ConsensusAuditVerdict,
-    ConsensusPhase,
+    ConsensusPhase, ConsensusInputKind,
     ConsensusPhaseInvocation,
     ConsensusPhaseOutputKind,
 )
@@ -37,7 +43,9 @@ from story_writing_agents.reply_trace import ReplyTrace, ReplyTraceOrigin
 from tests.test_collaboration_events import _reviewed_artifact_proposal
 
 
-_INPUT = artifact_material_handle("manuscript/part-01/source.md", "1" * 64)
+_INPUT = artifact_material_handle("manuscript/part-01/source.md", hashlib.sha256(
+    _ADMISSION_BRIEF.encode(),
+).hexdigest())
 _CANDIDATE = candidate_material_handle("2" * 64)
 _IDENTITY = ConsensusExecutionIdentity("session_a", "conversation_a")
 
@@ -58,6 +66,11 @@ def _invocation(
         candidate_material=(None if phase is ConsensusPhase.DRAFT else _CANDIDATE),
         agent_id=agent_id,
         ordinal=ordinal,
+
+        authoring_admission=_unit_basis(_IDENTITY, "workflow-1", _INPUT, _MATERIAL_ASSESSMENT,
+            input_kind=ConsensusInputKind.PROMPT
+        ),
+        authoring_direction=_UNIT_DIRECTION,
     )
 
 
@@ -95,27 +108,17 @@ class ConsensusRuntimeCorrelationTests(unittest.TestCase):
         )
         content = "new candidate"
         reply = replace(AgentReply.candidate("r0", content), trace=trace)
-        authored = candidate_material_handle(
-            hashlib.sha256(content.encode()).hexdigest()
-        )
+        authored = candidate_material_handle(hashlib.sha256(content.encode()).hexdigest())
 
-        result = StoryRuntime.map_consensus_provider_reply(
-            invocation,
-            reply,
-            authored_material=authored,
-        )
+        result = StoryRuntime.map_consensus_provider_reply(invocation, reply, authored_material=authored,)
 
         self.assertEqual(result.trace, trace)
 
     def test_all_six_routes_map_exact_typed_results(self) -> None:
         candidate_text = "new candidate"
-        authored = candidate_material_handle(
-            hashlib.sha256(candidate_text.encode()).hexdigest()
-        )
+        authored = candidate_material_handle(hashlib.sha256(candidate_text.encode()).hexdigest())
         conflict_text = "continuity conflict"
-        conflict = candidate_material_handle(
-            hashlib.sha256(conflict_text.encode()).hexdigest()
-        )
+        conflict = candidate_material_handle(hashlib.sha256(conflict_text.encode()).hexdigest())
         reviewed = _reviewed_artifact_proposal()
         routes = (
             (
@@ -160,9 +163,7 @@ class ConsensusRuntimeCorrelationTests(unittest.TestCase):
             ),
             (
                 _invocation(ConsensusPhase.FINALIZATION, LEAD_ORCHESTRATOR, 1),
-                AgentReply.finalization(
-                    "r0", reviewed.proposal_id, reviewed.proposal_digest
-                ),
+                AgentReply.finalization("r0", reviewed.proposal_id, reviewed.proposal_digest),
                 None,
                 ConsensusPhaseOutputKind.FINALIZATION,
                 None,
@@ -171,11 +172,7 @@ class ConsensusRuntimeCorrelationTests(unittest.TestCase):
         )
         for invocation, reply, material, kind, verdict, next_phase in routes:
             with self.subTest(phase=invocation.phase):
-                result = StoryRuntime.map_consensus_provider_reply(
-                    invocation,
-                    reply,
-                    authored_material=material,
-                )
+                result = StoryRuntime.map_consensus_provider_reply(invocation, reply, authored_material=material,)
                 self.assertIs(result.kind, kind)
                 self.assertIs(result.audit_verdict, verdict)
                 self.assertIs(result.next_phase, next_phase)
@@ -192,16 +189,12 @@ class ConsensusRuntimeCorrelationTests(unittest.TestCase):
 
     def test_synthesis_next_phase_deadlock_and_mismatches_are_fail_closed(self) -> None:
         invocation = _invocation(ConsensusPhase.SYNTHESIS, LEAD_ORCHESTRATOR, 1)
-        finalization = AgentReply.synthesis(
-            "r0", "ready", AgentReplyNextPhase.FINALIZATION
-        )
+        finalization = AgentReply.synthesis("r0", "ready", AgentReplyNextPhase.FINALIZATION)
         mapped = StoryRuntime.map_consensus_provider_reply(invocation, finalization)
         self.assertIs(mapped.next_phase, ConsensusPhase.FINALIZATION)
 
         deadlock = AgentReply.deadlock("r0", "three audits cannot be reconciled")
-        mapped_deadlock = StoryRuntime.map_consensus_provider_reply(
-            invocation, deadlock
-        )
+        mapped_deadlock = StoryRuntime.map_consensus_provider_reply(invocation, deadlock)
         self.assertIs(mapped_deadlock.kind, ConsensusPhaseOutputKind.DEADLOCK)
         self.assertTrue(mapped_deadlock.deadlocked)
         self.assertIs(mapped_deadlock.candidate_material, _CANDIDATE)
@@ -243,10 +236,7 @@ class ConsensusRuntimeCorrelationTests(unittest.TestCase):
             (ConsensusPhase.FINALIZATION, LEAD_ORCHESTRATOR),
         ):
             with self.subTest(phase=phase):
-                result = StoryRuntime.map_consensus_provider_reply(
-                    _invocation(phase, agent_id, 1),
-                    fallback,
-                )
+                result = StoryRuntime.map_consensus_provider_reply(_invocation(phase, agent_id, 1), fallback,)
                 self.assertIs(result.kind, ConsensusPhaseOutputKind.DEADLOCK)
                 self.assertIs(result.candidate_material, _CANDIDATE)
                 self.assertTrue(result.deadlocked)

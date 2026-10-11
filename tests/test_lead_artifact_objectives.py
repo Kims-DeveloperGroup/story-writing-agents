@@ -18,7 +18,7 @@ from tests import test_artifact_proposal_orchestration as artifact
 from tests import test_lead_orchestration as lead
 from tests import test_lead_artifact_application as application
 from tests import test_lead_story_commit as commit
-from tests.recommendation_fixture import RecommendationCase, action, recommendation
+from tests.recommendation_fixture import RecommendationCase, action, recommendation, task_assessment
 from tests.test_specialist_routing_runtime import ROSTER
 
 
@@ -46,9 +46,12 @@ class LeadArtifactObjectiveTests(RecommendationCase):
         self.backend.enqueue(recommendation(message=brief,
             recommended_action=action(source_ids=(source.event_id,),
                 target_paths=(path,), instruction="Preserve the exact approved draft.", specialist_ids=ROSTER),
-            authoring_scope=lambda call: lead._workflow_material(call.payload)["authoring_tasks"][0]["current_scope"]))
+            authoring_scope=lambda call: lead._workflow_material(call.payload)["authoring_tasks"][0]["current_scope"],
+            authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=("bounded artifact review judgments", "separate exact proposal preparation"))))
         offered = await self.runtime.lead_turn(self.session_id, conversation_id,
-            "Approve the previous draft and prepare it as a new document.")
+            ("Approve the previous draft and prepare it as a new document." + f" Target: {path}. {brief}"
+             + "\nSupplied selected draft:\n" + text
+             + "\nYou may give bounded artifact review judgments and prepare a separate exact proposal; preserve supplied facts. Execution requires separate confirmation."))
         self.assertIs(offered.kind, c.LeadOutcomeKind.RECOMMENDATION, offered)
         request = offered.recommendation_request
         self.assertEqual(request.basis.editorial_refs, (memory.record_ref,))

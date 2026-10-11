@@ -214,11 +214,15 @@ workspace; session policy capture does not redirect those authorities.
 ```python
 StoryRuntime.submit_consensus_prompt(
     session_id: str, conversation_id: str, prompt: str,
-) -> ConsensusRuntimeInspection
+    *, authoring_assessment: AuthoringAssessment | None = None,
+    authoring_direction: str | None = None,
+) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded
 StoryRuntime.submit_consensus_draft(
     session_id: str, conversation_id: str, draft: str,
     *, intent: AuthoringIntent = AuthoringIntent.AUTHORING,
-) -> ConsensusRuntimeInspection
+    authoring_assessment: AuthoringAssessment | None = None,
+    authoring_direction: str | None = None,
+) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded
 StoryRuntime.inspect_consensus(
     session_id: str, conversation_id: str, workflow_id: str,
 ) -> ConsensusRuntimeInspection
@@ -250,7 +254,8 @@ StoryRuntime.continue_consensus_deadlock(
     mode: ConsensusContinuationMode,
     ruling: str,
     added_revision_rounds: int,
-) -> ConsensusRuntimeInspection
+    authoring_assessment: AuthoringAssessment | None = None,
+) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded
 ```
 
 `RuntimeSession` exposes the same names without `session_id`. Its decision
@@ -272,8 +277,52 @@ from story_writing_agents.consensus import (
 )
 ```
 
-Default AUTHORING submission creates a durable DRAFT request without calling a
-provider. Confirming it runs the Execution Specialist, transforming even a supplied
+### Official authoring admission
+
+Import the pure admission values directly; they are not package-root exports:
+
+```python
+from story_writing_agents.authoring_admission import (
+    AuthoringAssessment,
+    AuthoringAdmissionNeeded,
+)
+```
+
+Official drafting requires an assessment of the available story foundations,
+USER direction, bounded creative room, protected constraints, and each required
+decision. Each evidence row names actual offered source IDs and explains their
+relevance. A `sufficient` status, nonempty text, or confidence statement alone
+cannot qualify. Direction and creative delegation must cite USER input; selected
+material and READ results cannot impersonate USER decisions.
+
+The direct specialist advisory and AUTHORING consensus intake methods accept
+keyword-only `authoring_assessment`. Missing or inadequate assessments return
+`AuthoringAdmissionNeeded` before an authoring proposal or phase request is
+created. Inspect its `questions`, `offered_sources`, and `available_source_ids`,
+reuse facts already supplied, ask only for missing information or choices, and
+resubmit with the resulting semantic assessment. Source presence and byte counts
+prove availability, rather than literary adequacy. An empty READ remains offered
+absence evidence; an adequate literal USER brief can supply foundations for an
+empty target.
+
+Consensus prompt and draft intakes also accept optional `authoring_direction`:
+literal USER text stored separately from supplied material. Offered aliases are
+`user_input` for a literal prompt, `input_material` for a supplied draft or selected
+artifact, `user_direction` for this additional USER input, and `ruling_input` for a
+fresh deadlock ruling. Inspect the offered sources before constructing an
+assessment. Supplied material cannot supply USER direction merely because the
+intent is AUTHORING. REVIEW_ONLY rejects `authoring_direction`.
+
+An assessment is untrusted task input. The host binds it to exact source bytes,
+original authority, request, task or workflow, revision, and scope, then checks
+freshness again before confirmed dispatch. It grants no confirmation, review,
+Apply, or Commit authority. A changed synthesis-deadlock ruling requires a fresh
+assessment; the previous ruling's qualification is not copied. REVIEW_ONLY
+consensus and concrete review advisory do not require an authoring assessment.
+Ordinary Lead and exploration adoption obtain this assessment through the existing
+structured front channel.
+
+A qualified AUTHORING submission creates a durable DRAFT request without calling a provider. Confirming it runs the Execution Specialist, transforming even a supplied
 draft into newly authored `r0` before audit. For a supplied draft, opt in with
 `intent=AuthoringIntent.REVIEW_ONLY` to create an INPUT_ADOPTION request instead.
 Its exact confirmation adopts the verified original UTF-8 bytes without provider
@@ -488,7 +537,8 @@ await StoryRuntime.propose_specialist_advisory(
     action_progress_sink: ContextActionProgressSink | None = None,
     authoring_scope: AuthoringScope | None = None,
     review_basis: ReviewBasis | None = None,
-) -> LeadTurnResult
+    authoring_assessment: AuthoringAssessment | None = None,
+) -> LeadTurnResult | AuthoringAdmissionNeeded
 
 await StoryRuntime.decide_lead_recommendation(
     decision: LeadRecommendationDecision,
@@ -1133,6 +1183,8 @@ and omit `review_basis`. Review requires concrete nonempty material; the direct
 supplied-text alias is `user_input`. A status receipt or a request to write a
 candidate is insufficient review material. Confirm the exact returned proposal
 using the decision flow above; this call alone starts no specialist.
+Official drafting also requires `authoring_assessment`; handle the
+`AuthoringAdmissionNeeded` result described above before accessing a proposal.
 
 It returns `awaiting_confirmation` without calling the lead provider. The
 proposal has step kind `specialist_advisory`, one assignment, and zero
@@ -1470,11 +1522,15 @@ RuntimeSession.inspect_reference_operation(
 ) -> ReferenceOperationHistory | None
 RuntimeSession.submit_consensus_prompt(
     conversation_id: str, prompt: str,
-) -> ConsensusRuntimeInspection
+    *, authoring_assessment: AuthoringAssessment | None = None,
+    authoring_direction: str | None = None,
+) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded
 RuntimeSession.submit_consensus_draft(
     conversation_id: str, draft: str,
     *, intent: AuthoringIntent = AuthoringIntent.AUTHORING,
-) -> ConsensusRuntimeInspection
+    authoring_assessment: AuthoringAssessment | None = None,
+    authoring_direction: str | None = None,
+) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded
 RuntimeSession.inspect_consensus(
     conversation_id: str, workflow_id: str,
 ) -> ConsensusRuntimeInspection
@@ -1502,7 +1558,8 @@ RuntimeSession.continue_consensus_deadlock(
     mode: ConsensusContinuationMode,
     ruling: str,
     added_revision_rounds: int,
-) -> ConsensusRuntimeInspection
+    authoring_assessment: AuthoringAssessment | None = None,
+) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded
 await RuntimeSession.lead_turn(
     conversation_id: str,
     text: str,
@@ -1522,7 +1579,8 @@ await RuntimeSession.propose_specialist_advisory(
     action_progress_sink: ContextActionProgressSink | None = None,
     authoring_scope: AuthoringScope | None = None,
     review_basis: ReviewBasis | None = None,
-) -> LeadTurnResult
+    authoring_assessment: AuthoringAssessment | None = None,
+) -> LeadTurnResult | AuthoringAdmissionNeeded
 await RuntimeSession.decide_lead_recommendation(
     decision: LeadRecommendationDecision,
     context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,

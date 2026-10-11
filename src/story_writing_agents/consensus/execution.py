@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from ..authoring_admission import (
+    AuthoringAdmissionBasis,
+)
+
 import asyncio
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -69,7 +73,20 @@ class ConsensusPhaseInvocation:
     continuation: ConsensusContinuation | None = None
     intent: AuthoringIntent = field(default=AuthoringIntent.AUTHORING, kw_only=True)
 
+    authoring_admission: AuthoringAdmissionBasis | None = field(default=None, kw_only=True)
+    authoring_direction: ConsensusMaterialHandle | None = field(default=None, kw_only=True)
+
     def __post_init__(self) -> None:
+        if self.authoring_direction is not None and (
+            type(self.authoring_direction) is not ConsensusMaterialHandle
+            or not self.authoring_direction.locator.startswith("candidate:")
+            or self.intent is AuthoringIntent.REVIEW_ONLY
+        ):
+            raise ValueError("consensus USER direction requires actual authoring input")
+        if self.intent is AuthoringIntent.AUTHORING and type(self.authoring_admission) is not AuthoringAdmissionBasis:
+            raise ValueError("official consensus invocation requires authoring admission")
+        if self.intent is AuthoringIntent.REVIEW_ONLY and self.authoring_admission is not None:
+            raise ValueError("review-only invocation cannot acquire authoring admission")
         if type(self.intent) is not AuthoringIntent:
             raise TypeError("consensus invocation intent is invalid")
         if self.phase in {ConsensusPhase.INPUT_ADOPTION, ConsensusPhase.REVIEW_COMPLETION}:
@@ -433,6 +450,8 @@ class ConsensusExecutionCoordinator:
         )
         for ordinal, agent_id in enumerate(agents, start=1):
             invocation = ConsensusPhaseInvocation(
+                authoring_admission=request.authoring_admission,
+                authoring_direction=request.authoring_direction,
                 workflow_id=request.workflow_id,
                 phase_request_id=request.phase_request_id,
                 proposal_id=request.proposal_id,

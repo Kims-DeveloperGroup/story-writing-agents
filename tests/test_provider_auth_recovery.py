@@ -11,7 +11,7 @@ import tempfile
 import threading
 import unittest
 from contextlib import asynccontextmanager
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from unittest import mock
 
@@ -590,12 +590,18 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
                     self.fail("closed activity admitted")
 
     async def test_specialist_auth_failure_preserves_completed_siblings_and_durable_outcome(self):
+        from tests.recommendation_fixture import task_assessment
         from story_writing_agents.conversations import project_collaboration_history
 
         for safe in (True, False):
             with self.subTest(proved_preturn_rejection=safe):
                 conversation = self.conversation("Known rejection" if safe else "Uncertain submission")
-                proposed = await self.proposal(conversation, assignments=_assignments(PLOT_ARCHITECT, CHARACTER_CUSTODIAN))
+                proposed = await self.proposal(conversation, assignments=_assignments(PLOT_ARCHITECT, CHARACTER_CUSTODIAN), text=(
+                'Please check the story direction.\nSupplied story facts: Mara wants safety and fears exposure. '
+                'Review the story direction against those facts and the exact requested references. You may give '
+                'bounded story-direction review judgments; preserve supplied facts and do not write files. Execution '
+                'requires separate exact confirmation.'
+            ), authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded story-direction review judgments',))))
                 failure = auth_failure("codex", safe=safe)
                 self.backend.enqueue_for(PLOT_ARCHITECT, lead._SubmittedFailure(failure, submission_uncertain=not safe))
                 self.backend.enqueue_for(CHARACTER_CUSTODIAN, lead._specialist_outcome())
@@ -686,8 +692,14 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
         )
 
     async def test_parallel_specialists_resume_without_duplicate_dispatch_or_synthesis(self):
+        from tests.recommendation_fixture import task_assessment
         conversation = self.conversation()
-        proposed = await self.proposal(conversation, assignments=_assignments(PLOT_ARCHITECT, CHARACTER_CUSTODIAN))
+        proposed = await self.proposal(conversation, assignments=_assignments(PLOT_ARCHITECT, CHARACTER_CUSTODIAN), text=(
+                'Please check the story direction.\nSupplied story facts: Mara wants safety and fears exposure. '
+                'Review the story direction against those facts and the exact requested references. You may give '
+                'bounded story-direction review judgments; preserve supplied facts and do not write files. Execution '
+                'requires separate exact confirmation.'
+            ), authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded story-direction review judgments',))))
         original = lead._LeadContextProvider.invoke_context
         failed = set()
         both_active = asyncio.Event()

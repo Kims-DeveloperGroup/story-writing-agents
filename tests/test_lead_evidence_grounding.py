@@ -1,17 +1,20 @@
 """Exhaustive acceptance coverage for runtime-grounded lead judgments."""
 
 from __future__ import annotations
+from story_writing_agents import authoring_admission as admission
+from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
+
 from tests.test_lead_orchestration import _exploration_outcome, _read_history_hit
 from story_writing_agents import lead_exploration as exploration
 import hashlib
 
 import json
 import unittest
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 from story_writing_agents import StoryRuntime
 from story_writing_agents.agent_context.service import ContextProviderTerminalCode
-from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT
+from story_writing_agents.agents import EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR, PLOT_ARCHITECT
 from story_writing_agents.conversations import (
     CollaborationAppendError,
     CollaborationEvidenceAcquisition,
@@ -49,7 +52,7 @@ from tests.test_lead_orchestration import (
     _live_scope,
     _provider_envelope,
     _specialist_outcome,
-    _synthesis_outcome,
+    _submitted_calls, _synthesis_outcome,
     _visible_outcome,
 )
 from tests.collaboration_contract_fixture import (
@@ -78,20 +81,13 @@ def _attached(
     ranged: bool = False,
 ) -> CollaborationEvidenceReceipt:
     return CollaborationEvidenceReceipt(
-        evidence_id=evidence_id,
-        acquisition=CollaborationEvidenceAcquisition.ATTACHED_REFERENCE,
-        operation_id=_OPERATION,
-        result_correlation_id=_RESULT,
-        manifest_digest=_DIGEST_A,
-        source_id=f"source_{ordinal}",
-        source_kind=CollaborationInputKind.CORE_DOCUMENT,
-        locator=locator,
-        source_state=CollaborationInputState.PRESENT,
-        revision_digest=_DIGEST_A,
-        content_digest=_DIGEST_B,
-        utf8_bytes=utf8_bytes,
-        boundary_kind="artifact_lines" if ranged else "whole",
-        boundary_start=2 if ranged else None,
+        evidence_id=evidence_id, acquisition=CollaborationEvidenceAcquisition.ATTACHED_REFERENCE,
+        operation_id=_OPERATION, result_correlation_id=_RESULT,
+        manifest_digest=_DIGEST_A, source_id=f"source_{ordinal}",
+        source_kind=CollaborationInputKind.CORE_DOCUMENT, locator=locator,
+        source_state=CollaborationInputState.PRESENT, revision_digest=_DIGEST_A,
+        content_digest=_DIGEST_B, utf8_bytes=utf8_bytes,
+        boundary_kind="artifact_lines" if ranged else "whole", boundary_start=2 if ranged else None,
         boundary_end=3 if ranged else None,
         start_line=2 if ranged else None,
         end_line=3 if ranged else None,
@@ -106,15 +102,10 @@ def _core_status(
     utf8_bytes: int = 10,
 ) -> CollaborationEvidenceReceipt:
     absent = state is CollaborationInputState.ABSENT
-    return CollaborationEvidenceReceipt(
-        evidence_id=evidence_id,
-        acquisition=CollaborationEvidenceAcquisition.CORE_STATUS,
-        operation_id=_OPERATION,
-        result_correlation_id=_RESULT,
-        manifest_digest=_DIGEST_A,
-        source_id=f"source_{evidence_id}",
-        source_kind=CollaborationInputKind.CORE_DOCUMENT,
-        locator=f"core_documents/{evidence_id}.md",
+    return CollaborationEvidenceReceipt(evidence_id=evidence_id,
+        acquisition=CollaborationEvidenceAcquisition.CORE_STATUS, operation_id=_OPERATION,
+        result_correlation_id=_RESULT, manifest_digest=_DIGEST_A, source_id=f"source_{evidence_id}",
+        source_kind=CollaborationInputKind.CORE_DOCUMENT, locator=f"core_documents/{evidence_id}.md",
         source_state=state,
         revision_digest=None if absent else _DIGEST_A,
         content_digest=None if absent else _DIGEST_B,
@@ -159,10 +150,7 @@ def _evidence_for(
         receipts = (_attached(),)
     elif status is LeadEvidenceStatus.MISSING:
         receipts = (
-            _core_status(
-                evidence_id="status_2",
-                state=CollaborationInputState.ABSENT,
-            ),
+            _core_status(evidence_id="status_2", state=CollaborationInputState.ABSENT,),
         )
     elif status is LeadEvidenceStatus.EMPTY:
         receipts = (_core_status(utf8_bytes=0),)
@@ -171,12 +159,7 @@ def _evidence_for(
     else:
         receipts = (
             _attached(),
-            _attached(
-                "reference_2",
-                locator="${manuscript/part-01/opening.md}#L2-L3",
-                ordinal=2,
-                ranged=True,
-            ),
+            _attached("reference_2", locator="${manuscript/part-01/opening.md}#L2-L3", ordinal=2, ranged=True,),
         )
     return CollaborationLeadEvidence(scope, status, receipts)
 
@@ -225,26 +208,14 @@ class DurableLeadEvidenceMatrixTests(unittest.TestCase):
                         scope is LeadOutcomeScope.STORY_SPECIFIC
                         and kind in allowed_story.get(status, set())
                     )
-                    with self.subTest(
-                        scope=scope.value,
-                        status=status.value,
-                        kind=kind.value,
-                    ):
+                    with self.subTest(scope=scope.value, status=status.value, kind=kind.value,):
                         if expected:
-                            payload = CollaborationLeadJudgmentPayload(
-                                kind,
-                                "Visible lead judgment.",
-                                evidence,
-                            )
+                            payload = CollaborationLeadJudgmentPayload(kind, "Visible lead judgment.", evidence,)
                             self.assertIs(payload.evidence, evidence)
                             accepted += 1
                         else:
                             with self.assertRaises(ValueError):
-                                CollaborationLeadJudgmentPayload(
-                                    kind,
-                                    "Visible lead judgment.",
-                                    evidence,
-                                )
+                                CollaborationLeadJudgmentPayload(kind, "Visible lead judgment.", evidence,)
                             rejected += 1
         self.assertEqual((accepted, rejected), (23, 37))
 
@@ -322,12 +293,15 @@ def _search(query: str, kinds: list[str]):
     return respond
 
 
-def _missing_outcome(*, proposal: bool = False):
+def _missing_outcome(*, proposal: bool = False, authoring_assessment=None):
     def respond(call, _provider):
         observation = call.payload["context_observation"]
         assert observation["observation_type"] == "context_search_results" and observation["zero_hit_receipt"] is not None
         value = {
-                "recommended_action": None if proposal else {"kind": "prepare_consultation", "purpose": "Check the missing evidence.",
+                **({"authoring_assessment": admission.assessment_to_dict(authoring_assessment)}
+                if authoring_assessment is not None else {}),
+            "recommended_action": None if proposal else {"kind": "prepare_consultation",
+                "purpose": "Check the missing evidence.",
                 "instruction": "Prepare an exact consultation for the disclosed user input.",
                 "expected_result": "A separate consultation confirmation request.",
                 "source_ids": ["user_input"], "target_paths": [],
@@ -339,9 +313,7 @@ def _missing_outcome(*, proposal: bool = False):
             "evidence_ids": [observation["zero_hit_receipt"]["evidence_id"]],
             "artifact_intent": None,
             "objective_intent": None,
-            "authoring_scope": _live_scope(
-                call, activity="review", domains=("plot_structure",)
-            ),
+            "authoring_scope": _live_scope(call, activity="review", domains=("plot_structure",)),
             "proposal": (
                 {
                     "relation": "new_step",
@@ -364,7 +336,7 @@ def _missing_outcome(*, proposal: bool = False):
     return respond
 
 
-def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False):
+def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False, authoring_assessment=None):
     def respond(call, _provider):
         aliases = call.payload["task_input"]["available_input_sources"]
         target_paths = tuple(
@@ -373,6 +345,8 @@ def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False):
             if item["input_source_id"] != "user_input"
         )
         return _provider_envelope(call, {
+            **({"authoring_assessment": admission.assessment_to_dict(authoring_assessment)}
+               if authoring_assessment is not None else {}),
             "kind": "question" if factual else "proposal",
             "message": "The reference is empty. What candidate material should be reviewed?" if factual else "The supplied outline and manuscript candidates require review.",
             "scope": "story_specific", "evidence_status": status, "evidence_ids": evidence_ids,
@@ -402,14 +376,12 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         for index, kinds in enumerate((["w"], ["w", "c"], ["c"])):
             with self.subTest(kinds=kinds):
                 conversation_id = self.conversation(f"Zero hit {index}")
-                self.backend.enqueue(
-                    _search("phrase absent from every source", kinds),
-                    _missing_outcome(),
-                )
+                self.backend.enqueue(_search("phrase absent from every source", kinds),
+                    _missing_outcome(authoring_assessment=_fixture_assessment()),)
                 result = await self.runtime.lead_turn(
                     self.session_id,
                     conversation_id,
-                    "Check for absent evidence.",
+                    _ADMISSION_BRIEF + "\n" + "Check for absent evidence.",
                 )
                 self.assertIs(result.kind, LeadOutcomeKind.RECOMMENDATION)
                 self.assertIsNotNone(result.evidence)
@@ -451,15 +423,10 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         conversation_id = self.conversation("Content-free zero hit")
-        self.backend.enqueue(
-            _search("private internal search phrase", ["w"]),
-            _missing_outcome(),
-        )
-        result = await self.runtime.lead_turn(
-            self.session_id,
-            conversation_id,
-            "Check canonical artifacts.",
-        )
+        self.backend.enqueue(_search("private internal search phrase", ["w"]),
+            _missing_outcome(authoring_assessment=_fixture_assessment()),)
+        result = await self.runtime.lead_turn(self.session_id, conversation_id,
+            _ADMISSION_BRIEF + "\n" + "Check canonical artifacts.",)
         self.assertIs(result.kind, LeadOutcomeKind.RECOMMENDATION)
         self.assertIsNotNone(result.recommendation_request)
         self.assertIsNotNone(result.evidence)
@@ -470,9 +437,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             if receipt.acquisition is CollaborationEvidenceAcquisition.ZERO_HIT_SEARCH
         )
         self.assertEqual(len(zero_hits), 1)
-        wire = b"\n".join(
-            encode_collaboration_event(event) for event in self.history(conversation_id)
-        )
+        wire = b"\n".join(encode_collaboration_event(event) for event in self.history(conversation_id))
         for forbidden in (
             b"private internal search phrase",
             b"Outline first line",
@@ -487,6 +452,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
     async def test_mixed_zero_hit_survives_self_appended_history_without_mutation(
         self,
     ) -> None:
+        from tests.recommendation_fixture import task_assessment
         conversation_id = self.conversation("Stable mixed zero hit")
         before = {
             path.relative_to(self.workspace.root): path.read_bytes()
@@ -494,18 +460,20 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         }
         self.backend.enqueue(
             _search("phrase absent from every source", ["w", "c"]),
-            _missing_outcome(proposal=True),
+            _missing_outcome(proposal=True, authoring_assessment=task_assessment(foundation_ids=('user_input',), actions=('bounded missing-evidence review judgments',))),
         )
         proposed = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
-            "Confirm an absent artifact fact.",
+            ("Confirm an absent artifact fact." + (
+                '\nSupplied facts: Mara wants safety and fears exposure. Assess only the missing evidence claim '
+                'against these facts. You may give bounded missing-evidence review judgments; do not invent an '
+                'absent artifact. Execution requires separate exact confirmation.'
+            )),
         )
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
-        completed = await self.runtime.decide_lead_step(
-            _decision(proposed, self._confirm_decision())
-        )
+        completed = await self.runtime.decide_lead_step(_decision(proposed, self._confirm_decision()))
         self.assertIs(completed.turn.state, CollaborationStepState.COMPLETED)
         after = {
             path.relative_to(self.workspace.root): path.read_bytes()
@@ -526,22 +494,18 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         conversation_id = self.conversation("Zero hit drift")
-        self.backend.enqueue(
-            _search("phrase absent from every source", ["w"]),
-            _missing_outcome(proposal=True),
-        )
+        self.backend.enqueue(_search("phrase absent from every source", ["w"]), _missing_outcome(proposal=True,
+            authoring_assessment=_fixture_assessment()),)
         proposed = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
-            "Confirm an absent writing artifact fact.",
+            _ADMISSION_BRIEF + "\n" + "Confirm an absent writing artifact fact.",
         )
         new_artifact = self.workspace.path("manuscript/part-01/new-evidence.md")
         new_artifact.write_text("New evidence.\n", encoding="utf-8")
         calls_before = len(self.backend.calls)
         with self.assertRaises(BackendProtocolError):
-            await self.runtime.decide_lead_step(
-                _decision(proposed, self._confirm_decision())
-            )
+            await self.runtime.decide_lead_step(_decision(proposed, self._confirm_decision()))
         self.assertEqual(len(self.backend.calls), calls_before)
 
     async def test_whole_and_range_conflict_bind_proposal_and_detect_drift(
@@ -552,6 +516,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             _referenced_outcome(
                 status="conflicting",
                 evidence_ids=["reference_1", "reference_2"],
+                authoring_assessment=_fixture_assessment(foundation_ids=("reference_1", "reference_2")),
             )
         )
         result = await self.runtime.lead_turn(
@@ -559,7 +524,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             conversation_id,
             (
                 "Compare ${core_documents/global_outline.md} with "
-                "${manuscript/part-01/opening.md}#L2-L3."
+                "${manuscript/part-01/opening.md}#L2-L3." + "\n" + _ADMISSION_BRIEF
             ),
         )
         assert result.evidence is not None and result.proposal is not None
@@ -569,27 +534,21 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             if item.acquisition
             is CollaborationEvidenceAcquisition.ATTACHED_REFERENCE
         )
-        self.assertEqual(
-            tuple(item.boundary_kind for item in attached),
-            ("whole", "artifact_lines"),
-        )
-        self.assertEqual(
-            tuple((item.start_line, item.end_line) for item in attached),
-            ((None, None), (2, 3)),
-        )
+        self.assertEqual(tuple(item.boundary_kind for item in attached), ("whole", "artifact_lines"),)
+        self.assertEqual(tuple((item.start_line, item.end_line) for item in attached), ((None, None), (2, 3)),)
         self.assertEqual(result.proposal.basis.evidence, result.evidence)
-        self.assertEqual(
-            collaboration_proposal_digest(result.proposal),
-            result.proposal.proposal_digest,
-        )
-        self.workspace.path("manuscript/part-01/opening.md").write_text(
-            "Opening changed.\n",
-            encoding="utf-8",
-        )
+        basis = result.proposal.basis.authoring_admission
+        read_facts = tuple(v for v in basis.sources if v.kind is admission.AdmissionSourceKind.READ)
+        self.assertEqual(tuple(v.source_id for v in read_facts), ("reference_1", "reference_2"))
+        self.assertEqual(tuple(v.utf8_bytes for v in read_facts), tuple(v.utf8_bytes for v in attached))
+        self.assertTrue(all(v.original_authority == "actual_read" for v in read_facts))
+        self.assertEqual(tuple(v.source_identity for v in read_facts), tuple(
+            v.operation_id + "/" + v.result_correlation_id + "/" + v.evidence_id for v in attached))
+
+        self.assertEqual(collaboration_proposal_digest(result.proposal), result.proposal.proposal_digest,)
+        self.workspace.path("manuscript/part-01/opening.md").write_text("Opening changed.\n", encoding="utf-8",)
         with self.assertRaises(BackendProtocolError):
-            await self.runtime.decide_lead_step(
-                _decision(result, self._confirm_decision())
-            )
+            await self.runtime.decide_lead_step(_decision(result, self._confirm_decision()))
         path = self.workspace.path("manuscript/part-01/exploration.md")
         path.write_text("current-exploration-evidence\nSecond line.\n", encoding="utf-8")
         observed = []
@@ -613,9 +572,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         empty = self.workspace.path("manuscript/part-01/empty.md")
         empty.write_bytes(b"")
         conversation_id = self.conversation("Empty whole")
-        self.backend.enqueue(
-            _referenced_outcome(status="empty", evidence_ids=["reference_1"], factual=True)
-        )
+        self.backend.enqueue(_referenced_outcome(status="empty", evidence_ids=["reference_1"], factual=True))
         result = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
@@ -628,6 +585,17 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         self.assertEqual(result.evidence.receipts[0].utf8_bytes, 0)
         self.assertEqual(result.evidence.receipts[0].boundary_kind, "whole")
 
+        self.backend.enqueue(_referenced_outcome(
+            status="empty", evidence_ids=["reference_1"],
+            authoring_assessment=_fixture_assessment(foundation_ids=("reference_1",)),
+        ))
+        unqualified = await self.runtime.lead_turn(
+            self.session_id, self.conversation("Empty READ foundation"),
+            "Use ${manuscript/part-01/empty.md} as the sole foundation.\n" + _ADMISSION_BRIEF,
+        )
+        self.assertIsNone(unqualified.proposal)
+        self.assertIs(unqualified.next_action, CollaborationNextAction.REPLY_TO_LEAD)
+        self.assertEqual(unqualified.evidence.receipts[0].utf8_bytes, 0)
         failures = (
             (
                 "Review ${manuscript/part-01/missing.md}.",
@@ -642,73 +610,100 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             with self.subTest(code=code.value):
                 failed_id = self.conversation(f"Reference failure {index}")
                 with self.assertRaises(ReferenceOperationFailure) as raised:
-                    await self.runtime.lead_turn(
-                        self.session_id,
-                        failed_id,
-                        text,
-                    )
+                    await self.runtime.lead_turn(self.session_id, failed_id, text,)
                 self.assertIs(raised.exception.code, code)
 
-    async def test_unknown_duplicate_reordered_and_prior_turn_ids_fail_once(
-        self,
-    ) -> None:
-        def invalid(ids: list[str]):
+    async def test_unknown_duplicate_reordered_and_prior_turn_ids_fail_once(self) -> None:
+        def selected_sources(ids: list[str], *, references: bool = False):
             def respond(call, _provider):
                 self.assertEqual(
                     [item["evidence_id"] for item in call.payload["core_document_statuses"]],
                     ["status_1", "status_2", "status_3", "status_4"],
                 )
-                return _provider_envelope(
-                    call,
-                    {
-                "recommended_action": {"kind": "prepare_consultation", "purpose": "Check the missing evidence.",
-                "instruction": "Prepare an exact consultation for the disclosed user input.",
-                "expected_result": "A separate consultation confirmation request.",
-                "source_ids": ["user_input"], "target_paths": [],
-                "specialist_ids": [PLOT_ARCHITECT], "objective_id": None},
-                        "kind": "recommendation",
-                        "message": "Invalid evidence must close this turn.",
-                        "scope": "story_specific",
-                        "evidence_status": "missing",
-                        "evidence_ids": ids,
-                        "artifact_intent": None,
-                "objective_intent": None,
-                        "proposal": None,
-                    },
+                offered = {item["input_source_id"] for item in call.payload["task_input"][
+                    "available_input_sources"]}
+                self.assertIn("user_input", offered)
+                if references:
+                    self.assertTrue({"reference_1", "reference_2"}.issubset(offered))
+                else:
+                    self.assertTrue(set(ids).isdisjoint(offered))
+                assessment = _fixture_assessment(
+                    foundation_ids=("reference_1", "reference_2") if references else ("user_input",),
                 )
-
+                response = _provider_envelope(call, {
+                    "authoring_assessment": admission.assessment_to_dict(assessment),
+                    "authoring_scope": _live_scope(call, activity="review", domains=("plot_structure",
+                        "tone_execution"),
+                                                  paths=("core_documents/global_outline.md",
+                                                      "manuscript/part-01/opening.md")),
+                    "recommended_action": {
+                        "kind": "prepare_consultation",
+                        "purpose": "Check the exact current source selection.",
+                        "instruction": "Prepare an exact consultation for the disclosed user input.",
+                        "expected_result": "A separate consultation confirmation request.",
+                        "source_ids": ids,
+                        "target_paths": ["core_documents/global_outline.md"],
+                        "specialist_ids": [PLOT_ARCHITECT, EXECUTION_SPECIALIST],
+                        "objective_id": None,
+                    },
+                    "kind": "recommendation",
+                    "message": "The current contract determines whether this source selection is admissible.",
+                    "scope": "story_specific",
+                    "evidence_status": "verified" if references else "missing",
+                    "artifact_intent": None,
+                    "objective_intent": None,
+                    "proposal": None,
+                })
+                self.assertEqual(json.loads(response)["action"]["result"]["recommended_action"]["source_ids"], ids)
+                return response
             return respond
 
-        for index, ids in enumerate(
-            (
-                ["provider_fact"],
-                ["status_2", "status_2"],
-                ["status_2", "status_1"],
-            )
-        ):
+        for index, ids in enumerate((
+            ["provider_fact"], ["reference_1", "reference_1"], ["reference_2", "reference_1"],
+        )):
             with self.subTest(ids=ids):
-                conversation_id = self.conversation(f"Invalid evidence IDs {index}")
-                self.backend.enqueue(invalid(ids))
-                self.backend.enqueue(invalid(ids))
+                conversation_id = self.conversation(f"Current source selection {index}")
+                self.backend.enqueue(selected_sources(ids, references=True))
+                if index != 2:
+                    self.backend.enqueue(selected_sources(ids, references=True))
                 result = await self.runtime.lead_turn(
-                    self.session_id,
-                    conversation_id,
-                    "Reject invalid evidence IDs.",
+                    self.session_id, conversation_id,
+                    _ADMISSION_BRIEF +
+                        "\nUse ${core_documents/global_outline.md} ${manuscript/part-01/opening.md}#L2-L3.",
                 )
-                self.assertIs(
-                    result.next_action,
-                    CollaborationNextAction.CONTINUE_WITH_LEAD,
-                )
-                failure_payloads = tuple(
-                    event.payload
-                    for event in self.history(conversation_id)
-                    if type(event.payload) is CollaborationLeadOutcomeFailurePayload
-                )
-                self.assertEqual(len(failure_payloads), 1)
-                self.assertIs(
-                    failure_payloads[0].code,
-                    CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED,
-                )
+                failure_payloads = tuple(event.payload for event in self.history(conversation_id)
+                                         if type(event.payload) is CollaborationLeadOutcomeFailurePayload)
+                self.assertEqual(len(failure_payloads), 0 if index == 2 else 1)
+                self.assertEqual(len(_submitted_calls(self.history(conversation_id))), 1 if index == 2 else 2)
+                if index == 2:
+                    self.assertIs(result.kind, LeadOutcomeKind.RECOMMENDATION)
+                    self.assertIsNotNone(result.recommendation_request, result)
+                    attached = tuple(item for item in result.evidence.receipts
+                                     if item.acquisition is CollaborationEvidenceAcquisition.ATTACHED_REFERENCE)
+                    self.assertEqual(tuple(item.evidence_id for item in attached), ("reference_1", "reference_2"))
+                    self.assertEqual(tuple(item.locator for item in attached), (
+                        "${core_documents/global_outline.md}", "${manuscript/part-01/opening.md}#L2-L3",
+                    ))
+                    self.assertEqual(result.recommendation_request.basis.evidence, result.evidence)
+                    basis = result.recommendation_request.basis.authoring_admission
+                    self.assertIsNotNone(basis)
+                    reads = tuple(item for item in basis.sources
+                        if item.kind is admission.AdmissionSourceKind.READ)
+                    self.assertEqual(tuple(item.source_id for item in reads), ("reference_1", "reference_2"))
+                    self.assertEqual(tuple(item.source_identity for item in reads),
+                                     tuple(item.operation_id + "/" + item.result_correlation_id + "/" +
+                                         item.evidence_id
+                                           for item in attached))
+                    self.assertEqual(tuple(item.utf8_bytes for item in reads),
+                        tuple(item.utf8_bytes for item in attached))
+                    self.assertTrue(all(item.original_authority for item in reads))
+                else:
+                    self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
+                    self.assertIs(failure_payloads[0].code,
+                        CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED)
+                    source_rule = ("expected nonempty unique offered source aliases" if index == 1
+                        else "select only frozen offered aliases or evidence IDs from completed authorized READs")
+                    self.assertIn(source_rule, "\n".join(result.validation_details))
 
         prior_evidence_ids: list[str] = []
 
@@ -730,53 +725,37 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             return _provider_envelope(
                 call,
                 {
-                    "recommended_action": None,
-                    "kind": "answer",
-                    "message": "The current READ supports this answer.",
-                    "scope": "story_specific",
-                    "evidence_status": "verified",
-                    "evidence_ids": [evidence_id],
-                    "artifact_intent": None,
+                    "recommended_action": None, "kind": "answer",
+                    "message": "The current READ supports this answer.", "scope": "story_specific",
+                    "evidence_status": "verified", "evidence_ids": [evidence_id], "artifact_intent": None,
                 "objective_intent": None,
                     "proposal": None,
-                },
-                used_handles=provider.used_handles,
+                }, used_handles=provider.used_handles,
             )
 
         conversation_id = self.conversation("Stale prior-turn evidence")
-        self.backend.enqueue(
-            _search("Outline", ["w"]),
-            read_prior_turn,
-            answer_prior_turn,
-        )
-        first = await self.runtime.lead_turn(
-            self.session_id,
-            conversation_id,
-            "Read current evidence.",
-        )
+        self.backend.enqueue(_search("Outline", ["w"]), read_prior_turn, answer_prior_turn)
+        first = await self.runtime.lead_turn(self.session_id, conversation_id, "Read current evidence.")
         self.assertIs(first.kind, LeadOutcomeKind.ANSWER)
         self.assertEqual(first.message, "The current READ supports this answer.")
         self.assertEqual(len(prior_evidence_ids), 1)
 
-        self.backend.enqueue(invalid(prior_evidence_ids))
-        self.backend.enqueue(invalid(prior_evidence_ids))
+        self.backend.enqueue(selected_sources(prior_evidence_ids))
+        self.backend.enqueue(selected_sources(prior_evidence_ids))
         stale = await self.runtime.lead_turn(
-            self.session_id,
-            conversation_id,
-            "Reject evidence issued to the prior invocation.",
+            self.session_id, conversation_id,
+            _ADMISSION_BRIEF + "\nReject evidence issued to the prior invocation.",
         )
-        self.assertIs(
-            stale.next_action,
-            CollaborationNextAction.CONTINUE_WITH_LEAD,
-        )
-        self.assertEqual(
-            sum(
-                event.turn_id == stale.turn_id
-                and event.kind is CollaborationEventKind.LEAD_OUTCOME_FAILURE
-                for event in self.history(conversation_id)
-            ),
-            1,
-        )
+        self.assertIs(stale.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
+        self.assertEqual(sum(event.turn_id == stale.turn_id
+            and event.kind is CollaborationEventKind.LEAD_OUTCOME_FAILURE
+                             for event in self.history(conversation_id)), 1)
+        failure = next(event.payload for event in self.history(conversation_id)
+                       if event.turn_id == stale.turn_id and type(
+                           event.payload) is CollaborationLeadOutcomeFailurePayload)
+        self.assertIs(failure.code, CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED)
+        self.assertIn("select only frozen offered aliases or evidence IDs from completed authorized READs",
+                      "\n".join(stale.validation_details))
 
     async def test_unread_and_truncated_search_fall_back_while_reads_attach_locally(
         self,
@@ -785,13 +764,9 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             return _provider_envelope(
                 call,
                 {
-                    "recommended_action": None,
-                    "kind": "answer",
-                    "message": "Correction still claims unread evidence.",
-                    "scope": "story_specific",
-                    "evidence_status": "verified",
-                    "evidence_ids": ["invented"],
-                    "artifact_intent": None,
+                    "recommended_action": None, "kind": "answer",
+                    "message": "Correction still claims unread evidence.", "scope": "story_specific",
+                    "evidence_status": "verified", "evidence_ids": ["invented"], "artifact_intent": None,
                 "objective_intent": None,
                     "proposal": None,
                 },
@@ -803,12 +778,8 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             return _provider_envelope(
                 call,
                 {
-                    "recommended_action": None,
-                    "kind": "answer",
-                    "message": "A SEARCH hit is not READ evidence.",
-                    "scope": "story_specific",
-                    "evidence_status": "verified",
-                    "evidence_ids": ["search_1"],
+                    "recommended_action": None, "kind": "answer", "message": "A SEARCH hit is not READ evidence.",
+                    "scope": "story_specific", "evidence_status": "verified", "evidence_ids": ["search_1"],
                     "artifact_intent": None,
                 "objective_intent": None,
                     "proposal": None,
@@ -832,17 +803,13 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             return _provider_envelope(
                 call,
                 {
-                    "recommended_action": None,
-                    "kind": "answer",
-                    "message": "An unused READ cannot ground this answer.",
-                    "scope": "story_specific",
-                    "evidence_status": "verified",
-                    "evidence_ids": [observation["read_results"][0]["evidence_id"]],
+                    "recommended_action": None, "kind": "answer",
+                    "message": "An unused READ cannot ground this answer.", "scope": "story_specific",
+                    "evidence_status": "verified", "evidence_ids": [observation["read_results"][0]["evidence_id"]],
                     "artifact_intent": None,
                 "objective_intent": None,
                     "proposal": None,
-                },
-                used_handles=(),
+                }, used_handles=(),
             )
 
         cases = (
@@ -858,10 +825,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 conversation_id,
                 "Do not accept unread evidence.",
             )
-            self.assertIs(
-                result.next_action,
-                CollaborationNextAction.CONTINUE_WITH_LEAD,
-            )
+            self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD,)
 
         for index in range(12):
             self.workspace.path(f"manuscript/part-01/shared-{index}.md").write_text(
@@ -874,20 +838,14 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             return answer_with_unread_id(call, provider)
 
         conversation_id = self.conversation("Truncated search")
-        self.backend.enqueue(
-            _search("Shared grounding phrase", ["w"]),
-            truncated_answer,
-        )
+        self.backend.enqueue(_search("Shared grounding phrase", ["w"]), truncated_answer,)
         self.backend.enqueue(invalid_correction)
         result = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
             "Reject truncated search evidence.",
         )
-        self.assertIs(
-            result.next_action,
-            CollaborationNextAction.CONTINUE_WITH_LEAD,
-        )
+        self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD,)
 
     async def test_validation_failure_closes_once_and_restart_uses_fresh_turn(
         self,
@@ -896,15 +854,10 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
 
         def incomplete(call, _provider):
             del call, _provider
-            return json.dumps(
-                {"action": {"kind": "answer", "result": {}}},
-                separators=(",", ":"),
-            )
+            return json.dumps({"action": {"kind": "answer", "result": {}}}, separators=(",", ":"),)
 
         self.backend.enqueue(incomplete)
-        self.backend.enqueue(
-            _visible_outcome("answer", "Corrected complete direct answer.")
-        )
+        self.backend.enqueue(_visible_outcome("answer", "Corrected complete direct answer."))
         corrected = await self.runtime.lead_turn(
             self.session_id,
             incomplete_id,
@@ -926,10 +879,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             ),
         )
         self.assertFalse(
-            any(
-                event.kind is CollaborationEventKind.LEAD_OUTCOME_FAILURE
-                for event in self.history(incomplete_id)
-            )
+            any(event.kind is CollaborationEventKind.LEAD_OUTCOME_FAILURE for event in self.history(incomplete_id))
         )
 
         conversation_id = self.conversation("Retry after exhausted correction")
@@ -952,77 +902,43 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         self.backend.enqueue(invented)
         self.backend.enqueue(invented)
         calls_before = len(self.backend.calls)
-        failed = await self.runtime.lead_turn(
-            self.session_id,
-            conversation_id,
-            "Reject invented evidence.",
-        )
-        self.assertIs(
-            failed.next_action,
-            CollaborationNextAction.CONTINUE_WITH_LEAD,
-        )
+        failed = await self.runtime.lead_turn(self.session_id, conversation_id, "Reject invented evidence.",)
+        self.assertIs(failed.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD,)
         self.assertEqual(len(self.backend.calls) - calls_before, 2)
         first_history = self.history(conversation_id)
         self.assertEqual(
-            sum(
-                event.kind is CollaborationEventKind.LEAD_OUTCOME_FAILURE
-                for event in first_history
-            ),
+            sum(event.kind is CollaborationEventKind.LEAD_OUTCOME_FAILURE for event in first_history),
             1,
         )
 
         restart_backend = _LeadBackend()
         restart_backend.enqueue(_visible_outcome("answer", "Fresh retry answer."))
         restarted = StoryRuntime(self.control_workspace, restart_backend)  # type: ignore[arg-type]
-        fresh = await restarted.lead_turn(
-            self.session_id,
-            conversation_id,
-            "Retry in a fresh turn.",
-        )
+        fresh = await restarted.lead_turn(self.session_id, conversation_id, "Retry in a fresh turn.",)
         self.assertIs(fresh.kind, LeadOutcomeKind.ANSWER)
         self.assertEqual(len(restart_backend.calls), 1)
-        final_history = restarted.conversation_storage_services.event_store.read(
-            self.session_id,
-            conversation_id,
-        )
+        final_history = restarted.conversation_storage_services.event_store.read(self.session_id, conversation_id,)
         self.assertEqual(
-            sum(
-                event.kind is CollaborationEventKind.LEAD_OUTCOME_FAILURE
-                for event in final_history
-            ),
+            sum(event.kind is CollaborationEventKind.LEAD_OUTCOME_FAILURE for event in final_history),
             1,
         )
 
     def test_failure_correlation_and_post_closure_calls_fail_closed(self) -> None:
         calls = provider_call_drafts(
-            invocation_id="invocation_failure",
-            call_id="call_failure",
-            role=LEAD_ORCHESTRATOR,
-            recipient=LEAD,
+            invocation_id="invocation_failure", call_id="call_failure", role=LEAD_ORCHESTRATOR, recipient=LEAD,
             invocation_kind=CollaborationInvocationKind.LEAD,
         )
         failure = make_draft(
-            "lead_failure",
-            CollaborationEventKind.LEAD_OUTCOME_FAILURE,
-            RUNTIME,
-            USER,
+            "lead_failure", CollaborationEventKind.LEAD_OUTCOME_FAILURE, RUNTIME, USER,
             CollaborationLeadOutcomeFailurePayload(
-                CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED,
-                "invocation_failure",
+                CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED, "invocation_failure",
                 "call_failure",
             ),
         )
-        history = store_batch(
-            (),
-            make_batch((), "batch_failure", *calls, failure),
-        )
+        history = store_batch((), make_batch((), "batch_failure", *calls, failure),)
         post_closure = provider_call_drafts(
-            invocation_id="invocation_failure",
-            call_id="call_after_failure",
-            role=LEAD_ORCHESTRATOR,
-            recipient=LEAD,
-            invocation_kind=CollaborationInvocationKind.LEAD,
-            ordinal=2,
+            invocation_id="invocation_failure", call_id="call_after_failure", role=LEAD_ORCHESTRATOR,
+            recipient=LEAD, invocation_kind=CollaborationInvocationKind.LEAD, ordinal=2,
             call_kind=CollaborationProviderCallKind.CONTINUATION,
         )[0]
         with self.assertRaises(CollaborationAppendError):
@@ -1034,10 +950,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         sibling_failure = replace(
             failure,
             event_id="sibling_failure",
-            payload=replace(
-                failure.payload,
-                invocation_id="sibling_invocation",
-            ),
+            payload=replace(failure.payload, invocation_id="sibling_invocation",),
         )
         with self.assertRaises(CollaborationAppendError):
             validate_collaboration_candidate_batch(

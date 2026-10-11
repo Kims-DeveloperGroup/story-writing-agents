@@ -7,10 +7,11 @@ import json
 import pickle
 from dataclasses import replace
 
-from story_writing_agents import conversations as c
+from story_writing_agents import authoring_admission as admission, conversations as c
 from tests.recommendation_fixture import (
     DRAFT, OUTLINE, RecommendationCase, action, decision, digest,
     preparation, recommendation, rewrite_history,
+    task_assessment,
 )
 from tests import test_lead_orchestration as lead
 
@@ -68,15 +69,30 @@ class RecommendationActionContractTests(RecommendationCase):
         self.assertEqual(c.decode_collaboration_event(scoped_wire), event)
         self.assertTrue(next(field for field in dataclasses.fields(request)
                              if field.name == "authoring_scope").kw_only)
-        changed = replace(request, authoring_scope=replace(request.authoring_scope,
-            interpretation="Another concrete candidate review interpretation."))
+        changed_scope = replace(request.authoring_scope, interpretation="Another concrete candidate review interpretation.")
+        self.assertRaisesRegex(ValueError, "changed its exact task or scope", replace, request, authoring_scope=changed_scope)
+        original_admission = request.basis.authoring_admission
+        changed_admission = admission.qualify_authoring_assessment( original_admission.assessment, sources=original_admission.sources,
+            request_digest=original_admission.request_digest, task_id=changed_scope.task_id, task_revision=changed_scope.task_revision,
+            scope_digest=admission.admission_digest(c.authoring_scope_to_dict(changed_scope)), )
+        changed = replace(request, authoring_scope=changed_scope, basis=replace(request.basis, authoring_admission=changed_admission))
         self.assertNotEqual(changed.action_digest, request.action_digest)
         with self.assertRaises(ValueError):
             replace(request, authoring_scope=None)
+        missing_admission = replace(request.basis, authoring_admission=None)
+        self.assertRaisesRegex(ValueError, "qualified authoring admission", replace, request, basis=missing_admission)
+        unqualified_event = json.loads(scoped_wire)
+        unqualified_event["payload"]["basis"].pop("authoring_admission")
+        self.assertRaisesRegex(ValueError, "qualified authoring admission", c.decode_collaboration_event,
+            json.dumps(unqualified_event, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8", errors="strict"))
         current_draft = event.to_draft()
         current_wire = c.encode_collaboration_event_draft(current_draft)
         self.assertIn("authoring_scope", json.loads(current_wire)["payload"])
         self.assertEqual(c.encode_collaboration_event_draft(c.decode_collaboration_event_draft(current_wire)), current_wire)
+        unqualified_draft = json.loads(current_wire)
+        unqualified_draft["payload"]["basis"].pop("authoring_admission")
+        self.assertRaisesRegex(ValueError, "qualified authoring admission", c.decode_collaboration_event_draft,
+            json.dumps(unqualified_draft, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8", errors="strict"))
         self.assertEqual((request.authoring_scope.schema_version, request.basis.schema_version), (3, 2))
         self.assertEqual(replace(request).action_digest, request.action_digest)
         self.assertEqual(self.history(conversation_id)[-1], event)
@@ -98,9 +114,9 @@ class RecommendationActionContractTests(RecommendationCase):
         self.assertEqual((request.source_proposal_id, request.source_proposal_revision,
                           request.source_proposal_digest, request.source_execution_attempt_id), (None,) * 4)
         # Ordered offered sources remain whole-message snapshots, including the new reply.
-        self.backend.enqueue(recommendation(message="Second whole reply", recommended_action=action(
-            source_ids=(source.event_id, "current_response")), authoring_scope=c.authoring_scope_to_dict(request.authoring_scope)))
-        second = await self.runtime.lead_turn(self.session_id, conversation_id, "Offer another plan.")
+        self.backend.enqueue(recommendation(message="Second whole reply", recommended_action=action( source_ids=(source.event_id, "current_response")), authoring_scope=c.authoring_scope_to_dict(request.authoring_scope),
+            authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=('bounded review judgments', 'separate proposal preparation'))))
+        second = await self.runtime.lead_turn(self.session_id, conversation_id, ("Finished candidate:\n" + message + "\nYou may make bounded review judgments and prepare a separate proposal; preserve supplied facts.\n" + "Offer another plan."))
         self.assertEqual(second.recommendation_request.authoring_scope, request.authoring_scope)
         self.assertEqual(tuple(s.content_digest for s in second.recommendation_request.draft_sources),
                          (digest(message), digest("Second whole reply")))
@@ -109,14 +125,15 @@ class RecommendationActionContractTests(RecommendationCase):
                 (("current_response",), "foreign_objective", False),
                 (("current_response",), None, True)):
             cid = self.conversation("Rejected source aliases")
-            bad = recommendation(recommended_action=action(source_ids=sources, objective_id=objective_id))
+            bad = recommendation(recommended_action=action(source_ids=sources, objective_id=objective_id),
+                authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=('bounded review judgments', 'separate proposal preparation')))
             if bad_route:
-                bad = recommendation(recommended_action=action(source_ids=sources,
-                    kind="prepare_consultation", specialist_ids=("character_custodian",)),
-                    authoring_scope=lambda call: lead._live_scope(call, activity="review", paths=(OUTLINE,)))
+                bad = recommendation(recommended_action=action(source_ids=sources, kind="prepare_consultation", specialist_ids=("character_custodian",)),
+                    authoring_scope=lambda call: lead._live_scope(call, activity="review", paths=(OUTLINE,)),
+                    authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=('bounded review judgments', 'separate proposal preparation')))
             self.backend.enqueue(bad)
             self.backend.enqueue(bad)
-            result = await self.runtime.lead_turn(self.session_id, cid, "Reject undisclosed aliases.")
+            result = await self.runtime.lead_turn(self.session_id, cid, ("Finished candidate:\n" + message + "\nYou may make bounded review judgments and prepare a separate proposal; preserve supplied facts.\n" + "Reject undisclosed aliases."))
             self.assertIsNone(result.recommendation_request)
             self.assertFalse(self.payload_events(cid, c.LeadRecommendationRequestPayload))
             if bad_route:
@@ -195,8 +212,7 @@ class RecommendationActionContractTests(RecommendationCase):
             (start, replace(start.payload, decision_event_id="foreign")),
             (result, replace(result.payload, start_event_id="foreign")),
             (result, replace(result.payload, lead_result_event_id=request_event.event_id)),
-            (objective, replace(objective.payload, facts=replace(objective.payload.facts,
-                origin_recommendation_decision_event_id="foreign"))),
+            (objective, replace(objective.payload, facts=replace(objective.payload.facts, origin_recommendation_decision_event_id="foreign"))),
         )
         for event, payload in mutations:
             with self.subTest(event=event.kind, payload=payload), self.assertRaises(ValueError):

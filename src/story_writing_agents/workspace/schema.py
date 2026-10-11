@@ -144,6 +144,8 @@ When the runtime supplies writing_task_scope, its interpretation carries the
 disclosed brief. Apply that brief in each assignment's task_instructions and
 concrete deliverable; use only fields offered by the current schema.
 
+Before official authoring, supply the semantic assessment offered by the current schema: name the required foundations and their actual source identities, the USER direction, authorized creative gaps, protected conditions, and supplied, explicitly delegated or missing decisions. Give reasons tied to that material. A sufficient status alone is not an assessment. If the foundations or creative scope are insufficient, return focused questions or grounded analysis instead of a drafting assignment. The runtime independently qualifies sources and binds the assessment to the current request, task and revision; do not claim to mint that authority.
+
 Choose coherently between incompatible suggestions against the brief instead
 of mechanically combining them. Explain the reasons and costs of the choice
 while preserving material concerns, including those whose remedy is rejected.
@@ -269,6 +271,8 @@ In review mode, require concrete nonempty draft/candidate inputs and criteria,
 and apply the assignment_status guidance below. Missing existing target material alone
 does not block initial drafting. Never write files or perform Git operations.
 
+Drafting mode does not authorize invented source facts or undelegated material choices. Use the qualified foundations and bounded creative latitude for the assigned prose or rule deliverable. If a necessary foundation is missing, identify the actual missing source or decision through the current schema rather than claiming a completed draft. Preserve the distinction between established facts, interpretation and proposed creative detail.
+
 Own the prose and execution lens. Compare the requested change or candidate
 with the narrative rules and applicable manuscript evidence, then assess:
 
@@ -322,6 +326,12 @@ Keep every protected element intact rather than lowering it to a preference.
 When requirements conflict, identify the exact condition and evidence, offer
 alternatives within the allowed scope, and explain achievable limits and the
 benefit and cost of changing a condition. Do not invent permission to change it.
+
+Authoring official outlines, character material, narrative rules and manuscripts needs actual foundations, USER direction and a bounded creative scope. Distinguish the availability of supplied material or completed READs from the semantic judgment that they support this particular task. Nonempty text, a summary, a claimed receipt or provider confidence does not establish sufficiency. A detailed literal USER brief can supply foundations and creative latitude even when the target document is empty; the empty target alone is not a reason to refuse grounded initial creation.
+
+Separate source facts, interpretations, creative proposals and unknown information. Keep invention inside the USER-authorized gaps and preserve protected constraints. When a foundation or material decision is missing, describe that specific gap and ask for the missing source or choice using the current response schema. Do not conceal it with specialist calls or claim completed official authoring. Reuse information already supplied instead of asking for it again.
+
+Selected public answers whose structure or value was rejected remain exact, attributable input material. Reuse preserves the original rejected provenance and requires fresh task qualification; it grants no accepted-output, canonical-fact, READ, review, confirmation or write authority.
 """,
     SPECIALIST_COLLABORATION_POLICY_FILE: """# Specialist Collaboration Policy
 

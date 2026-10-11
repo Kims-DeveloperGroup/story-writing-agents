@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+from .authoring_admission import (
+    AdmissionStatus, AdmissionSource, AdmissionSourceKind, AuthoringAssessment, AuthoringAdmissionBasis,
+    AuthoringAdmissionNeeded, admission_digest, assessment_from_dict, assessment_schema,
+    qualify_authoring_assessment, revalidate_authoring_basis,
+)
+from .conversations.events import authoring_source_facts
+
 from .lead_task_transitions import (
     task_value_to_dict,
     LeadTaskAction, LeadTaskDecision, LeadTaskRef, LeadMaterialRef,
@@ -179,6 +186,7 @@ from .consensus.contracts import (
     ConsensusContinuationMode,
     ConsensusMaterialHandle,
     ConsensusPhase,
+    ConsensusPhaseRequest,
     ConsensusPhaseResult,
     ConsensusPhaseState,
 )
@@ -194,6 +202,8 @@ from .consensus.event_store import (
     ConsensusWorkflowSubmission,
 )
 from .consensus.material_store import ConsensusMaterialStore
+from .consensus.serialization import ConsensusInputKind
+from .consensus.projection import project_consensus
 from .consensus.runtime_adapter import (
     ConsensusRuntimeAdapter,
     ConsensusRuntimeDecision,
@@ -911,6 +921,39 @@ def _lead_front_result_contract(
     if facts.premise_question_id is not None:
         variants.append(PremiseDecisionConstraints(facts.premise_question_id,
             facts.input_ids, allow_read_sources=facts.allow_read_sources).front_schema())
+    qualified_variants = []
+    for variant in variants:
+        properties = variant.get("properties", {})
+        authoring_capable = (
+            bool({"proposal", "artifact_intent", "recommended_action"}.intersection(properties))
+            and properties.get("authoring_scope", {}).get("type") == "object"
+            and facts.adoption_intent is not AuthoringIntent.REVIEW_ONLY
+            and not (facts.scope is not None and facts.scope.intent is AuthoringIntent.REVIEW_ONLY)
+        )
+        if not authoring_capable:
+            qualified_variants.append(variant)
+            continue
+        intent_schema = properties["authoring_scope"]["properties"].get("intent")
+        offered_intents = () if intent_schema is None else tuple(intent_schema.get("enum", ()))
+        if AuthoringIntent.REVIEW_ONLY.value in offered_intents and len(offered_intents) > 1:
+            for intent in offered_intents:
+                scoped_variant = json.loads(json.dumps(variant))
+                scoped_variant["properties"]["authoring_scope"]["properties"]["intent"]["enum"] = [intent]
+                if intent == AuthoringIntent.AUTHORING.value:
+                    scoped_variant["properties"]["authoring_assessment"] = {"anyOf": [
+                        assessment_schema(None if facts.allow_read_sources else facts.input_ids),
+                        {"type": "null", "description": 'No assessment: clarify missing authoring decisions using retained sources.'},
+                    ]}
+                    scoped_variant["required"].append("authoring_assessment")
+                qualified_variants.append(scoped_variant)
+        else:
+            properties["authoring_assessment"] = {"anyOf": [
+                assessment_schema(None if facts.allow_read_sources else facts.input_ids),
+                {"type": "null", "description": 'No assessment: clarify missing authoring decisions using retained sources.'},
+            ]}
+            variant["required"].append("authoring_assessment")
+            qualified_variants.append(variant)
+    variants = qualified_variants
     schema = alternatives(variants)
     schema["description"] = (
         (
@@ -920,6 +963,37 @@ def _lead_front_result_contract(
         )
         + schema.get("description", "")
     ).rstrip()
+    concise_descriptions = {
+        'Classify the current work and include every affected specialist domain and canonical workspace-relative target. Preserve the bound scope and task/revision when supplied.':
+            'Declare affected specialists and canonical targets; preserve task/revision.',
+        'Disclose review_only only for an explicit request to evaluate the supplied original without authoring or artifact authority. Activity review alone does not imply this intent. Preserve bound intent; requested revisions need fresh authoring work.':
+            'review_only evaluates an explicitly supplied original; activity review is not intent. Preserve bound intent. Revisions need fresh authoring authority.',
+        "Nonempty UTF-8 task instructions specifying this specialist's concrete deliverable and success criteria against the shared writing-task brief. Preserve its protected elements, change boundaries, and exact offered task/source identities.":
+            'State the concrete deliverable and success criteria; preserve protected elements, change boundaries, and exact task/source IDs.',
+        "Preparation recommendation sources are not assignment inputs unless confirmed preparation has materialized and offered them here. Preserve all required inputs and each reviewer's own source.":
+            'Use every required/reviewer input. Recommendation sources become inputs only when preparation offers them.',
+        ' USER instruction input is host-wired separately from the exact adopted_idea supplied candidate; preserve every other declared source role.':
+            'Review-only adoption: USER instructions are host-wired; adopted_idea is the exact candidate. Keep other source roles.',
+        'Assign Plot when plot, causality, pacing, or outline structure is affected; request its scoped draft or review.':
+            'Plot: draft or review plot, causality, pacing and outline.',
+        'Assign Character when characterization, motivation, or relationships are affected; request its scoped draft or review.':
+            'Character: draft or review characterization, motivation and relationships.',
+        'Assign Execution when scene prose, narrative voice, or narrative rules are affected; request its scoped draft or review.':
+            'Execution: draft or review prose, voice and narrative rules.',
+    }
+
+    def compact_metadata(node):
+        if type(node) is dict:
+            description = node.get("description")
+            if type(description) is str and description in concise_descriptions:
+                node["description"] = concise_descriptions[description]
+            for child in node.values():
+                compact_metadata(child)
+        elif type(node) is list:
+            for child in node:
+                compact_metadata(child)
+
+    compact_metadata(schema)
     return _provider_result_contract("lead-response-v8" if facts.premise_question_id is not None else "lead-response-v6" if facts.scope is not None and facts.scope.schema_version < 3 else "lead-response-v7", schema)
 
 
@@ -2209,6 +2283,29 @@ class StoryRuntime:
 
         if type(invocation) is not ConsensusPhaseInvocation:
             raise TypeError("invocation must be ConsensusPhaseInvocation")
+        stored = self.load_workflow(invocation.execution_identity.session_id,
+            invocation.execution_identity.conversation_id, invocation.workflow_id)
+        if stored is None:
+            raise ValueError("consensus invocation has no current host-owned workflow")
+        requests = tuple(event.payload for event in stored.events
+                         if type(event.payload) is ConsensusPhaseRequest
+                         and event.payload.phase_request_id == invocation.phase_request_id)
+        if len(requests) != 1:
+            raise ValueError("consensus invocation request is unavailable")
+        request = requests[0]
+        projection = project_consensus(stored.events)
+        if projection.state is not ConsensusPhaseState.RUNNING or projection.request_event_id != next(event.event_id for event in stored.events if event.payload is request):
+            raise ValueError("consensus invocation requires the current confirmed running phase")
+        if (request.authoring_direction != invocation.authoring_direction
+            or request.authoring_admission != invocation.authoring_admission
+                or request.execution_identity != invocation.execution_identity
+                or request.input_material != invocation.input_material
+                or request.candidate_material != invocation.candidate_material
+                or request.proposal_id != invocation.proposal_id
+                or request.phase != invocation.phase or request.revision_id != invocation.revision_id
+                or request.intent != invocation.intent or request.continuation != invocation.continuation):
+            raise ValueError("consensus invocation changed its qualified request")
+        self.validate_consensus_authoring(request)
         if self.backend is None:
             raise BackendProtocolError("consensus execution requires an AgentBackend")
         if invocation.phase in {ConsensusPhase.INPUT_ADOPTION, ConsensusPhase.REVIEW_COMPLETION}:
@@ -2278,6 +2375,9 @@ class StoryRuntime:
                 artifact_binding=artifact_binding,
                 reference_boundary_reconciled=reference_boundary_reconciled,
             )
+            if invocation.authoring_direction is not None:
+                direction = self._consensus_material_store.read_text(invocation.authoring_direction)
+                input_text += "\n\nExplicit USER authoring direction:\n" + direction
             candidate_text = self._resolve_consensus_candidate(invocation)
             review_messages: tuple[DebateMessage, ...] = ()
             if (
@@ -2546,12 +2646,122 @@ class StoryRuntime:
             raise ValueError("consensus candidate must be unpublished material")
         return self._consensus_material_store.read_text(handle)
 
+    def capture_consensus_direction(self, direction: str, /) -> ConsensusMaterialHandle:
+        """Capture exact explicit USER direction without execution authority."""
+        if type(direction) is not str or not direction.strip():
+            raise ValueError("consensus USER direction must be nonempty text")
+        return self._consensus_material_store.put_text(direction)
+
+    def qualify_consensus_authoring(
+        self, identity: ConsensusExecutionIdentity, workflow_id: str,
+        material: ConsensusMaterialHandle, assessment: AuthoringAssessment | None, *,
+        input_kind: ConsensusInputKind,
+        direction_material: ConsensusMaterialHandle | None = None,
+        ruling_material: ConsensusMaterialHandle | None = None, source_revision_id: str = "r0",
+        source_workflow_id: str | None = None,
+    ) -> AuthoringAdmissionBasis | AuthoringAdmissionNeeded:
+        """Bind semantic judgment to actual immutable USER and selected material bytes."""
+        self.workspace.validate_identifier(identity.session_id)
+        self.workspace.validate_identifier(identity.conversation_id, label="conversation ID")
+        if type(input_kind) is not ConsensusInputKind:
+            raise TypeError("consensus input kind is invalid")
+        if input_kind is ConsensusInputKind.CONTINUATION:
+            original = self.load_workflow(identity.session_id, identity.conversation_id, source_workflow_id or workflow_id)
+            if original is None:
+                raise ValueError("consensus original input lineage is unavailable")
+            if original.submission.input_material != material or original.submission.authoring_direction != direction_material:
+                raise ValueError("consensus original input lineage changed")
+            seen: set[str] = set()
+            while original.submission.input_kind is ConsensusInputKind.CONTINUATION:
+                if original.submission.workflow_id in seen or original.submission.continuation is None:
+                    raise ValueError("consensus input lineage is invalid")
+                seen.add(original.submission.workflow_id)
+                parent = self.load_workflow(identity.session_id, identity.conversation_id,
+                    original.submission.continuation.source_workflow_id)
+                if parent is None or parent.submission.input_material != material or parent.submission.authoring_direction != direction_material:
+                    raise ValueError("consensus original input lineage changed")
+                original = parent
+            input_kind = original.submission.input_kind
+        facts: list[AdmissionSource] = []
+        # A manuscript is material even when its container is an immutable candidate.
+        for alias, handle, kind in (
+            ("user_direction", direction_material, AdmissionSourceKind.USER),
+            ("ruling_input", ruling_material, AdmissionSourceKind.USER),
+            ("user_input" if input_kind is ConsensusInputKind.PROMPT and material.locator.startswith("candidate:") else "input_material", material,
+             AdmissionSourceKind.USER if input_kind is ConsensusInputKind.PROMPT and material.locator.startswith("candidate:") else AdmissionSourceKind.MATERIAL),
+        ):
+            if handle is None:
+                continue
+            revision_digest = "sha256:" + handle.digest
+            if handle.locator.startswith("candidate:"):
+                text = self._consensus_material_store.read_text(handle)
+            elif handle is material and handle.locator.startswith("artifact:"):
+                try:
+                    binding = self._session_artifact_binding(identity.session_id)
+                    path = handle.locator.removeprefix("artifact:")
+                    with _open_session_artifact_repository(binding) as repository:
+                        snapshots = repository.read_current((path,))
+                except (OSError, ValueError, WorkspaceFormatError, SessionArtifactBindingError):
+                    return AuthoringAdmissionNeeded(AdmissionStatus.NEEDS_INFORMATION,
+                        ("Select available current manuscript bytes through the session source boundary before authoring.",), tuple(facts))
+                if len(snapshots) != 1 or snapshots[0].source.source_sha256 != handle.digest:
+                    return AuthoringAdmissionNeeded(AdmissionStatus.NEEDS_INFORMATION,
+                        ("Select the current manuscript bytes before assessing authoring direction.",), tuple(facts))
+                text = snapshots[0].read_text()
+                revision_digest = admission_digest(asdict(snapshots[0].source))
+            else:
+                raise ValueError("consensus admission source is unavailable")
+            encoded = text.encode("utf-8", "strict")
+            if hashlib.sha256(encoded).hexdigest() != handle.digest:
+                raise ValueError("consensus admission material changed")
+            facts.append(AdmissionSource(alias, kind, handle.locator, revision_digest,
+                "literal_user" if kind is AdmissionSourceKind.USER else "input_only", len(encoded)))
+        if (ruling_material is not None and assessment is not None and assessment.status is AdmissionStatus.SUFFICIENT
+            and (assessment.direction is None or assessment.creative_scope is None
+                 or "ruling_input" not in assessment.direction.source_ids
+                 or "ruling_input" not in assessment.creative_scope.source_ids)):
+            return AuthoringAdmissionNeeded(AdmissionStatus.NEEDS_INFORMATION, (
+                "Assess the new USER ruling using ruling_input while retaining the original material and direction.",), tuple(facts))
+        request = {"input": material.digest, "direction": None if direction_material is None else direction_material.digest,
+                   "ruling": None if ruling_material is None else ruling_material.digest}
+        scope = {"session_id": identity.session_id, "conversation_id": identity.conversation_id,
+                 "workflow_id": workflow_id, "input_kind": input_kind.value, "input_locator": material.locator,
+                 "direction_locator": None if direction_material is None else direction_material.locator,
+                 "ruling_locator": None if ruling_material is None else ruling_material.locator,
+                 "source_revision_id": source_revision_id, "intent": "authoring"}
+        return qualify_authoring_assessment(assessment, sources=tuple(facts), request_digest=admission_digest(request),
+            task_id=workflow_id, task_revision=int(source_revision_id.removeprefix("r")) + (2 if ruling_material is not None else 1),
+            scope_digest=admission_digest(scope))
+
+
+    def validate_consensus_authoring(self, request: ConsensusPhaseRequest, /) -> None:
+        if request.intent is AuthoringIntent.REVIEW_ONLY:
+            return
+        basis = request.authoring_admission
+        if type(basis) is not AuthoringAdmissionBasis:
+            raise ValueError("consensus authoring admission is missing")
+        stored = self.load_workflow(request.execution_identity.session_id, request.execution_identity.conversation_id, request.workflow_id)
+        if stored is None or stored.submission.input_material != request.input_material or stored.submission.authoring_direction != request.authoring_direction:
+            raise ValueError("consensus authoring input changed its host submission")
+        continuation = request.continuation
+        qualified = self.qualify_consensus_authoring(
+            request.execution_identity, request.workflow_id, request.input_material, basis.assessment,
+            input_kind=stored.submission.input_kind, direction_material=request.authoring_direction,
+            ruling_material=None if continuation is None else continuation.ruling_material,
+            source_revision_id="r0" if continuation is None else continuation.source_revision_id,
+            source_workflow_id=None if continuation is None else continuation.source_workflow_id)
+        if qualified != basis:
+            raise ValueError("consensus authoring admission or source changed; qualify the current work again")
+
     def submit_consensus_prompt(
         self,
         session_id: str,
         conversation_id: str,
         prompt: str,
-    ) -> ConsensusRuntimeInspection:
+        *,
+        authoring_assessment: AuthoringAssessment | None = None,
+        authoring_direction: str | None = None,
+    ) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded:
         """Durably submit prompt material for a confirmed draft phase."""
 
         self.workspace.validate_identifier(session_id)
@@ -2561,7 +2771,7 @@ class StoryRuntime:
             session_id=session_id,
             conversation_id=conversation_id,
             input_material=material,
-        )
+            authoring_assessment=authoring_assessment, authoring_direction=authoring_direction)
 
     def submit_consensus_draft(
         self,
@@ -2570,7 +2780,9 @@ class StoryRuntime:
         draft: str,
         *,
         intent: AuthoringIntent = AuthoringIntent.AUTHORING,
-    ) -> ConsensusRuntimeInspection:
+        authoring_assessment: AuthoringAssessment | None = None,
+        authoring_direction: str | None = None,
+    ) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded:
         """Disclose authoring transformation or exact provider-free review adoption."""
 
         self.workspace.validate_identifier(session_id)
@@ -2583,7 +2795,7 @@ class StoryRuntime:
             conversation_id=conversation_id,
             draft_material=material,
             intent=intent,
-        )
+            authoring_assessment=authoring_assessment, authoring_direction=authoring_direction)
 
     def inspect_consensus(
         self,
@@ -2656,7 +2868,8 @@ class StoryRuntime:
         mode: ConsensusContinuationMode,
         ruling: str,
         added_revision_rounds: int,
-    ) -> ConsensusRuntimeInspection:
+        authoring_assessment: AuthoringAssessment | None = None,
+    ) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded:
         """Prepare, but never execute, one exact deadlock continuation repair."""
 
         self.workspace.validate_identifier(session_id)
@@ -2682,7 +2895,7 @@ class StoryRuntime:
             mode=mode,
             ruling_material=ruling_material,
             added_revision_rounds=added_revision_rounds,
-        )
+            authoring_assessment=authoring_assessment)
 
     def consensus_artifact_review_handoff(
         self,
@@ -3341,6 +3554,7 @@ class StoryRuntime:
         shared_premises: tuple[CollaborationSharedPremise, ...] = (),
         editorial_refs: tuple[EditorialRecordRef, ...] = (),
         editorial_context_digest: str | None = None,
+        authoring_admission: AuthoringAdmissionBasis | None = None,
     ) -> CollaborationProposalBasis:
         if type(artifact_binding) is not SessionArtifactBinding:
             raise TypeError("recommendation basis requires an exact artifact binding")
@@ -3354,6 +3568,7 @@ class StoryRuntime:
         ) for agent_id in ROSTER if agent_id in {LEAD_ORCHESTRATOR, *specialist_ids})
         route = "lead_recommendation_" + kind.value
         return CollaborationProposalBasis(
+            authoring_admission=authoring_admission,
             route=route,
             route_fingerprint=self._canonical_digest([route, specialist_ids, [asdict(p) for p in profiles]]),
             agent_profiles=profiles,
@@ -3436,6 +3651,19 @@ class StoryRuntime:
                              CollaborationInputKind.WRITING_ARTIFACT}:
                 artifact_ordinal += 1
                 selected[index] = replace(item, input_id=f"reference_{artifact_ordinal}")
+        admission = (source.payload.authoring_admission
+                     if type(source.payload) is CollaborationLeadJudgmentPayload else None)
+        if admission is None and type(source.payload) is CollaborationLeadSynthesisPayload:
+            original = projection.current_proposal
+            if original is not None and original.step_id == source.step_id:
+                admission = original.basis.authoring_admission
+        if admission is not None:
+            for fact in admission.sources:
+                actual = aliases.get(fact.source_id)
+                if actual is None:
+                    raise _LeadOutcomeValidationError("recommendation admission source is not offered")
+                if all(item.input_id != actual.input_id for item in selected):
+                    selected.append(actual)
         selected_inputs = tuple(selected)
         scope = source.payload.authoring_scope
         if scope is None or scope.activity is AuthoringActivity.WORKFLOW:
@@ -3719,6 +3947,16 @@ class StoryRuntime:
             elif source_proposal is not None and source_proposal.basis.schema_version == 2:
                 inherited_capture = self._remap_shared_premises(source_proposal.basis, selected_inputs)
         _bound_editorial_refs, _bound_editorial_digest = self._editorial_context_for_scope(source.session_id, scope, session_history)
+        qualified_admission = None
+        if admission is not None and scope is not None:
+            qualified_admission = self._qualify_authoring_inputs(
+                admission.assessment, inputs=selected_inputs, evidence=evidence, scope=scope,
+                events=events, pending_material=source, pending_replies=preview_replies,
+            )
+            if type(qualified_admission) is not AuthoringAdmissionBasis:
+                raise _LeadOutcomeValidationError("recommendation lost its current authoring admission")
+        if (self._official_authoring_scope(scope) or action.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT) and qualified_admission is None:
+            raise _LeadOutcomeValidationError("official preparation requires qualified authoring admission")
         request = LeadRecommendationRequestPayload(
             request_event_id=request_event_id, request_id=self._new_id("rc"),
             action_id=self._new_id("ra") if previous is None else previous.action_id,
@@ -3738,6 +3976,7 @@ class StoryRuntime:
                 authoring_scope=scope,
                 shared_premises=inherited_capture,
                 editorial_refs=_bound_editorial_refs, editorial_context_digest=_bound_editorial_digest,
+                authoring_admission=qualified_admission,
             ),
             source_fingerprint=self._recommendation_source_fingerprint(
                 source.session_id,
@@ -3935,6 +4174,17 @@ class StoryRuntime:
                         evidence_inputs=evidence_inputs,
                         artifact_binding=artifact_binding,
                     )
+                    if (scope.intent is AuthoringIntent.AUTHORING
+                            or request.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT):
+                        if type(request.basis.authoring_admission) is not AuthoringAdmissionBasis:
+                            raise ValueError("official preparation requires qualified authoring admission")
+                    if request.basis.authoring_admission is not None:
+                        if request.authoring_scope is None:
+                            raise ValueError("official recommendation admission has no authoring scope")
+                        qualified = self._qualify_authoring_inputs(request.basis.authoring_admission.assessment,
+                            inputs=current_inputs, evidence=request.basis.evidence, scope=request.authoring_scope, events=events)
+                        if qualified != request.basis.authoring_admission:
+                            raise ValueError("recommendation authoring admission is stale")
                     if (current_inputs != request.basis.inputs
                         or self._recommendation_basis(
                             session_id,
@@ -3946,7 +4196,7 @@ class StoryRuntime:
                             authoring_scope=request.authoring_scope,
                             shared_premises=self._remap_shared_premises(request.basis, current_inputs),
                             editorial_refs=request.basis.editorial_refs, editorial_context_digest=request.basis.editorial_context_digest,
-                        ) != request.basis
+                            authoring_admission=request.basis.authoring_admission) != request.basis
                         or self._recommendation_source_fingerprint(
                             session_id,
                             conversation_id,
@@ -5037,7 +5287,8 @@ class StoryRuntime:
         action_progress_sink: ContextActionProgressSink | None = None,
         authoring_scope: AuthoringScope | None = None,
         review_basis: ReviewBasis | None = None,
-    ) -> LeadTurnResult:
+        authoring_assessment: AuthoringAssessment | None = None,
+    ) -> LeadTurnResult | AuthoringAdmissionNeeded:
         """Disclose explicitly scoped provider-free work for one specialist."""
         if authoring_scope is not None and authoring_scope.schema_version == 3:
             raise ValueError("scope3 contributions require the separately confirmed Lead workflow; advisory supports historical scope1/2")
@@ -5091,6 +5342,14 @@ class StoryRuntime:
             authoring_scope = self._resolve_authoring_scope(
                 authoring_scope, inputs, None, prior_scope,
             )
+            authoring_admission = None
+            if self._official_authoring_scope(authoring_scope):
+                qualified = self._qualify_authoring_inputs(authoring_assessment,
+                    inputs=inputs, evidence=None, scope=authoring_scope,
+                    events=events, pending_user_text=text)
+                if type(qualified) is AuthoringAdmissionNeeded:
+                    return qualified
+                authoring_admission = qualified
             validate_specialist_routing(authoring_scope, (specialist_id,))
             referenced_reviewers = {
                 reviewer
@@ -5172,6 +5431,7 @@ class StoryRuntime:
                     synthesis_max_physical_calls=0,
                 ),
                 basis=CollaborationProposalBasis(
+                    authoring_admission=authoring_admission,
                     route="specialist_advisory",
                     route_fingerprint=self._canonical_digest(route),
                     agent_profiles=(profile,),
@@ -9384,6 +9644,16 @@ class StoryRuntime:
             ],
             "route": "lead_specialist_consultation",
         }
+        authoring_admission = proposal.basis.authoring_admission
+        if authoring_admission is not None:
+            qualified = self._qualify_authoring_inputs(authoring_admission.assessment,
+                inputs=tuple(inputs), evidence=proposal.basis.evidence,
+                scope=next_intent.authoring_scope, events=events)
+            if (type(qualified) is not AuthoringAdmissionBasis
+                or qualified.sources != authoring_admission.sources
+                or qualified.request_digest != authoring_admission.request_digest):
+                raise BackendProtocolError("continuation changed the admitted authoring sources")
+            authoring_admission = qualified
         return CollaborationProposal.create(
             step_id=proposal.step_id,
             proposal_id=proposal_id,
@@ -9404,6 +9674,7 @@ class StoryRuntime:
                 synthesis_max_physical_calls=synthesis_calls,
             ),
             basis=CollaborationProposalBasis(
+                authoring_admission=authoring_admission,
                 route="lead_specialist_consultation",
                 route_fingerprint=self._canonical_digest(route_value),
                 agent_profiles=profiles,
@@ -9774,6 +10045,8 @@ class StoryRuntime:
                 raise TypeError("collaboration store returned a non-tuple history")
             if any(type(event.payload) is CollaborationExplorationAdoptionPayload for event in events):
                 self._editorial_snapshot(session_id).validate_exploration_adoptions(conversation_id)
+            elif any(type(event.payload) is CollaborationLeadMaterialCapturePayload for event in events):
+                self._editorial_snapshot(session_id)
             return events, project_collaboration_history(events), None
         except Exception as failure:
             return None, None, failure
@@ -11237,6 +11510,32 @@ class StoryRuntime:
                         selected = tuple(item for item in decoded.proposal.shared_premises if item.slot_id == premise_capture.slot_id)
                         if len(selected) != 1 or selected[0].selected_premise != premise_capture.selected_text or "selected_premise" not in selected[0].basis_input_ids:
                             raise _LeadOutcomeValidationError("selected premise requires the exact disclosed dependency capture")
+                    requires_admission = ((self._official_authoring_scope(decoded.authoring_scope)
+                        and (decoded.proposal is not None or decoded.recommended_action is not None))
+                        or decoded.artifact_intent is not None
+                        or (decoded.recommended_action is not None
+                            and decoded.recommended_action.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT))
+                    if requires_admission:
+                        if (decoded.authoring_scope is None
+                                or decoded.authoring_scope.intent is not AuthoringIntent.AUTHORING
+                                or decoded.authoring_scope.activity is AuthoringActivity.WORKFLOW):
+                            raise _LeadOutcomeValidationError("official candidate preparation requires an explicit authoring scope")
+                        try:
+                            qualified = self._qualify_authoring_inputs(
+                                decoded.authoring_assessment,
+                                inputs=self._materialize_lead_evidence_inputs(inputs, decoded_evidence),
+                                evidence=decoded_evidence, scope=decoded.authoring_scope, events=objective_events)
+                        except (TypeError, ValueError) as exc:
+                            raise validation_failure(_LeadOutcomeValidationError("authoring assessment is not source-qualified"),
+                                "$.authoring_assessment", "assessment must bind actual supplied USER/material/READ sources") from exc
+                        if type(qualified) is AuthoringAdmissionNeeded:
+                            decoded = replace(decoded, kind=LeadOutcomeKind.QUESTION,
+                                message=qualified.message, proposal=None, artifact_intent=None,
+                                objective_intent=None, recommended_action=None)
+                        else:
+                            decoded = replace(decoded, authoring_admission=qualified,
+                                proposal=(replace(decoded.proposal, authoring_admission=qualified)
+                                          if decoded.proposal is not None else None))
                     if decoded.kind is LeadOutcomeKind.PROPOSAL:
                         if decoded.proposal is not None:
                             if decoded.proposal.relation is not expected_relation:
@@ -11343,6 +11642,7 @@ class StoryRuntime:
                             sender=_LEAD_ACTOR, recipient=_USER_ACTOR,
                             payload=CollaborationLeadJudgmentPayload(
                                 decoded.kind, decoded.message, decoded_evidence, decoded.authoring_scope,
+                                authoring_admission=decoded.authoring_admission,
                             ),
                         )
                         self._recommendation_request_draft(
@@ -11923,6 +12223,7 @@ class StoryRuntime:
                         evidence,
                         outcome.authoring_scope,
                         outcome.trace,
+                        authoring_admission=outcome.authoring_admission,
                     ),
                 )
                 proposal_event = self._draft(
@@ -11998,6 +12299,7 @@ class StoryRuntime:
                     evidence,
                     outcome.authoring_scope,
                     outcome.trace,
+                    authoring_admission=outcome.authoring_admission,
                 ),
             )
             final_drafts = (
@@ -12161,7 +12463,14 @@ class StoryRuntime:
                             shared_premises=self._remap_shared_premises(request.basis, tuple(materialized)))
                 )
                 self._validate_draft_provenance(review_scope, authoring_events)
+        if type(outcome.authoring_admission) is not AuthoringAdmissionBasis:
+            raise _LeadOutcomeValidationError("official candidate preparation lacks qualified admission")
+        review_admission = self._qualify_authoring_inputs(outcome.authoring_admission.assessment,
+            inputs=tuple(materialized), evidence=evidence, scope=review_scope, events=objective_events)
+        if type(review_admission) is not AuthoringAdmissionBasis:
+            raise _LeadOutcomeValidationError("candidate review lost its current authoring admission")
         proposal_intent = LeadProposalIntent(
+            authoring_admission=review_admission,
             relation=LeadProposalRelation.NEW_STEP,
             authoring_scope=review_scope,
             shared_premises=inherited_premises,
@@ -12208,6 +12517,7 @@ class StoryRuntime:
                 evidence,
                 proposal.authoring_scope,
                 outcome.trace,
+                authoring_admission=outcome.authoring_admission,
             ),
         )
         candidate_payload = ArtifactReviewCandidatePayload(
@@ -13448,6 +13758,11 @@ class StoryRuntime:
                 object_pairs_hook=unique,
                 parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
             )
+            assessment_present = type(value) is dict and "authoring_assessment" in value
+            raw_assessment = value.get("authoring_assessment") if type(value) is dict else None
+            assessment = None if raw_assessment is None else assessment_from_dict(raw_assessment)
+            if type(value) is dict:
+                value = {key: item for key, item in value.items() if key != "authoring_assessment"}
             allowed = {
                 frozenset({"authoring_scope", "message"}),
                 frozenset({"authoring_scope", "kind", "message"}),
@@ -13463,6 +13778,8 @@ class StoryRuntime:
                     'expected authoring_scope and message, with only the fields permitted by kind',
                 )
             if value.get("authoring_scope") is None and type(value.get("proposal")) is dict and "premise_decision" in value["proposal"]:
+                if assessment_present:
+                    raise ValueError("premise analysis cannot acquire authoring admission")
                 raw = value["proposal"]
                 if set(value) != {"kind", "message", "authoring_scope", "proposal"} or value["kind"] != "proposal" or set(raw) != {"assignments", "premise_decision"}:
                     raise ValueError("premise analysis cannot carry authoring or objective fields")
@@ -13512,6 +13829,12 @@ class StoryRuntime:
                     'interpretation': message,
                 },
             )
+            if assessment_present and (
+                authoring_scope.intent is AuthoringIntent.REVIEW_ONLY
+                or not {"proposal", "artifact_intent", "recommended_action"}.intersection(value)
+            ):
+                raise validation_failure(ValueError(), '$.authoring_assessment',
+                    'authoring assessment is not a field of this non-authoring result variant')
             scope = (
                 LeadOutcomeScope.WORKFLOW_META
                 if authoring_scope.activity is AuthoringActivity.WORKFLOW
@@ -13577,7 +13900,7 @@ class StoryRuntime:
                     None,
                     objective_intent,
                     recommended_action,
-                    authoring_scope=authoring_scope,
+                    authoring_scope=authoring_scope, authoring_assessment=assessment,
                 )
             if (proposal_value is None) is (artifact_value is None):
                 raise validation_failure(
@@ -13600,7 +13923,7 @@ class StoryRuntime:
                     None,
                     artifact_intent,
                     objective_intent,
-                    authoring_scope=authoring_scope,
+                    authoring_scope=authoring_scope, authoring_assessment=assessment,
                 )
             if type(proposal_value) is not dict or frozenset(proposal_value) not in {
                 frozenset({"assignments", *({"shared_premises"} if authoring_scope.schema_version == 3 else set())}),
@@ -13675,7 +13998,7 @@ class StoryRuntime:
                 proposal,
                 None,
                 objective_intent,
-                authoring_scope=authoring_scope,
+                authoring_scope=authoring_scope, authoring_assessment=assessment,
             )
         except (
             ArtifactProposalError,
@@ -14862,6 +15185,190 @@ class StoryRuntime:
                         ),
                     )
 
+    @staticmethod
+    def _official_authoring_scope(scope: AuthoringScope | None) -> bool:
+        return scope is not None and scope.intent is AuthoringIntent.AUTHORING
+
+    def _qualify_authoring_inputs(
+        self, assessment: AuthoringAssessment | None, *,
+        inputs: tuple[CollaborationInputRevision, ...],
+        evidence: CollaborationLeadEvidence | None, scope: AuthoringScope,
+        events: tuple[CollaborationEvent, ...], pending_user_text: str | None = None,
+        pending_material: CollaborationEventDraft | None = None,
+        pending_replies: tuple[CollaborationSpecialistReplyPayload, ...] = (),
+    ) -> AuthoringAdmissionBasis | AuthoringAdmissionNeeded:
+        user = tuple(v for v in inputs if v.kind is CollaborationInputKind.USER_INPUT
+                     and v.state is CollaborationInputState.PRESENT)
+        if len(user) != 1:
+            raise ValueError("authoring admission requires one actual originating USER input")
+        if type(pending_replies) is not tuple or any(type(reply) is not CollaborationSpecialistReplyPayload for reply in pending_replies):
+            raise ValueError("authoring admission pending replies must be exact typed results")
+
+        def pending_reply_origin(item: CollaborationInputRevision) -> CollaborationEvent | CollaborationEventDraft | None:
+            source = pending_material
+            if source is None or type(source.payload) is not CollaborationLeadSynthesisPayload:
+                return None
+            matches = tuple(reply for reply in pending_replies
+                            if item.locator == f"conversation/{self._deterministic_id('e', reply.execution_attempt_id, reply.assignment_id, 'reply')}")
+            if not matches:
+                return None
+            if len(matches) != 1:
+                raise ValueError("authoring admission pending reply is ambiguous")
+            reply = matches[0]
+            identity = self._deterministic_id("e", reply.execution_attempt_id, reply.assignment_id, "reply")
+            header = (source.session_id, source.conversation_id, source.turn_id, source.step_id)
+            dispatches = tuple(event for event in events if event.event_id == reply.dispatch_event_id)
+            if len(dispatches) != 1 or type(dispatches[0].payload) is not CollaborationAssignmentDispatchPayload:
+                raise ValueError("authoring admission pending reply lacks exact dispatch")
+            dispatch_event, dispatch = dispatches[0], dispatches[0].payload
+            key = (reply.proposal_id, reply.proposal_revision, reply.proposal_digest)
+            proposals = tuple(event.payload for event in events
+                              if type(event.payload) is CollaborationProposal
+                              and (event.session_id, event.conversation_id, event.step_id) == (header[0], header[1], header[3])
+                              and (event.payload.proposal_id, event.payload.proposal_revision, event.payload.proposal_digest) == key)
+            if (len(proposals) != 1 or proposals[0] not in confirmed_authoring_proposals(scope, events)
+                or proposals[0].authoring_scope != source.payload.authoring_scope
+                or source.kind is not CollaborationEventKind.LEAD_SYNTHESIS
+                or source.sender != _LEAD_ACTOR or source.recipient != _USER_ACTOR
+                or dispatch_event.kind is not CollaborationEventKind.ASSIGNMENT_DISPATCH
+                or (dispatch_event.session_id, dispatch_event.conversation_id, dispatch_event.turn_id, dispatch_event.step_id) != header
+                or dispatch_event.sender != _RUNTIME_ACTOR
+                or dispatch_event.recipient != CollaborationActor(CollaborationActorKind.SPECIALIST, dispatch.assignment.specialist_id)
+                or key != (dispatch.proposal_id, dispatch.proposal_revision, dispatch.proposal_digest)
+                or key != (source.payload.proposal_id, source.payload.proposal_revision, source.payload.proposal_digest)
+                or reply.execution_attempt_id != dispatch.execution_attempt_id
+                or reply.execution_attempt_id != source.payload.execution_attempt_id
+                or dispatch.assignment not in proposals[0].assignments
+                or reply.assignment_id != dispatch.assignment.assignment_id
+                or reply.mode is not dispatch.assignment.mode
+                or any(input_id not in dispatch.assignment.input_ids for input_id in reply.input_ids)
+                or identity not in source.payload.reply_event_ids
+                or item.input_id != identity or item.kind is not CollaborationInputKind.CONVERSATION_EVENT
+                or item.state is not CollaborationInputState.PRESENT
+                or item.start_line is not None or item.end_line is not None
+                or item.revision_digest != self._specialist_reply_digest(reply)):
+                raise ValueError("authoring admission pending reply is not exact host input")
+            running = tuple(event for event in events
+                            if type(event.payload) is CollaborationStepStatePayload
+                            and (event.session_id, event.conversation_id, event.turn_id, event.step_id) == header
+                            and event.payload.state is CollaborationStepState.RUNNING
+                            and event.payload.execution_attempt_id == reply.execution_attempt_id
+                            and (event.payload.proposal_id, event.payload.proposal_revision, event.payload.proposal_digest) == key)
+            if len(running) != 1:
+                raise ValueError("authoring admission pending reply lacks exact running attempt")
+            pending = self._draft_with_id(
+                event_id=identity, session_id=source.session_id, conversation_id=source.conversation_id,
+                turn_id=source.turn_id, step_id=source.step_id, kind=CollaborationEventKind.SPECIALIST_REPLY,
+                sender=CollaborationActor(CollaborationActorKind.SPECIALIST, dispatch.assignment.specialist_id),
+                recipient=_USER_ACTOR if proposals[0].step_kind is CollaborationStepKind.SPECIALIST_ADVISORY else _LEAD_ACTOR,
+                payload=reply,
+            )
+            stored = tuple(event for event in events if event.event_id == identity)
+            if len(stored) > 1:
+                raise ValueError("authoring admission material origin is ambiguous")
+            if stored:
+                original = stored[0]
+                if ((original.session_id, original.conversation_id, original.turn_id, original.step_id) != header
+                    or original.kind is not pending.kind or original.sender != pending.sender
+                    or original.recipient != pending.recipient or original.payload != reply):
+                    raise ValueError("authoring admission pending reply conflicts with stored origin")
+                return original
+            return pending
+
+        def pending_origin(item: CollaborationInputRevision) -> CollaborationEvent | CollaborationEventDraft | None:
+            if pending_material is None:
+                return None
+            if type(pending_material) is not CollaborationEventDraft:
+                raise ValueError("authoring admission pending material must be an exact typed draft")
+            if item.locator != f"conversation/{pending_material.event_id}":
+                return pending_reply_origin(item)
+            source = pending_material
+            header = (source.session_id, source.conversation_id, source.turn_id, source.step_id)
+            expected_kind = (CollaborationEventKind.MESSAGE
+                             if type(source.payload) is CollaborationLeadJudgmentPayload
+                             else CollaborationEventKind.LEAD_SYNTHESIS)
+            if (type(source.payload) not in {CollaborationLeadJudgmentPayload, CollaborationLeadSynthesisPayload}
+                    or source.kind is not expected_kind or source.sender != _LEAD_ACTOR
+                    or source.recipient != _USER_ACTOR
+                    or not any((event.session_id, event.conversation_id, event.turn_id, event.step_id)
+                               == header for event in events)
+                    or item.kind is not CollaborationInputKind.CONVERSATION_EVENT
+                    or item.state is not CollaborationInputState.PRESENT
+                    or item.start_line is not None or item.end_line is not None
+                    or item.revision_digest != self._recommendation_event_digest(source)):
+                raise ValueError("authoring admission pending material is not exact host input")
+            stored = tuple(event for event in events if event.event_id == source.event_id)
+            if len(stored) > 1:
+                raise ValueError("authoring admission material origin is ambiguous")
+            if stored:
+                original = stored[0]
+                if ((original.session_id, original.conversation_id, original.turn_id, original.step_id) != header
+                        or original.kind is not source.kind or original.sender != source.sender
+                        or original.recipient != source.recipient or original.payload != source.payload):
+                    raise ValueError("authoring admission pending material conflicts with stored origin")
+                return original
+            return source
+
+        lengths = {}
+        for item in inputs:
+            text = None
+            if item.kind is CollaborationInputKind.USER_INPUT and pending_user_text is not None:
+                text = pending_user_text
+                if "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest() != item.revision_digest:
+                    raise ValueError("pending USER admission bytes changed")
+            elif item.kind is CollaborationInputKind.USER_INPUT:
+                value = self._collaboration_input_value(item, events, evidence=evidence)
+                text = value.get("text")
+            elif item.kind is CollaborationInputKind.CONVERSATION_EVENT:
+                matches = tuple(v for v in events if v.event_id == item.locator.removeprefix("conversation/"))
+                pending = pending_origin(item)
+                if pending is not None or len(matches) == 1:
+                    payload = pending.payload if pending is not None else matches[0].payload
+                    if type(payload) in {CollaborationLeadMaterialCapturePayload,
+                            CollaborationPremiseSelectionPayload, CollaborationExplorationAdoptionPayload}:
+                        text = payload.capture.selected_text
+                    elif type(payload) in {CollaborationSpecialistReplyPayload, CollaborationLeadSynthesisPayload,
+                                          CollaborationLeadJudgmentPayload}:
+                        text = payload.message
+                    elif type(payload) is CollaborationLeadPublicResponsePayload:
+                        text = payload.response.response_text
+                    elif type(payload) is CollaborationLeadDiscussionPayload:
+                        text = payload.report.response_text
+            lengths[item.input_id] = None if type(text) is not str else len(text.encode("utf-8", errors="strict"))
+        facts = authoring_source_facts(inputs, evidence, selected_utf8_bytes=lengths)
+        qualified_sources = []
+        snapshots = {}
+        for source in facts:
+            authority = source.original_authority
+            if source.kind is AdmissionSourceKind.MATERIAL and source.source_identity.startswith("conversation/"):
+                matches = tuple(event for event in events
+                                if event.event_id == source.source_identity.removeprefix("conversation/"))
+                item = next(value for value in inputs if value.input_id == source.source_id)
+                pending = pending_origin(item)
+                if pending is None and len(matches) != 1:
+                    raise ValueError("authoring admission material origin missing or ambiguous")
+                payload = pending.payload if pending is not None else matches[0].payload
+                if type(payload) is CollaborationLeadMaterialCapturePayload:
+                    capture = payload.capture
+                    ref = capture.source
+                    if ref.kind is LeadMaterialKind.PUBLIC_RESPONSE:
+                        if ref.session_id not in snapshots:
+                            snapshots[ref.session_id] = self._editorial_snapshot(ref.session_id)
+                        snapshot = snapshots[ref.session_id]
+                        if self._selected_task_material(snapshot, ref) != capture.selected_text:
+                            raise ValueError("authoring admission selected public bytes changed")
+                        payload = next(record.payload for row in snapshot.conversations
+                                       if row.metadata.conversation_id == ref.conversation_id
+                                       for record in row.records if record.event_id == ref.event_id)
+                if (type(payload) is CollaborationLeadPublicResponsePayload
+                        and payload.response.acceptance is LeadPublicResponseAcceptance.REJECTED):
+                    authority = "rejected_public_response"
+            qualified_sources.append(replace(source, original_authority=authority))
+        return qualify_authoring_assessment(assessment,
+            sources=tuple(qualified_sources),
+            request_digest=user[0].revision_digest, task_id=scope.task_id,
+            task_revision=scope.task_revision, scope_digest=admission_digest(authoring_scope_to_dict(scope)))
+
     def _build_lead_proposal(
         self,
         *,
@@ -15021,6 +15528,7 @@ class StoryRuntime:
         }
         _bound_editorial_refs, _bound_editorial_digest = ((), None) if intent.premise_decision is not None else self._editorial_context_for_scope(session_id, intent.authoring_scope, session_history)
         basis = CollaborationProposalBasis(
+            authoring_admission=intent.authoring_admission,
             route="lead_specialist_consultation",
             route_fingerprint=self._canonical_digest(route_value),
             agent_profiles=profiles,
@@ -15143,6 +15651,15 @@ class StoryRuntime:
             )
             if specialist_ids != canonical:
                 raise ValueError("proposal specialist order is no longer canonical")
+            if (self._official_authoring_scope(proposal.authoring_scope)
+            or proposal.basis.authoring_admission is not None):
+                assert proposal.authoring_scope is not None
+                current_admission = self._qualify_authoring_inputs(
+                    proposal.basis.authoring_admission.assessment if proposal.basis.authoring_admission else None,
+                    inputs=inputs, evidence=proposal.basis.evidence, scope=proposal.authoring_scope, events=events)
+                if (type(current_admission) is not AuthoringAdmissionBasis
+                        or current_admission != proposal.basis.authoring_admission):
+                    raise ValueError("official authoring admission is missing or stale")
             if proposal.authoring_scope is not None:
                 validate_specialist_routing(proposal.authoring_scope, specialist_ids,
                                             affected_paths=self._authoring_affected_paths(inputs, proposal.basis.evidence))
@@ -15221,6 +15738,7 @@ class StoryRuntime:
                 ],
             }
             basis = CollaborationProposalBasis(
+                authoring_admission=proposal.basis.authoring_admission,
                 route=route_name,
                 route_fingerprint=self._canonical_digest(route_value),
                 agent_profiles=profiles,
@@ -16403,7 +16921,7 @@ class StoryRuntime:
             receipts=tuple(available_by_id[item] for item in selected_ids),
         )
         try:
-            CollaborationLeadJudgmentPayload(outcome.kind, outcome.message, evidence, outcome.authoring_scope)
+            CollaborationLeadJudgmentPayload(outcome.kind, outcome.message, evidence, outcome.authoring_scope, authoring_admission=outcome.authoring_admission)
         except (TypeError, ValueError) as exc:
             raise carry_validation(
                 validation_failure(
@@ -17614,11 +18132,16 @@ class RuntimeSession:
         self,
         conversation_id: str,
         prompt: str,
-    ) -> ConsensusRuntimeInspection:
+        *,
+        authoring_assessment: AuthoringAssessment | None = None,
+        authoring_direction: str | None = None,
+    ) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded:
         return self.runtime.submit_consensus_prompt(
             self.session_id,
             conversation_id,
             prompt,
+            authoring_assessment=authoring_assessment,
+            authoring_direction=authoring_direction,
         )
 
     def submit_consensus_draft(
@@ -17627,12 +18150,16 @@ class RuntimeSession:
         draft: str,
         *,
         intent: AuthoringIntent = AuthoringIntent.AUTHORING,
-    ) -> ConsensusRuntimeInspection:
+        authoring_assessment: AuthoringAssessment | None = None,
+        authoring_direction: str | None = None,
+    ) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded:
         return self.runtime.submit_consensus_draft(
             self.session_id,
             conversation_id,
             draft,
             intent=intent,
+            authoring_assessment=authoring_assessment,
+            authoring_direction=authoring_direction,
         )
 
     def inspect_consensus(
@@ -17705,7 +18232,8 @@ class RuntimeSession:
         mode: ConsensusContinuationMode,
         ruling: str,
         added_revision_rounds: int,
-    ) -> ConsensusRuntimeInspection:
+        authoring_assessment: AuthoringAssessment | None = None,
+    ) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded:
         return self.runtime.continue_consensus_deadlock(
             self.session_id,
             conversation_id,
@@ -17715,7 +18243,7 @@ class RuntimeSession:
             mode=mode,
             ruling=ruling,
             added_revision_rounds=added_revision_rounds,
-        )
+            authoring_assessment=authoring_assessment)
 
     def inspect_editorial_state(self) -> EditorialStateProjection:
         return self.runtime.inspect_editorial_state(self.session_id)
@@ -17774,7 +18302,8 @@ class RuntimeSession:
         action_progress_sink: ContextActionProgressSink | None = None,
         authoring_scope: AuthoringScope | None = None,
         review_basis: ReviewBasis | None = None,
-    ) -> LeadTurnResult:
+        authoring_assessment: AuthoringAssessment | None = None,
+    ) -> LeadTurnResult | AuthoringAdmissionNeeded:
         """Propose one provider-free direct advisory in this session."""
 
         return await self.runtime.propose_specialist_advisory(
@@ -17786,6 +18315,7 @@ class RuntimeSession:
             action_progress_sink=action_progress_sink,
             authoring_scope=authoring_scope,
             review_basis=review_basis,
+            authoring_assessment=authoring_assessment,
         )
 
     async def decide_lead_recommendation(

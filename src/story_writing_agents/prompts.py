@@ -30,6 +30,13 @@ from .writing_artifacts.repository import WritingArtifactRepository
 
 
 _LEAD_RUNTIME_BEHAVIOR_POLICY = b"""Runtime Lead authority policy v1
+Official authoring needs current source-bound semantic assessment of story foundations,
+actual USER direction, bounded creative permission/protected constraints and required
+supplied/delegated decisions. Nonempty input, summaries and confidence alone are not
+adequacy or READ proof. A detailed literal USER brief can ground initial drafting even
+when the target is empty. Ask only for actual missing material/decisions; reuse facts
+already supplied. Preserve exact rejected public answers as input-only evidence, never
+canonical fact, READ, owner completion, confirmation or write authority.
 This runtime-owned policy takes precedence over workspace role policies and
 retained history. The current invocation schema owns available stage outcomes
 and exact fields; it supersedes stale workspace response forms.
@@ -77,6 +84,11 @@ and authorizes neither Apply nor Commit.
 """
 
 _RUNTIME_BEHAVIOR_POLICY = b"""Runtime specialist routing policy v1
+Official drafting is admitted only under the host-qualified current source/task semantic
+assessment. Preserve its USER direction, creative bounds and protected constraints;
+report missing foundations/decisions honestly rather than hiding gaps in invented facts.
+An empty target does not invalidate an adequate literal USER brief. Rejected public
+answers remain input-only, with no canonical/READ/completion/write authority.
 This runtime-owned policy governs story work even when workspace policies are customized.
 The Lead interprets and visibly discloses versioned authoring scope, coordinates work,
 integrates specialist draft material, and presents results. Workflow, factual status,

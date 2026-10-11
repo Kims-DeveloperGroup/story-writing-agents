@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
-from dataclasses import replace
+from dataclasses import asdict, replace
 from unittest import mock
 
 from story_writing_agents import StoryRuntime, Workspace
@@ -62,12 +62,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
 
     def snapshots(self):
         return (
-            tuple(
-                (a.path, a.content)
-                for a in WritingArtifactRepository(
-                    self.workspace.root
-                ).capture_complete_state()
-            ),
+            tuple( (a.path, a.content) for a in WritingArtifactRepository( self.workspace.root ).capture_complete_state() ),
             subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=self.workspace.root),
             subprocess.check_output(["git", "diff", "--cached", "--binary"], cwd=self.workspace.root),
         )
@@ -93,6 +88,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
     async def start(self, conversation_id=None, *, message=DRAFT, objective_id=None,
                     target_path=OUTLINE, specialist_ids=(PLOT_ARCHITECT,)):
         from tests.test_specialist_routing_runtime import scoped_proposal
+        from tests.recommendation_fixture import task_assessment
 
         conversation_id = conversation_id or self.conversation()
         paths = () if target_path is None else (target_path,)
@@ -108,13 +104,13 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         self.backend.enqueue(scoped_proposal(
             *specialist_ids, paths=paths,
             domains=(() if target_path is not None and specialist_ids == (PLOT_ARCHITECT,) else
-                     tuple({"plot_architect": "plot_structure", "character_custodian": "character_world",
-                            "execution_specialist": "tone_execution"}[agent] for agent in specialist_ids)),
+                     tuple({"plot_architect": "plot_structure", "character_custodian": "character_world", "execution_specialist": "tone_execution"}[agent] for agent in specialist_ids)),
             selected=self.objective_tasks.get(objective_id),
             mutate=lambda value, _material: value.update(objective_intent=intent),
+            authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=('scene transitions', 'supporting dialogue')),
         ))
         proposed = await self.runtime.lead_turn(self.session_id, conversation_id,
-            f"Draft {target_path or 'a synthetic scene'} from this brief: a lantern vanishes, its keeper is found, and it returns.")
+            (f"Draft {target_path or 'a synthetic scene'} from this brief: a lantern vanishes, its keeper is found, and it returns." + " Invent scene transitions and supporting dialogue; preserve the supplied brief facts."))
         self.assertIs(proposed.kind, c.LeadOutcomeKind.PROPOSAL, proposed)
         self.assertEqual(proposed.proposal.participants, specialist_ids)
         if intent is not None:
@@ -138,12 +134,8 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
 
     async def clarify(self, conversation_id=None, *, message="Which consequence should close the outline?"):
         conversation_id = conversation_id or self.conversation()
-        self.backend.enqueue(self.question(intent={
-            "action": "start", "request": "Prepare the approved synthetic outline.",
-            "target_paths": [OUTLINE], "next_step": "clarify", "draft_source_event_ids": [],
-        }, message=message))
-        turn = await self.runtime.lead_turn(self.session_id, conversation_id,
-            f"Help me clarify the ending before drafting {OUTLINE}.")
+        self.backend.enqueue(self.question(intent={ "action": "start", "request": "Prepare the approved synthetic outline.", "target_paths": [OUTLINE], "next_step": "clarify", "draft_source_event_ids": [], }, message=message))
+        turn = await self.runtime.lead_turn(self.session_id, conversation_id, f"Help me clarify the ending before drafting {OUTLINE}.")
         self.assertIs(turn.kind, c.LeadOutcomeKind.QUESTION)
         judgment = next(e.payload for e in reversed(self.history(conversation_id))
                         if isinstance(e.payload, c.CollaborationLeadJudgmentPayload))
@@ -155,7 +147,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
             await self.start(conversation_id, message=text)
         objective = self.objective(conversation_id)
         source = self.projection(conversation_id).offered_draft_sources[-1]
-        from tests.recommendation_fixture import action, recommendation, decision
+        from tests.recommendation_fixture import action, recommendation, decision, task_assessment
         scope = next(event.payload.authoring_scope for event in self.history(conversation_id) if event.event_id == source.event_id)
         self.assertEqual((scope.schema_version, scope.activity), (3, lead.AuthoringActivity.DRAFT))
         intent = {"action": "continue", "objective_id": objective.facts.objective_id,
@@ -169,16 +161,17 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         def prepare_current_task(call, provider):
             value = json.loads(response(call, provider))
             value["action"]["result"]["authoring_scope"] = lead._compact_scope(c.authoring_scope_to_dict(scope))
+            value["action"]["result"]["authoring_assessment"] = asdict(offered.recommendation_request.basis.authoring_admission.assessment)
             return json.dumps(value)
         def offer_current_task(call, provider):
             sources = ((source.event_id,) if select else ("user_input",)) + (
                 tuple(evidence(call, lead._workflow_material(call.payload))) if attached else ())
             return recommendation(message=scope.interpretation, authoring_scope=c.authoring_scope_to_dict(scope),
-                recommended_action=action(source_ids=sources, objective_id=objective.facts.objective_id,
-                    target_paths=objective.facts.target_paths))(call, provider)
+                recommended_action=action(source_ids=sources, objective_id=objective.facts.objective_id, target_paths=objective.facts.target_paths),
+                authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=('candidate preparation', 'separate proposal preparation')))(call, provider)
         self.backend.enqueue(offer_current_task)
         prompt = f"Prepare the next revision using ${{{OUTLINE}}}." if attached else "네, 그 초안 그대로 문서로 준비해 줘."
-        offered = await self.runtime.lead_turn(self.session_id, conversation_id, prompt)
+        offered = await self.runtime.lead_turn(self.session_id, conversation_id, ("Finished candidate:\n" + text + "\nYou may prepare this candidate and a separate proposal; preserve supplied facts.\n" + prompt))
         self.assertIs(offered.kind, c.LeadOutcomeKind.RECOMMENDATION, offered)
         self.backend.enqueue(prepare_current_task)
         result = await self.runtime.decide_lead_recommendation(decision(offered))
@@ -348,7 +341,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         self.assertEqual({field.key: field.text for field in objective_record.fields}, {
             c.CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_REQUEST: (
                 "Draft core_documents/global_outline.md from this brief: a lantern "
-                "vanishes, its keeper is found, and it returns."
+                "vanishes, its keeper is found, and it returns. Invent scene transitions and supporting dialogue; preserve the supplied brief facts."
             ),
             c.CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_ACTION: "start",
             c.CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_NEXT_STEP: "consult",

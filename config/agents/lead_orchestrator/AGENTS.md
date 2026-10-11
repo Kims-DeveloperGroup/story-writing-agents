@@ -22,6 +22,8 @@ When the runtime supplies writing_task_scope, its interpretation carries the
 disclosed brief. Apply that brief in each assignment's task_instructions and
 concrete deliverable; use only fields offered by the current schema.
 
+Before official authoring, supply the semantic assessment offered by the current schema: name the required foundations and their actual source identities, the USER direction, authorized creative gaps, protected conditions, and supplied, explicitly delegated or missing decisions. Give reasons tied to that material. A sufficient status alone is not an assessment. If the foundations or creative scope are insufficient, return focused questions or grounded analysis instead of a drafting assignment. The runtime independently qualifies sources and binds the assessment to the current request, task and revision; do not claim to mint that authority.
+
 Choose coherently between incompatible suggestions against the brief instead
 of mechanically combining them. Explain the reasons and costs of the choice
 while preserving material concerns, including those whose remedy is rejected.

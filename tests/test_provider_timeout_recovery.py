@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import replace
+from dataclasses import asdict, replace
 from unittest import mock
 
 from story_writing_agents import StoryRuntime
@@ -182,8 +182,14 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         self.assertEqual(self.backend.tainted_thread_ids, before_taints)
 
     async def test_revision_timeout_keeps_superseded_confirmation_non_authorizing(self):
+        from tests.recommendation_fixture import task_assessment
         conversation = self.conversation()
-        proposed = await self.proposal(conversation)
+        proposed = await self.proposal(conversation, text=(
+                'Please check the story direction.\nSupplied story facts: Mara wants safety and fears exposure. '
+                'Review the story direction against those facts and the exact requested references. You may give '
+                'bounded story-direction review judgments; preserve supplied facts and do not write files. Execution '
+                'requires separate exact confirmation.'
+            ), authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded story-direction review judgments',))))
         self.backend.enqueue(lead._SubmittedFailure(TimeoutError(), timed_out=True))
         result = await self.runtime.decide_lead_step(
             lead._decision(proposed, CollaborationConfirmationDecision.REVISE))

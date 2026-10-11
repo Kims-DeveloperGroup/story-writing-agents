@@ -48,6 +48,15 @@ Specialists are isolated. A Plot assignment cannot use a Character reply as if
 it were its own evidence, and a specialist never becomes a second user-facing
 lead.
 
+### Supply foundations and creative room
+
+Give Lead the story facts or selected material to use, the direction of the requested work, protected conditions, and the choices it may invent. A detailed USER brief can support initial creation while the target document is empty. Lead asks for a specific missing foundation or material choice when the supplied information cannot support official drafting.
+
+Read evidence records which source and revision were actually supplied. The semantic assessment explains how that material supports the particular task and its permitted creative choices. It keeps established facts, interpretations, creative proposals and unknowns distinct. Specialist calls do not establish a missing foundation, and already supplied facts do not need to be entered again.
+
+The same admission applies to Lead, direct specialist, adopted material, consensus AUTHORING and Python API paths. Referencing a rejected public answer preserves its exact input and original provenance; later use has fresh task qualification and the usual separate review, Apply and Commit decisions.
+
+
 ### Session worktree boundary
 
 The initialized `main` workspace is the runtime's control root: configuration,

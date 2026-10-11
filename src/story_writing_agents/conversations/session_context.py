@@ -8,7 +8,11 @@ session-wide event sequence.
 
 from __future__ import annotations
 
-from ..lead_task_transitions import LeadMaterialKind, task_material_sha256, task_value_to_dict
+from ..authoring_admission import AdmissionSourceKind, admission_basis_to_dict
+
+from ..lead_task_transitions import (
+    LeadMaterialKind, LeadPublicResponseAcceptance, task_material_sha256, task_value_to_dict,
+)
 
 import hashlib
 import json
@@ -252,7 +256,9 @@ def _legacy_visible_details(payload: object) -> dict[str, object]:
                 "branch": None if payload.result is None else payload.result.branch,
                 "commit_id": None if payload.result is None else payload.result.commit_id}
     if type(payload) is CollaborationProposal:
-        return {"side_effects": [item.value for item in payload.side_effects],
+        return {
+            **({"authoring_admission": admission_basis_to_dict(payload.basis.authoring_admission)}
+               if payload.basis.authoring_admission is not None else {}),"side_effects": [item.value for item in payload.side_effects],
                 "sources": [
                     {"input_id": item.input_id, "locator": item.locator,
                      "kind": item.kind.value, "state": item.state.value,
@@ -542,6 +548,44 @@ class SessionHistorySnapshot:
             ):
                 raise ValueError("session history inventory is inconsistent")
             previous = item.metadata.conversation_id
+        self._validate_material_admission_origins()
+
+    def _validate_material_admission_origins(self) -> None:
+        records = {(row.metadata.conversation_id, record.event_id): record
+                   for row in self.conversations for record in row.records}
+        for row in self.conversations:
+            for record in row.records:
+                if type(record.payload) not in {CollaborationProposal, LeadRecommendationRequestPayload}:
+                    continue
+                admission = record.payload.basis.authoring_admission
+                if admission is None:
+                    continue
+                for source in admission.sources:
+                    if source.kind is not AdmissionSourceKind.MATERIAL:
+                        continue
+                    authority = "input_only"
+                    if source.source_identity.startswith("conversation/"):
+                        origin = records.get((row.metadata.conversation_id,
+                                              source.source_identity.removeprefix("conversation/")))
+                        if origin is None:
+                            raise ValueError("authoring admission material origin unavailable")
+                        payload = origin.payload
+                        if type(payload) is CollaborationLeadMaterialCapturePayload:
+                            capture = payload.capture
+                            ref = capture.source
+                            if ref.kind is LeadMaterialKind.PUBLIC_RESPONSE:
+                                selected = records.get((ref.conversation_id, ref.event_id))
+                                if (ref.session_id != self.session_id or selected is None
+                                        or type(selected.payload) is not CollaborationLeadPublicResponsePayload
+                                        or selected.payload.response.response_text != capture.selected_text
+                                        or task_material_sha256(capture.selected_text) != ref.material_digest):
+                                    raise ValueError("authoring admission selected public origin changed")
+                                payload = selected.payload
+                        if (type(payload) is CollaborationLeadPublicResponsePayload
+                                and payload.response.acceptance is LeadPublicResponseAcceptance.REJECTED):
+                            authority = "rejected_public_response"
+                    if source.original_authority != authority:
+                        raise ValueError("authoring admission material provenance changed")
 
     def exploration_source(self, selection: ExplorationAdoptionSelection, *, latest: bool = True) -> CollaborationEvent:
         """Qualify a real same-session idea; retained captures keep their exact source."""

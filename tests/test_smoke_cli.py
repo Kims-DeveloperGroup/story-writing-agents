@@ -102,12 +102,15 @@ def execution_artifacts(workspace: Workspace) -> tuple[str, ...]:
 
 def editorial_run(*arguments, input_text=None):
     tool = Path(__file__).resolve().parents[1] / "tools" / "evaluate_lead_editorial.py"
-    return subprocess.run(
-        [sys.executable, str(tool), *map(str, arguments)],
-        capture_output=True,
-        text=True,
-        check=False, input=input_text,
-    )
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as standard_input:
+        standard_input.write(input_text or "")
+        standard_input.seek(0)
+        return subprocess.run(
+            [sys.executable, str(tool), *map(str, arguments)],
+            capture_output=True,
+            text=True,
+            check=False, stdin=standard_input if input_text is not None else None,
+        )
 
 
 def editorial_action(command, dataset, captures, *, packet=None, reviews=None, output):

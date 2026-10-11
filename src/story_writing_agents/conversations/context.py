@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..authoring_admission import AdmissionSourceKind, AuthoringAdmissionBasis
+
 from ..lead_task_transitions import (
     LeadTaskAction, LeadTaskDecision, LeadTaskRef, LeadMaterialRef,
     LeadMaterialKind, LeadTaskTransitionReceipt, LeadMaterialCapture,
@@ -3638,10 +3640,97 @@ def _public_response_omission_call(
     return None
 
 
+def _validate_authoring_admission_provenance(
+    proposal: CollaborationProposal | LeadRecommendationRequestPayload, prior: dict[str, CollaborationEvent],
+) -> None:
+    """Validate immutable USER/material origins on original physical history."""
+    basis = proposal.basis.authoring_admission
+    if basis is None:
+        return
+    if type(basis) is not AuthoringAdmissionBasis:
+        raise ValueError("authoring admission basis is invalid")
+    for source in basis.sources:
+        if source.kind is AdmissionSourceKind.USER:
+            prefix, suffix = "conversation/", "/user_input"
+            if not source.source_identity.startswith(prefix) or not source.source_identity.endswith(suffix):
+                raise ValueError("authoring admission USER source identity is invalid")
+            turn_id = source.source_identity[len(prefix):-len(suffix)]
+            origins = tuple(event for event in prior.values()
+                if event.turn_id == turn_id and type(event.payload) is CollaborationMessagePayload
+                and event.sender.kind is CollaborationActorKind.USER
+                and event.recipient.kind is CollaborationActorKind.LEAD)
+            if len(origins) != 1:
+                raise ValueError("authoring admission USER origin is missing or ambiguous")
+            digest = "sha256:" + hashlib.sha256(origins[0].payload.content.encode("utf-8")).hexdigest()
+            if (digest != source.revision_digest
+                    or len(origins[0].payload.content.encode("utf-8")) != source.utf8_bytes):
+                raise ValueError("authoring admission USER bytes changed")
+        elif source.kind is AdmissionSourceKind.MATERIAL:
+            text = None
+            authority = "input_only"
+            if source.source_identity.startswith("conversation/"):
+                origin = prior.get(source.source_identity.removeprefix("conversation/"))
+                if origin is None:
+                    raise ValueError("authoring admission material origin is unavailable")
+                payload = origin.payload
+                if type(payload) in {CollaborationLeadMaterialCapturePayload,
+                        CollaborationPremiseSelectionPayload, CollaborationExplorationAdoptionPayload}:
+                    text = payload.capture.selected_text
+                    if type(payload) is CollaborationLeadMaterialCapturePayload:
+                        ref = payload.capture.source
+                        if ref.conversation_id != origin.conversation_id:
+                            authority = None  # Exact foreign lineage is checked by the session snapshot.
+                        elif ref.kind is LeadMaterialKind.PUBLIC_RESPONSE:
+                            selected = prior.get(ref.event_id)
+                            if (selected is None
+                                    or (selected.session_id, selected.conversation_id) !=
+                                    (ref.session_id, ref.conversation_id)
+                                    or type(selected.payload) is not CollaborationLeadPublicResponsePayload
+                                    or selected.payload.response.response_text != text
+                                    or task_material_sha256(text) != ref.material_digest):
+                                raise ValueError("authoring admission selected public origin changed")
+                            if selected.payload.response.acceptance is LeadPublicResponseAcceptance.REJECTED:
+                                authority = "rejected_public_response"
+                elif type(payload) in {CollaborationSpecialistReplyPayload, CollaborationLeadSynthesisPayload,
+                                      CollaborationLeadJudgmentPayload}:
+                    text = payload.message
+                    if (type(payload) in {CollaborationLeadJudgmentPayload, CollaborationLeadSynthesisPayload}
+                            and source.revision_digest != "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()):
+                        raise ValueError("authoring admission stored material digest changed")
+                elif type(payload) is CollaborationLeadPublicResponsePayload:
+                    text = payload.response.response_text
+                    if payload.response.acceptance is LeadPublicResponseAcceptance.REJECTED:
+                        authority = "rejected_public_response"
+                elif type(payload) is CollaborationLeadDiscussionPayload:
+                    text = payload.report.response_text
+            length = None if type(text) is not str else len(text.encode("utf-8"))
+            if length != source.utf8_bytes:
+                raise ValueError("authoring admission material byte observation changed")
+            if authority is not None and authority != source.original_authority:
+                raise ValueError("authoring admission material provenance changed")
+
+
 def _project_task_context(
     events: tuple[CollaborationEvent, ...], projection: CollaborationHistoryProjection,
+    *, _source_history: tuple[CollaborationEvent, ...] = (),
 ) -> CollaborationHistoryProjection:
     """Validate USER controls and project literal material without execution proof."""
+    def _authoring_source_prior(subject: CollaborationEvent) -> dict[str, CollaborationEvent]:
+        source_prior: dict[str, CollaborationEvent] = {}
+        for original in _source_history or events:
+            if (original.session_id, original.conversation_id) != (
+                subject.session_id, subject.conversation_id,
+            ):
+                raise ValueError("authoring admission source history changed owner")
+            if original.event_id == subject.event_id:
+                if original != subject:
+                    raise ValueError("authoring admission source subject changed")
+                return source_prior
+            if original.sequence >= subject.sequence or original.event_id in source_prior:
+                raise ValueError("authoring admission source prefix is not exact")
+            source_prior[original.event_id] = original
+        raise ValueError("authoring admission source subject is unavailable")
+
     def _artifact_revision_source(receipt, original, history) -> bool:
         if (
             receipt is None or original is None
@@ -3778,6 +3867,8 @@ def _project_task_context(
                 and _public_response_omission_call(event, tuple(prior.values())) is None):
             raise ValueError("public omission notice requires exact submitted-call display facts")
         scope = getattr(payload, "authoring_scope", None)
+        if type(payload) in {CollaborationProposal, LeadRecommendationRequestPayload}:
+            _validate_authoring_admission_provenance(payload, _authoring_source_prior(event))
         if type(payload) is CollaborationProposal and scope is not None:
             planning = next((control.payload.receipt for control in reversed(tuple(transitions.values()))
                              if (control.payload.receipt.target_task_id,
@@ -4374,7 +4465,7 @@ def _project_validated_collaboration_history(
         )
         base = replace(base, session_id=events[0].session_id,
                        conversation_id=events[0].conversation_id)
-        return _project_task_context(events, base)
+        return _project_task_context(events, base, _source_history=_control_history or events)
     _validate_editorial_event_headers(events)
     workflow_events = tuple(event for event in events if type(event.payload) is not CollaborationEditorialRecordPayload)
     if len(workflow_events) != len(events):
@@ -5407,7 +5498,7 @@ def _project_validated_collaboration_history(
         current_recommendation_start=recommendation_start,
         current_recommendation_result=recommendation_result,
         current_recommendation_state=recommendation_state,
-    ))
+    ), _source_history=_control_history or events)
 
 
 def _project_artifact_objective_history(

@@ -1,6 +1,7 @@
 """Pure routing, versioned wire compatibility, and draft/review acceptance."""
 from dataclasses import FrozenInstanceError, fields, replace
 import json
+import hashlib
 from pathlib import Path
 import unittest
 from story_writing_agents import lead_premise_decisions as premise
@@ -147,40 +148,49 @@ class SpecialistRoutingTests(unittest.TestCase):
             premise.premise_spec_from_dict({**encoded, "candidate_input_ids": ["user_input"]})
 
     def test_legacy_proposal_bytes_stay_omitted_and_new_scope_changes_digest(self):
-        frozen = json.loads((Path(__file__).parent / "fixtures/authoring_scope_compatibility/scope_v2_basis_v1_76a80f7.json").read_bytes())
-        self.assertEqual(frozen["source_commit"], "76a80f72be711d927fff7eee4ee455d3b37802c4")
-        for case in frozen["cases"].values():
-            historical = c.decode_collaboration_proposal(case["proposal_utf8"].encode())
-            self.assertEqual(c.encode_collaboration_proposal(historical), case["proposal_utf8"].encode())
-            self.assertEqual(historical.proposal_digest, case["proposal_digest"])
-            for key in ("contributions", "dependency_slots"):
-                with self.assertRaises(ValueError): c.authoring_scope_from_dict(dict(c.authoring_scope_to_dict(historical.authoring_scope), **{key: []}))
-            poisoned = json.loads(case["proposal_utf8"])
-            poisoned["proposal"]["basis"]["shared_premises"] = []
-            with self.assertRaises(ValueError): c.decode_collaboration_proposal(json.dumps(poisoned, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode())
+        from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
         legacy = fixture.make_proposal()
         before = c.encode_collaboration_proposal(legacy)
         self.assertNotIn(b'authoring_scope', before)
         self.assertNotIn(b'review_basis', before)
         self.assertEqual(c.encode_collaboration_proposal(c.decode_collaboration_proposal(before)), before)
-        assignments = tuple(replace(a, mode=Mode.DRAFT) for a in legacy.assignments)
+        assignments = tuple(replace(a, input_ids=(*a.input_ids, 'user_input'), mode=Mode.DRAFT) for a in legacy.assignments)
         scope = self.scope(domains=(Domain.PLOT_STRUCTURE, Domain.CHARACTER_WORLD))
         values = {f.name:getattr(legacy,f.name) for f in fields(legacy) if f.name != "proposal_digest"}
-        values.update(authoring_scope=scope, assignments=assignments)
+        values.update(authoring_scope=scope, assignments=assignments, basis=fixture.qualify_fixture_basis(legacy.basis, scope, user_text=_ADMISSION_BRIEF, assessment=_fixture_assessment()))
         scoped = c.CollaborationProposal.create(**values)
         wire = c.encode_collaboration_proposal(scoped)
         self.assertEqual(c.decode_collaboration_proposal(wire), scoped)
         self.assertNotEqual(scoped.proposal_digest, legacy.proposal_digest)
-        for change in ({"task_revision": 2}, {"interpretation": "A different visible interpretation."},
-                       {"target_paths": ("core_documents/global_outline.md",)}):
-            changed = c.CollaborationProposal.create(**dict(values, authoring_scope=replace(scope, **change)))
+        frozen = json.loads((Path(__file__).parent / "fixtures/authoring_scope_compatibility/scope_v2_basis_v1_76a80f7.json").read_bytes())
+        self.assertEqual(frozen["source_commit"], "76a80f72be711d927fff7eee4ee455d3b37802c4")
+        for case in frozen["cases"].values():
+            raw = case["proposal_utf8"].encode()
+            self.assertEqual(hashlib.sha256(raw).hexdigest(), case["proposal_sha256"])
+            self.assertEqual(json.loads(raw)["proposal"]["proposal_digest"], case["proposal_digest"])
+            historical_scope = c.authoring_scope_from_dict(json.loads(case["scope_utf8"]))
+            if case["intent"] == "authoring":
+                with self.assertRaises(ValueError):
+                    c.decode_collaboration_proposal(raw)
+            else:
+                historical = c.decode_collaboration_proposal(raw)
+                self.assertEqual(c.encode_collaboration_proposal(historical), raw)
+            for key in ("contributions", "dependency_slots"):
+                with self.assertRaises(ValueError): c.authoring_scope_from_dict(dict(c.authoring_scope_to_dict(historical_scope), **{key: []}))
+            poisoned = json.loads(c.encode_collaboration_proposal(scoped))
+            poisoned["proposal"]["basis"]["shared_premises"] = []
+            with self.assertRaises(ValueError): c.decode_collaboration_proposal(json.dumps(poisoned, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode())
+        for change in ({'task_revision': 2}, {'interpretation': 'A different visible interpretation.'}, {'target_paths': ('core_documents/global_outline.md',)}):
+            changed_scope = replace(scope, **change)
+            changed = c.CollaborationProposal.create(**dict(values, authoring_scope=changed_scope,
+                basis=fixture.qualify_fixture_basis(legacy.basis, changed_scope, user_text=_ADMISSION_BRIEF, assessment=_fixture_assessment())))
             self.assertNotEqual(changed.proposal_digest, scoped.proposal_digest)
         self.assertEqual(c.encode_collaboration_proposal(legacy), before)
         from story_writing_agents.conversations import events as owner
         scope3 = replace(scope, schema_version=3, contributions=tuple(Contribution(domain, Role.DRAFT_OWNER) for domain in scope.domains), dependency_slots=(Slot("setting", (Domain.PLOT_STRUCTURE,)),))
         source = owner.CollaborationPremiseSource(scoped.basis.inputs[0], None)
         premise = owner.CollaborationSharedPremise("setting", "Exact café 한글\r\n  ", (source,))
-        basis2 = replace(scoped.basis, schema_version=2, shared_premises=(premise,))
+        basis2 = fixture.qualify_fixture_basis(replace(legacy.basis, schema_version=2, shared_premises=(premise,)), scope3, user_text=_ADMISSION_BRIEF, assessment=_fixture_assessment())
         current = c.CollaborationProposal.create(**dict(values, authoring_scope=scope3, basis=basis2))
         self.assertEqual(c.decode_collaboration_proposal(c.encode_collaboration_proposal(current)), current)
         self.assertNotEqual(current.proposal_digest, scoped.proposal_digest)
