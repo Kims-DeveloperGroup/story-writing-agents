@@ -4,6 +4,7 @@ from __future__ import annotations
 from story_writing_agents.specialist_routing import AuthoringIntent
 import hashlib
 from tests.test_consensus_projection import (
+    AuthoringTarget, _qualify_readiness_fixture_port,
     _ADMISSION_BRIEF, _FIXTURE_DRAFT, _FIXTURE_RULING, _FIXTURE_TEXTS, _UNIT_DIRECTION,
     _USER_ASSESSMENT, _MATERIAL_ASSESSMENT, _RULING_ASSESSMENT, _unit_basis,
     _qualify_fixture_port, _capture_fixture_direction, _validate_fixture_port,
@@ -84,6 +85,7 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
             authoring_admission=_unit_basis(_IDENTITY, "workflow-1", _INPUT_MATERIAL, _MATERIAL_ASSESSMENT,
                 input_kind=ConsensusInputKind.PROMPT
             ),
+            authoring_target=AuthoringTarget.GLOBAL_OUTLINE,
             authoring_direction=_UNIT_DIRECTION,
         )
 
@@ -151,10 +153,7 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
                 (PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST),
                 ConsensusPhase.SYNTHESIS,
             ),
-            ConsensusPhase.SYNTHESIS: (
-                (LEAD_ORCHESTRATOR,),
-                ConsensusPhase.FINALIZATION,
-            ),
+            ConsensusPhase.SYNTHESIS: ((LEAD_ORCHESTRATOR,), ConsensusPhase.FINALIZATION,),
             ConsensusPhase.FINALIZATION: ((LEAD_ORCHESTRATOR,), None),
         }
         for phase, (expected_agents, expected_next) in routes.items():
@@ -217,15 +216,10 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
         async def invoke(invocation):
             return replace(await self.valid_result(invocation), validation_details=details)
 
-        _, _, _, _, receipt = await self.execute(
-            ConsensusPhase.DRAFT, appended.append, invoke,
-        )
+        _, _, _, _, receipt = await self.execute(ConsensusPhase.DRAFT, appended.append, invoke,)
         self.assertIs(receipt.state, ConsensusPhaseState.COMPLETED)
         self.assertEqual(receipt.provider_results[0].validation_details, details)
-        self.assertEqual(
-            receipt.terminal_event.payload.validation_details_by_provider,
-            (details,),
-        )
+        self.assertEqual(receipt.terminal_event.payload.validation_details_by_provider,(details,),)
         self.assertEqual(receipt.terminal_event.payload.next_phase, ConsensusPhase.AUDIT)
 
     async def test_audit_validation_details_keep_provider_ordinal_order(self) -> None:
@@ -234,9 +228,7 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
         async def invoke(invocation):
             return replace(
                 await self.valid_result(invocation),
-                validation_details=(
-                    f"Original response\n$.auditor_{invocation.ordinal}: expected string",
-                ),
+                validation_details=(f"Original response\n$.auditor_{invocation.ordinal}: expected string",),
             )
 
         _, _, _, _, receipt = await self.execute(ConsensusPhase.AUDIT, appended.append, invoke,)
@@ -270,25 +262,17 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
             )
 
         appended = []
-        _, _, _, _, receipt = await self.execute(
-            ConsensusPhase.DRAFT, appended.append, invoke,
-        )
+        _, _, _, _, receipt = await self.execute(ConsensusPhase.DRAFT, appended.append, invoke,)
         self.assertIs(receipt.state, ConsensusPhaseState.FAILED)
         self.assertEqual(receipt.provider_results[0].validation_details, details)
-        self.assertEqual(
-            receipt.terminal_event.payload.validation_details_by_provider,
-            (details,),
-        )
+        self.assertEqual(receipt.terminal_event.payload.validation_details_by_provider,(details,),)
         self.assertEqual(appended[-1], receipt.terminal_event)
 
     async def test_invalid_typed_provider_result_keeps_report_without_accepting_result(
         self,
     ) -> None:
         details = ("Original response\n$.candidate: expected a new candidate",)
-        cases = (
-            (ConsensusPhase.DRAFT, _INPUT_MATERIAL),
-            (ConsensusPhase.AUDIT, _CANDIDATE_MATERIAL),
-        )
+        cases = ((ConsensusPhase.DRAFT, _INPUT_MATERIAL),(ConsensusPhase.AUDIT, _CANDIDATE_MATERIAL),)
         for phase, material in cases:
             with self.subTest(phase=phase):
                 appended = []
@@ -387,11 +371,7 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             tuple(item.verdict for item in audits),
-            (
-                ConsensusAuditVerdict.APPROVE,
-                ConsensusAuditVerdict.CONFLICT,
-                ConsensusAuditVerdict.APPROVE,
-            ),
+            (ConsensusAuditVerdict.APPROVE, ConsensusAuditVerdict.CONFLICT, ConsensusAuditVerdict.APPROVE,),
         )
         self.assertFalse(receipt.terminal_event.payload.unanimous)
 
@@ -399,10 +379,7 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
         cases = (
             (RuntimeError("failed"), ConsensusPhaseState.FAILED),
             (InterruptedError("interrupted"), ConsensusPhaseState.INTERRUPTED),
-            (
-                ConsensusProviderOutcomeUnknown("unknown"),
-                ConsensusPhaseState.OUTCOME_UNKNOWN,
-            ),
+            (ConsensusProviderOutcomeUnknown("unknown"), ConsensusPhaseState.OUTCOME_UNKNOWN,),
         )
         for failure, expected in cases:
             with self.subTest(expected=expected):
@@ -436,11 +413,7 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
                 invocation.candidate_material,
             )
 
-        for phase in (
-            ConsensusPhase.REPAIR,
-            ConsensusPhase.SYNTHESIS,
-            ConsensusPhase.FINALIZATION,
-        ):
+        for phase in (ConsensusPhase.REPAIR, ConsensusPhase.SYNTHESIS, ConsensusPhase.FINALIZATION,):
             with self.subTest(phase=phase):
                 appended = []
                 _, _, _, _, receipt = await self.execute(phase, appended.append, deadlock,)

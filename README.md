@@ -435,6 +435,46 @@ freshly validated on entry and exit. Both insert durable identity-only
 indicators. See
 [artifact references](docs/guides/artifact-references.md).
 
+## Core document completion
+
+Build the core documents for the entire intended work in this order:
+
+| Document | Required whole-work coverage | Initial dependencies |
+| --- | --- | --- |
+| `core_documents/global_outline.md` | Plot progression, conflict, ending and essential settings | Current work scope and author direction |
+| `core_documents/part_outlines.md` | Every intended segment, connections and later development | Complete global outline |
+| `core_documents/character_sheets.md` | Roles, relationships, motivations, settings and necessary changes | Complete global and part outlines |
+| `core_documents/narrative_rules.md` | Point of view, tone, expression, narration and exceptions | Complete global and part outlines, with sufficient style evidence |
+
+Narrative rules may be prepared while character material is unfinished. Ordinary
+manuscript drafting and revision require all four documents to be complete for
+the current work plan and document revisions. A file, partial draft or statement
+of intent alone does not establish completion. Existing manuscripts can be read
+for analysis while the core documents are being prepared.
+
+Completion findings retain the work extent, source baseline, document revision,
+criterion-level reasons, cited evidence and missing author decisions. Deliberate
+reader secrecy preserves the user's decision, scope and resolved author-side
+facts; an undecided essential setting remains missing. Relevant changes require
+the affected findings to be reassessed. Advice, source collection, organization
+and eligible core construction can continue while later documents are uncreated.
+Those uncreated documents are remaining work. Completion findings do not grant
+candidate approval, Apply or Commit authority.
+
+Inspect the current findings with
+`StoryRuntime.inspect_core_document_readiness(session_id)` or
+`RuntimeSession.inspect_core_document_readiness()`. They return
+`CoreDocumentReadiness` or actionable `CoreDocumentReadinessNeeded` information.
+The runtime restores these findings across conversation changes and restarts and
+checks current evidence again before writer dispatch.
+
+For Python consensus authoring, pass the actual output through `authoring_target`,
+using `AuthoringTarget` from `story_writing_agents.core_document_readiness`.
+For example, `AuthoringTarget.MANUSCRIPT` requires all four core documents.
+An omitted or ambiguous authoring target returns `CoreDocumentReadinessNeeded`
+before a request or provider call. Review-only consensus can proceed without an
+authoring target.
+
 ## Important limits
 
 - Interactive and Python lead conversation, proposal decisions, confirmed

@@ -3,6 +3,7 @@
 from __future__ import annotations
 from story_writing_agents.specialist_routing import AuthoringIntent
 from tests.test_consensus_projection import (
+    AuthoringTarget, _qualify_readiness_fixture_port,
     _ADMISSION_BRIEF, _FIXTURE_DRAFT, _FIXTURE_RULING, _FIXTURE_TEXTS, _UNIT_DIRECTION,
     _USER_ASSESSMENT, _MATERIAL_ASSESSMENT, _RULING_ASSESSMENT, _unit_basis,
     _qualify_fixture_port, _capture_fixture_direction, _validate_fixture_port,
@@ -70,6 +71,7 @@ def _invocation(
         authoring_admission=_unit_basis(_IDENTITY, "workflow-1", _INPUT, _MATERIAL_ASSESSMENT,
             input_kind=ConsensusInputKind.PROMPT
         ),
+        authoring_target=AuthoringTarget.GLOBAL_OUTLINE,
         authoring_direction=_UNIT_DIRECTION,
     )
 

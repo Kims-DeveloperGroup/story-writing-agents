@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+from .core_document_readiness import (
+    AuthoringTarget, CoreDocumentAssessment, CoreDocumentReadinessBasis, CoreDocumentReadinessNeeded,
+    ReadinessSource, assessment_schema as core_assessment_schema,
+    assessment_from_dict as core_assessment_from_dict, source_basis_ref as readiness_source_basis_ref,
+    qualify_assessment as qualify_core_assessment, project_readiness, require_readiness, targets_for_paths,
+)
+
 from .authoring_admission import (
     AdmissionStatus, AdmissionSource, AdmissionSourceKind, AuthoringAssessment, AuthoringAdmissionBasis,
     AuthoringAdmissionNeeded, admission_digest, assessment_from_dict, assessment_schema,
@@ -921,6 +928,16 @@ def _lead_front_result_contract(
     if facts.premise_question_id is not None:
         variants.append(PremiseDecisionConstraints(facts.premise_question_id,
             facts.input_ids, allow_read_sources=facts.allow_read_sources).front_schema())
+    if (facts.readiness_source_basis_ref is not None and not fresh_revision_only
+            and not facts.preparation_kind and not facts.recommendation_only
+            and facts.adoption_intent is None and facts.scope is None):
+        variants.append(_closed_result_object({
+            "kind": {"type": "string", "enum": ["answer"]},
+            "message": nonempty_text_schema(), "authoring_scope": {"type": "null"},
+            "core_document_assessment": core_assessment_schema(
+                None if facts.allow_read_sources else facts.input_ids,
+                None if facts.allow_read_sources else (), facts.readiness_source_basis_ref),
+        }, description="Assess the actual current whole-book basis and four core documents; readiness grants no authoring or write authority."))
     qualified_variants = []
     for variant in variants:
         properties = variant.get("properties", {})
@@ -982,11 +999,399 @@ def _lead_front_result_contract(
             'Execution: draft or review prose, voice and narrative rules.',
     }
 
+    concise_descriptions.update({'Answer workflow or status questions directly when no clarification, request update, or specialist proposal is needed.': 'Answer '
+                                                                                                                              'workflow/status '
+                                                                                                                              'only '
+                                                                                                                              'when '
+                                                                                                                              'no '
+                                                                                                                              'clarification, '
+                                                                                                                              'request '
+                                                                                                                              'update '
+                                                                                                                              'or '
+                                                                                                                              'specialist '
+                                                                                                                              'proposal '
+                                                                                                                              'is '
+                                                                                                                              'needed.',
+     'Ask for missing information while starting or continuing the associated document change request; keep that request pending.': 'Ask '
+                                                                                                                                    'missing '
+                                                                                                                                    'information '
+                                                                                                                                    'while '
+                                                                                                                                    'starting/continuing '
+                                                                                                                                    'the '
+                                                                                                                                    'document-change '
+                                                                                                                                    'request; '
+                                                                                                                                    'keep '
+                                                                                                                                    'it '
+                                                                                                                                    'pending.',
+     'Ask for missing information with clarification_question, or explain a scoped concern with critique, when no document request update or proposal is needed.': 'Ask '
+                                                                                                                                                                   'clarification_question '
+                                                                                                                                                                   'or '
+                                                                                                                                                                   'give '
+                                                                                                                                                                   'scoped '
+                                                                                                                                                                   'critique '
+                                                                                                                                                                   'only '
+                                                                                                                                                                   'when '
+                                                                                                                                                                   'no '
+                                                                                                                                                                   'document-request '
+                                                                                                                                                                   'update '
+                                                                                                                                                                   'or '
+                                                                                                                                                                   'proposal '
+                                                                                                                                                                   'is '
+                                                                                                                                                                   'needed.',
+     'Assess supplied foundations and USER-bounded creative work; host qualification remains separate.': 'Assess '
+                                                                                                         'supplied '
+                                                                                                         'foundations/USER-bounded '
+                                                                                                         'creative '
+                                                                                                         'work; '
+                                                                                                         'host '
+                                                                                                         'qualification '
+                                                                                                         'is '
+                                                                                                         'separate.',
+     "Assignment sources use only offered assignment inputs or evidence IDs from completed authorized READs. Preparation recommendation sources are not assignment inputs unless confirmed preparation has materialized and offered them here. Preserve all required inputs and each reviewer's own source.": 'Only '
+                                                                                                                                                                                                                                                                                                              'offered '
+                                                                                                                                                                                                                                                                                                              'inputs '
+                                                                                                                                                                                                                                                                                                              'or '
+                                                                                                                                                                                                                                                                                                              'completed '
+                                                                                                                                                                                                                                                                                                              'authorized '
+                                                                                                                                                                                                                                                                                                              'READ '
+                                                                                                                                                                                                                                                                                                              'IDs; '
+                                                                                                                                                                                                                                                                                                              'recommendation '
+                                                                                                                                                                                                                                                                                                              'sources '
+                                                                                                                                                                                                                                                                                                              'need '
+                                                                                                                                                                                                                                                                                                              'confirmed '
+                                                                                                                                                                                                                                                                                                              'materialization/offering. '
+                                                                                                                                                                                                                                                                                                              'Keep '
+                                                                                                                                                                                                                                                                                                              'all '
+                                                                                                                                                                                                                                                                                                              'required '
+                                                                                                                                                                                                                                                                                                              'inputs '
+                                                                                                                                                                                                                                                                                                              'and '
+                                                                                                                                                                                                                                                                                                              'each '
+                                                                                                                                                                                                                                                                                                              "reviewer's "
+                                                                                                                                                                                                                                                                                                              'own '
+                                                                                                                                                                                                                                                                                                              'source.',
+     'Bind each declared dependency slot to a disclosed choice and currently available sources; unresolved choices require clarification.': 'Bind '
+                                                                                                                                            'every '
+                                                                                                                                            'declared '
+                                                                                                                                            'slot '
+                                                                                                                                            'to '
+                                                                                                                                            'a '
+                                                                                                                                            'disclosed '
+                                                                                                                                            'choice/current '
+                                                                                                                                            'sources; '
+                                                                                                                                            'clarify '
+                                                                                                                                            'unresolved '
+                                                                                                                                            'choices.',
+     'Create a document when the canonical destination is new; provide its complete UTF-8 text and proposed workspace-relative path.': 'Create '
+                                                                                                                                       'only '
+                                                                                                                                       'at '
+                                                                                                                                       'a '
+                                                                                                                                       'new '
+                                                                                                                                       'canonical '
+                                                                                                                                       'destination; '
+                                                                                                                                       'supply '
+                                                                                                                                       'complete '
+                                                                                                                                       'UTF-8 '
+                                                                                                                                       'text '
+                                                                                                                                       'and '
+                                                                                                                                       'proposed '
+                                                                                                                                       'workspace-relative '
+                                                                                                                                       'path.',
+     'Declare affected specialists and canonical targets; preserve task/revision.': 'Declare affected '
+                                                                                    'specialists/canonical '
+                                                                                    'targets; preserve '
+                                                                                    'task/revision.',
+     'Delete the document identified by completed READ evidence when its removal is intended; this proposes deletion without executing it.': 'Propose '
+                                                                                                                                             'intended '
+                                                                                                                                             'document '
+                                                                                                                                             'deletion '
+                                                                                                                                             'using '
+                                                                                                                                             'completed '
+                                                                                                                                             'READ '
+                                                                                                                                             'evidence; '
+                                                                                                                                             'do '
+                                                                                                                                             'not '
+                                                                                                                                             'execute '
+                                                                                                                                             'it.',
+     'Draft a document-change proposal when the selected sources already support exact changes to these targets. Use this variant when no existing document change request is being continued.': 'Prepare '
+                                                                                                                                                                                                 'exact '
+                                                                                                                                                                                                 'target '
+                                                                                                                                                                                                 'changes '
+                                                                                                                                                                                                 'from '
+                                                                                                                                                                                                 'selected '
+                                                                                                                                                                                                 'supporting '
+                                                                                                                                                                                                 'sources; '
+                                                                                                                                                                                                 'use '
+                                                                                                                                                                                                 'only '
+                                                                                                                                                                                                 'when '
+                                                                                                                                                                                                 'no '
+                                                                                                                                                                                                 'document-change '
+                                                                                                                                                                                                 'request '
+                                                                                                                                                                                                 'is '
+                                                                                                                                                                                                 'continued.',
+     'Draft a specialist consultation proposal when further drafting or review is needed; include every affected specialist. Use this variant when no existing document change request is being continued.': 'Further '
+                                                                                                                                                                                                             'draft/review: '
+                                                                                                                                                                                                             'prepare '
+                                                                                                                                                                                                             'consultation '
+                                                                                                                                                                                                             'with '
+                                                                                                                                                                                                             'every '
+                                                                                                                                                                                                             'affected '
+                                                                                                                                                                                                             'specialist; '
+                                                                                                                                                                                                             'use '
+                                                                                                                                                                                                             'only '
+                                                                                                                                                                                                             'when '
+                                                                                                                                                                                                             'no '
+                                                                                                                                                                                                             'document-change '
+                                                                                                                                                                                                             'request '
+                                                                                                                                                                                                             'is '
+                                                                                                                                                                                                             'continued.',
+     'Exact disclosed shared-premise choice supported by the selected sources.': 'Exact disclosed '
+                                                                                 'shared-premise '
+                                                                                 'choice, supported by '
+                                                                                 'selected sources.',
+     'Justify this requirement with exact offered sources.': 'Justify using exact offered sources.',
+     'Nonempty UTF-8 text.': 'Nonempty UTF-8.',
+     'One explicit contribution role for a declared story domain.': 'Explicit contribution role for a '
+                                                                    'declared domain.',
+     'One explicit shared-premise dependency for declared draft-owner domains.': 'Explicit '
+                                                                                 'shared-premise '
+                                                                                 'dependency for '
+                                                                                 'declared draft '
+                                                                                 'owners.',
+     'Patch only the exact span identified by completed READ evidence when a local edit suffices; provide its replacement text.': 'Local '
+                                                                                                                                  'patch: '
+                                                                                                                                  'replace '
+                                                                                                                                  'only '
+                                                                                                                                  'the '
+                                                                                                                                  'exact '
+                                                                                                                                  'completed-READ '
+                                                                                                                                  'span; '
+                                                                                                                                  'supply '
+                                                                                                                                  'replacement '
+                                                                                                                                  'text.',
+     'Prepare exact changes while starting or advancing a document change request; review and Apply still require separate confirmation.': 'Start/advance '
+                                                                                                                                           'the '
+                                                                                                                                           'document-change '
+                                                                                                                                           'request '
+                                                                                                                                           'with '
+                                                                                                                                           'exact '
+                                                                                                                                           'proposals; '
+                                                                                                                                           'separately '
+                                                                                                                                           'confirm '
+                                                                                                                                           'review '
+                                                                                                                                           'and '
+                                                                                                                                           'Apply.',
+     'Prepare exact changes without a document change request update when none is needed; review and Apply still require separate confirmation.': 'Prepare '
+                                                                                                                                                  'exact '
+                                                                                                                                                  'changes '
+                                                                                                                                                  'only '
+                                                                                                                                                  'when '
+                                                                                                                                                  'no '
+                                                                                                                                                  'request '
+                                                                                                                                                  'update '
+                                                                                                                                                  'is '
+                                                                                                                                                  'needed; '
+                                                                                                                                                  'separately '
+                                                                                                                                                  'confirm '
+                                                                                                                                                  'review '
+                                                                                                                                                  'and '
+                                                                                                                                                  'Apply.',
+     'Propose exact artifact changes when content and READ evidence are ready for specialist review; separate review, Apply, and Commit confirmations remain required.': 'Exact '
+                                                                                                                                                                         'changes '
+                                                                                                                                                                         'need '
+                                                                                                                                                                         'ready '
+                                                                                                                                                                         'content/READ '
+                                                                                                                                                                         'evidence '
+                                                                                                                                                                         'for '
+                                                                                                                                                                         'specialist '
+                                                                                                                                                                         'review. '
+                                                                                                                                                                         'Review, '
+                                                                                                                                                                         'Apply '
+                                                                                                                                                                         'and '
+                                                                                                                                                                         'Commit '
+                                                                                                                                                                         'each '
+                                                                                                                                                                         'require '
+                                                                                                                                                                         'separate '
+                                                                                                                                                                         'confirmation.',
+     'Propose specialist consultation when the affected domains need drafting or review; disclose the assignments for separate confirmation.': 'Affected '
+                                                                                                                                               'domains '
+                                                                                                                                               'need '
+                                                                                                                                               'draft/review: '
+                                                                                                                                               'disclose '
+                                                                                                                                               'specialist '
+                                                                                                                                               'assignments '
+                                                                                                                                               'for '
+                                                                                                                                               'separate '
+                                                                                                                                               'confirmation.',
+     'Propose specialist work that starts or advances a document change request; confirmation authorizes the assignments, not document changes.': 'Propose '
+                                                                                                                                                  'specialist '
+                                                                                                                                                  'work '
+                                                                                                                                                  'to '
+                                                                                                                                                  'start/advance '
+                                                                                                                                                  'its '
+                                                                                                                                                  'document-change '
+                                                                                                                                                  'request; '
+                                                                                                                                                  'Confirm '
+                                                                                                                                                  'authorizes '
+                                                                                                                                                  'assignments '
+                                                                                                                                                  'only.',
+     'Propose specialist work when no document change request update is needed; confirmation authorizes only these disclosed assignments.': 'No '
+                                                                                                                                            'request '
+                                                                                                                                            'update '
+                                                                                                                                            'needed: '
+                                                                                                                                            'Confirm '
+                                                                                                                                            'authorizes '
+                                                                                                                                            'only '
+                                                                                                                                            'the '
+                                                                                                                                            'disclosed '
+                                                                                                                                            'specialist '
+                                                                                                                                            'assignments.',
+     'Recommend one proposal-drafting step when preparation should be confirmed before forming the full specialist or document-change proposal.': 'Recommend '
+                                                                                                                                                  'one '
+                                                                                                                                                  'confirmed '
+                                                                                                                                                  'preparation '
+                                                                                                                                                  'before '
+                                                                                                                                                  'forming '
+                                                                                                                                                  'the '
+                                                                                                                                                  'full '
+                                                                                                                                                  'specialist/document-change '
+                                                                                                                                                  'proposal.',
+     'Recommendation source_ids select only offered preparation recommendation sources or evidence IDs from completed authorized READs. Select the exact approved historical draft to prepare its document; preserve its task and provenance. This selection does not make it an ordinary assignment input or authorize a write.': 'Select '
+                                                                                                                                                                                                                                                                                                                                   'only '
+                                                                                                                                                                                                                                                                                                                                   'offered '
+                                                                                                                                                                                                                                                                                                                                   'preparation '
+                                                                                                                                                                                                                                                                                                                                   'sources '
+                                                                                                                                                                                                                                                                                                                                   'or '
+                                                                                                                                                                                                                                                                                                                                   'completed '
+                                                                                                                                                                                                                                                                                                                                   'authorized '
+                                                                                                                                                                                                                                                                                                                                   'READ '
+                                                                                                                                                                                                                                                                                                                                   'IDs. '
+                                                                                                                                                                                                                                                                                                                                   'Use '
+                                                                                                                                                                                                                                                                                                                                   'the '
+                                                                                                                                                                                                                                                                                                                                   'exact '
+                                                                                                                                                                                                                                                                                                                                   'approved '
+                                                                                                                                                                                                                                                                                                                                   'historical '
+                                                                                                                                                                                                                                                                                                                                   'draft '
+                                                                                                                                                                                                                                                                                                                                   'to '
+                                                                                                                                                                                                                                                                                                                                   'prepare '
+                                                                                                                                                                                                                                                                                                                                   'its '
+                                                                                                                                                                                                                                                                                                                                   'document, '
+                                                                                                                                                                                                                                                                                                                                   'preserving '
+                                                                                                                                                                                                                                                                                                                                   'task/provenance. '
+                                                                                                                                                                                                                                                                                                                                   'Selection '
+                                                                                                                                                                                                                                                                                                                                   'is '
+                                                                                                                                                                                                                                                                                                                                   'not '
+                                                                                                                                                                                                                                                                                                                                   'an '
+                                                                                                                                                                                                                                                                                                                                   'assignment '
+                                                                                                                                                                                                                                                                                                                                   'input '
+                                                                                                                                                                                                                                                                                                                                   'or '
+                                                                                                                                                                                                                                                                                                                                   'write '
+                                                                                                                                                                                                                                                                                                                                   'authority.',
+     'Rename the document identified by completed READ evidence when only its location changes; propose a new canonical workspace-relative destination.': 'Rename '
+                                                                                                                                                          'only '
+                                                                                                                                                          'its '
+                                                                                                                                                          'location '
+                                                                                                                                                          'using '
+                                                                                                                                                          'completed '
+                                                                                                                                                          'READ; '
+                                                                                                                                                          'propose '
+                                                                                                                                                          'a '
+                                                                                                                                                          'canonical '
+                                                                                                                                                          'workspace-relative '
+                                                                                                                                                          'destination.',
+     'Replace all text when a whole-document rewrite is needed; select completed whole-file READ evidence and provide complete new text.': 'Whole-document '
+                                                                                                                                           'rewrite: '
+                                                                                                                                           'completed '
+                                                                                                                                           'whole-file '
+                                                                                                                                           'READ '
+                                                                                                                                           'evidence '
+                                                                                                                                           'and '
+                                                                                                                                           'complete '
+                                                                                                                                           'new '
+                                                                                                                                           'text '
+                                                                                                                                           'are '
+                                                                                                                                           'required.',
+     "Respond as Lead within the current writing scope. Choose the permitted result that advances the user's request; proposals and recommendations grant no execution or write authority.": 'Choose '
+                                                                                                                                                                                             "Lead's "
+                                                                                                                                                                                             'permitted '
+                                                                                                                                                                                             'in-scope '
+                                                                                                                                                                                             'result '
+                                                                                                                                                                                             'to '
+                                                                                                                                                                                             'advance '
+                                                                                                                                                                                             'the '
+                                                                                                                                                                                             'USER '
+                                                                                                                                                                                             'request. '
+                                                                                                                                                                                             'Proposals/recommendations '
+                                                                                                                                                                                             'grant '
+                                                                                                                                                                                             'no '
+                                                                                                                                                                                             'execution/write '
+                                                                                                                                                                                             'authority.',
+     'Start a document change request when no matching request exists; track the selected targets without treating preparation as Apply.': 'Start '
+                                                                                                                                           'a '
+                                                                                                                                           'document-change '
+                                                                                                                                           'request '
+                                                                                                                                           'only '
+                                                                                                                                           'if '
+                                                                                                                                           'none '
+                                                                                                                                           'matches; '
+                                                                                                                                           'track '
+                                                                                                                                           'selected '
+                                                                                                                                           'targets. '
+                                                                                                                                           'Preparation '
+                                                                                                                                           'is '
+                                                                                                                                           'not '
+                                                                                                                                           'Apply.',
+     'State the concrete deliverable and success criteria; preserve protected elements, change boundaries, and exact task/source IDs.': 'Concrete '
+                                                                                                                                        'deliverable '
+                                                                                                                                        'and '
+                                                                                                                                        'success '
+                                                                                                                                        'criteria; '
+                                                                                                                                        'preserve '
+                                                                                                                                        'protected '
+                                                                                                                                        'elements, '
+                                                                                                                                        'change '
+                                                                                                                                        'boundaries, '
+                                                                                                                                        'exact '
+                                                                                                                                        'task/source '
+                                                                                                                                        'IDs.',
+     'This required USER decision is unavailable.': 'Required USER decision unavailable.',
+     'review_only evaluates an explicitly supplied original; activity review is not intent. Preserve bound intent. Revisions need fresh authoring authority.': 'review_only '
+                                                                                                                                                               'evaluates '
+                                                                                                                                                               'the '
+                                                                                                                                                               'explicit '
+                                                                                                                                                               'supplied '
+                                                                                                                                                               'original; '
+                                                                                                                                                               'review '
+                                                                                                                                                               'activity '
+                                                                                                                                                               'is '
+                                                                                                                                                               'not '
+                                                                                                                                                               'intent. '
+                                                                                                                                                               'Keep '
+                                                                                                                                                               'bound '
+                                                                                                                                                               'intent; '
+                                                                                                                                                               'revisions '
+                                                                                                                                                               'need '
+                                                                                                                                                               'fresh '
+                                                                                                                                                               'authoring '
+                                                                                                                                                               'authority.'})
     def compact_metadata(node):
         if type(node) is dict:
             description = node.get("description")
-            if type(description) is str and description in concise_descriptions:
-                node["description"] = concise_descriptions[description]
+            if type(description) is str:
+                if description in concise_descriptions:
+                    description = concise_descriptions[description]
+                if description.startswith("Continue task ") and " at revision " in description:
+                    description = description.replace("Continue task ", "Task ", 1).replace(" at revision ", "@", 1).replace(
+                        " when this is the task being addressed; copy this exact pair together.",
+                        " when addressed; copy the exact ID/revision pair.")
+                if description.startswith("Assignment sources use only offered assignment inputs") or description.startswith("Only offered inputs or completed authorized READ IDs;"):
+                    description = "Assignment source rule; keep every required/own-reviewer input."
+                elif description.startswith("Select only offered preparation sources or completed authorized READ IDs.") or description.startswith("Recommendation source_ids select only offered preparation recommendation sources"):
+                    description = "Recommendation source rule; selection grants no input/write authority."
+                elif description.startswith("Concrete deliverable and success criteria;") or description.startswith("State the concrete deliverable and success criteria;"):
+                    description = "Specialist instruction rule; exact deliverable/success criteria."
+                elif description.startswith("review_only evaluates the explicit supplied original;"):
+                    description = "Writing intent rule; preserve explicit bound intent."
+                node["description"] = description
             for child in node.values():
                 compact_metadata(child)
         elif type(node) is list:
@@ -994,6 +1399,21 @@ def _lead_front_result_contract(
                 compact_metadata(child)
 
     compact_metadata(schema)
+    shared_rules = (
+        "Shared rules apply only to the named native fields; all offered schema choices remain binding. "
+        "Assignment source rule (specialist_consultation_proposal.assignments[*].input_source_ids): "
+        "use offered assignment inputs" + (" or completed authorized READ IDs" if facts.allow_read_sources else "") +
+        "; recommendation sources need confirmed materialization/offering. Keep all required inputs and each reviewer's own source. "
+        "Recommendation source rule (proposal_drafting_request.source_ids): select offered preparation sources" +
+        (" or completed authorized READ IDs" if facts.allow_read_sources else "") +
+        ". Use the exact approved historical draft to prepare its document, preserving task/provenance; selection is not an assignment input or write authority. "
+        "Specialist instruction rule (specialist_consultation_proposal.assignments[*].task_instructions): "
+        "state the concrete deliverable and success criteria; preserve protected elements, change boundaries, exact task/source IDs. "
+        "Writing intent rule (writing_task_scope.writing_intent): review_only evaluates the explicit supplied original; "
+        "review activity is not intent. Keep bound intent; revisions need fresh authoring authority."
+    )
+    schema["description"] += " " + shared_rules
+
     return _provider_result_contract("lead-response-v8" if facts.premise_question_id is not None else "lead-response-v6" if facts.scope is not None and facts.scope.schema_version < 3 else "lead-response-v7", schema)
 
 
@@ -2297,6 +2717,8 @@ class StoryRuntime:
         if projection.state is not ConsensusPhaseState.RUNNING or projection.request_event_id != next(event.event_id for event in stored.events if event.payload is request):
             raise ValueError("consensus invocation requires the current confirmed running phase")
         if (request.authoring_direction != invocation.authoring_direction
+            or request.authoring_target != invocation.authoring_target
+            or request.core_document_readiness != invocation.core_document_readiness
             or request.authoring_admission != invocation.authoring_admission
                 or request.execution_identity != invocation.execution_identity
                 or request.input_material != invocation.input_material
@@ -2378,6 +2800,8 @@ class StoryRuntime:
             if invocation.authoring_direction is not None:
                 direction = self._consensus_material_store.read_text(invocation.authoring_direction)
                 input_text += "\n\nExplicit USER authoring direction:\n" + direction
+            if invocation.authoring_target is not None:
+                input_text += "\n\nExplicit authoring target (no artifact-write authority): " + invocation.authoring_target.value
             candidate_text = self._resolve_consensus_candidate(invocation)
             review_messages: tuple[DebateMessage, ...] = ()
             if (
@@ -2659,6 +3083,7 @@ class StoryRuntime:
         direction_material: ConsensusMaterialHandle | None = None,
         ruling_material: ConsensusMaterialHandle | None = None, source_revision_id: str = "r0",
         source_workflow_id: str | None = None,
+        authoring_target: AuthoringTarget | None = None,
     ) -> AuthoringAdmissionBasis | AuthoringAdmissionNeeded:
         """Bind semantic judgment to actual immutable USER and selected material bytes."""
         self.workspace.validate_identifier(identity.session_id)
@@ -2725,7 +3150,7 @@ class StoryRuntime:
         request = {"input": material.digest, "direction": None if direction_material is None else direction_material.digest,
                    "ruling": None if ruling_material is None else ruling_material.digest}
         scope = {"session_id": identity.session_id, "conversation_id": identity.conversation_id,
-                 "workflow_id": workflow_id, "input_kind": input_kind.value, "input_locator": material.locator,
+                 "workflow_id": workflow_id, "input_kind": input_kind.value, "authoring_target": None if authoring_target is None else authoring_target.value, "input_locator": material.locator,
                  "direction_locator": None if direction_material is None else direction_material.locator,
                  "ruling_locator": None if ruling_material is None else ruling_material.locator,
                  "source_revision_id": source_revision_id, "intent": "authoring"}
@@ -2743,13 +3168,19 @@ class StoryRuntime:
         stored = self.load_workflow(request.execution_identity.session_id, request.execution_identity.conversation_id, request.workflow_id)
         if stored is None or stored.submission.input_material != request.input_material or stored.submission.authoring_direction != request.authoring_direction:
             raise ValueError("consensus authoring input changed its host submission")
+        path = request.authoring_target.value + "/" if request.authoring_target is AuthoringTarget.MANUSCRIPT else request.authoring_target.value
+        readiness = self._qualify_readiness_targets(request.execution_identity.session_id, (path,),
+            retained=request.core_document_readiness)
+        if type(readiness) is CoreDocumentReadinessNeeded or readiness != request.core_document_readiness:
+            raise ValueError(readiness.message if type(readiness) is CoreDocumentReadinessNeeded else "consensus current readiness basis changed")
         continuation = request.continuation
         qualified = self.qualify_consensus_authoring(
             request.execution_identity, request.workflow_id, request.input_material, basis.assessment,
             input_kind=stored.submission.input_kind, direction_material=request.authoring_direction,
             ruling_material=None if continuation is None else continuation.ruling_material,
             source_revision_id="r0" if continuation is None else continuation.source_revision_id,
-            source_workflow_id=None if continuation is None else continuation.source_workflow_id)
+            source_workflow_id=None if continuation is None else continuation.source_workflow_id,
+            authoring_target=request.authoring_target)
         if qualified != basis:
             raise ValueError("consensus authoring admission or source changed; qualify the current work again")
 
@@ -2760,8 +3191,9 @@ class StoryRuntime:
         prompt: str,
         *,
         authoring_assessment: AuthoringAssessment | None = None,
+        authoring_target: AuthoringTarget | None = None,
         authoring_direction: str | None = None,
-    ) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded:
+    ) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded | CoreDocumentReadinessNeeded:
         """Durably submit prompt material for a confirmed draft phase."""
 
         self.workspace.validate_identifier(session_id)
@@ -2771,7 +3203,8 @@ class StoryRuntime:
             session_id=session_id,
             conversation_id=conversation_id,
             input_material=material,
-            authoring_assessment=authoring_assessment, authoring_direction=authoring_direction)
+            authoring_assessment=authoring_assessment,
+            authoring_target=authoring_target, authoring_direction=authoring_direction)
 
     def submit_consensus_draft(
         self,
@@ -2781,8 +3214,9 @@ class StoryRuntime:
         *,
         intent: AuthoringIntent = AuthoringIntent.AUTHORING,
         authoring_assessment: AuthoringAssessment | None = None,
+        authoring_target: AuthoringTarget | None = None,
         authoring_direction: str | None = None,
-    ) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded:
+    ) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded | CoreDocumentReadinessNeeded:
         """Disclose authoring transformation or exact provider-free review adoption."""
 
         self.workspace.validate_identifier(session_id)
@@ -2795,7 +3229,8 @@ class StoryRuntime:
             conversation_id=conversation_id,
             draft_material=material,
             intent=intent,
-            authoring_assessment=authoring_assessment, authoring_direction=authoring_direction)
+            authoring_assessment=authoring_assessment,
+            authoring_target=authoring_target, authoring_direction=authoring_direction)
 
     def inspect_consensus(
         self,
@@ -2869,7 +3304,8 @@ class StoryRuntime:
         ruling: str,
         added_revision_rounds: int,
         authoring_assessment: AuthoringAssessment | None = None,
-    ) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded:
+        authoring_target: AuthoringTarget | None = None,
+    ) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded | CoreDocumentReadinessNeeded:
         """Prepare, but never execute, one exact deadlock continuation repair."""
 
         self.workspace.validate_identifier(session_id)
@@ -2895,7 +3331,7 @@ class StoryRuntime:
             mode=mode,
             ruling_material=ruling_material,
             added_revision_rounds=added_revision_rounds,
-            authoring_assessment=authoring_assessment)
+            authoring_assessment=authoring_assessment, authoring_target=authoring_target)
 
     def consensus_artifact_review_handoff(
         self,
@@ -3555,6 +3991,7 @@ class StoryRuntime:
         editorial_refs: tuple[EditorialRecordRef, ...] = (),
         editorial_context_digest: str | None = None,
         authoring_admission: AuthoringAdmissionBasis | None = None,
+        core_document_readiness: CoreDocumentReadinessBasis | None = None,
     ) -> CollaborationProposalBasis:
         if type(artifact_binding) is not SessionArtifactBinding:
             raise TypeError("recommendation basis requires an exact artifact binding")
@@ -3568,6 +4005,7 @@ class StoryRuntime:
         ) for agent_id in ROSTER if agent_id in {LEAD_ORCHESTRATOR, *specialist_ids})
         route = "lead_recommendation_" + kind.value
         return CollaborationProposalBasis(
+            core_document_readiness=core_document_readiness,
             authoring_admission=authoring_admission,
             route=route,
             route_fingerprint=self._canonical_digest([route, specialist_ids, [asdict(p) for p in profiles]]),
@@ -3957,6 +4395,12 @@ class StoryRuntime:
                 raise _LeadOutcomeValidationError("recommendation lost its current authoring admission")
         if (self._official_authoring_scope(scope) or action.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT) and qualified_admission is None:
             raise _LeadOutcomeValidationError("official preparation requires qualified authoring admission")
+        qualified_readiness = None
+        if action.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT or (scope is not None and scope.intent is AuthoringIntent.AUTHORING and scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}):
+            qualified_readiness = self._qualify_readiness_targets(source.session_id,
+                action.target_paths or (() if scope is None else scope.target_paths))
+            if type(qualified_readiness) is CoreDocumentReadinessNeeded:
+                raise _LeadOutcomeValidationError(qualified_readiness.message)
         request = LeadRecommendationRequestPayload(
             request_event_id=request_event_id, request_id=self._new_id("rc"),
             action_id=self._new_id("ra") if previous is None else previous.action_id,
@@ -3976,6 +4420,7 @@ class StoryRuntime:
                 authoring_scope=scope,
                 shared_premises=inherited_capture,
                 editorial_refs=_bound_editorial_refs, editorial_context_digest=_bound_editorial_digest,
+                core_document_readiness=qualified_readiness,
                 authoring_admission=qualified_admission,
             ),
             source_fingerprint=self._recommendation_source_fingerprint(
@@ -4148,6 +4593,12 @@ class StoryRuntime:
                 )
             stale = False
             if decision.kind is not CollaborationConfirmationDecision.REJECT:
+                if request.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT or (request.authoring_scope is not None and request.authoring_scope.intent is AuthoringIntent.AUTHORING and request.authoring_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}):
+                    readiness = self._qualify_readiness_targets(session_id,
+                        request.target_paths or request.authoring_scope.target_paths,
+                        retained=request.basis.core_document_readiness)
+                    if type(readiness) is CoreDocumentReadinessNeeded or readiness != request.basis.core_document_readiness:
+                        raise ValueError(readiness.message if type(readiness) is CoreDocumentReadinessNeeded else "preparation readiness basis missing or changed")
                 try:
                     self._validate_editorial_refs(session_id, request.basis.editorial_refs, request.basis.editorial_context_digest, scope=request.authoring_scope)
                     artifact_binding = self._session_artifact_binding(session_id)
@@ -4196,6 +4647,7 @@ class StoryRuntime:
                             authoring_scope=request.authoring_scope,
                             shared_premises=self._remap_shared_premises(request.basis, current_inputs),
                             editorial_refs=request.basis.editorial_refs, editorial_context_digest=request.basis.editorial_context_digest,
+                            core_document_readiness=request.basis.core_document_readiness,
                             authoring_admission=request.basis.authoring_admission) != request.basis
                         or self._recommendation_source_fingerprint(
                             session_id,
@@ -4465,6 +4917,93 @@ class StoryRuntime:
     def _editorial_snapshot(self, session_id: str) -> SessionHistorySnapshot:
         services = self.conversation_storage_services
         return SessionHistorySourceAdapter(services.catalog, services.event_store, session_id).capture()
+
+    def inspect_core_document_readiness(self, session_id: str):
+        """Project retained semantic judgments against independently current physical bytes."""
+        snapshot = self._editorial_snapshot(session_id)
+        heads = snapshot.readiness_heads()
+        if len(heads) > 1:
+            return CoreDocumentReadinessNeeded(("Reconcile parallel whole-book assessments explicitly; no causal head is selected.",))
+        if not heads:
+            return project_readiness(None, ())
+        record = heads[0]
+        basis = record.payload.core_document_readiness
+        current = list(basis.sources)
+        receipts = record.payload.evidence.receipts if record.payload.evidence is not None else ()
+        paths = tuple(dict.fromkeys(r.locator.removeprefix("${").removesuffix("}") for r in receipts
+            if r.acquisition in {CollaborationEvidenceAcquisition.READ, CollaborationEvidenceAcquisition.ATTACHED_REFERENCE}
+            and r.source_kind in {CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.WRITING_ARTIFACT}))
+        if paths:
+            binding = self._session_artifact_binding(session_id)
+            with _open_session_artifact_repository(binding) as repository:
+                actual = {row.path: row for row in repository.read_current(paths)}
+            stale_ids = set()
+            for receipt in receipts:
+                path = receipt.locator.removeprefix("${").removesuffix("}")
+                if path not in paths:
+                    continue
+                row = actual.get(path)
+                selected = None if row is None or row.content is None else self._select_current_reference_bytes(
+                    row.content, receipt.start_line, receipt.end_line)
+                if selected is None or "sha256:" + hashlib.sha256(selected).hexdigest() != receipt.content_digest:
+                    stale_ids.add(receipt.evidence_id)
+            current = [source for source in current if source.source_id not in stale_ids]
+        # Only explicitly cited structured editorial revisions can supersede a plan;
+        # unrelated chat and mutable conversation names/status do not invalidate it.
+        editorial = snapshot.editorial_state()
+        owners = {row.metadata.conversation_id: row for row in snapshot.conversations}
+        superseded = set()
+        for receipt in receipts:
+            if receipt.acquisition is not CollaborationEvidenceAcquisition.READ or receipt.source_kind is not CollaborationInputKind.CONVERSATION_EVENT:
+                continue
+            owner = owners.get(receipt.locator.removeprefix("conversation/"))
+            if owner is None or receipt.boundary_start is None or receipt.boundary_end is None:
+                superseded.add(receipt.evidence_id)
+                continue
+            selected = tuple(row for row in owner.records if receipt.boundary_start <= row.sequence <= receipt.boundary_end)
+            for row in selected:
+                if type(row.payload) is CollaborationEditorialRecordPayload:
+                    revision = row.payload.record
+                    if revision.approval_state is EditorialApprovalState.SELECTED and editorial.effective_approval(revision.ref) is not EditorialApprovalState.SELECTED:
+                        superseded.add(receipt.evidence_id)
+        current = [source for source in current if source.source_id not in superseded]
+        return project_readiness(basis, tuple(current))
+
+    def _qualify_readiness_targets(self, session_id: str, paths: tuple[str, ...], *,
+                                   retained: CoreDocumentReadinessBasis | None = None,
+                                   require_explicit: bool = True):
+        if not paths and require_explicit:
+            return CoreDocumentReadinessNeeded(("Choose the actual core-document or manuscript target; grounded analysis remains available.",))
+        targets = targets_for_paths(paths)
+        if not targets or targets == (AuthoringTarget.GLOBAL_OUTLINE,):
+            return None
+        readiness = self.inspect_core_document_readiness(session_id)
+        if type(readiness) is CoreDocumentReadinessNeeded:
+            return readiness
+        for target in targets:
+            needed = require_readiness(target, readiness, () if readiness.basis is None else readiness.basis.sources)
+            if needed is not None:
+                return needed
+        snapshot = self._editorial_snapshot(session_id)
+        head = snapshot.readiness_heads()[0]
+        reference = snapshot.readiness_ref(head)
+        if retained is not None:
+            snapshot.validate_readiness_use(retained)
+            if (retained.assessment != readiness.basis.assessment or retained.sources != readiness.basis.sources
+                or retained.request_digest != readiness.basis.request_digest or retained.prior_assessment_refs != (reference,)):
+                return CoreDocumentReadinessNeeded(("The retained readiness basis changed; qualify the current work again.",))
+            return retained
+        return replace(readiness.basis, prior_assessment_refs=(reference,), history_coverage=snapshot.coverage,
+            history_metadata=tuple((row.metadata.conversation_id, row.metadata.subject, row.metadata.status.value)
+                                   for row in snapshot.conversations))
+
+    def qualify_consensus_readiness(self, identity: ConsensusExecutionIdentity, target: AuthoringTarget | None, /):
+        if target is None:
+            return CoreDocumentReadinessNeeded(("Choose the actual core-document or manuscript target; analysis and initial outline planning remain available.",))
+        if type(target) is not AuthoringTarget:
+            raise TypeError("consensus authoring target must be typed")
+        path = target.value + "/" if target is AuthoringTarget.MANUSCRIPT else target.value
+        return self._qualify_readiness_targets(identity.session_id, (path,))
 
     def inspect_editorial_state(self, session_id: str) -> EditorialStateProjection:
         """Inspect exact retained USER decisions, never artifact or workflow authority."""
@@ -5288,7 +5827,7 @@ class StoryRuntime:
         authoring_scope: AuthoringScope | None = None,
         review_basis: ReviewBasis | None = None,
         authoring_assessment: AuthoringAssessment | None = None,
-    ) -> LeadTurnResult | AuthoringAdmissionNeeded:
+    ) -> LeadTurnResult | AuthoringAdmissionNeeded | CoreDocumentReadinessNeeded:
         """Disclose explicitly scoped provider-free work for one specialist."""
         if authoring_scope is not None and authoring_scope.schema_version == 3:
             raise ValueError("scope3 contributions require the separately confirmed Lead workflow; advisory supports historical scope1/2")
@@ -5342,6 +5881,11 @@ class StoryRuntime:
             authoring_scope = self._resolve_authoring_scope(
                 authoring_scope, inputs, None, prior_scope,
             )
+            core_document_readiness = None
+            if authoring_scope.intent is AuthoringIntent.AUTHORING and authoring_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}:
+                core_document_readiness = self._qualify_readiness_targets(session_id, authoring_scope.target_paths)
+                if type(core_document_readiness) is CoreDocumentReadinessNeeded:
+                    return core_document_readiness
             authoring_admission = None
             if self._official_authoring_scope(authoring_scope):
                 qualified = self._qualify_authoring_inputs(authoring_assessment,
@@ -5431,6 +5975,7 @@ class StoryRuntime:
                     synthesis_max_physical_calls=0,
                 ),
                 basis=CollaborationProposalBasis(
+                    core_document_readiness=core_document_readiness,
                     authoring_admission=authoring_admission,
                     route="specialist_advisory",
                     route_fingerprint=self._canonical_digest(route),
@@ -9644,6 +10189,13 @@ class StoryRuntime:
             ],
             "route": "lead_specialist_consultation",
         }
+        core_document_readiness = proposal.basis.core_document_readiness
+        if next_intent.authoring_scope is not None and any(item.mode is SpecialistAssignmentMode.DRAFT for item in next_intent.assignments):
+            readiness = self._qualify_readiness_targets(session_id, next_intent.authoring_scope.target_paths,
+                retained=core_document_readiness)
+            if type(readiness) is CoreDocumentReadinessNeeded:
+                raise BackendProtocolError(readiness.message)
+            core_document_readiness = readiness
         authoring_admission = proposal.basis.authoring_admission
         if authoring_admission is not None:
             qualified = self._qualify_authoring_inputs(authoring_admission.assessment,
@@ -9674,6 +10226,7 @@ class StoryRuntime:
                 synthesis_max_physical_calls=synthesis_calls,
             ),
             basis=CollaborationProposalBasis(
+                core_document_readiness=core_document_readiness,
                 authoring_admission=authoring_admission,
                 route="lead_specialist_consultation",
                 route_fingerprint=self._canonical_digest(route_value),
@@ -10900,8 +11453,14 @@ class StoryRuntime:
                 and not (source_review_revision or source_artifact_revision)
             ):
                 revision_source_scope = None
+            readiness_offered_sources = self._readiness_sources(
+                inputs=inputs, evidence=None, events=objective_events)
+            readiness_request_digest = next(item.revision_digest for item in inputs
+                if item.kind is CollaborationInputKind.USER_INPUT)
+            readiness_pin = readiness_source_basis_ref(readiness_offered_sources, readiness_request_digest)
             constraints = LeadProviderConstraints(
                 input_ids=tuple(item.input_id for item in inputs),
+                readiness_source_basis_ref=readiness_pin,
                 reviewer_inputs=tuple(
                     (reviewer, item.input_id) for item in inputs
                     if item.kind in {CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.MANUSCRIPT,
@@ -11315,6 +11874,22 @@ class StoryRuntime:
                             item.evidence_id for item in decoded_evidence.receipts
                         ),
                     )
+                    if decoded.core_document_assessment is not None:
+                        materialized = self._materialize_lead_evidence_inputs(inputs, decoded_evidence)
+                        sources = self._readiness_sources(inputs=materialized, evidence=decoded_evidence,
+                                                          events=objective_events)
+                        try:
+                            snapshot = self._editorial_snapshot(session_id)
+                            basis = qualify_core_assessment(decoded.core_document_assessment, sources, readiness_request_digest,
+                                prior_assessment_refs=tuple(snapshot.readiness_ref(row) for row in snapshot.readiness_heads()),
+                                history_coverage=snapshot.coverage,
+                                history_metadata=tuple((row.metadata.conversation_id, row.metadata.subject, row.metadata.status.value)
+                                                       for row in snapshot.conversations))
+                        except (TypeError, ValueError) as exc:
+                            raise validation_failure(_LeadOutcomeValidationError("readiness is not source-qualified"),
+                                "$.core_document_assessment", "bind current actual USER/material/whole READ facts") from exc
+                        decoded = replace(decoded, core_document_readiness=basis)
+                        return
                     authoring_scope = decoded.authoring_scope
                     admitted_authoring = decoded.proposal is not None or (
                         decoded.recommended_action is not None
@@ -11533,9 +12108,18 @@ class StoryRuntime:
                                 message=qualified.message, proposal=None, artifact_intent=None,
                                 objective_intent=None, recommended_action=None)
                         else:
-                            decoded = replace(decoded, authoring_admission=qualified,
-                                proposal=(replace(decoded.proposal, authoring_admission=qualified)
-                                          if decoded.proposal is not None else None))
+                            needs_readiness_preparation = decoded.artifact_intent is not None or (decoded.recommended_action is not None and
+                                (decoded.recommended_action.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT or decoded.authoring_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}))
+                            drafting = decoded.proposal is not None and any(a.mode is SpecialistAssignmentMode.DRAFT for a in decoded.proposal.assignments)
+                            readiness = (self._qualify_readiness_targets(session_id, decoded.authoring_scope.target_paths)
+                                         if needs_readiness_preparation or drafting else None)
+                            if type(readiness) is CoreDocumentReadinessNeeded:
+                                decoded = replace(decoded, kind=LeadOutcomeKind.QUESTION, message=readiness.message,
+                                    proposal=None, artifact_intent=None, objective_intent=None, recommended_action=None)
+                                return
+                            decoded = replace(decoded, core_document_readiness=readiness, authoring_admission=qualified,
+                                proposal=(replace(decoded.proposal, authoring_admission=qualified,
+                                    core_document_readiness=readiness) if decoded.proposal is not None else None))
                     if decoded.kind is LeadOutcomeKind.PROPOSAL:
                         if decoded.proposal is not None:
                             if decoded.proposal.relation is not expected_relation:
@@ -11642,6 +12226,7 @@ class StoryRuntime:
                             sender=_LEAD_ACTOR, recipient=_USER_ACTOR,
                             payload=CollaborationLeadJudgmentPayload(
                                 decoded.kind, decoded.message, decoded_evidence, decoded.authoring_scope,
+                                core_document_readiness=decoded.core_document_readiness if decoded.core_document_assessment is not None else None,
                                 authoring_admission=decoded.authoring_admission,
                             ),
                         )
@@ -12223,6 +12808,7 @@ class StoryRuntime:
                         evidence,
                         outcome.authoring_scope,
                         outcome.trace,
+                        core_document_readiness=outcome.core_document_readiness if outcome.core_document_assessment is not None else None,
                         authoring_admission=outcome.authoring_admission,
                     ),
                 )
@@ -12300,6 +12886,7 @@ class StoryRuntime:
                     outcome.authoring_scope,
                     outcome.trace,
                     authoring_admission=outcome.authoring_admission,
+                    core_document_readiness=outcome.core_document_readiness if outcome.core_document_assessment is not None else None,
                 ),
             )
             final_drafts = (
@@ -12470,6 +13057,7 @@ class StoryRuntime:
         if type(review_admission) is not AuthoringAdmissionBasis:
             raise _LeadOutcomeValidationError("candidate review lost its current authoring admission")
         proposal_intent = LeadProposalIntent(
+            core_document_readiness=outcome.core_document_readiness,
             authoring_admission=review_admission,
             relation=LeadProposalRelation.NEW_STEP,
             authoring_scope=review_scope,
@@ -12517,6 +13105,7 @@ class StoryRuntime:
                 evidence,
                 proposal.authoring_scope,
                 outcome.trace,
+                core_document_readiness=outcome.core_document_readiness if outcome.core_document_assessment is not None else None,
                 authoring_admission=outcome.authoring_admission,
             ),
         )
@@ -13759,6 +14348,14 @@ class StoryRuntime:
                 parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
             )
             assessment_present = type(value) is dict and "authoring_assessment" in value
+            if type(value) is dict and "core_document_assessment" in value:
+                if (set(value) != {"kind", "message", "authoring_scope", "core_document_assessment"}
+                        or value["kind"] != "answer" or value["authoring_scope"] is not None
+                        or assessment_present or not visible_text(value["message"])):
+                    raise ValueError("readiness assessment is a distinct authority-free answer")
+                return LeadProviderOutcome(LeadOutcomeKind.ANSWER, value["message"],
+                    LeadOutcomeScope.STORY_SPECIFIC, LeadEvidenceStatus.VERIFIED, (),
+                    core_document_assessment=core_assessment_from_dict(value["core_document_assessment"]))
             raw_assessment = value.get("authoring_assessment") if type(value) is dict else None
             assessment = None if raw_assessment is None else assessment_from_dict(raw_assessment)
             if type(value) is dict:
@@ -15189,14 +15786,14 @@ class StoryRuntime:
     def _official_authoring_scope(scope: AuthoringScope | None) -> bool:
         return scope is not None and scope.intent is AuthoringIntent.AUTHORING
 
-    def _qualify_authoring_inputs(
-        self, assessment: AuthoringAssessment | None, *,
+    def _qualified_input_sources(
+        self, *,
         inputs: tuple[CollaborationInputRevision, ...],
-        evidence: CollaborationLeadEvidence | None, scope: AuthoringScope,
+        evidence: CollaborationLeadEvidence | None, scope: AuthoringScope | None,
         events: tuple[CollaborationEvent, ...], pending_user_text: str | None = None,
         pending_material: CollaborationEventDraft | None = None,
         pending_replies: tuple[CollaborationSpecialistReplyPayload, ...] = (),
-    ) -> AuthoringAdmissionBasis | AuthoringAdmissionNeeded:
+    ) -> tuple[AdmissionSource, ...]:
         user = tuple(v for v in inputs if v.kind is CollaborationInputKind.USER_INPUT
                      and v.state is CollaborationInputState.PRESENT)
         if len(user) != 1:
@@ -15226,7 +15823,7 @@ class StoryRuntime:
                               if type(event.payload) is CollaborationProposal
                               and (event.session_id, event.conversation_id, event.step_id) == (header[0], header[1], header[3])
                               and (event.payload.proposal_id, event.payload.proposal_revision, event.payload.proposal_digest) == key)
-            if (len(proposals) != 1 or proposals[0] not in confirmed_authoring_proposals(scope, events)
+            if (len(proposals) != 1 or scope is None or proposals[0] not in confirmed_authoring_proposals(scope, events)
                 or proposals[0].authoring_scope != source.payload.authoring_scope
                 or source.kind is not CollaborationEventKind.LEAD_SYNTHESIS
                 or source.sender != _LEAD_ACTOR or source.recipient != _USER_ACTOR
@@ -15364,10 +15961,51 @@ class StoryRuntime:
                         and payload.response.acceptance is LeadPublicResponseAcceptance.REJECTED):
                     authority = "rejected_public_response"
             qualified_sources.append(replace(source, original_authority=authority))
-        return qualify_authoring_assessment(assessment,
-            sources=tuple(qualified_sources),
-            request_digest=user[0].revision_digest, task_id=scope.task_id,
+        return tuple(qualified_sources)
+
+    def _qualify_authoring_inputs(
+        self, assessment: AuthoringAssessment | None, *,
+        inputs: tuple[CollaborationInputRevision, ...],
+        evidence: CollaborationLeadEvidence | None, scope: AuthoringScope,
+        events: tuple[CollaborationEvent, ...], pending_user_text: str | None = None,
+        pending_material: CollaborationEventDraft | None = None,
+        pending_replies: tuple[CollaborationSpecialistReplyPayload, ...] = (),
+    ) -> AuthoringAdmissionBasis | AuthoringAdmissionNeeded:
+        sources = self._qualified_input_sources(inputs=inputs, evidence=evidence, scope=scope,
+            events=events, pending_user_text=pending_user_text, pending_material=pending_material,
+            pending_replies=pending_replies)
+        user = next(v for v in inputs if v.kind is CollaborationInputKind.USER_INPUT
+                    and v.state is CollaborationInputState.PRESENT)
+        return qualify_authoring_assessment(assessment, sources=sources,
+            request_digest=user.revision_digest, task_id=scope.task_id,
             task_revision=scope.task_revision, scope_digest=admission_digest(authoring_scope_to_dict(scope)))
+
+    def _readiness_sources(
+        self, *, inputs: tuple[CollaborationInputRevision, ...],
+        evidence: CollaborationLeadEvidence | None, events: tuple[CollaborationEvent, ...],
+    ) -> tuple[ReadinessSource, ...]:
+        facts = self._qualified_input_sources(inputs=inputs, evidence=evidence, scope=None, events=events)
+        receipts = () if evidence is None else evidence.receipts
+        result = []
+        for fact in facts:
+            matches = tuple(r for r in receipts if r.evidence_id == fact.source_id
+                and r.acquisition in {CollaborationEvidenceAcquisition.READ,
+                                      CollaborationEvidenceAcquisition.ATTACHED_REFERENCE})
+            if len(matches) > 1:
+                raise ValueError("readiness source acquisition is ambiguous")
+            receipt = matches[0] if matches else None
+            path = None if receipt is None else receipt.locator
+            if path is not None:
+                path = path.removeprefix("${").removesuffix("}")
+            whole = bool(receipt is not None and path in tuple(t.value for t in AuthoringTarget)
+                and receipt.source_kind is CollaborationInputKind.CORE_DOCUMENT
+                and receipt.boundary_kind == "whole" and receipt.start_line is None
+                and receipt.end_line is None and receipt.source_state is CollaborationInputState.PRESENT)
+            result.append(ReadinessSource(fact.source_id, fact.source_identity, fact.revision_digest,
+                fact.kind, fact.utf8_bytes, fact.original_authority,
+                path if whole else None, None if receipt is None else receipt.content_digest,
+                whole, None if receipt is None else receipt.evidence_id))
+        return tuple(result)
 
     def _build_lead_proposal(
         self,
@@ -15528,6 +16166,7 @@ class StoryRuntime:
         }
         _bound_editorial_refs, _bound_editorial_digest = ((), None) if intent.premise_decision is not None else self._editorial_context_for_scope(session_id, intent.authoring_scope, session_history)
         basis = CollaborationProposalBasis(
+            core_document_readiness=intent.core_document_readiness,
             authoring_admission=intent.authoring_admission,
             route="lead_specialist_consultation",
             route_fingerprint=self._canonical_digest(route_value),
@@ -15660,6 +16299,11 @@ class StoryRuntime:
                 if (type(current_admission) is not AuthoringAdmissionBasis
                         or current_admission != proposal.basis.authoring_admission):
                     raise ValueError("official authoring admission is missing or stale")
+            if proposal.authoring_scope is not None and (self._artifact_candidate_for_proposal(events, proposal) is not None or any(item.mode is SpecialistAssignmentMode.DRAFT for item in proposal.assignments)):
+                readiness = self._qualify_readiness_targets(session_id, proposal.authoring_scope.target_paths,
+                    retained=proposal.basis.core_document_readiness)
+                if type(readiness) is CoreDocumentReadinessNeeded or readiness != proposal.basis.core_document_readiness:
+                    raise ValueError(readiness.message if type(readiness) is CoreDocumentReadinessNeeded else "dispatch readiness basis missing or changed")
             if proposal.authoring_scope is not None:
                 validate_specialist_routing(proposal.authoring_scope, specialist_ids,
                                             affected_paths=self._authoring_affected_paths(inputs, proposal.basis.evidence))
@@ -15738,6 +16382,7 @@ class StoryRuntime:
                 ],
             }
             basis = CollaborationProposalBasis(
+                core_document_readiness=proposal.basis.core_document_readiness,
                 authoring_admission=proposal.basis.authoring_admission,
                 route=route_name,
                 route_fingerprint=self._canonical_digest(route_value),
@@ -16826,7 +17471,8 @@ class StoryRuntime:
             if (
                 outcome.scope is not LeadOutcomeScope.WORKFLOW_META
                 and (
-                    item.locator in scoped_paths
+                    outcome.core_document_assessment is not None
+                    or item.locator in scoped_paths
                     or artifact_domain(item.locator) in scoped_domains
                 )
             )
@@ -16921,7 +17567,8 @@ class StoryRuntime:
             receipts=tuple(available_by_id[item] for item in selected_ids),
         )
         try:
-            CollaborationLeadJudgmentPayload(outcome.kind, outcome.message, evidence, outcome.authoring_scope, authoring_admission=outcome.authoring_admission)
+            CollaborationLeadJudgmentPayload(outcome.kind, outcome.message, evidence, outcome.authoring_scope, core_document_readiness=outcome.core_document_readiness if outcome.core_document_assessment is not None else None,
+                                                                                                               authoring_admission=outcome.authoring_admission)
         except (TypeError, ValueError) as exc:
             raise carry_validation(
                 validation_failure(
@@ -18134,13 +18781,15 @@ class RuntimeSession:
         prompt: str,
         *,
         authoring_assessment: AuthoringAssessment | None = None,
+        authoring_target: AuthoringTarget | None = None,
         authoring_direction: str | None = None,
-    ) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded:
+    ) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded | CoreDocumentReadinessNeeded:
         return self.runtime.submit_consensus_prompt(
             self.session_id,
             conversation_id,
             prompt,
             authoring_assessment=authoring_assessment,
+            authoring_target=authoring_target,
             authoring_direction=authoring_direction,
         )
 
@@ -18151,14 +18800,16 @@ class RuntimeSession:
         *,
         intent: AuthoringIntent = AuthoringIntent.AUTHORING,
         authoring_assessment: AuthoringAssessment | None = None,
+        authoring_target: AuthoringTarget | None = None,
         authoring_direction: str | None = None,
-    ) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded:
+    ) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded | CoreDocumentReadinessNeeded:
         return self.runtime.submit_consensus_draft(
             self.session_id,
             conversation_id,
             draft,
             intent=intent,
             authoring_assessment=authoring_assessment,
+            authoring_target=authoring_target,
             authoring_direction=authoring_direction,
         )
 
@@ -18233,7 +18884,8 @@ class RuntimeSession:
         ruling: str,
         added_revision_rounds: int,
         authoring_assessment: AuthoringAssessment | None = None,
-    ) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded:
+        authoring_target: AuthoringTarget | None = None,
+    ) -> ConsensusRuntimeInspection | AuthoringAdmissionNeeded | CoreDocumentReadinessNeeded:
         return self.runtime.continue_consensus_deadlock(
             self.session_id,
             conversation_id,
@@ -18243,7 +18895,10 @@ class RuntimeSession:
             mode=mode,
             ruling=ruling,
             added_revision_rounds=added_revision_rounds,
-            authoring_assessment=authoring_assessment)
+            authoring_assessment=authoring_assessment, authoring_target=authoring_target)
+
+    def inspect_core_document_readiness(self):
+        return self.runtime.inspect_core_document_readiness(self.session_id)
 
     def inspect_editorial_state(self) -> EditorialStateProjection:
         return self.runtime.inspect_editorial_state(self.session_id)

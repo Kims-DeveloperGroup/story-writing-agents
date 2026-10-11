@@ -12,7 +12,10 @@ from .accounting import ContextComponentKind, JsonPath, canonical_provider_json
 _MIN_SHARED_OBJECT_BYTES = 256
 _CONTEXT_ENCODING_INSTRUCTION = (
     'At runtime context slots, {"shared_context_object_id":"oN"} means the exact JSON object '
-    "in shared_context_objects[oN]. Resolve only within this request. Pool contents and "
+    "in shared_context_objects[oN]. Resolve only within this request. Runtime slots also "
+    "include typed basis, authoring_admission, core_document_readiness, their assessment "
+    "objects, core_document_assessment, and readiness book_basis/document_judgments "
+    "objects under runtime-owned context fields. Pool contents and "
     "user data are literal; never recursively resolve markers inside them. "
     "Keep each slot's original meaning and authority; history remains context "
     "only. Follow response_contract and the response schema for output; never encode output as "
@@ -67,6 +70,30 @@ def _context_slots(
                             + ("selected_inputs", input_index, "conversation_event"),
                             item.get("conversation_event"),
                         )
+    # Only closed runtime-owned fields are inspected; source bodies stay literal.
+    pending = [(path, value, "context") for path, value in slots]
+    fields = {
+        "context": (("basis", "basis"), ("authoring_admission", "admission"),
+                    ("core_document_readiness", "readiness"),
+                    ("core_document_assessment", "assessment")),
+        "basis": (("authoring_admission", "admission"),
+                  ("core_document_readiness", "readiness")),
+        "admission": (("assessment", "authoring_assessment"),),
+        "readiness": (("assessment", "assessment"),),
+        "assessment": (("book_basis", "book_basis"),),
+    }
+    for path, value, shape in pending:
+        for key, child_shape in fields.get(shape, ()):
+            child = value.get(key)
+            if type(child) is dict:
+                child_path = path + (key,)
+                add(child_path, child)
+                pending.append((child_path, child, child_shape))
+        if shape == "assessment":
+            judgments = value.get("document_judgments")
+            if type(judgments) in {list, tuple}:
+                for index, judgment in enumerate(judgments):
+                    add(path + ("document_judgments", index), judgment)
     return slots
 
 
@@ -159,7 +186,15 @@ def compact_context_payload(
     shared: dict[str, object] = {}
     replacements: list[tuple[JsonPath, dict[str, str]]] = []
     pooled_paths: dict[JsonPath, ContextComponentKind] = {}
-    for identity, occurrences in groups.items():
+    for identity, candidates in groups.items():
+        # A pooled value stays literal: never replace an ancestor and descendant.
+        occurrences = [
+            (path, value) for path, value in candidates
+            if not any(
+                _is_prefix(path, chosen) or _is_prefix(chosen, path)
+                for chosen, _ in replacements
+            )
+        ]
         if len(occurrences) < 2:
             continue
         alias = f"o{len(shared) + 1}"

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from ..core_document_readiness import (
+    AuthoringTarget, CoreDocumentReadinessBasis, validate_authoring_target_basis,
+    basis_to_dict as readiness_basis_to_dict, basis_from_dict as readiness_basis_from_dict,
+)
 from ..authoring_admission import (
     AuthoringAdmissionBasis,
     admission_basis_to_dict,
@@ -66,8 +70,14 @@ class ConsensusWorkflowSubmission:
 
     authoring_admission: AuthoringAdmissionBasis | None = field(default=None, kw_only=True)
     authoring_direction: ConsensusMaterialHandle | None = field(default=None, kw_only=True)
+    authoring_target: AuthoringTarget | None = field(default=None, kw_only=True)
+    core_document_readiness: CoreDocumentReadinessBasis | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
+        if self.intent is AuthoringIntent.AUTHORING:
+            validate_authoring_target_basis(self.authoring_target, self.core_document_readiness)
+        elif self.authoring_target is not None or self.core_document_readiness is not None:
+            raise ValueError("review-only submission cannot acquire authoring readiness")
         if self.authoring_direction is not None and (
             type(self.authoring_direction) is not ConsensusMaterialHandle
             or not self.authoring_direction.locator.startswith("candidate:")
@@ -137,11 +147,16 @@ class ConsensusStoredWorkflow:
         requests = tuple(event.payload for event in self.events if type(event.payload) is ConsensusPhaseRequest)
         if any(request.authoring_direction != self.submission.authoring_direction for request in requests):
             raise ValueError("consensus request changed original USER direction")
+        if requests and (requests[0].authoring_target != self.submission.authoring_target
+                         or requests[0].core_document_readiness != self.submission.core_document_readiness):
+            raise ValueError("consensus initial readiness differs from submission")
         if requests and requests[0].authoring_admission != self.submission.authoring_admission:
             raise ValueError("consensus initial request changed its admitted source basis")
         for prior, current in zip(requests, requests[1:]):
             if (current.continuation == prior.continuation
-                    and current.authoring_admission != prior.authoring_admission):
+                    and (current.authoring_admission != prior.authoring_admission
+                         or current.authoring_target != prior.authoring_target
+                         or current.core_document_readiness != prior.core_document_readiness)):
                 raise ValueError("consensus ordinary next phase changed its admitted source basis")
         projection = project_consensus(self.events)
         if not self.events or type(self.events[0].payload) is not ConsensusPhaseRequest:
@@ -224,6 +239,8 @@ def deserialize_consensus_workflow(value: bytes) -> ConsensusStoredWorkflow:
 
 def _submission_to_json(value: ConsensusWorkflowSubmission) -> dict[str, Any]:
     return {
+        "authoring_target": value.authoring_target.value if value.authoring_target is not None else None,
+        "core_document_readiness": readiness_basis_to_dict(value.core_document_readiness) if value.core_document_readiness is not None else None,
         **({"authoring_admission": admission_basis_to_dict(value.authoring_admission)}
            if value.authoring_admission is not None else {}),
         **({"intent": value.intent.value} if value.intent is AuthoringIntent.REVIEW_ONLY else {}),
@@ -245,6 +262,7 @@ def _submission_from_json(value: object, *, schema_version: int) -> ConsensusWor
             "workflow_id",
             "proposal_id",
             "input_kind",
+            "authoring_target", "core_document_readiness",
             "input_material",
             "continuation",
         } | _intent_fields(value, schema_version) | ({key for key in ("authoring_admission", "authoring_direction") if type(value) is dict and key in value}),
@@ -253,6 +271,8 @@ def _submission_from_json(value: object, *, schema_version: int) -> ConsensusWor
     return ConsensusWorkflowSubmission(
         authoring_admission=(admission_basis_from_dict(raw["authoring_admission"]) if "authoring_admission" in raw else None),
         authoring_direction=_optional_material_from_json(raw.get("authoring_direction")),
+        authoring_target=AuthoringTarget(raw["authoring_target"]) if raw["authoring_target"] is not None else None,
+        core_document_readiness=readiness_basis_from_dict(raw["core_document_readiness"]) if raw["core_document_readiness"] is not None else None,
         intent=AuthoringIntent(raw.get("intent", "authoring")),
         execution_identity=_identity_from_json(raw["execution_identity"]),
         workflow_id=raw["workflow_id"],
@@ -268,7 +288,9 @@ def _event_to_json(event: ConsensusEvent) -> dict[str, Any]:
     if type(payload) is ConsensusPhaseRequest:
         kind = "request"
         body = {
-            **({"authoring_admission": admission_basis_to_dict(payload.authoring_admission)}
+            "authoring_target": payload.authoring_target.value if payload.authoring_target is not None else None,
+        "core_document_readiness": readiness_basis_to_dict(payload.core_document_readiness) if payload.core_document_readiness is not None else None,
+        **({"authoring_admission": admission_basis_to_dict(payload.authoring_admission)}
                if payload.authoring_admission is not None else {}),
             **({"intent": payload.intent.value} if payload.intent is AuthoringIntent.REVIEW_ONLY else {}),
             "workflow_id": payload.workflow_id,
@@ -365,13 +387,15 @@ def _request_from_json(value: object, *, schema_version: int) -> ConsensusPhaseR
             "base_tail_sequence",
             "previous_result_event_id",
             "continuation",
-            "request_digest",
+            "request_digest", "authoring_target", "core_document_readiness",
         } | _intent_fields(value, schema_version) | ({key for key in ("authoring_admission", "authoring_direction") if type(value) is dict and key in value}),
         "request",
     )
     return ConsensusPhaseRequest(
         authoring_admission=(admission_basis_from_dict(raw["authoring_admission"]) if "authoring_admission" in raw else None),
         authoring_direction=_optional_material_from_json(raw.get("authoring_direction")),
+        authoring_target=AuthoringTarget(raw["authoring_target"]) if raw["authoring_target"] is not None else None,
+        core_document_readiness=readiness_basis_from_dict(raw["core_document_readiness"]) if raw["core_document_readiness"] is not None else None,
         intent=AuthoringIntent(raw.get("intent", "authoring")),
         workflow_id=raw["workflow_id"],
         phase_request_id=raw["phase_request_id"],

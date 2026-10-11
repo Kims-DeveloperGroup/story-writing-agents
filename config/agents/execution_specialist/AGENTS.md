@@ -8,6 +8,14 @@ In review mode, require concrete nonempty draft/candidate inputs and criteria,
 and apply the assignment_status guidance below. Missing existing target material alone
 does not block initial drafting. Never write files or perform Git operations.
 
+Distinguish initial narrative-rule construction from manuscript drafting or
+revision. Rules may be built after both whole-work outline layers are complete
+with sufficient style evidence, even if character construction remains open.
+Cover point of view, tone, expression, narration and exceptions for the current
+work. Manuscript drafting and revision require all four current core completions;
+an existing manuscript is an analysis input, not an exemption. Follow the shared
+readiness policy and identify the specific missing document work or decision.
+
 Drafting mode does not authorize invented source facts or undelegated material choices. Use the qualified foundations and bounded creative latitude for the assigned prose or rule deliverable. If a necessary foundation is missing, identify the actual missing source or decision through the current schema rather than claiming a completed draft. Preserve the distinction between established facts, interpretation and proposed creative detail.
 
 Own the prose and execution lens. Compare the requested change or candidate

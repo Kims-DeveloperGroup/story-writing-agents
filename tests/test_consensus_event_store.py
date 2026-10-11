@@ -3,6 +3,7 @@
 from __future__ import annotations
 from story_writing_agents.specialist_routing import AuthoringIntent
 from tests.test_consensus_projection import (
+    AuthoringTarget, _qualify_readiness_fixture_port,
     _ADMISSION_BRIEF, _FIXTURE_DRAFT, _FIXTURE_RULING, _FIXTURE_TEXTS, _UNIT_DIRECTION,
     _USER_ASSESSMENT, _MATERIAL_ASSESSMENT, _RULING_ASSESSMENT, _unit_basis,
     _qualify_fixture_port, _capture_fixture_direction, _validate_fixture_port,
@@ -64,6 +65,7 @@ _REPLY_CANDIDATE_MATERIAL = candidate_material_handle(_REPLY_CANDIDATE)
 class _DurableConsensusPort:
     """Provider-free adapter port backed by the real event store."""
     qualify_consensus_authoring = _qualify_fixture_port
+    qualify_consensus_readiness = _qualify_readiness_fixture_port
     capture_consensus_direction = _capture_fixture_direction
     validate_consensus_authoring = _validate_fixture_port
 
@@ -146,6 +148,7 @@ class ConsensusEventStoreTests(unittest.TestCase):
                 input_material,
                 assessment, input_kind=input_kind,
             ),
+            authoring_target=AuthoringTarget.GLOBAL_OUTLINE,
             authoring_direction=_UNIT_DIRECTION,
         )
         submission = ConsensusWorkflowSubmission(
@@ -156,6 +159,7 @@ class ConsensusEventStoreTests(unittest.TestCase):
             input_material=input_material,
 
             authoring_admission=_unit_basis(identity, workflow_id, input_material, assessment, input_kind=input_kind),
+            authoring_target=AuthoringTarget.GLOBAL_OUTLINE,
             authoring_direction=_UNIT_DIRECTION,
         )
         return submission, ConsensusEvent("request-event", 1, request)
@@ -276,9 +280,7 @@ class DurableConsensusRestartTests(unittest.IsolatedAsyncioTestCase):
                     f"{invocation.ordinal + 5}" * 64,
                     invocation.candidate_material,
                     audit_verdict=ConsensusAuditVerdict.APPROVE,
-                    validation_details=(
-                        f"Original response\n$.auditor_{invocation.ordinal}: expected string",
-                    ),
+                    validation_details=(f"Original response\n$.auditor_{invocation.ordinal}: expected string",),
                 )
 
         for fail_second in (False, True):
@@ -292,6 +294,7 @@ class DurableConsensusRestartTests(unittest.IsolatedAsyncioTestCase):
                     input_material=_PROMPT_MATERIAL,
 
                     authoring_assessment=_USER_ASSESSMENT,
+                    authoring_target=AuthoringTarget.GLOBAL_OUTLINE,
                 )
                 workflow_id = submitted.submission.workflow_id
 
@@ -354,6 +357,7 @@ class DurableConsensusRestartTests(unittest.IsolatedAsyncioTestCase):
             input_material=_PROMPT_MATERIAL,
 
             authoring_assessment=_USER_ASSESSMENT,
+            authoring_target=AuthoringTarget.GLOBAL_OUTLINE,
         )
         workflow_id = submitted.submission.workflow_id
         request_event = port.load_workflow("session-1", "conversation-1", workflow_id).events[-1]
@@ -406,6 +410,7 @@ class DurableConsensusRestartTests(unittest.IsolatedAsyncioTestCase):
             input_material=_PROMPT_MATERIAL,
 
             authoring_assessment=_USER_ASSESSMENT,
+            authoring_target=AuthoringTarget.GLOBAL_OUTLINE,
         )
         stored = port.load_workflow("session-1", "conversation-1", submitted.submission.workflow_id)
         request_event = stored.events[-1]

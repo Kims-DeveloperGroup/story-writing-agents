@@ -4,6 +4,7 @@ from __future__ import annotations
 from story_writing_agents.specialist_routing import AuthoringIntent
 import hashlib
 from tests.test_consensus_projection import (
+    AuthoringTarget, _qualify_readiness_fixture_port,
     _ADMISSION_BRIEF, _FIXTURE_DRAFT, _FIXTURE_RULING, _FIXTURE_TEXTS, _UNIT_DIRECTION,
     _USER_ASSESSMENT, _MATERIAL_ASSESSMENT, _RULING_ASSESSMENT, _unit_basis,
     _qualify_fixture_port, _capture_fixture_direction, _validate_fixture_port,
@@ -64,6 +65,7 @@ def _runtime_decision(request_event, confirmation_id, choice=ConsensusDecision.C
 
 class FakeConsensusPort:
     qualify_consensus_authoring = _qualify_fixture_port
+    qualify_consensus_readiness = _qualify_readiness_fixture_port
     capture_consensus_direction = _capture_fixture_direction
     validate_consensus_authoring = _validate_fixture_port
     def __init__(self) -> None:
@@ -82,11 +84,7 @@ class FakeConsensusPort:
         return f"{prefix}-{self.counter}"
 
     def create_workflow(self, submission, request_event):
-        key = (
-            submission.session_id,
-            submission.conversation_id,
-            submission.workflow_id,
-        )
+        key = (submission.session_id, submission.conversation_id, submission.workflow_id,)
         if key in self.workflows:
             raise ValueError("duplicate workflow")
         self.workflows[key] = ConsensusStoredWorkflow(submission, (request_event,))
@@ -143,6 +141,7 @@ class ConsensusRuntimeAdapterTests(unittest.IsolatedAsyncioTestCase):
             input_material=_PROMPT_MATERIAL,
 
             authoring_assessment=_USER_ASSESSMENT,
+            authoring_target=AuthoringTarget.GLOBAL_OUTLINE,
         )
 
     def test_prompt_and_supplied_draft_have_exact_distinct_metadata(self) -> None:
@@ -153,6 +152,7 @@ class ConsensusRuntimeAdapterTests(unittest.IsolatedAsyncioTestCase):
             draft_material=_DRAFT_MATERIAL,
 
             authoring_assessment=_MATERIAL_ASSESSMENT,
+            authoring_target=AuthoringTarget.GLOBAL_OUTLINE,
             authoring_direction=_ADMISSION_BRIEF,
         )
         self.assertEqual(
@@ -246,6 +246,7 @@ class ConsensusRuntimeAdapterTests(unittest.IsolatedAsyncioTestCase):
                     input_material=_PROMPT_MATERIAL,
 
                     authoring_assessment=_USER_ASSESSMENT,
+                    authoring_target=AuthoringTarget.GLOBAL_OUTLINE,
                 )
                 self.port = port
                 result = await adapter.decide(self.exact_decision(inspection, choice))
@@ -310,25 +311,10 @@ class ConsensusRuntimeAdapterTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         expected = (
             (1, ConsensusDurability.UNKNOWN, None, 0),
-            (
-                2,
-                ConsensusDurability.CONFIRMED,
-                ConsensusPhaseState.RECOVERY_REQUIRED,
-                0,
-            ),
-            (
-                3,
-                ConsensusDurability.CONFIRMED,
-                ConsensusPhaseState.RECOVERY_REQUIRED,
-                1,
-            ),
+            (2, ConsensusDurability.CONFIRMED, ConsensusPhaseState.RECOVERY_REQUIRED, 0,),
+            (3, ConsensusDurability.CONFIRMED, ConsensusPhaseState.RECOVERY_REQUIRED, 1,),
         )
-        for (
-            append_number,
-            decision_durability,
-            execution_state,
-            provider_count,
-        ) in expected:
+        for (append_number, decision_durability, execution_state, provider_count,) in expected:
             with self.subTest(append_number=append_number):
                 port = FakeConsensusPort()
                 adapter = ConsensusRuntimeAdapter(port)
@@ -338,6 +324,7 @@ class ConsensusRuntimeAdapterTests(unittest.IsolatedAsyncioTestCase):
                     input_material=_PROMPT_MATERIAL,
 
                     authoring_assessment=_USER_ASSESSMENT,
+                    authoring_target=AuthoringTarget.GLOBAL_OUTLINE,
                 )
                 self.port = port
                 port.fail_append_number = append_number
@@ -395,11 +382,7 @@ class ConsensusRuntimeAdapterTests(unittest.IsolatedAsyncioTestCase):
         history = []
         prior = None
         candidate = None
-        for phase in (
-            ConsensusPhase.DRAFT,
-            ConsensusPhase.AUDIT,
-            ConsensusPhase.SYNTHESIS,
-        ):
+        for phase in (ConsensusPhase.DRAFT, ConsensusPhase.AUDIT, ConsensusPhase.SYNTHESIS,):
             tail = len(history)
             request, capability = prepare_consensus_phase(
                 owner=owner,
@@ -418,6 +401,7 @@ class ConsensusRuntimeAdapterTests(unittest.IsolatedAsyncioTestCase):
                     "deadlock-session",
                     "deadlock-conversation",
                 ), "deadlock-workflow", _PROMPT_MATERIAL, _USER_ASSESSMENT, input_kind=ConsensusInputKind.PROMPT),
+                authoring_target=AuthoringTarget.GLOBAL_OUTLINE,
                 authoring_direction=_UNIT_DIRECTION,
             )
             request_event = ConsensusEvent(f"request-{tail + 1}", tail + 1, request)
@@ -474,6 +458,7 @@ class ConsensusRuntimeAdapterTests(unittest.IsolatedAsyncioTestCase):
                 "deadlock-session",
                 "deadlock-conversation",
             ), "deadlock-workflow", _PROMPT_MATERIAL, _USER_ASSESSMENT, input_kind=ConsensusInputKind.PROMPT),
+            authoring_target=AuthoringTarget.GLOBAL_OUTLINE,
             authoring_direction=_UNIT_DIRECTION,
         )
         return ConsensusStoredWorkflow(submission, tuple(history))

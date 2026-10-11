@@ -5,6 +5,7 @@ import hashlib
 from pathlib import Path
 import unittest
 from story_writing_agents import lead_premise_decisions as premise
+from story_writing_agents import core_document_readiness as readiness
 
 from story_writing_agents import conversations as c
 from story_writing_agents.specialist_routing import (
@@ -63,12 +64,26 @@ class SpecialistRoutingTests(unittest.TestCase):
                  ("core_documents/character_sheets.md", Domain.CHARACTER_WORLD, "character_custodian"),
                  ("core_documents/narrative_rules.md", Domain.TONE_EXECUTION, "execution_specialist"),
                  ("manuscript/part-01/opening.md", Domain.TONE_EXECUTION, "execution_specialist"))
+        empty = readiness.project_readiness(None, ())
+        target = readiness.AuthoringTarget
+        prerequisites = {
+            target.GLOBAL_OUTLINE: (),
+            target.PART_OUTLINES: (target.GLOBAL_OUTLINE.value,),
+            target.CHARACTER_SHEETS: (target.GLOBAL_OUTLINE.value, target.PART_OUTLINES.value),
+            target.NARRATIVE_RULES: (target.GLOBAL_OUTLINE.value, target.PART_OUTLINES.value),
+            target.MANUSCRIPT: (target.GLOBAL_OUTLINE.value, target.PART_OUTLINES.value,
+                                target.CHARACTER_SHEETS.value, target.NARRATIVE_RULES.value),
+        }
         for path, domain, owner in cases:
             with self.subTest(path=path):
                 self.assertIs(artifact_domain(path), domain)
                 scope = self.scope(target_paths=(path,), domains=())
                 self.assertEqual(required_authoring_domains(scope), (domain,))
                 self.assertEqual(required_authoring_specialists(scope), (owner,))
+                actual_target = target.MANUSCRIPT if path.startswith("manuscript/") else target(path)
+                needed = readiness.require_readiness(actual_target, empty)
+                self.assertEqual(needed.required_documents if needed else (), prerequisites[actual_target])
+        self.assertIsInstance(readiness.require_readiness(None, empty), readiness.CoreDocumentReadinessNeeded)
         self.assertEqual(required_authoring_specialists(self.scope(domains=tuple(Domain))),
                          ("plot_architect", "character_custodian", "execution_specialist"))
 

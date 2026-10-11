@@ -4,6 +4,7 @@ from __future__ import annotations
 from story_writing_agents.specialist_routing import AuthoringIntent
 import hashlib
 from tests.test_consensus_projection import (
+    AuthoringTarget, _qualify_readiness_fixture_port,
     _ADMISSION_BRIEF, _FIXTURE_DRAFT, _FIXTURE_RULING, _FIXTURE_TEXTS, _UNIT_DIRECTION,
     _USER_ASSESSMENT, _MATERIAL_ASSESSMENT, _RULING_ASSESSMENT, _unit_basis,
     _qualify_fixture_port, _capture_fixture_direction, _validate_fixture_port,
@@ -44,6 +45,7 @@ _CONFLICTS = tuple(candidate_material_handle(str(index) * 64) for index in (5, 6
 
 class _Port:
     qualify_consensus_authoring = _qualify_fixture_port
+    qualify_consensus_readiness = _qualify_readiness_fixture_port
     capture_consensus_direction = _capture_fixture_direction
     validate_consensus_authoring = _validate_fixture_port
     def __init__(self) -> None:
@@ -63,11 +65,7 @@ class _Port:
         return f"{prefix}-{self.counter}"
 
     def create_workflow(self, submission, request_event) -> None:
-        key = (
-            submission.session_id,
-            submission.conversation_id,
-            submission.workflow_id,
-        )
+        key = (submission.session_id, submission.conversation_id, submission.workflow_id,)
         if key in self.workflows:
             raise ValueError("duplicate workflow")
         self.workflows[key] = ConsensusStoredWorkflow(submission, (request_event,))
@@ -203,6 +201,7 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
             input_material=_PROMPT,
 
             authoring_assessment=_USER_ASSESSMENT,
+            authoring_target=AuthoringTarget.GLOBAL_OUTLINE,
         )
         draft = await self._confirm(inspection)
         audit_request = self._next(draft.inspection)
@@ -237,6 +236,7 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
             added_revision_rounds=rounds,
 
             authoring_assessment=_RULING_ASSESSMENT,
+            authoring_target=AuthoringTarget.GLOBAL_OUTLINE,
         )
 
     async def test_resume_in_place_binds_exact_lineage_and_requires_fresh_confirmation(
@@ -305,9 +305,7 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         deadlocked = await self._deadlock()
-        source = self.port.load_workflow(
-            "session-1", "conversation-1", deadlocked.submission.workflow_id
-        )
+        source = self.port.load_workflow("session-1", "conversation-1", deadlocked.submission.workflow_id)
         source_events = source.events
         calls_before = len(self.port.provider_calls)
         linked = self._continue(deadlocked, ConsensusContinuationMode.LINKED_WORKFLOW)
@@ -329,9 +327,7 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         deadlocked = await self._deadlock()
-        continued = self._continue(
-            deadlocked, ConsensusContinuationMode.RESUME_IN_PLACE
-        )
+        continued = self._continue(deadlocked, ConsensusContinuationMode.RESUME_IN_PLACE)
         calls_before = len(self.port.provider_calls)
         revised = await self.adapter.decide(
             _decision(self.adapter, self.port, continued, ConsensusDecision.REVISE,)
@@ -365,9 +361,7 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         deadlocked = await self._deadlock()
-        continued = self._continue(
-            deadlocked, ConsensusContinuationMode.RESUME_IN_PLACE
-        )
+        continued = self._continue(deadlocked, ConsensusContinuationMode.RESUME_IN_PLACE)
         repaired = await self._confirm(continued)
         calls_before_request = len(self.port.provider_calls)
 
@@ -401,9 +395,7 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         deadlocked = await self._deadlock()
-        source = self.port.load_workflow(
-            "session-1", "conversation-1", deadlocked.submission.workflow_id
-        )
+        source = self.port.load_workflow("session-1", "conversation-1", deadlocked.submission.workflow_id)
         terminal = source.events[-1]
         baseline_keys = set(self.port.workflows)
         calls_before = len(self.port.provider_calls)
@@ -429,6 +421,7 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(ValueError):
                     self.adapter.continue_deadlock(**(base | override),
                         authoring_assessment=_RULING_ASSESSMENT,
+                        authoring_target=AuthoringTarget.GLOBAL_OUTLINE,
                     )
                 self.assertEqual(len(self.port.provider_calls), calls_before)
                 self.assertEqual(set(self.port.workflows), baseline_keys)
@@ -437,6 +430,7 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "material is unavailable"):
             self.adapter.continue_deadlock(**base,
                 authoring_assessment=_RULING_ASSESSMENT,
+                authoring_target=AuthoringTarget.GLOBAL_OUTLINE,
             )
         self.assertEqual(len(self.port.provider_calls), calls_before)
         self.assertEqual(set(self.port.workflows), baseline_keys)
@@ -448,6 +442,7 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
             input_material=_PROMPT,
 
             authoring_assessment=_USER_ASSESSMENT,
+            authoring_target=AuthoringTarget.GLOBAL_OUTLINE,
         )
         completed_submission = self.adapter.submit_prompt(
             session_id="session-completed",
@@ -455,6 +450,7 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
             input_material=_PROMPT,
 
             authoring_assessment=_USER_ASSESSMENT,
+            authoring_target=AuthoringTarget.GLOBAL_OUTLINE,
         )
         completed = await self.adapter.confirm(_decision(self.adapter, self.port, completed_submission))
 
@@ -464,6 +460,7 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
             input_material=_PROMPT,
 
             authoring_assessment=_USER_ASSESSMENT,
+            authoring_target=AuthoringTarget.GLOBAL_OUTLINE,
         )
 
         async def fail(_invocation):
@@ -494,15 +491,14 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
                         added_revision_rounds=1,
 
                         authoring_assessment=_RULING_ASSESSMENT,
+                        authoring_target=AuthoringTarget.GLOBAL_OUTLINE,
                     )
         self.assertEqual(len(self.port.provider_calls), calls_before)
         self.assertEqual(set(self.port.workflows), keys_before)
 
     async def test_interruption_and_second_deadlock_never_publish(self) -> None:
         deadlocked = await self._deadlock()
-        continued = self._continue(
-            deadlocked, ConsensusContinuationMode.RESUME_IN_PLACE
-        )
+        continued = self._continue(deadlocked, ConsensusContinuationMode.RESUME_IN_PLACE)
         interruption = []
 
         async def interrupt(invocation):
@@ -525,9 +521,7 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
         second_adapter = ConsensusRuntimeAdapter(second_port)
         self.port, self.adapter = second_port, second_adapter
         deadlocked = await self._deadlock()
-        continued = self._continue(
-            deadlocked, ConsensusContinuationMode.RESUME_IN_PLACE
-        )
+        continued = self._continue(deadlocked, ConsensusContinuationMode.RESUME_IN_PLACE)
         repaired = await self._confirm(continued)
         self.port.reaudit_conflicts = True
         reaudit = await self._confirm(self._next(repaired.inspection))
@@ -550,9 +544,7 @@ class ConsensusDeadlockContinuationTests(unittest.IsolatedAsyncioTestCase):
         for changed in (
             {"conflict_materials": ()},
             {"conflict_materials": (_CONFLICTS[0], _CONFLICTS[0])},
-            {
-                "ruling_material": ConsensusMaterialHandle("artifact:core_documents/global_outline.md", "8" * 64)
-            },
+            {"ruling_material": ConsensusMaterialHandle("artifact:core_documents/global_outline.md", "8" * 64)},
             {"added_revision_rounds": 0},
         ):
             with self.subTest(changed=changed):

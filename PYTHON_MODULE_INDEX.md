@@ -70,9 +70,9 @@ errors/configuration. These are stable inputs to orchestration and adapters; the
 depend on terminal presentation or concrete persistence.
 
 - `agents`, `models`, `errors`, `config`, `prompts`, `directives`, `artifact_proposals`
-- `specialist_routing`, `authoring_admission`, `reply_trace`, `run_inputs`
+- `specialist_routing`, `authoring_admission`, `core_document_readiness`, `reply_trace`, `run_inputs`
 
-Primary access is the root facade. `specialist_routing` owns pure shared `AuthoringIntent`, independent of activity; conversation codecs preserve its immutable task lineage. `config` owns configuration loading. Scope-v3 contribution/dependency declarations and consistent per-specialist roles remain pure routing contracts; historical scope constructors retain default version 2. Historical drafting-input eligibility is pure routing policy; current execution proof remains host-owned.
+Primary access is the root facade. `specialist_routing` owns pure shared `AuthoringIntent`, independent of activity; conversation codecs preserve its immutable task lineage. `config` owns configuration loading. Scope-v3 contribution/dependency declarations and consistent per-specialist roles remain pure routing contracts; historical scope constructors retain default version 2. Historical drafting-input eligibility is pure routing policy; current execution proof remains host-owned. `core_document_readiness` owns pure whole-book criteria, document dependencies and current-source projection; adapters qualify actual USER/READ origins and retain causal captures in existing event stores. Completion grants no execution or write authority.
 `prompts` owns captured policy bytes, stable fingerprints and runtime authority invariants; stages remain invocation data without provider execution.
 `models` carries optional diagnostics and keyword-only `AgentRequest.expected_reviewed_proposal` and `review_only` hints, without next-action authority.
 
@@ -181,7 +181,7 @@ runtime collaborators, and persist event/material records. `consensus` is the su
 facade; contracts and projections remain infrastructure-neutral.
 
 - `consensus`, `consensus.contracts`, `consensus.execution`, `consensus.projection`
-- `consensus.serialization`, `consensus.runtime_adapter` Source-bound authoring admission is preserved in phase/submission codecs and requalified by the owning runtime port before Confirm/dispatch; new USER rulings require fresh semantic input.
+- `consensus.serialization`, `consensus.runtime_adapter` Source-bound authoring admission is preserved in phase/submission codecs and requalified by the owning runtime port before Confirm/dispatch; new USER rulings require fresh semantic input. Explicit authoring targets/readiness use current codecs and fresh runtime dispatch checks; REVIEW_ONLY stays completion-free.
 - `consensus.event_store`, `consensus.material_store`
 
 Execution and serialization depend on contracts/projection; stores own durable workspace records. Contracts must not import execution or stores.

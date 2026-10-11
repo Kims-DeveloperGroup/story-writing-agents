@@ -8,7 +8,9 @@ session-wide event sequence.
 
 from __future__ import annotations
 
-from ..authoring_admission import AdmissionSourceKind, admission_basis_to_dict
+from ..core_document_readiness import assessment_to_dict as readiness_assessment_to_dict
+
+from ..authoring_admission import AdmissionSource, AdmissionSourceKind, admission_basis_to_dict
 
 from ..lead_task_transitions import (
     LeadMaterialKind, LeadPublicResponseAcceptance, task_material_sha256, task_value_to_dict,
@@ -31,7 +33,7 @@ from .context import project_editorial_state
 from ..lead_premise_decisions import premise_value_to_dict
 from .context import (
     CollaborationReadableRecord, artifact_objective_context,
-    project_collaboration_history,
+    project_collaboration_history, validate_readiness_sources,
 )
 from .events import (
     CollaborationMessagePayload,
@@ -154,6 +156,10 @@ def _operations(operations: tuple[object, ...]) -> list[dict[str, object]]:
 
 def _visible_details(payload: object) -> dict[str, object]:
     """Session-only visible facts omitted by the bounded search field contract."""
+    if type(payload) is CollaborationLeadJudgmentPayload and payload.core_document_readiness is not None:
+        return {"core_document_assessment": readiness_assessment_to_dict(payload.core_document_readiness.assessment),
+                "readiness_authority": "Retained semantic judgment, not current READ, completion, Confirm, review, Apply or Commit authority; the host requalifies actual sources."}
+
     if type(payload) in {
         CollaborationLeadTaskDecisionPayload, CollaborationLeadTaskTransitionPayload,
         CollaborationLeadMaterialCapturePayload, CollaborationLeadDiscussionPayload,
@@ -549,18 +555,23 @@ class SessionHistorySnapshot:
                 raise ValueError("session history inventory is inconsistent")
             previous = item.metadata.conversation_id
         self._validate_material_admission_origins()
+        self._validate_readiness_captures()
 
     def _validate_material_admission_origins(self) -> None:
         records = {(row.metadata.conversation_id, record.event_id): record
                    for row in self.conversations for record in row.records}
         for row in self.conversations:
             for record in row.records:
-                if type(record.payload) not in {CollaborationProposal, LeadRecommendationRequestPayload}:
+                if type(record.payload) in {CollaborationProposal, LeadRecommendationRequestPayload}:
+                    admission = record.payload.basis.authoring_admission
+                    sources = () if admission is None else admission.sources
+                elif type(record.payload) is CollaborationLeadJudgmentPayload and record.payload.core_document_readiness is not None:
+                    sources = tuple(AdmissionSource(v.source_id, v.kind, v.source_identity,
+                        v.revision_digest, v.source_classification, v.utf8_bytes)
+                        for v in record.payload.core_document_readiness.sources)
+                else:
                     continue
-                admission = record.payload.basis.authoring_admission
-                if admission is None:
-                    continue
-                for source in admission.sources:
+                for source in sources:
                     if source.kind is not AdmissionSourceKind.MATERIAL:
                         continue
                     authority = "input_only"
@@ -586,6 +597,103 @@ class SessionHistorySnapshot:
                             authority = "rejected_public_response"
                     if source.original_authority != authority:
                         raise ValueError("authoring admission material provenance changed")
+
+    @staticmethod
+    def readiness_ref(record: CollaborationEvent | CollaborationReadableRecord) -> str:
+        return f"{record.session_id}/{record.conversation_id}/{record.event_id}"
+
+    def readiness_assessments(self) -> tuple[CollaborationReadableRecord, ...]:
+        """Expose actual immutable captures; no global clock or completion authority."""
+        return tuple(record for row in self.conversations for record in row.records
+            if type(record.payload) is CollaborationLeadJudgmentPayload
+            and record.payload.core_document_readiness is not None)
+
+    def readiness_heads(self) -> tuple[CollaborationReadableRecord, ...]:
+        records = self.readiness_assessments()
+        consumed = {ref for record in records
+                    for ref in record.payload.core_document_readiness.prior_assessment_refs}
+        return tuple(record for record in records if self.readiness_ref(record) not in consumed)
+
+    def validate_readiness_use(self, basis) -> None:
+        """Verify a workflow's exact captured assessment and its original causal prefix."""
+        captured = {self.readiness_ref(record): record for record in self.readiness_assessments()}
+        if len(basis.prior_assessment_refs) != 1 or basis.prior_assessment_refs[0] not in captured:
+            raise ValueError("readiness use has no exact actual assessment")
+        original = captured[basis.prior_assessment_refs[0]]
+        source = original.payload.core_document_readiness
+        if (basis.assessment, basis.sources, basis.request_digest) != (source.assessment, source.sources, source.request_digest):
+            raise ValueError("readiness use changed original assessment/source facts")
+        owners = {row.metadata.conversation_id: row for row in self.conversations}
+        metadata = {row[0]: row[1:] for row in basis.history_metadata}
+        covered = set()
+        for owner, count, digest in basis.history_coverage:
+            if owner not in owners or owner not in metadata:
+                raise ValueError("readiness use owner is unavailable")
+            row = owners[owner]
+            title, status = metadata[owner]
+            historical = replace(row, metadata=replace(row.metadata, subject=title, status=type(row.metadata.status)(status)))
+            if historical.prefix_digest(count) != digest:
+                raise ValueError("readiness use immutable prefix changed")
+            covered.update(self.readiness_ref(record) for record in row.records[:count])
+        if basis.prior_assessment_refs[0] not in covered:
+            raise ValueError("readiness use assessment is foreign or future to captured prefix")
+
+    def _validate_readiness_captures(self) -> None:
+        owners = {row.metadata.conversation_id: row for row in self.conversations}
+        captured = {self.readiness_ref(record): record for record in self.readiness_assessments()}
+        edges = {}
+        def qualified_prefix(record, basis):
+            metadata = {row[0]: row[1:] for row in basis.history_metadata}
+            prefixes = {}
+            for owner, count, digest in basis.history_coverage:
+                if owner not in owners or owner not in metadata:
+                    raise ValueError("readiness captured owner is unavailable")
+                row = owners[owner]
+                subject, status = metadata[owner]
+                original = replace(row, metadata=replace(row.metadata, subject=subject,
+                    status=type(row.metadata.status)(status)))
+                if original.prefix_digest(count) != digest:
+                    raise ValueError("readiness original physical prefix changed")
+                if owner == record.conversation_id and count >= record.sequence:
+                    raise ValueError("readiness capture includes its future publication")
+                prefixes[owner] = row._events()[:count]
+            if record.conversation_id not in prefixes:
+                raise ValueError("readiness capture lacks its actual owner prefix")
+            prior = {event.event_id: event for events in prefixes.values() for event in events}
+            if len(prior) != sum(len(events) for events in prefixes.values()):
+                raise ValueError("readiness physical origin identities collide")
+            refs = {self.readiness_ref(event) for event in prior.values()}
+            if any(value not in refs or value not in captured for value in basis.prior_assessment_refs):
+                raise ValueError("readiness predecessor is missing, foreign or future")
+            return prior
+
+        for ref, record in captured.items():
+            basis = record.payload.core_document_readiness
+            prior = qualified_prefix(record, basis)
+            validate_readiness_sources(basis, record.payload.evidence, prior, turn_id=record.turn_id)
+            edges[ref] = basis.prior_assessment_refs
+        for owner in self.conversations:
+            for record in owner.records:
+                if type(record.payload) not in {CollaborationProposal, LeadRecommendationRequestPayload}:
+                    continue
+                basis = record.payload.basis.core_document_readiness
+                if basis is None:
+                    continue
+                prior = qualified_prefix(record, basis)
+                if len(basis.prior_assessment_refs) != 1:
+                    raise ValueError("readiness use must select one actual causal assessment")
+                original = captured[basis.prior_assessment_refs[0]]
+                source = original.payload.core_document_readiness
+                if (basis.assessment, basis.sources, basis.request_digest) != (source.assessment, source.sources, source.request_digest):
+                    raise ValueError("readiness use changed original assessment or actual source facts")
+                validate_readiness_sources(basis, original.payload.evidence, prior, turn_id=original.turn_id)
+        def visit(ref, path):
+            if ref in path:
+                raise ValueError("readiness causal predecessors form a cycle")
+            for previous in edges[ref]:
+                visit(previous, path | {ref})
+        for ref in edges:
+            visit(ref, set())
 
     def exploration_source(self, selection: ExplorationAdoptionSelection, *, latest: bool = True) -> CollaborationEvent:
         """Qualify a real same-session idea; retained captures keep their exact source."""

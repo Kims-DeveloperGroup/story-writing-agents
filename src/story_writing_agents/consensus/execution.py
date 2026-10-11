@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..core_document_readiness import AuthoringTarget, CoreDocumentReadinessBasis, validate_authoring_target_basis
 from ..authoring_admission import (
     AuthoringAdmissionBasis,
 )
@@ -75,8 +76,14 @@ class ConsensusPhaseInvocation:
 
     authoring_admission: AuthoringAdmissionBasis | None = field(default=None, kw_only=True)
     authoring_direction: ConsensusMaterialHandle | None = field(default=None, kw_only=True)
+    authoring_target: AuthoringTarget | None = field(default=None, kw_only=True)
+    core_document_readiness: CoreDocumentReadinessBasis | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
+        if self.intent is AuthoringIntent.AUTHORING:
+            validate_authoring_target_basis(self.authoring_target, self.core_document_readiness)
+        elif self.authoring_target is not None or self.core_document_readiness is not None:
+            raise ValueError("review-only invocation cannot acquire authoring readiness")
         if self.authoring_direction is not None and (
             type(self.authoring_direction) is not ConsensusMaterialHandle
             or not self.authoring_direction.locator.startswith("candidate:")
@@ -452,6 +459,8 @@ class ConsensusExecutionCoordinator:
             invocation = ConsensusPhaseInvocation(
                 authoring_admission=request.authoring_admission,
                 authoring_direction=request.authoring_direction,
+                authoring_target=request.authoring_target,
+                core_document_readiness=request.core_document_readiness,
                 workflow_id=request.workflow_id,
                 phase_request_id=request.phase_request_id,
                 proposal_id=request.proposal_id,
