@@ -676,3 +676,7 @@ Contributors must follow [AGENTS.md](AGENTS.md),
 [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md), and
 [COMMIT_POLICY.md](COMMIT_POLICY.md). For tracked work, load
 [`$github-task-lifecycle`](.agents/skills/github-task-lifecycle/SKILL.md).
+
+The four-shard validation work is tracked in [Issue #846](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/846#implementation-plan).
+Its plan covers partitioning, local scheduling and complete reconciliation while
+preserving the existing suite cost limits.
