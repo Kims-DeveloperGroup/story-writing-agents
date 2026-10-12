@@ -1411,9 +1411,11 @@ class CliTests(unittest.TestCase):
             failure = WorkspaceFormatError("initialization failed")
             with (
                 _fresh_cli_effect_patch('initialize_workspace', failure) as initialize,
+                mock.patch.object(cli_module, "_run_interactive_cli") as shell,
                 contextlib.redirect_stderr(stderr),
             ):
                 self.assertEqual(main(["init", str(target)]), 2)
+            shell.assert_not_called()
             self.assertEqual(
                 stderr.getvalue(), "WorkspaceFormatError: initialization failed\n"
             )
@@ -3135,7 +3137,7 @@ class CliTests(unittest.TestCase):
     def test_init_inspect_and_expected_error_exit_codes(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        workspace_path = Path(temporary.name) / "workspace"
+        workspace_path = Path(temporary.name) / "workspace with spaces"
 
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
@@ -3146,14 +3148,21 @@ class CliTests(unittest.TestCase):
         self.assertTrue((workspace_path / "config" / "system_defaults.json").is_file())
 
         workspace = Workspace(workspace_path)
-        before = {
-            path.relative_to(workspace_path).as_posix(): (
-                path.read_bytes(),
-                path.stat().st_mtime_ns,
-            )
-            for path in workspace_path.rglob("*")
-            if path.is_file()
-        }
+        def snapshot():
+            return {path: (path.read_bytes(), path.stat().st_mtime_ns)
+                    for path in workspace_path.rglob("*") if path.is_file()}
+        before = snapshot()
+        with (
+            mock.patch.object(cli_module, "_interactive_streams_are_terminals", return_value=True),
+            mock.patch.object(cli_module, "_run_interactive_cli", return_value=7) as shell,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(main(["init", str(workspace_path)]), 7)
+        shell.assert_called_once()
+        self.assertEqual(vars(shell.call_args.args[0]),
+                         vars(cli_module.build_parser().parse_args(
+                             ["chat", "--workspace", str(workspace_path.resolve())])))
+        self.assertEqual(snapshot(), before)
         stderr = io.StringIO()
         with (
             contextlib.redirect_stderr(stderr),
@@ -3162,17 +3171,7 @@ class CliTests(unittest.TestCase):
             main(["init", str(workspace_path), "--overwrite-prompts"])
         self.assertEqual(retired.exception.code, 2)
         self.assertIn("unrecognized arguments: --overwrite-prompts", stderr.getvalue())
-        self.assertEqual(
-            {
-                path.relative_to(workspace_path).as_posix(): (
-                    path.read_bytes(),
-                    path.stat().st_mtime_ns,
-                )
-                for path in workspace_path.rglob("*")
-                if path.is_file()
-            },
-            before,
-        )
+        self.assertEqual(snapshot(), before)
 
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):

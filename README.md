@@ -167,10 +167,18 @@ Successful initialization prints the absolute workspace path:
 }
 ```
 
+In a terminal, `story init` then opens the interactive shell in that workspace,
+including its normal authentication and default-provider setup. You can create
+or reopen a session immediately. The parent terminal stays in its current
+directory; after quitting Story, use `cd ./my-story` for subsequent commands.
+When streams are redirected, initialization prints only JSON and exits without
+starting the shell or authenticating providers.
+
 It creates one strict schema-v2 workspace, four zero-byte core documents, and
 one clean local `main` root commit named `Initialize story workspace`. The
 initializer writes no story content. Repeating `story init` on that unchanged
 workspace validates it without rewriting, staging, or committing again.
+In a terminal, successful validation also opens the shell in that workspace.
 
 The initialization root is the pristine `main` baseline. `story init` records
 the session branch/ref/worktree grammar but creates none of those resources.

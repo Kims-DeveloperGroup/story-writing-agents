@@ -1238,6 +1238,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.command == "init":
             workspace = initialize_workspace(arguments.workspace)
             print(json.dumps({"workspace": str(workspace.root)}, indent=2))
+            if _interactive_streams_are_terminals():
+                return _run_interactive_cli(
+                    parser.parse_args(["chat", "--workspace", str(workspace.root)])
+                )
             return 0
 
         if arguments.command == "smoke":
