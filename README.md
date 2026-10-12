@@ -577,6 +577,11 @@ The Python package is under `src/story_writing_agents/`; tests are under
 `tests/`; role prompts are under `config/agents/`; and
 [PYTHON_MODULE_INDEX.md](PYTHON_MODULE_INDEX.md) is the production-module map.
 
+A Lead response-contract change must update its final offered schema, bound
+validation, and source-authored repair requirements together. Check strict
+field/value rules and branch relationships after the final provider projection;
+a successful repair does not establish schema alignment.
+
 Run tests from the repository root in the same Python 3.11+ development
 environment used to install the project. The canonical runner uses only the
 standard library and records the exact selected IDs, results, timings, policy,
