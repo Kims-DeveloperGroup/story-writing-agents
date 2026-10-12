@@ -96,18 +96,16 @@ def check_source_scope(current: dict[str, Any]) -> None:
 def check_reports(
     current: dict[str, Any], paths: Sequence[str], *, allow_wall_time_overage: bool = False,
 ) -> dict[str, Any]:
-    reconciliation = runner._reconcile_reports(paths)
+    reconciliation = runner.reconcile_reports(paths)
     if reconciliation["outcome"] != "success":
         raise BudgetError("shard tests did not all pass")
     records: dict[str, int] = {}
-    for path in paths:
-        report = json.loads(Path(path).read_text(encoding="utf-8"))
-        for row in report["tests"]:
-            identifier = row["canonical_id"]
-            count = row.get("subtest_count")
-            if type(count) is not int or count < 0:
-                raise BudgetError(f"missing or invalid subtest count: {identifier}")
-            records[identifier] = count
+    for row in reconciliation["tests"]:
+        identifier = row["canonical_id"]
+        count = row.get("subtest_count")
+        if type(count) is not int or count < 0:
+            raise BudgetError(f"missing or invalid subtest count: {identifier}")
+        records[identifier] = count
     if set(records) != set(current["subtest_caps"]):
         raise BudgetError("shard records differ from frozen inventory")
     expanded = sorted(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import json
 import math
 import os
@@ -17,10 +18,12 @@ from pathlib import Path
 from typing import Callable, Iterable, Sequence, TextIO
 
 from tests import suite_policy
+from tests.local_ci_state import LocalCIError, snapshot
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 RUNNER_NAME = "story-writing-agents-unittest"
+CANONICAL_INVENTORY_PATH = Path(__file__).parent / "fixtures" / "test_budget_v1.json"
 
 
 class RunnerError(ValueError):
@@ -131,6 +134,33 @@ def _select(
     return CanonicalCollection(tests, tuple(test.id() for test in tests))
 
 
+def _suite_policy_metadata(weights: suite_policy.TimingWeights,
+                           plan: suite_policy.ShardPlan | None = None) -> dict[str, object]:
+    policy: dict[str, object] = {
+        "version": suite_policy.POLICY_VERSION,
+        "fast_tier_manifest": _manifest(suite_policy.FAST_TEST_IDS),
+        "weight_manifest": {
+            "schema_version": weights.version, "digest": weights.digest,
+            "source": weights.source,
+            "fallback_test_weight_microseconds": weights.fallback_test_weight_microseconds,
+            "provenance": weights.provenance,
+        },
+    }
+    if plan is not None:
+        policy["partition"] = {
+            "algorithm": suite_policy.SHARD_ALGORITHM, "shard_count": suite_policy.SHARD_COUNT,
+            "digest": plan.digest, "group_count": len(plan.group_weights_microseconds),
+            "fallback_group_count": len(plan.fallback_groups),
+            "shards": [
+                {"identity": f"{index + 1}/4", "group_count": len(plan.shard_groups[index]),
+                 "predicted_weight_microseconds": plan.shard_weights_microseconds[index],
+                 "selection_manifest": _manifest(plan.shard_ids[index])}
+                for index in range(suite_policy.SHARD_COUNT)
+            ],
+        }
+    return policy
+
+
 def _policy_select(
     collection: CanonicalCollection,
     *,
@@ -154,10 +184,10 @@ def _policy_select(
         raise RunnerError(str(error)) from error
 
     if shard is not None:
-        if shard not in {"1/2", "2/2"}:
-            raise RunnerError("--shard must be 1/2 or 2/2")
+        if shard not in {f"{index}/4" for index in range(1, 5)}:
+            raise RunnerError("--shard must be 1/4, 2/4, 3/4, or 4/4")
         try:
-            plan = suite_policy.partition_two_shards(collection.ids, weights)
+            plan = suite_policy.partition_full_shards(collection.ids, weights)
         except suite_policy.SuitePolicyError as error:
             raise RunnerError(str(error)) from error
         shard_index = int(shard[0]) - 1
@@ -179,47 +209,10 @@ def _policy_select(
     selection = CanonicalCollection(tests, tuple(test.id() for test in tests))
     if not selection.ids:
         raise RunnerError("test selection produced no tests")
-    fast_manifest = _manifest(suite_policy.FAST_TEST_IDS)
-    partition_metadata = None
-    if shard is not None:
-        partition_metadata = {
-            "algorithm": suite_policy.SHARD_ALGORITHM,
-            "digest": plan.digest,
-            "group_count": len(plan.group_weights_microseconds),
-            "fallback_group_count": len(plan.fallback_groups),
-            "shards": [
-                {
-                    "identity": f"{index + 1}/2",
-                    "group_count": len(plan.shard_groups[index]),
-                    "predicted_weight_microseconds": plan.shard_weights_microseconds[index],
-                    "selection_manifest": _manifest(plan.shard_ids[index]),
-                }
-                for index in range(2)
-            ],
-        }
-    metadata: dict[str, object] = {
-        "selection": {
-            "tiers": list(requested_tiers),
-            "shard": shard,
-        },
-        "suite_policy": {
-            "version": suite_policy.POLICY_VERSION,
-            "fast_tier_manifest": fast_manifest,
-            "weight_manifest": {
-                "schema_version": weights.version,
-                "digest": weights.digest,
-                "source": weights.source,
-                "fallback_test_weight_microseconds": (
-                    weights.fallback_test_weight_microseconds
-                ),
-                "provenance": weights.provenance,
-            },
-        },
+    metadata = {
+        "selection": {"tiers": list(requested_tiers), "shard": shard},
+        "suite_policy": _suite_policy_metadata(weights, plan if shard is not None else None),
     }
-    if partition_metadata is not None:
-        policy = metadata["suite_policy"]
-        assert isinstance(policy, dict)
-        policy["partition"] = partition_metadata
     return PolicySelection(selection, metadata)
 
 
@@ -343,34 +336,67 @@ class TimedTextTestResult(unittest.TextTestResult):
         } for identifier in ordered_ids if identifier in self._statuses]
 
 
+def _source_snapshot() -> dict[str, object]:
+    try:
+        return snapshot(Path(__file__).resolve().parents[1])
+    except LocalCIError as error:
+        raise RunnerError(f"cannot capture test source: {error}") from error
+
+
+def _execution_environment() -> dict[str, str]:
+    distributions = sorted((str(item.metadata.get("Name", "")).lower(), item.version)
+                           for item in importlib.metadata.distributions())
+    encoded = json.dumps(distributions, separators=(",", ":")).encode()
+    return {
+        "python_version": platform.python_version(),
+        "python_implementation": platform.python_implementation(),
+        "executable": sys.executable, "platform": platform.platform(),
+        "system": platform.system(), "machine": platform.machine(),
+        "dependency_lock_sha256": hashlib.sha256(
+            (Path(__file__).resolve().parents[1] / "uv.lock").read_bytes()).hexdigest(),
+        "installed_distributions_sha256": hashlib.sha256(encoded).hexdigest(),
+    }
+
+
 @dataclass(frozen=True)
 class Execution:
     result: TimedTextTestResult
     wall_seconds: float
     interrupted: bool
+    source_binding: dict[str, object]
+    environment: dict[str, str]
+    environment_valid: bool
 
 
 def _execute(selection: CanonicalCollection, *, stream: TextIO, failfast: bool = False,
              clock: Callable[[], float] = time.perf_counter) -> Execution:
+    before = _source_snapshot()
+    environment = _execution_environment()
     captured: list[TimedTextTestResult] = []
-
     def result_factory(*args, **kwargs):
         result = TimedTextTestResult(*args, clock=clock, **kwargs)
         captured.append(result)
         return result
-
     test_runner = unittest.TextTestRunner(
         stream=stream, verbosity=2, failfast=failfast, resultclass=result_factory,
     )
     started = clock()
+    interrupted = False
     try:
         result = test_runner.run(unittest.TestSuite(selection.tests))
-        return Execution(result, max(0.0, clock() - started), False)
     except KeyboardInterrupt:
-        wall = max(0.0, clock() - started)
+        interrupted = True
         result = captured[0]
         result.mark_interrupted()
-        return Execution(result, wall, True)
+    wall = max(0.0, clock() - started)
+    after = _source_snapshot()
+    binding = {
+        "checkout_sha": before["checkout_sha"], "checkout_tree": before["checkout_tree"],
+        "before_digest": before["digest"], "after_digest": after["digest"],
+        "source_valid": before == after,
+    }
+    return Execution(result, wall, interrupted, binding, environment,
+                     environment == _execution_environment())
 
 
 def _run_report(canonical: CanonicalCollection, selection: CanonicalCollection,
@@ -383,7 +409,8 @@ def _run_report(canonical: CanonicalCollection, selection: CanonicalCollection,
     report = {
         "schema_version": SCHEMA_VERSION, "runner": RUNNER_NAME, "kind": "run_result",
         "outcome": "interrupted" if execution.interrupted else (
-            "success" if result.wasSuccessful() else "failure"
+            "success" if result.wasSuccessful() and execution.source_binding["source_valid"]
+                and execution.environment_valid else "failure"
         ),
         "canonical_manifest": _manifest(canonical.ids),
         "selection_manifest": _manifest(selection.ids),
@@ -406,12 +433,9 @@ def _run_report(canonical: CanonicalCollection, selection: CanonicalCollection,
             -float(row["duration_seconds"]), str(row["canonical_id"])
         ))[:slowest],
         "details": result.details,
-        "environment": {
-            "python_version": platform.python_version(),
-            "python_implementation": platform.python_implementation(),
-            "executable": sys.executable, "platform": platform.platform(),
-            "machine": platform.machine(),
-        },
+        "source_binding": execution.source_binding,
+        "environment": execution.environment,
+        "environment_valid": execution.environment_valid,
     }
     if policy_metadata is not None:
         report.update(policy_metadata)
@@ -557,129 +581,177 @@ def _required_durations(payload: dict[str, object]) -> dict[str, float]:
 
 def _required_ids(payload: dict[str, object], key: str) -> tuple[str, ...]:
     manifest = _required_dict(payload, key)
-    values = manifest.get("ordered_ids")
-    if type(values) is not list or any(type(value) is not str for value in values):
-        raise RunnerError(f"shard report has invalid {key!r} ordered IDs")
-    identifiers = tuple(values)
-    if _manifest(identifiers) != manifest:
-        raise RunnerError(f"shard report has inconsistent {key!r}")
-    return identifiers
+    ids = manifest.get("ordered_ids")
+    if (type(manifest.get("count")) is not int or type(manifest.get("digest")) is not str
+            or type(ids) is not list or not ids or any(type(item) is not str or not item for item in ids)
+            or len(set(ids)) != len(ids) or manifest != _manifest(ids)):
+        raise RunnerError(f"shard {key} is invalid")
+    return tuple(ids)
 
 
-def _reconcile_reports(paths: Sequence[str]) -> dict[str, object]:
-    """Prove two independently emitted full shards are complementary."""
+def _required_report_identity(report: dict[str, object]) -> tuple[dict[str, object], dict[str, str]]:
+    source = _required_dict(report, "source_binding")
+    keys = {"checkout_sha", "checkout_tree", "before_digest", "after_digest", "source_valid"}
+    if set(source) != keys or source["source_valid"] is not True:
+        raise RunnerError("shard source binding is invalid or stale")
+    for key in ("checkout_sha", "checkout_tree"):
+        value = source[key]
+        if type(value) is not str or len(value) != 40 or set(value) - set("0123456789abcdef"):
+            raise RunnerError("shard source commit/tree is invalid")
+    digest = source["before_digest"]
+    if (type(digest) is not str or not digest.startswith("sha256:") or len(digest) != 71
+            or set(digest[7:]) - set("0123456789abcdef") or source["after_digest"] != digest):
+        raise RunnerError("shard source changed during execution")
+    environment = _required_dict(report, "environment")
+    common = ("python_version", "python_implementation", "system", "machine",
+              "dependency_lock_sha256", "installed_distributions_sha256")
+    if (set(environment) != set(common) | {"executable", "platform"}
+            or any(type(value) is not str or not value for value in environment.values())
+            or report.get("environment_valid") is not True):
+        raise RunnerError("shard execution environment is invalid or changed")
+    for key in ("dependency_lock_sha256", "installed_distributions_sha256"):
+        value = environment[key]
+        if len(value) != 64 or set(value) - set("0123456789abcdef"):
+            raise RunnerError("shard environment fingerprint is invalid")
+    return source, {key: environment[key] for key in common}
 
-    if len(paths) != 2 or paths[0] == paths[1]:
-        raise RunnerError("reconcile requires two distinct shard report paths")
+
+def reconcile_reports(paths: Sequence[str]) -> dict[str, object]:
+    """Validate the complete current four-report contract and retain its records."""
+    identities = tuple(f"{index}/4" for index in range(1, 5))
+    if len(paths) != 4 or len(set(paths)) != 4:
+        raise RunnerError("reconcile requires four distinct shard report paths")
     by_shard: dict[str, dict[str, object]] = {}
     durations_by_shard: dict[str, dict[str, float]] = {}
+    bindings = []
+    allowed = {"passed", "skipped", "failed", "error", "expected_failure", "unexpected_success"}
+    counters = ("selected", "started", "completed", "passed", "failures", "errors", "skipped",
+                "expected_failures", "unexpected_successes", "interrupted")
     for path in paths:
         report = _load_json_object(path)
-        if report.get("runner") != RUNNER_NAME or report.get("kind") != "run_result":
-            raise RunnerError(f"{path!r} is not a canonical run report")
-        if report.get("outcome") not in {"success", "failure"}:
-            raise RunnerError(f"{path!r} is not terminal")
+        if (type(report.get("schema_version")) is not int or report.get("schema_version") != SCHEMA_VERSION
+                or report.get("runner") != RUNNER_NAME
+                or report.get("kind") != "run_result" or report.get("outcome") not in {"success", "failure"}):
+            raise RunnerError(f"{path!r} is not a current terminal canonical run report")
         selection = _required_dict(report, "selection")
         shard = selection.get("shard")
-        if shard not in {"1/2", "2/2"} or shard in by_shard:
-            raise RunnerError("reports must have complementary unique shard identities")
+        if shard not in identities or shard in by_shard or selection.get("tiers") != []:
+            raise RunnerError("reports must have complementary unique four-shard identities")
+        bindings.append(_required_report_identity(report))
         durations = _required_durations(report)
         totals = _required_dict(report, "totals")
-        selected = totals.get("selected")
-        if (
-            type(selected) is not int
-            or totals.get("started") != selected
-            or totals.get("completed") != selected
-            or report.get("unexecuted_ids") != []
-        ):
+        if any(type(totals.get(key)) is not int or totals[key] < 0 for key in counters):
+            raise RunnerError(f"shard {shard} has invalid totals")
+        selected = totals["selected"]
+        if (selected <= 0 or totals["started"] != selected or totals["completed"] != selected
+                or totals["interrupted"] != 0 or report.get("unexecuted_ids") != []):
             raise RunnerError(f"shard {shard} is incomplete")
         selection_ids = _required_ids(report, "selection_manifest")
         records = report.get("tests")
         if type(records) is not list or any(type(row) is not dict for row in records):
             raise RunnerError(f"shard {shard} has invalid test records")
-        record_ids = tuple(row.get("canonical_id") for row in records)
-        if record_ids != selection_ids:
+        if len(records) != selected or tuple(row.get("canonical_id") for row in records) != selection_ids:
             raise RunnerError(f"shard {shard} records do not match its selection")
-        by_shard[str(shard)] = report
-        durations_by_shard[str(shard)] = durations
-
-    first, second = by_shard["1/2"], by_shard["2/2"]
-    canonical_first = _required_dict(first, "canonical_manifest")
-    canonical_second = _required_dict(second, "canonical_manifest")
-    if canonical_first != canonical_second:
-        raise RunnerError("shard canonical manifests disagree")
+        for row in records:
+            duration = row.get("duration_seconds")
+            count = row.get("subtest_count")
+            if (row.get("status") not in allowed or type(count) is not int or count < 0
+                    or type(duration) not in (int, float) or not math.isfinite(duration) or duration < 0):
+                raise RunnerError(f"shard {shard} has an invalid terminal test record")
+        statuses = [row["status"] for row in records]
+        if totals["passed"] != statuses.count("passed"):
+            raise RunnerError(f"shard {shard} pass totals disagree with records")
+        for status, key in (("skipped", "skipped"), ("failed", "failures"), ("error", "errors"),
+                            ("expected_failure", "expected_failures"), ("unexpected_success", "unexpected_successes")):
+            if totals[key] < statuses.count(status):
+                raise RunnerError(f"shard {shard} outcome totals disagree with records")
+        details = report.get("details")
+        if type(details) is not list or any(type(item) is not dict for item in details):
+            raise RunnerError(f"shard {shard} details are invalid")
+        if any(item.get("canonical_id") not in selection_ids for item in details):
+            raise RunnerError(f"shard {shard} details refer to unselected tests")
+        for key, kinds in (("failures", {"failure", "subtest_failure"}),
+                           ("errors", {"error", "subtest_error"}), ("skipped", {"skip"}),
+                           ("expected_failures", {"expected_failure"}),
+                           ("unexpected_successes", {"unexpected_success"})):
+            if totals[key] != sum(item.get("kind") in kinds for item in details):
+                raise RunnerError(f"shard {shard} totals disagree with outcome details")
+        if not math.isclose(durations["cumulative_test_seconds"],
+                            sum(row["duration_seconds"] for row in records), rel_tol=1e-12, abs_tol=1e-9):
+            raise RunnerError(f"shard {shard} cumulative duration disagrees with records")
+        for row in records:
+            if row["status"] == "skipped" and not any(
+                item.get("canonical_id") == row["canonical_id"] and item.get("kind") == "skip"
+                and type(item.get("reason")) is str and item["reason"] for item in details
+            ):
+                raise RunnerError(f"shard {shard} skipped record has no attributable reason")
+        successful = (all(status in {"passed", "skipped"} for status in statuses)
+                      and not any(totals[key] for key in ("failures", "errors", "expected_failures", "unexpected_successes")))
+        if (report["outcome"] == "success") != successful:
+            raise RunnerError(f"shard {shard} outcome disagrees with records")
+        by_shard[shard] = report
+        durations_by_shard[shard] = durations
+    if any(binding != bindings[0] for binding in bindings[1:]):
+        raise RunnerError("shard source or execution environments disagree")
+    first = by_shard[identities[0]]
+    canonical = _required_dict(first, "canonical_manifest")
     canonical_ids = _required_ids(first, "canonical_manifest")
-    first_policy = _required_dict(first, "suite_policy")
-    second_policy = _required_dict(second, "suite_policy")
-    if first_policy != second_policy:
-        raise RunnerError("shard policy or partition metadata disagree")
-    partition = _required_dict(first_policy, "partition")
-    planned_shards = partition.get("shards")
-    if type(planned_shards) is not list or len(planned_shards) != 2:
-        raise RunnerError("partition metadata must describe exactly two shards")
-    shard_ids = {
-        identity: _required_ids(report, "selection_manifest")
-        for identity, report in by_shard.items()
-    }
-    for index, identity in enumerate(("1/2", "2/2")):
-        planned = planned_shards[index]
-        if type(planned) is not dict or planned.get("identity") != identity:
-            raise RunnerError("partition shard identities are invalid")
-        planned_manifest = planned.get("selection_manifest")
-        if planned_manifest != _manifest(shard_ids[identity]):
-            raise RunnerError(f"shard {identity} differs from the partition plan")
-    first_set, second_set = set(shard_ids["1/2"]), set(shard_ids["2/2"])
-    if first_set & second_set:
-        raise RunnerError("shard selections overlap")
-    if first_set | second_set != set(canonical_ids):
-        raise RunnerError("shard selections are not exhaustive")
-    if tuple(identifier for identifier in canonical_ids if identifier in first_set) != shard_ids["1/2"]:
-        raise RunnerError("shard 1 selection is not in canonical order")
-    if tuple(identifier for identifier in canonical_ids if identifier in second_set) != shard_ids["2/2"]:
-        raise RunnerError("shard 2 selection is not in canonical order")
-
-    shard_summaries: list[dict[str, object]] = []
-    for identity in ("1/2", "2/2"):
+    inventory = _load_json_object(str(CANONICAL_INVENTORY_PATH)).get("subtest_caps")
+    if (type(inventory) is not dict or not inventory
+            or any(type(identifier) is not str or not identifier
+                   or type(cap) is not int or cap < 0
+                   for identifier, cap in inventory.items())):
+        raise RunnerError("current frozen canonical inventory is invalid")
+    if canonical_ids != tuple(sorted(inventory)):
+        raise RunnerError("shard canonical inventory differs from the current frozen inventory")
+    policy = _required_dict(first, "suite_policy")
+    if any(_required_dict(report, "canonical_manifest") != canonical
+           or _required_dict(report, "suite_policy") != policy for report in by_shard.values()):
+        raise RunnerError("shard canonical manifests or policy partition metadata disagree")
+    try:
+        weights = suite_policy.load_timing_weights()
+        plan = suite_policy.partition_full_shards(canonical_ids, weights)
+    except suite_policy.SuitePolicyError as error:
+        raise RunnerError(str(error)) from error
+    if json.dumps(policy, sort_keys=True) != json.dumps(_suite_policy_metadata(weights, plan), sort_keys=True):
+        raise RunnerError("shard policy differs from the current deterministic four-partition plan")
+    source = bindings[0][0]
+    root = Path(__file__).resolve().parents[1]
+    try:
+        current = snapshot(root, exclude=tuple(paths))
+    except LocalCIError as error:
+        raise RunnerError(f"cannot verify reconciliation source: {error}") from error
+    if (source["checkout_sha"] != current["checkout_sha"]
+            or source["checkout_tree"] != current["checkout_tree"]
+            or source["before_digest"] != current["digest"]):
+        raise RunnerError("shard source differs from the current checkout inputs")
+    seen: set[str] = set()
+    record_map: dict[str, dict[str, object]] = {}
+    summaries = []
+    for index, identity in enumerate(identities):
         report = by_shard[identity]
-        shard_summaries.append(
-            {
-                "identity": identity,
-                "outcome": report["outcome"],
-                "selection_manifest": report["selection_manifest"],
-                "totals": report["totals"],
-                "durations": durations_by_shard[identity],
-            }
-        )
-    wall_durations = tuple(
-        durations_by_shard[identity]["wall_seconds"]
-        for identity in ("1/2", "2/2")
-    )
-    cumulative_durations = tuple(
-        durations_by_shard[identity]["cumulative_test_seconds"]
-        for identity in ("1/2", "2/2")
-    )
+        ids = _required_ids(report, "selection_manifest")
+        if ids != plan.shard_ids[index] or tuple(item for item in canonical_ids if item in set(ids)) != ids:
+            raise RunnerError(f"shard {identity} differs from its ordered partition plan")
+        if seen.intersection(ids):
+            raise RunnerError("shard selections overlap")
+        seen.update(ids)
+        record_map.update((row["canonical_id"], row) for row in report["tests"])
+        summaries.append({"identity": identity, "outcome": report["outcome"],
+                          "selection_manifest": report["selection_manifest"], "totals": report["totals"],
+                          "durations": durations_by_shard[identity], "details": report["details"]})
+    if seen != set(canonical_ids):
+        raise RunnerError("shard selections are not exhaustive")
+    walls = [durations_by_shard[key]["wall_seconds"] for key in identities]
     return {
-        "schema_version": SCHEMA_VERSION,
-        "runner": RUNNER_NAME,
-        "kind": "reconciliation",
-        "outcome": "success"
-        if all(summary["outcome"] == "success" for summary in shard_summaries)
-        else "failure",
-        "canonical_manifest": canonical_first,
-        "suite_policy": first_policy,
-        "shards": shard_summaries,
-        "totals": {
-            "selected": len(canonical_ids),
-            "completed": sum(
-                int(_required_dict(report, "totals")["completed"])
-                for report in (first, second)
-            ),
-        },
-        "durations": {
-            "sequential_equivalent_wall_seconds": sum(wall_durations),
-            "concurrent_wall_seconds": max(wall_durations),
-            "cumulative_test_seconds": sum(cumulative_durations),
-        },
+        "schema_version": SCHEMA_VERSION, "runner": RUNNER_NAME, "kind": "reconciliation",
+        "outcome": "success" if all(item["outcome"] == "success" for item in summaries) else "failure",
+        "canonical_manifest": canonical, "suite_policy": policy, "source_binding": source,
+        "common_environment": bindings[0][1], "shards": summaries,
+        "tests": [record_map[identifier] for identifier in canonical_ids],
+        "totals": {"selected": len(canonical_ids), "completed": sum(by_shard[key]["totals"]["completed"] for key in identities)},
+        "durations": {"sequential_equivalent_wall_seconds": sum(walls), "concurrent_wall_seconds": max(walls),
+                      "cumulative_test_seconds": sum(durations_by_shard[key]["cumulative_test_seconds"] for key in identities)},
         "unexecuted_ids": [],
     }
 
@@ -725,13 +797,15 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--id", action="append", default=[])
         command.add_argument("--module", action="append", default=[])
         command.add_argument("--tier", action="append", default=[])
-        command.add_argument("--shard")
+        command.add_argument("--shard", choices=("1/4", "2/4", "3/4", "4/4"),
+                             help="one complete partition of the four-shard suite")
         command.add_argument("--json")
         if name == "run":
             command.add_argument("--slowest", type=int, default=20)
             command.add_argument("--failfast", action="store_true")
     reconcile = commands.add_parser("reconcile")
-    reconcile.add_argument("reports", nargs=2)
+    reconcile.add_argument("reports", nargs=4, metavar="REPORT",
+                           help="one current report for each of 1/4 through 4/4")
     reconcile.add_argument("--json")
     return parser
 
@@ -740,7 +814,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == "reconcile":
-            report = _reconcile_reports(args.reports)
+            report = reconcile_reports(args.reports)
             _write_reconciliation_human(report, sys.stderr)
             if args.json:
                 _write_json(args.json, report)
@@ -797,7 +871,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _write_json(args.json, report)
         if execution.interrupted:
             return 130
-        return 0 if execution.result.wasSuccessful() else 1
+        return 0 if report["outcome"] == "success" else 1
     except RunnerError as error:
         print(f"test runner configuration error: {error}", file=sys.stderr)
         return 2

@@ -10,33 +10,48 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
-from tests import suite_budget
+from tests import runner, suite_budget, suite_policy
 
 
 class SuiteBudgetTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.budget = {
-            "schema_version": 1,
-            "max_sequential_wall_seconds": 1080,
-            "max_shard_wall_seconds": 540,
-            "max_test_source_lines": 1000,
-            "subtest_caps": {"a.test": 2, "b.test": 0},
-        }
+        self.budget = { "schema_version": 1, "max_sequential_wall_seconds": 1080, "max_shard_wall_seconds": 540, "max_test_source_lines": 1000,
+            "subtest_caps": {"a.test": 2, "b.test": 0, "c.control": 0, "d.control": 0}, }
 
     def _reports(self, directory, counts):
-        paths = [str(Path(directory) / f"{index}.json") for index in (1, 2)]
-        for path, identifier, count in zip(paths, self.budget["subtest_caps"], counts):
-            row = {"canonical_id": identifier, "subtest_count": count}
-            Path(path).write_text(json.dumps({"tests": [row]}), encoding="utf-8")
+        ids = tuple(self.budget["subtest_caps"])
+        self.weights = suite_policy.TimingWeights(1, 2, {"a": 9, "b": 5, "c": 3}, "retained strict fixture", "sha256:" + "c" * 64, "fixture")
+        self.plan = suite_policy.partition_full_shards(ids, self.weights)
+        inventory = Path(directory) / "inventory.json"
+        inventory.write_text(json.dumps(self.budget), encoding="utf-8")
+        self.enterContext(patch.object(runner, "CANONICAL_INVENTORY_PATH", inventory))
+        self.enterContext(patch.object(suite_policy, "load_timing_weights", return_value=self.weights))
+
+        class Control(unittest.FunctionTestCase):
+            def id(self):
+                return self._description
+
+        cases = tuple(Control(lambda: None, description=identifier) for identifier in ids)
+        canonical = runner.CanonicalCollection(cases, ids)
+        self.report_data = []
+        for index, selected_ids in enumerate(self.plan.shard_ids):
+            selected = runner.CanonicalCollection(tuple(cases[ids.index(value)] for value in selected_ids), selected_ids)
+            report = runner._run_report(canonical, selected, runner._execute(selected, stream=io.StringIO()), slowest=0,
+                                        policy_metadata={"suite_policy": runner._suite_policy_metadata(self.weights, self.plan),
+                                                         "selection": {"tiers": [], "shard": f"{index + 1}/4"}})
+            report["durations"].update(wall_seconds=540 if index == 0 else 180, cumulative_test_seconds=1)
+            report["tests"][0].update(duration_seconds=1, subtest_count=(*counts, 0, 0)[index])
+            self.report_data.append(report)
+        paths = [str(Path(directory) / f"{index}.json") for index in range(1, 5)]
+        for path, value in zip(paths, self.report_data):
+            Path(path).write_text(json.dumps(value), encoding="utf-8")
         return paths
 
     def test_new_id_increased_subtests_and_relaxed_time_are_rejected(self) -> None:
-        for change in (
-            lambda value: value["subtest_caps"].update({"c.test": 0}),
+        for change in ( lambda value: value["subtest_caps"].update({"c.test": 0}),
             lambda value: value["subtest_caps"].update({"a.test": 3}),
             lambda value: value.update(max_shard_wall_seconds=541),
-            lambda value: value.update(max_sequential_wall_seconds=1081),
-        ):
+            lambda value: value.update(max_sequential_wall_seconds=1081), ):
             with self.subTest(change=change):
                 candidate = json.loads(json.dumps(self.budget))
                 change(candidate)
@@ -48,44 +63,74 @@ class SuiteBudgetTests(unittest.TestCase):
             suite_budget.check_monotonic(candidate, self.budget)
 
     def test_exact_duration_boundary_passes_and_excess_fails(self) -> None:
-        reconciliation = {
-            "outcome": "success",
-            "durations": {"sequential_equivalent_wall_seconds": 1080},
-            "shards": [
-                {"identity": "1/2", "durations": {"wall_seconds": 540}},
-                {"identity": "2/2", "durations": {"wall_seconds": 540}},
-            ],
-        }
         with tempfile.TemporaryDirectory() as directory:
             paths = self._reports(directory, (2, 0))
-            with patch.object(suite_budget.runner, "_reconcile_reports", return_value=reconciliation):
+            reconciliation = suite_budget.runner.reconcile_reports(paths)
+            with patch.object(suite_budget.runner, "reconcile_reports", return_value=reconciliation), patch(
+                "builtins.open", side_effect=AssertionError("budget reopened validated reports") ):
                 self.assertIs(suite_budget.check_reports(self.budget, paths), reconciliation)
                 reconciliation["shards"][0]["durations"]["wall_seconds"] = 540.001
-                with self.assertRaisesRegex(suite_budget.BudgetError, "shard 1/2"):
+                with self.assertRaisesRegex(suite_budget.BudgetError, "shard 1/4"):
                     suite_budget.check_reports(self.budget, paths)
-                self.assertIs(
-                    suite_budget.check_reports(self.budget, paths, allow_wall_time_overage=True), reconciliation)
+                self.assertIs( suite_budget.check_reports(self.budget, paths, allow_wall_time_overage=True), reconciliation)
                 reconciliation["shards"][0]["durations"]["wall_seconds"] = 540
                 reconciliation["durations"]["sequential_equivalent_wall_seconds"] = 1080.001
                 with self.assertRaisesRegex(suite_budget.BudgetError, "sequential"):
                     suite_budget.check_reports(self.budget, paths)
-                self.assertIs(
-                    suite_budget.check_reports(self.budget, paths, allow_wall_time_overage=True), reconciliation)
+                self.assertIs( suite_budget.check_reports(self.budget, paths, allow_wall_time_overage=True), reconciliation)
 
     def test_subtest_expansion_and_incomplete_shards_fail(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             paths = self._reports(directory, (3, 0))
-            result = {
-                "outcome": "success",
-                "durations": {"sequential_equivalent_wall_seconds": 1},
-                "shards": [{"identity": "1/2", "durations": {"wall_seconds": 1}}],
-            }
+            result = runner.reconcile_reports(list(reversed(paths)))
+            self.assertEqual(tuple(row["canonical_id"] for row in result["tests"]), tuple(self.budget["subtest_caps"]))
+            self.assertEqual(result["durations"], {"sequential_equivalent_wall_seconds": 1080, "concurrent_wall_seconds": 540, "cumulative_test_seconds": 4})
+            self.assertEqual(suite_policy.partition_full_shards(tuple(reversed(self.budget["subtest_caps"])), self.weights), self.plan)
+            def write(change=lambda values: None):
+                values = json.loads(json.dumps(self.report_data))
+                change(values)
+                for path, value in zip(paths, values):
+                    Path(path).write_text(json.dumps(value), encoding="utf-8")
+            def reject(change, message):
+                write(change)
+                self.assertRaisesRegex(runner.RunnerError, message, runner.reconcile_reports, paths)
+            def status_change(values, kind, reason):
+                row = values[0]
+                row["tests"][0]["status"] = "failed"
+                row["totals"].update(passed=0, failures=1)
+                row.update(details=[{"canonical_id": "a.test", "kind": kind, "reason": reason}], outcome="failure")
+            def omit_case(values):
+                for row in values:
+                    row["canonical_manifest"] = runner._manifest(("a.test", "b.test", "c.control"))
+            def selection_change(values, identifier):
+                values[0]["selection_manifest"] = runner._manifest((identifier,))
+                values[0]["tests"][0]["canonical_id"] = identifier
+            with self.assertRaisesRegex(runner.RunnerError, "reconcile requires four distinct shard report paths"):
+                runner.reconcile_reports(paths[:3])
+            with self.assertRaisesRegex(runner.RunnerError, "reconcile requires four distinct shard report paths"):
+                runner.reconcile_reports([*paths[:3], paths[0]])
+            reject(omit_case, "shard canonical inventory differs from the current frozen inventory")
+            reject(lambda rows: rows[1]["selection"].update(shard="1/4"), "reports must have complementary unique four-shard identities")
+            reject(lambda rows: rows[0]["selection"].update(shard="1/2"), "reports must have complementary unique four-shard identities")
+            reject(lambda rows: rows[0].update(unexecuted_ids=["a.test"]), "shard 1/4 is incomplete")
+            reject(lambda rows: rows[0]["environment"].update(installed_distributions_sha256="a" * 64), "shard source or execution environments disagree")
+            reject( lambda rows: rows[0]["suite_policy"]["partition"].update(digest="sha256:" + "a" * 64),
+                "shard canonical manifests or policy partition metadata disagree", )
+            reject(lambda rows: selection_change(rows, "b.test"), "shard 1/4 differs from its ordered partition plan")
+            write(lambda rows: status_change(rows, "failure", "retained failure"))
+            self.assertEqual(runner.reconcile_reports(paths)["outcome"], "failure")
+            with self.assertRaisesRegex(suite_budget.BudgetError, "did not all pass"):
+                suite_budget.check_reports(self.budget, paths, allow_wall_time_overage=True)
+            write()
+            binding = self.report_data[0]["source_binding"]
+            with ( patch.object(runner, "snapshot", return_value={**binding, "digest": "sha256:" + "0" * 64}),
+                self.assertRaisesRegex(runner.RunnerError, "shard source differs from the current checkout inputs"), ):
+                runner.reconcile_reports(paths)
             for allowed in (False, True):
-                with patch.object(suite_budget.runner, "_reconcile_reports", return_value=result):
+                with patch.object(suite_budget.runner, "reconcile_reports", return_value=result):
                     with self.assertRaisesRegex(suite_budget.BudgetError, "subtest scope"):
                         suite_budget.check_reports(self.budget, paths, allow_wall_time_overage=allowed)
-                with patch.object(suite_budget.runner, "_reconcile_reports",
-                                  side_effect=suite_budget.runner.RunnerError("incomplete")):
+                with patch.object(suite_budget.runner, "reconcile_reports", side_effect=suite_budget.runner.RunnerError("incomplete")):
                     with self.assertRaisesRegex(suite_budget.runner.RunnerError, "incomplete"):
                         suite_budget.check_reports(self.budget, paths, allow_wall_time_overage=allowed)
 
@@ -103,6 +148,7 @@ class SuiteBudgetTests(unittest.TestCase):
         unittest.TestSuite([case]).run(result)
         self.assertEqual(result.records([case.id()])[0]["subtest_count"], 2)
 
+
         from tests import local_ci, local_ci_coordinator as queue, local_ci_worker as worker, local_ci_state as state
         from tests.local_ci_state import LocalCIError
         from types import SimpleNamespace
@@ -115,18 +161,10 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertEqual({key: record[key] for key in expected}, expected)
 
         ci_identity_values = {"NAME": "Story Tests", "EMAIL": "story-tests@example.invalid"}
-        caller_identity = {
-            "GIT_AUTHOR_NAME": "Caller Author", "GIT_AUTHOR_EMAIL": "author@example.invalid",
-            "GIT_COMMITTER_NAME": "Caller Committer", "GIT_COMMITTER_EMAIL": "committer@example.invalid",
-        }
-        inherited_config = {
-            "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "user.name",
-            "GIT_CONFIG_VALUE_0": "Inherited Git Name",
-        }
-        caller_environment = {
-            **caller_identity, **inherited_config, "GITHUB_ACTIONS": "true",
-            "PYTHONDONTWRITEBYTECODE": "0", "PYTHONPATH": "caller-path",
-        }
+        caller_identity = { "GIT_AUTHOR_NAME": "Caller Author", "GIT_AUTHOR_EMAIL": "author@example.invalid",
+            "GIT_COMMITTER_NAME": "Caller Committer", "GIT_COMMITTER_EMAIL": "committer@example.invalid", }
+        inherited_config = { "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "user.name", "GIT_CONFIG_VALUE_0": "Inherited Git Name", }
+        caller_environment = { **caller_identity, **inherited_config, "GITHUB_ACTIONS": "true", "PYTHONDONTWRITEBYTECODE": "0", "PYTHONPATH": "caller-path", }
         with patch.dict(worker.os.environ, caller_environment, clear=True):
             for ci_identity in (True, False):
                 environment = worker.test_environment({"ci_identity": ci_identity})
@@ -134,10 +172,8 @@ class SuiteBudgetTests(unittest.TestCase):
                 self.assertEqual({key: environment[key] for key in caller_identity}, expected_identity)
                 expected_config = {**inherited_config, "GIT_CONFIG_COUNT": "3" if ci_identity else "1"}
                 self.assertEqual({key: environment[key] for key in inherited_config}, expected_config)
-                appended_config = {
-                    "GIT_CONFIG_KEY_1": "user.name", "GIT_CONFIG_VALUE_1": "Story Tests",
-                    "GIT_CONFIG_KEY_2": "user.email", "GIT_CONFIG_VALUE_2": "story-tests@example.invalid",
-                } if ci_identity else {}
+                appended_config = { "GIT_CONFIG_KEY_1": "user.name", "GIT_CONFIG_VALUE_1": "Story Tests",
+                    "GIT_CONFIG_KEY_2": "user.email", "GIT_CONFIG_VALUE_2": "story-tests@example.invalid", } if ci_identity else {}
                 self.assertEqual({key: value for key, value in environment.items() if key.startswith("GIT_")},
                                  {**expected_identity, **expected_config, **appended_config})
                 self.assertEqual(environment["PYTHONDONTWRITEBYTECODE"], "1")
@@ -148,8 +184,7 @@ class SuiteBudgetTests(unittest.TestCase):
                 self.assertEqual(dict(worker.os.environ), caller_environment)
 
         invalid_configurations = [{"GIT_CONFIG_COUNT": count} for count in ("invalid", "-1", "01", "+1", "1.0", "")]
-        invalid_configurations.extend({f"GIT_CONFIG_{field}_{index}": "orphan"}
-                                      for index in (1, 2) for field in ("KEY", "VALUE"))
+        invalid_configurations.extend({f"GIT_CONFIG_{field}_{index}": "orphan"} for index in (1, 2) for field in ("KEY", "VALUE"))
         for invalid_config in invalid_configurations:
             invalid_environment = {**caller_environment, **invalid_config}
             with patch.dict(worker.os.environ, invalid_environment, clear=True):
@@ -164,18 +199,15 @@ class SuiteBudgetTests(unittest.TestCase):
         worker_arguments = ["snapshot", "harmless-fixture"]
         worker_calls.parser.return_value.parse_args.return_value = SimpleNamespace(**dict(zip(("command", "checkout"), worker_arguments)))
         worker_calls.snapshot.return_value = {"safe": True}
-        with patch.object(worker.os, "umask", worker_calls.umask), patch.object(
-            worker.argparse, "ArgumentParser", worker_calls.parser
+        with patch.object(worker.os, "umask", worker_calls.umask), patch.object( worker.argparse, "ArgumentParser", worker_calls.parser
         ), patch.object(worker, "snapshot", worker_calls.snapshot), patch.object(worker.sys, "stdout", io.StringIO()) as output:
             self.assertEqual(worker.main(worker_arguments), 0)
             self.assertEqual(output.getvalue(), '{"safe": true}\n')
         startup = {"umask", "parser", "parser().parse_args", "snapshot"}
         self.assertEqual([row for row in worker_calls.mock_calls if row[0] in startup], [
             call.umask(0o077), call.parser(*worker_calls.parser.call_args.args, **worker_calls.parser.call_args.kwargs),
-            call.parser().parse_args(worker_arguments), call.snapshot(Path("harmless-fixture")),
-        ])
+            call.parser().parse_args(worker_arguments), call.snapshot(Path("harmless-fixture")), ])
 
-        runner = suite_budget.runner
         collection = runner.CanonicalCollection((case,), (case.id(),))
         arguments = ["run", "--id", case.id()]
         with patch.object(runner, "_discover_canonical", return_value=collection), patch.object(
@@ -186,17 +218,14 @@ class SuiteBudgetTests(unittest.TestCase):
             execute.assert_not_called()
         host_exists = Path.exists
         lima_markers = {"/run/lima-ssh-ready", "/var/run/lima-ssh-ready", "/run/lima-guestagent.pid"}
-        for guest_marker, managed, hosted, expected, error in (
-            (False, False, "", 17, None),
+        for guest_marker, managed, hosted, expected, error in ( (False, False, "", 17, None),
             (False, True, "", None, None),
             (False, False, "true", None, None),
             (True, False, "", None, LocalCIError),
-            (True, True, "", None, None),
-        ):
+            (True, True, "", None, None), ):
             with patch.object(Path, "exists", new=lambda path: guest_marker and path == Path("/run/lima-ssh-ready") or str(path) not in lima_markers and host_exists(path)), patch.dict(
                 local_ci.os.environ, {"GITHUB_ACTIONS": hosted}
-            ), patch.object(local_ci, "admitted_worker", return_value=managed) as inherited, patch.object(
-                local_ci, "submit", return_value="owned"
+            ), patch.object(local_ci, "admitted_worker", return_value=managed) as inherited, patch.object( local_ci, "submit", return_value="owned"
             ) as submit, patch.object(local_ci, "wait_job", return_value={"exit_code": 17}) as wait, patch.object(local_ci, "state_root") as state_root:
                 self.assertEqual(invoke(lambda: local_ci.runner_admission(arguments), error, "submit through the host"), expected)
                 inherited.assert_called_once_with()
@@ -211,17 +240,13 @@ class SuiteBudgetTests(unittest.TestCase):
             job.update(state="running", pid=10000 + job["sequence"], process_identity="live", started_at=100.0)
             launched.append(job["id"])
 
-        with tempfile.TemporaryDirectory(prefix="local-ci-contract-") as temporary, patch.object(
-            queue, "snapshot", return_value={"digest": "stable"}
-        ), patch.object(queue, "process_identity", return_value="live"), patch.object(
-            queue, "group_members", return_value=[10000]
+        with tempfile.TemporaryDirectory(prefix="local-ci-contract-") as temporary, patch.object( queue, "snapshot", return_value={"digest": "stable"}
+        ), patch.object(queue, "process_identity", return_value="live"), patch.object( queue, "group_members", return_value=[10000]
         ), patch.object(queue, "boot_identity", return_value="sysctl:100:2") as boot, patch.object(queue.Coordinator, "launch", new=launch), patch.object(queue.os, "killpg") as kill:
             root = Path(temporary)
             coordinator = queue.Coordinator(root)
-            claims = [coordinator.request({
-                "action": "submit", "owner": {"pid": 100 + index, "identity": "live"},
-                "checkout": str(root), "source": {"digest": "stable"}, "args": arguments,
-                "python": "unused-test-python", "task": f"independent-task-{index}",
+            claims = [coordinator.request({ "action": "submit", "owner": {"pid": 100 + index, "identity": "live"},
+                "checkout": str(root), "source": {"digest": "stable"}, "args": arguments, "python": "unused-test-python", "task": f"independent-task-{index}",
             }) for index in range(8)]
             for action in ("submit", "reserve"):
                 with self.assertRaisesRegex(LocalCIError, "still owns work"):
@@ -271,24 +296,19 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertEqual(len(restarted.active()), 4)
             uncertain["owned_processes"] = {}
             child = {str(uncertain["pid"] + 1): {"pid": uncertain["pid"] + 1, "identity": "owned-child", "pgid": uncertain["pid"] + 1}}
-            with patch.object(queue, "process_identity", return_value="replacement") as leader, patch.object(
-                queue, "observed_descendants", return_value=child
+            with patch.object(queue, "process_identity", return_value="replacement") as leader, patch.object( queue, "observed_descendants", return_value=child
             ) as observed, patch.object(queue, "group_members", return_value=[]), patch.object(
-                queue, "live_owned", side_effect=lambda records: [uncertain["pid"] + 1] if records else []
-            ), patch.object(queue, "signal_owned") as signals:
-                for identity, raced, expected_state, expected_owned in (
-                    ("replacement", False, "quarantined", {}),
+                queue, "live_owned", side_effect=lambda records: [uncertain["pid"] + 1] if records else [] ), patch.object(queue, "signal_owned") as signals:
+                for identity, raced, expected_state, expected_owned in ( ("replacement", False, "quarantined", {}),
                     (None, False, "quarantined", {}),
                     ("live", True, "quarantined", {}),
-                    ("live", False, "cancelling", child),
-                ):
+                    ("live", False, "cancelling", child), ):
                     leader.return_value = identity
                     leader.side_effect = ("live", "replacement") if raced else None
                     observed.reset_mock()
                     signals.reset_mock()
                     restarted.request({"action": "cancel", **claims[1]})
-                    self.assertEqual(observed.call_args_list,
-                                     [call(uncertain["pid"])] if identity == "live" else [])
+                    self.assertEqual(observed.call_args_list, [call(uncertain["pid"])] if identity == "live" else [])
                     self.assertEqual(signals.call_args_list,
                                      [call(child, queue.signal.SIGINT, outside_group=uncertain["pid"])] if expected_state == "cancelling" else [])
                     kill.assert_not_called()
@@ -303,8 +323,7 @@ class SuiteBudgetTests(unittest.TestCase):
                 (0, None, False, True, True, False, "quarantined"),
                 (0, "replacement", False, False, True, False, "quarantined"),
                 (None, None, False, False, False, False, "quarantined"),
-                (0, None, False, False, True, True, "quarantined"),
-            )):
+                (0, None, False, False, True, True, "quarantined"), )):
                 refresh_root = state.owner_directory(root / f"refresh-{index}", create=True)
                 refresh = queue.Coordinator(refresh_root)
                 old_owned = {"21001": {"pid": 21001, "identity": "owned-child", "pgid": 21001}} if owned else {}
@@ -320,8 +339,7 @@ class SuiteBudgetTests(unittest.TestCase):
                 with patch.object(queue, "process_identity", side_effect=("live", replacement)), patch.object(
                     queue, "observed_descendants", return_value=temporary_owned
                 ) as observed, patch.object(queue, "group_members", return_value=[21000] if grouped else []), patch.object(
-                    queue, "live_owned", return_value=[21001] if owned else []
-                ), patch.object(queue, "signal_owned") as signals:
+                    queue, "live_owned", return_value=[21001] if owned else [] ), patch.object(queue, "signal_owned") as signals:
                     refresh.tick()
                 observed.assert_called_once_with(21000)
                 signals.assert_not_called()
@@ -344,11 +362,8 @@ class SuiteBudgetTests(unittest.TestCase):
             self.assertFalse((checkout / "tests/local_ci_worker.py").exists())
             checkout = checkout.resolve(strict=True)
             static_report = (root / "native-static-report").resolve()
-            static_args = local_ci.argparse.Namespace(
-                checkout=str(checkout), executor="native", guest_checkout=None, report_dir=str(static_report),
-                base_sha="a" * 40, head_sha="b" * 40, label=[], id=[], module=[],
-                timing_mode="shared", task="retained-native-static",
-            )
+            static_args = local_ci.argparse.Namespace( checkout=str(checkout), executor="native", guest_checkout=None, report_dir=str(static_report),
+                base_sha="a" * 40, head_sha="b" * 40, label=[], id=[], module=[], timing_mode="shared", task="retained-native-static", )
             def campaign_arguments(report, **overrides):
                 return local_ci.argparse.Namespace(**{**vars(static_args), "report_dir": str(report), **overrides})
             cached_sources = {"local_ci_worker.py": b"immutable worker source"}
@@ -357,8 +372,7 @@ class SuiteBudgetTests(unittest.TestCase):
             target_python = str(checkout / ".venv/bin/python")
             expected_environment = worker.test_environment({"ci_identity": True})
             older = campaign_arguments(root / "older-head-report")
-            with patch.object(local_ci, "git", side_effect=("a" * 40, "b" * 40, "c" * 40)), patch.object(
-                local_ci.subprocess, "run"
+            with patch.object(local_ci, "git", side_effect=("a" * 40, "b" * 40, "c" * 40)), patch.object( local_ci.subprocess, "run"
             ), patch.object(local_ci, "snapshot") as source:
                 with self.assertRaisesRegex(LocalCIError, "HEAD must equal the pinned head SHA exactly"):
                     local_ci.campaign(older)
@@ -367,25 +381,19 @@ class SuiteBudgetTests(unittest.TestCase):
                 local_ci, "snapshot", return_value={"porcelain": "", "digest": "pinned-source"}
             ), patch.object(local_ci, "classify", return_value={"runtime": "false", "full": "false", "changed_paths": []}) as classify, patch.object(
                 local_ci, "service_sources", return_value=("cached-code", cached_sources)
-            ), patch.object(local_ci, "state_root", return_value=host_state), patch.object(
-                local_ci, "prepare_service", return_value=cached_bundle
+            ), patch.object(local_ci, "state_root", return_value=host_state), patch.object( local_ci, "prepare_service", return_value=cached_bundle
             ) as prepare, patch.object(local_ci.subprocess, "check_output", return_value="Python 3.11.16\n") as version, patch.object(
-                local_ci.subprocess, "run", return_value=local_ci.subprocess.CompletedProcess([], 0, "static passed", "")
-            ) as execute_static:
+                local_ci.subprocess, "run", return_value=local_ci.subprocess.CompletedProcess([], 0, "static passed", "") ) as execute_static:
                 self.assertEqual(local_ci.campaign(static_args), 0)
                 prepare.assert_called_once_with(host_state, "cached-code", cached_sources)
                 version.assert_called_once_with([target_python, "--version"], text=True)
                 classify.assert_called_once_with(checkout, "a" * 40, "b" * 40, [])
-                self.assertEqual(execute_static.call_args.args, ([
-                    target_python, str(cached_bundle / "entry.py"), "static", "--checkout", str(checkout),
-                    "--report", str(static_report / "static.json"), "--base", "a" * 40, "--head", "b" * 40,
-                ],))
-                self.assertEqual(execute_static.call_args.kwargs, {
-                    "cwd": checkout, "env": expected_environment, "capture_output": True, "text": True,
-                })
+                self.assertEqual(execute_static.call_args.args, ([ target_python, str(cached_bundle / "entry.py"), "static", "--checkout", str(checkout),
+                    "--report", str(static_report / "static.json"), "--base", "a" * 40, "--head", "b" * 40, ],))
+                self.assertEqual(execute_static.call_args.kwargs, { "cwd": checkout, "env": expected_environment, "capture_output": True, "text": True, })
                 classify.return_value = {"runtime": "false", "full": "true", "changed_paths": []}
                 execute_static.return_value = local_ci.subprocess.CompletedProcess([], 0, "", "")
-                for timing_mode, override, concurrency in (("isolated", None, 1), ("shared", None, 2),
+                for timing_mode, override, concurrency in (("isolated", None, 1), ("shared", None, 4),
                                                            ("isolated", 2, 2), ("shared", 1, 1)):
                     git_calls.side_effect = ("a" * 40, "b" * 40, "b" * 40)
                     campaign_report = (root / f"campaign-{timing_mode}-{override}").resolve()
@@ -396,49 +404,50 @@ class SuiteBudgetTests(unittest.TestCase):
                         self.assertEqual(target, checkout)
                         self.assertEqual(arguments, ["run", "--shard", shard, "--json",
                                                      str(campaign_report / f"full-{shard[0]}.json")])
-                        self.assertEqual(options, {
-                            "python": target_python, "task": static_args.task + f":full-{shard[0]}",
-                            "executor": "native", "guest_checkout": None, "reservation": None, "ci_identity": True,
-                        })
+                        self.assertEqual(options, { "python": target_python, "task": static_args.task + f":full-{shard[0]}",
+                            "executor": "native", "guest_checkout": None, "reservation": None, "ci_identity": True, })
                         events.append(("submit", shard))
                         return shard
                     def wait_full(identifier):
                         events.append(("wait", identifier))
-                        return {"id": identifier, "exit_code": int(identifier == "1/2")}
-                    with patch.object(local_ci, "submit", side_effect=submit_full), patch.object(
-                        local_ci, "wait_job", side_effect=wait_full
-                    ), patch.object(local_ci, "rpc", side_effect=lambda message: {"worker_exit_code": int(message["id"] == "1/2")}), patch.object(
-                        local_ci, "control"
-                    ) as control_calls:
+                        start = ((int(identifier[0]) - 1) // concurrency) * 2
+                        return {"id": identifier, "exit_code": int(identifier == "1/4"), "state": "finished",
+                                "started_at": start, "finished_at": start + 1, "queue_wait_seconds": 0.25}
+                    with patch.object(local_ci, "submit", side_effect=submit_full), patch.object( local_ci, "wait_job", side_effect=wait_full
+                    ), patch.object( local_ci, "rpc", side_effect=lambda message: {"state": "finished", "worker_exit_code": int(message["id"] == "1/4")},
+                    ), patch.object( local_ci, "control" ) as control_calls:
                         self.assertEqual(local_ci.campaign(campaign_args), 1)
                         control_calls.assert_not_called()
-                    expected_events = [("submit", "1/2"), ("wait", "1/2"), ("submit", "2/2"), ("wait", "2/2")] if concurrency == 1 else [
-                        ("submit", "1/2"), ("submit", "2/2"), ("wait", "1/2"), ("wait", "2/2")]
+                    expected_events = { 1: [("submit", "1/4"), ("wait", "1/4"), ("submit", "2/4"), ("wait", "2/4"),
+                            ("submit", "3/4"), ("wait", "3/4"), ("submit", "4/4"), ("wait", "4/4")],
+                        2: [("submit", "1/4"), ("submit", "2/4"), ("wait", "1/4"), ("wait", "2/4"),
+                            ("submit", "3/4"), ("submit", "4/4"), ("wait", "3/4"), ("wait", "4/4")],
+                        3: [("submit", "1/4"), ("submit", "2/4"), ("submit", "3/4"), ("wait", "1/4"),
+                            ("wait", "2/4"), ("wait", "3/4"), ("submit", "4/4"), ("wait", "4/4")],
+                        4: [("submit", "1/4"), ("submit", "2/4"), ("submit", "3/4"), ("submit", "4/4"),
+                            ("wait", "1/4"), ("wait", "2/4"), ("wait", "3/4"), ("wait", "4/4")], }[concurrency]
                     self.assertEqual(events, expected_events)
                     metadata = json.loads((campaign_report / "campaign.json").read_text())
                     self.assertEqual({key: metadata[key] for key in ("timing_mode", "full_concurrency", "exit_code", "source_valid")}, {
-                        "timing_mode": timing_mode, "full_concurrency": concurrency, "exit_code": 1, "source_valid": True,
-                    })
-                    self.assertEqual(metadata["jobs"], [{"id": "1/2", "exit_code": 1}, {"id": "2/2", "exit_code": 0}])
-                    self.assertEqual(json.loads((campaign_report / "full-exit-status.json").read_text()), {"full-1": 1, "full-2": 0})
+                        "timing_mode": timing_mode, "full_concurrency": concurrency, "exit_code": 1, "source_valid": True, })
+                    starts = {1: (0, 2, 4, 6), 2: (0, 0, 2, 2), 3: (0, 0, 0, 2), 4: (0, 0, 0, 0)}[concurrency]
+                    expected_jobs = [{"id": f"{index}/4", "exit_code": int(index == 1), "state": "finished",
+                                      "started_at": start, "finished_at": start + 1, "queue_wait_seconds": 0.25} for index, start in enumerate(starts, 1)]
+                    self.assertEqual(metadata["jobs"], expected_jobs)
+                    self.assertEqual(json.loads((campaign_report / "full-exit-status.json").read_text()), {"full-1": 1, "full-2": 0, "full-3": 0, "full-4": 0})
                 classify.return_value = {"runtime": "true", "full": "false", "changed_paths": []}
-                for cleanup_case, primary_failure, body_code, interrupted, exit_code in (
-                    ("original", True, 0, False, 2), ("release", False, 0, False, 2),
+                for cleanup_case, primary_failure, body_code, interrupted, exit_code in ( ("original", True, 0, False, 2), ("release", False, 0, False, 2),
                     ("interrupt", False, 0, True, 130), ("original-interrupt", True, 0, True, 2),
-                    ("status-interrupt", False, 1, True, 1),
-                ):
+                    ("status-interrupt", False, 1, True, 1), ):
                     git_calls.side_effect = ("a" * 40, "b" * 40, "b" * 40)
                     cleanup_report = (root / f"cleanup-{cleanup_case}").resolve()
                     cleanup_args = campaign_arguments(cleanup_report, timing_mode="isolated")
                     original = LocalCIError("original wait failure")
                     cleanup_error = KeyboardInterrupt() if interrupted else LocalCIError("cleanup RPC failure")
                     waits = [{"state": "reserved"}, original if primary_failure else {"exit_code": body_code}]
-                    with patch.multiple(
-                        local_ci, owner=lambda: {"pid": 123, "identity": "owner"},
+                    with patch.multiple( local_ci, owner=lambda: {"pid": 123, "identity": "owner"},
                         claim=lambda *args: "reservation", submit=lambda *args, **kwargs: "fast-job",
-                    ), patch.object(local_ci, "wait_job", side_effect=waits), patch.object(
-                        local_ci, "control", side_effect=cleanup_error
-                    ) as cleanup:
+                    ), patch.object(local_ci, "wait_job", side_effect=waits), patch.object( local_ci, "control", side_effect=cleanup_error ) as cleanup:
                         if primary_failure:
                             with self.assertRaises(LocalCIError) as caught:
                                 local_ci.campaign(cleanup_args)
@@ -452,15 +461,13 @@ class SuiteBudgetTests(unittest.TestCase):
                     self.assertEqual(metadata["error"], "original wait failure" if primary_failure else
                                      "interrupted" if exit_code == 130 else "campaign cleanup failed; inspect cleanup_errors")
                     self.assertEqual(metadata["cleanup_errors"], [{"action": action, "id": identifier,
-                                     "error": "interrupted" if interrupted else "cleanup RPC failure"}
-                                     for action, identifier in operations])
+                                     "error": "interrupted" if interrupted else "cleanup RPC failure"} for action, identifier in operations])
             control = {"directory": "/tmp/durable-lima-control", "python": "/usr/bin/python3", "entry": "/tmp/durable-lima-control/control.py"}
             with self.assertRaisesRegex(LocalCIError, "control metadata missing"):
                 queue.lima_command({"executor": "lima:guest", "guest_checkout": "/removed/checkout"}, "probe", "owned-job")
             prepared = {**control, "code_identity": "immutable-source"}
             with patch.object(queue, "service_sources", return_value=("immutable-source", {"local_ci_worker.py": b"sealed source"})), patch.object(
-                queue.subprocess, "run", return_value=local_ci.argparse.Namespace(returncode=0, stdout=json.dumps(prepared), stderr="")
-            ) as bootstrap:
+                queue.subprocess, "run", return_value=local_ci.argparse.Namespace(returncode=0, stdout=json.dumps(prepared), stderr="") ) as bootstrap:
                 self.assertEqual(queue.prepare_lima_control({"executor": "lima:guest", "guest_checkout": "/initial/checkout"}), prepared)
                 self.assertEqual(bootstrap.call_args.args[0], ["limactl", "shell", "--workdir", "/initial/checkout", "guest", "/initial/checkout/.venv/bin/python", "-c", queue.GUEST_BOOTSTRAP])
                 package = json.loads(bootstrap.call_args.kwargs["input"])
@@ -469,8 +476,7 @@ class SuiteBudgetTests(unittest.TestCase):
             for operation in ("probe", "collect", "cancel"):
                 self.assertEqual(queue.lima_command({"executor": "lima:guest", "guest_checkout": "/removed/checkout", "guest_control": control}, operation, "owned-job"), [
                     "limactl", "shell", "--workdir", control["directory"], "guest", "env",
-                    "PYTHONPATH=" + control["directory"], control["python"], control["entry"], operation, "owned-job",
-                ])
+                    "PYTHONPATH=" + control["directory"], control["python"], control["entry"], operation, "owned-job", ])
             guest = state.owner_directory(root / "guest-state", create=True)
             supervisor = {"pid": 777, "process_identity": "supervisor", "boot_identity": "sysctl:200:3"}
             quarantined = {"state": "quarantined", "descendant_death_uncertain": True}
@@ -480,10 +486,8 @@ class SuiteBudgetTests(unittest.TestCase):
             guest_base = {"state": "running", "pid": 99999, "owned_processes": {}, "descendant_death_uncertain": False,
                           "boot_identity": "sysctl:{ sec = 200, usec = 3 } Wed Oct 7 03:00:00 UTC"}
             with patch.object(worker, "guest_job", return_value=guest), patch.object(worker, "group_members", return_value=[]), patch.object(
-                worker, "live_owned", return_value=[]
-            ), patch.object(worker, "boot_identity") as guest_boot, patch.object(worker, "process_identity") as birth:
-                for record, identities, extra, reboot, finalize, expected in (
-                    (None, (), {}, False, False, quarantined),
+                worker, "live_owned", return_value=[] ), patch.object(worker, "boot_identity") as guest_boot, patch.object(worker, "process_identity") as birth:
+                for record, identities, extra, reboot, finalize, expected in ( (None, (), {}, False, False, quarantined),
                     (None, (), quarantined, True, False, terminated),
                     (supervisor, ("supervisor", "supervisor"), {}, False, False, running),
                     (supervisor, (None, None), {}, False, False, quarantined),
@@ -491,8 +495,7 @@ class SuiteBudgetTests(unittest.TestCase):
                     (supervisor, ("supervisor", None), {}, False, False, quarantined),
                     (supervisor, ("supervisor", "supervisor"), quarantined, False, False, quarantined),
                     (supervisor, (None, None), completed, False, False, completed),
-                    (supervisor, (), {"descendant_death_uncertain": True}, False, True, {**quarantined, "exit_code": 0, "source_valid": True}),
-                ):
+                    (supervisor, (), {"descendant_death_uncertain": True}, False, True, {**quarantined, "exit_code": 0, "source_valid": True}), ):
                     worker.write_json(guest / "state.json", {**guest_base, **({"supervisor": record} if record else {}), **extra})
                     birth.side_effect = identities
                     guest_boot.return_value = "sysctl:201:3" if reboot else "sysctl:200:3"

@@ -243,16 +243,16 @@ def campaign_guest(operation: str, spec: dict) -> dict:
         path = directory / "static.json"
         code = static_checks(checkout, path, spec["base_sha"], spec["head_sha"], ci_identity=bool(spec.get("ci_identity")))
         return {"exit_code": code, "report": base64.b64encode(path.read_bytes()).decode("ascii")}
-    for name in ("full-1.json", "full-2.json"):
+    for name in ("full-1.json", "full-2.json", "full-3.json", "full-4.json"):
         with open(directory / name, "xb") as target:
             os.chmod(target.name, 0o600)
             target.write(base64.b64decode(spec["reports"][name], validate=True))
     steps = []
     for phase, arguments in (
-        ("reconcile", ["-m", "tests.runner", "reconcile", str(directory / "full-1.json"),
-                       str(directory / "full-2.json"), "--json", str(directory / "full-reconciled.json")]),
+        ("reconcile", ["-m", "tests.runner", "reconcile", *[str(directory / f"full-{index}.json") for index in range(1, 5)],
+                       "--json", str(directory / "full-reconciled.json")]),
         ("budget", ["-m", "tests.suite_budget", "--base-ref", spec["base_sha"],
-                    "--report", str(directory / "full-1.json"), "--report", str(directory / "full-2.json")]),
+                    *[value for index in range(1, 5) for value in ("--report", str(directory / f"full-{index}.json"))]]),
     ):
         command = [str(checkout / ".venv/bin/python"), *arguments]
         completed = subprocess.run(command, cwd=checkout, env=test_environment(spec), capture_output=True, text=True)

@@ -1974,9 +1974,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
 
 
 class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
-    async def test_confirm_is_exact_single_use_and_executes_without_artifact_effect(
-        self,
-    ) -> None:
+    async def test_confirm_is_exact_single_use_and_executes_without_artifact_effect(self) -> None:
         from tests.test_specialist_routing_runtime import _fixture_assessment
         assessment = asdict(_fixture_assessment(foundation_ids=("user_input",), user_id="user_input"))
         conversation_id = self.conversation("Confirm")
@@ -1984,25 +1982,25 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         calls_before = len(self.backend.calls)
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
-        artifacts_before = {
-            path: path.read_bytes() for path in self.workspace.root.rglob("*.md")
-        }
-
+        artifacts_before = {path: path.read_bytes() for path in self.workspace.root.rglob("*.md")}
         confirmed = await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
-
-        self.assertIs(confirmed.turn.state, CollaborationStepState.COMPLETED)
+        history = self.history(conversation_id)
+        diagnostic_events = [(event.kind.value,
+            event.payload.state if event.kind is CollaborationEventKind.STEP_STATE or type(event.payload) is CollaborationProviderCallPayload else None,
+            event.payload.code if type(event.payload) is CollaborationLeadOutcomeFailurePayload else None) for event in history[-32:]]
+        self.assertIs(confirmed.turn.state, CollaborationStepState.COMPLETED, msg={
+            "events": diagnostic_events, "new_calls": len(self.backend.calls) - calls_before,
+            "submitted_outcome_uncertain": any(event.kind is CollaborationEventKind.INTERRUPTION and event.payload.content ==
+                "A submitted provider outcome is uncertain; known sibling facts were preserved and this attempt will not be replayed."
+                for event in history[-32:]),
+            "agents": [agent if agent in (PLOT_ARCHITECT, LEAD_ORCHESTRATOR) else "other"
+                       for agent, _ in self.backend.call_records[calls_before:calls_before + 8]],
+        })
         self.assertIs(confirmed.turn.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD,)
         self.assertEqual(len(self.backend.calls), calls_before + 2)
         self.assertEqual({path: path.read_bytes() for path in artifacts_before}, artifacts_before,)
-        history = self.history(conversation_id)
-        self.assertTrue(
-            {
-                CollaborationEventKind.ASSIGNMENT_DISPATCH,
-                CollaborationEventKind.SPECIALIST_REPLY,
-                CollaborationEventKind.LEAD_SYNTHESIS,
-                CollaborationEventKind.EXECUTION_RESULT,
-            }.issubset({event.kind for event in history})
-        )
+        self.assertTrue({CollaborationEventKind.ASSIGNMENT_DISPATCH, CollaborationEventKind.SPECIALIST_REPLY,
+                        CollaborationEventKind.LEAD_SYNTHESIS, CollaborationEventKind.EXECUTION_RESULT}.issubset({event.kind for event in history}))
         with self.assertRaises(ValueError):
             await self._decide(proposed, CollaborationConfirmationDecision.CONFIRM)
 

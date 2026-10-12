@@ -1,4 +1,4 @@
-"""Versioned selection and two-shard policy for the canonical test runner."""
+"""Versioned selection and four-shard policy for the canonical test runner."""
 
 from __future__ import annotations
 
@@ -9,10 +9,11 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 
-POLICY_VERSION = 1
+POLICY_VERSION = 2
+SHARD_COUNT = 4
 WEIGHT_SCHEMA_VERSION = 1
 WEIGHT_MANIFEST_PATH = Path(__file__).parent / "fixtures" / "test_timing_weights_v1.json"
-SHARD_ALGORITHM = "class-lpt-v1"
+SHARD_ALGORITHM = "class-lpt-v2"
 
 
 class SuitePolicyError(ValueError):
@@ -54,9 +55,9 @@ class TimingWeights:
 
 @dataclass(frozen=True)
 class ShardPlan:
-    shard_ids: tuple[tuple[str, ...], tuple[str, ...]]
-    shard_groups: tuple[tuple[str, ...], tuple[str, ...]]
-    shard_weights_microseconds: tuple[int, int]
+    shard_ids: tuple[tuple[str, ...], ...]
+    shard_groups: tuple[tuple[str, ...], ...]
+    shard_weights_microseconds: tuple[int, ...]
     group_weights_microseconds: Mapping[str, int]
     fallback_groups: tuple[str, ...]
     digest: str
@@ -135,14 +136,18 @@ def load_timing_weights(path: Path = WEIGHT_MANIFEST_PATH) -> TimingWeights:
     )
 
 
-def partition_two_shards(
+def partition_full_shards(
     canonical_ids: Sequence[str], weights: TimingWeights
 ) -> ShardPlan:
-    """Partition complete class groups using deterministic two-bin LPT."""
+    """Partition complete class groups using deterministic four-bin LPT."""
 
+    if len(set(canonical_ids)) != len(canonical_ids):
+        raise SuitePolicyError("canonical inventory contains duplicate IDs")
     groups: dict[str, list[str]] = {}
     for identifier in canonical_ids:
         groups.setdefault(canonical_group_id(identifier), []).append(identifier)
+    if len(groups) < SHARD_COUNT:
+        raise SuitePolicyError("four nonempty shards require at least four class groups")
     stale = tuple(sorted(set(weights.group_weights_microseconds) - set(groups)))
     if stale:
         raise SuitePolicyError("timing manifest has stale groups: " + ", ".join(stale))
@@ -156,21 +161,23 @@ def partition_two_shards(
                 weights.fallback_test_weight_microseconds * len(identifiers)
             )
             fallback.append(group_id)
-    assigned_groups: list[list[str]] = [[], []]
-    totals = [0, 0]
+    assigned_groups: list[list[str]] = [[] for _ in range(SHARD_COUNT)]
+    totals = [0] * SHARD_COUNT
     assignment: dict[str, int] = {}
     for group_id in sorted(groups, key=lambda item: (-effective[item], item)):
-        shard = 0 if totals[0] <= totals[1] else 1
+        shard = min(range(SHARD_COUNT), key=lambda index: (totals[index], index))
         assigned_groups[shard].append(group_id)
         assignment[group_id] = shard
         totals[shard] += effective[group_id]
-    shard_ids = (
-        tuple(identifier for identifier in canonical_ids if assignment[canonical_group_id(identifier)] == 0),
-        tuple(identifier for identifier in canonical_ids if assignment[canonical_group_id(identifier)] == 1),
+    shard_ids = tuple(
+        tuple(identifier for identifier in canonical_ids
+              if assignment[canonical_group_id(identifier)] == index)
+        for index in range(SHARD_COUNT)
     )
     plan_payload = {
         "algorithm": SHARD_ALGORITHM,
         "policy_version": POLICY_VERSION,
+        "shard_count": SHARD_COUNT,
         "weight_digest": weights.digest,
         "assignments": [
             {"group_id": group_id, "shard": assignment[group_id] + 1, "weight_microseconds": effective[group_id]}
@@ -180,8 +187,8 @@ def partition_two_shards(
     encoded = json.dumps(plan_payload, sort_keys=True, separators=(",", ":")).encode()
     return ShardPlan(
         shard_ids=shard_ids,
-        shard_groups=(tuple(assigned_groups[0]), tuple(assigned_groups[1])),
-        shard_weights_microseconds=(totals[0], totals[1]),
+        shard_groups=tuple(tuple(group) for group in assigned_groups),
+        shard_weights_microseconds=tuple(totals),
         group_weights_microseconds=effective,
         fallback_groups=tuple(sorted(fallback)),
         digest="sha256:" + hashlib.sha256(encoded).hexdigest(),
@@ -192,12 +199,13 @@ __all__ = [
     "FAST_TEST_IDS",
     "POLICY_VERSION",
     "SHARD_ALGORITHM",
+    "SHARD_COUNT",
     "ShardPlan",
     "SuitePolicyError",
     "TimingWeights",
     "WEIGHT_MANIFEST_PATH",
     "canonical_group_id",
     "load_timing_weights",
-    "partition_two_shards",
+    "partition_full_shards",
     "select_fast",
 ]

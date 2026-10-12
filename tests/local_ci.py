@@ -37,13 +37,13 @@ def _exchange(request: dict) -> dict:
         connection.settimeout(45)
         connection.connect(str(root / "coordinator.sock"))
         connection.sendall(json.dumps({"code_identity": service_sources()[0], **request}).encode() + b"\n")
-        data = b""
-        while not data.endswith(b"\n"):
+        chunks = []
+        while not chunks or not chunks[-1].endswith(b"\n"):
             block = connection.recv(65536)
             if not block:
                 raise LocalCIError("coordinator disconnected before returning evidence")
-            data += block
-        response = json.loads(data)
+            chunks.append(block)
+        response = json.loads(b"".join(chunks))
         if not response["ok"]:
             raise LocalCIError(response["error"])
         if response["result"].get("idle_restart"):
@@ -227,6 +227,7 @@ process.stdout.write(JSON.stringify(output));
 
 
 def campaign(args: argparse.Namespace) -> int:
+    campaign_started = time.monotonic()
     checkout = Path(args.checkout).resolve(strict=True)
     if args.executor != "native" and not re.fullmatch(r"lima:[A-Za-z0-9][A-Za-z0-9_.-]*", args.executor):
         raise LocalCIError("executor must be native or lima:INSTANCE")
@@ -255,12 +256,12 @@ def campaign(args: argparse.Namespace) -> int:
         raise LocalCIError("runtime-code changes require explicit affected --id or --module selectors")
     full_concurrency = getattr(args, "full_concurrency", None)
     if full_concurrency is None:
-        full_concurrency = 1 if args.timing_mode == "isolated" else 2
-    if full_concurrency not in (1, 2):
-        raise LocalCIError("full concurrency must be 1 or 2")
+        full_concurrency = 1 if args.timing_mode == "isolated" else 4
+    if type(full_concurrency) is not int or full_concurrency not in (1, 2, 3, 4):
+        raise LocalCIError("full concurrency must be 1, 2, 3, or 4")
     metadata = {"schema_version": 1, "task": args.task, "base_sha": args.base_sha,
                 "head_sha": args.head_sha, "source": original, "classification": selection,
-                "executor": args.executor, "timing_mode": args.timing_mode, "full_concurrency": full_concurrency, "python": version,
+                "executor": args.executor, "timing_mode": args.timing_mode, "full_concurrency": full_concurrency, "requested_full_concurrency": getattr(args, "full_concurrency", None), "python": version,
                 "started_at": time.time(), "steps": [], "jobs": []}
     guest_spec = {"id": uuid.uuid4().hex, "guest_checkout": args.guest_checkout or str(checkout),
                   "executor": args.executor, "source": original,
@@ -323,28 +324,57 @@ def campaign(args: argparse.Namespace) -> int:
                 metadata["jobs"].append(result)
                 code |= int(result.get("exit_code", 2) != 0)
         if selection["full"] == "true":
-            identifiers = []
-            for index in (1, 2):
-                identifier = submit(checkout, ["run", "--shard", f"{index}/2", "--json", str(report / f"full-{index}.json")],
-                                    python=python, task=args.task + f":full-{index}", executor=args.executor,
-                                    guest_checkout=args.guest_checkout, reservation=reservation, ci_identity=True)
-                identifiers.append(identifier)
-                submitted.append(identifier)
-                if full_concurrency == 1:
+            full_started = time.monotonic()
+            identifiers: list[str] = []
+            active: dict[str, int] = {}
+            full_results: dict[int, dict] = {}
+            next_index = 1
+            outstanding_peak = 0
+            while active or next_index <= 4:
+                while next_index <= 4 and len(active) < full_concurrency:
+                    identifier = submit(checkout, ["run", "--shard", f"{next_index}/4", "--json", str(report / f"full-{next_index}.json")],
+                                        python=python, task=args.task + f":full-{next_index}", executor=args.executor,
+                                        guest_checkout=args.guest_checkout, reservation=reservation, ci_identity=True)
+                    identifiers.append(identifier)
+                    submitted.append(identifier)
+                    active[identifier] = next_index
+                    next_index += 1
+                    outstanding_peak = max(outstanding_peak, len(active))
+                ready = []
+                for identifier in active:
+                    state = rpc({"action": "get", "id": identifier})["state"]
+                    if state in TERMINAL or state == "quarantined":
+                        ready.append(identifier)
+                if not ready:
+                    time.sleep(0.2)
+                    continue
+                for identifier in ready:
                     result = wait_job(identifier)
+                    full_results[active.pop(identifier)] = result
                     metadata["jobs"].append(result)
                     code |= int(result.get("exit_code", 2) != 0)
-            if full_concurrency == 2:
-                for identifier in identifiers:
-                    result = wait_job(identifier)
-                    metadata["jobs"].append(result)
-                    code |= int(result.get("exit_code", 2) != 0)
+            intervals = [(result.get("started_at"), result.get("finished_at")) for result in full_results.values()]
+            peak = None
+            if all(type(start) in (int, float) and type(finish) in (int, float) and finish >= start
+                   for start, finish in intervals):
+                running = peak = 0
+                for _, delta in sorted([(start, 1) for start, _ in intervals] + [(finish, -1) for _, finish in intervals]):
+                    running += delta
+                    peak = max(peak, running)
+            metadata["full_phase"] = {
+                "elapsed_seconds": time.monotonic() - full_started,
+                "shard_count": 4, "resolved_concurrency": full_concurrency,
+                "outstanding_jobs_peak": outstanding_peak,
+                "worker_peak_from_terminal_intervals": peak,
+                "queue_wait_seconds": {f"full-{index}": full_results[index].get("queue_wait_seconds") for index in range(1, 5)},
+                "terminal_states": {f"full-{index}": full_results[index].get("state") for index in range(1, 5)},
+            }
             write_json(report / "full-exit-status.json", {
                 f"full-{index}": rpc({"action": "get", "id": identifier}).get("worker_exit_code")
                 for index, identifier in enumerate(identifiers, 1)}, exclusive=True)
             if args.executor != "native":
                 guest_spec["reports"] = {name: base64.b64encode((report / name).read_bytes()).decode("ascii")
-                                         for name in ("full-1.json", "full-2.json")}
+                                         for name in ("full-1.json", "full-2.json", "full-3.json", "full-4.json")}
                 command = lima_command(guest_spec, "finalize-guest", "-")
                 completed = subprocess.run(command, input=json.dumps(guest_spec), capture_output=True, text=True)
                 if completed.returncode:
@@ -357,10 +387,10 @@ def campaign(args: argparse.Namespace) -> int:
                         os.chmod(target.name, 0o600)
                         target.write(base64.b64decode(value["reconciliation"], validate=True))
             for phase, arguments in (() if args.executor != "native" else (
-                ("reconcile", ["-m", "tests.runner", "reconcile", str(report / "full-1.json"), str(report / "full-2.json"),
+                ("reconcile", ["-m", "tests.runner", "reconcile", *[str(report / f"full-{index}.json") for index in range(1, 5)],
                                "--json", str(report / "full-reconciled.json")]),
                 ("budget", ["-m", "tests.suite_budget", "--base-ref", args.base_sha,
-                            "--report", str(report / "full-1.json"), "--report", str(report / "full-2.json")]),
+                            *[value for index in range(1, 5) for value in ("--report", str(report / f"full-{index}.json"))]]),
             )):
                 command = [python, *arguments]
                 from tests.local_ci_worker import test_environment
@@ -385,7 +415,7 @@ def campaign(args: argparse.Namespace) -> int:
         if metadata.get("cleanup_errors"):
             code = code or 2
             metadata.setdefault("error", "campaign cleanup failed; inspect cleanup_errors")
-        metadata.update(finished_at=time.time(), exit_code=code)
+        metadata.update(finished_at=time.time(), execution_seconds=time.monotonic() - campaign_started, exit_code=code)
         write_json(report / "campaign.json", metadata, exclusive=True)
     return code
 
@@ -401,8 +431,8 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--executor", default="native")
     run.add_argument("--guest-checkout")
     run.add_argument("--timing-mode", choices=("shared", "isolated"), default="shared")
-    run.add_argument("--full-concurrency", choices=(1, 2), type=int,
-                     help="full shard processes per campaign (default: shared 2, isolated 1)")
+    run.add_argument("--full-concurrency", choices=(1, 2, 3, 4), type=int,
+                     help="full shard processes per campaign (default: shared 4, isolated 1)")
     run.add_argument("--task", default="local CI")
     commands.add_parser("status")
     cancel = commands.add_parser("cancel")
