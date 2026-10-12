@@ -57,7 +57,7 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
         )
         case.setUp()
         try:
-            reviewed = await case.reviewed_create("Presentation fixture", user_brief='The narrative rule should use a close-third viewpoint and a restrained voice, preserving the existing story facts.')
+            reviewed = await case.reviewed_create("Presentation fixture", readiness=True, user_brief='The narrative rule should use a close-third viewpoint and a restrained voice, preserving the existing story facts.')
             applied = await case.runtime.decide_artifact_application(
                 _application_decision(
                     reviewed,

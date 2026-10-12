@@ -3330,7 +3330,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
                 "..agent_context.progress",
             },
             "_collaboration_view.py": {
-                "..lead_task_transitions",
+                "..core_document_readiness", "..lead_task_transitions",
                 "..conversations",
                 "..reply_trace",
                 "..specialist_routing",

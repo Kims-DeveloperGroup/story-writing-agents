@@ -16,7 +16,7 @@ from tests import antigravity_live_harness as harness
 
 def scoped_user_text(mode):
     return ('Finished candidate: Nara arrives on day 1 and observes the door on day 3.'
-                 + '\nUSER direction: ' + ('Draft from these facts, preserving the stated chronology.'
+                 + '\nUSER direction: ' + ('Draft from these facts, preserving the stated chronology. Draft the global outline at core_documents/global_outline.md.'
                  if mode == 'draft' else 'Review the exact supplied facts without rewriting them.')
                  + ' Creative latitude is confined to this declared fixture task.')
 
@@ -44,7 +44,7 @@ def scoped_proposal(agents=('plot_architect',), *, mode='review', proposal_id='s
         assignments=tuple(replace(a, mode=None, review_basis=None) for a in assignments))
     values = {field.name: getattr(legacy, field.name) for field in fields(legacy)
         if field.name not in {'proposal_digest', 'authoring_scope', 'assignments'}}
-    scope = AuthoringScope(AuthoringActivity(mode), (), tuple((domains[a] for a in agents)), 'Finished supplied candidate.' if mode == 'review' else 'Requested draft.', proposal_id, 1)
+    scope = AuthoringScope(AuthoringActivity(mode), ("core_documents/global_outline.md",) if mode == "draft" else (), tuple((domains[a] for a in agents)), 'Finished supplied candidate.' if mode == 'review' else 'Requested draft.', proposal_id, 1)
     assessment = admission.AuthoringAssessment(admission.AdmissionStatus.SUFFICIENT,
         (admission.AdmissionEvidence('foundations', ('candidate',), 'The literal fixture supplies Nara and chronology.'),),
         admission.AdmissionEvidence('direction', ('candidate',), 'The USER direction names this task.'),
@@ -410,6 +410,7 @@ class LiveHarnessAuditTests(unittest.TestCase):
         from story_writing_agents import conversations as contracts
         from story_writing_agents.specialist_routing import ArtifactReviewDomain, AuthoringActivity
         from tests.recommendation_fixture import RecommendationCase, action, recommendation, task_assessment
+        from tests.test_lead_orchestration import _live_scope
 
         runtime_case = RecommendationCase()
         self.addCleanup(runtime_case.doCleanups)
@@ -418,7 +419,9 @@ class LiveHarnessAuditTests(unittest.TestCase):
         spec = harness.selected_spec('L06C-RECOMMENDATION')
         runtime_case.backend.enqueue(recommendation(message=spec['candidate_text'],
             recommended_action=action(kind='prepare_consultation', purpose='Prepare a separately confirmed chronology review.', instruction='Prepare a Plot REVIEW proposal for the supplied finished outline.'),
-            authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=("bounded chronology review",))))
+            authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=("bounded chronology review",)),
+            authoring_scope=lambda call: _live_scope(call, activity="review",
+                domains=("plot_structure",), paths=("core_documents/global_outline.md",))))
         observer = SimpleNamespace(calls=[])
         turns = []
 

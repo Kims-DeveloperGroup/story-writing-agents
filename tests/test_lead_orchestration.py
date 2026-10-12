@@ -783,15 +783,9 @@ def _visible_outcome(kind: str, message: str = "Visible lead response.", *, reco
         return _provider_envelope(
             call,
             {
-                "recommended_action": recommended_action,
-                "kind": kind,
-                "message": message,
-                "scope": "workflow_meta",
-                "evidence_status": "not_applicable",
-                "evidence_ids": [],
-                "artifact_intent": None,
-                "objective_intent": None,
-                "proposal": None,
+                "recommended_action": recommended_action, "kind": kind, "message": message,
+                "scope": "workflow_meta", "evidence_status": "not_applicable", "evidence_ids": [],
+                "artifact_intent": None, "objective_intent": None, "proposal": None,
             },
         )
 
@@ -805,6 +799,7 @@ def _proposal_outcome(
     purpose: str = "Check the story evidence before recommending a change.",
     activity: str | None = None,
     authoring_assessment: dict[str, object] | None = None,
+    paths: tuple[str, ...] = (),
 ):
     def respond(
         call: ContextProviderCallRequest,
@@ -812,31 +807,17 @@ def _proposal_outcome(
     ) -> str:
         core_statuses = call.payload.get("core_document_statuses", [])
         value = {
-                "recommended_action": None,
-                "kind": "proposal",
-                "message": "Specialist review would resolve the open question.",
-                "scope": "story_specific",
-                "evidence_status": "incomplete",
-                "evidence_ids": (
-                    [core_statuses[0]["evidence_id"]] if core_statuses else []
-                ),
-                "artifact_intent": None,
-                "objective_intent": None,
-                "proposal": {
-                    "relation": relation,
-                    "purpose": purpose,
-                    "assignments": assignments,
-                    **({"shared_premises": []} if "contributions" in _live_scope(call) else {}),
-                },
-            }
+                    "recommended_action": None, "kind": "proposal", "message": "Specialist review would resolve the open question.", "scope": "story_specific",
+                    "evidence_status": "incomplete", "evidence_ids": ( [core_statuses[0]["evidence_id"]] if core_statuses else [] ), "artifact_intent": None,
+                    "objective_intent": None,
+                    "proposal": { "relation": relation, "purpose": purpose, "assignments": assignments, **({"shared_premises": []} if "contributions" in _live_scope(call) else {}), },
+                }
         if authoring_assessment is not None:
             value["authoring_assessment"] = authoring_assessment
         if activity is not None:
             value["authoring_scope"] = _live_scope(
-                call,
-                activity=activity,
-                domains=("plot_structure", "character_world", "tone_execution"),
-            )
+                                           call, activity=activity, domains=("plot_structure", "character_world", "tone_execution"), paths=paths,
+                                       )
         return _provider_envelope(call, value,)
 
     return respond
@@ -948,15 +929,11 @@ def _answer_from_history(
     return _provider_envelope(
         call,
         {
-            "recommended_action": None,
-            "kind": "answer",
+            "recommended_action": None, "kind": "answer",
             "message": "The prior lead response supplies enough evidence.",
-            "scope": "story_specific",
-            "evidence_status": "verified",
+            "scope": "story_specific", "evidence_status": "verified",
             "evidence_ids": [observation["read_results"][0]["evidence_id"]],
-            "artifact_intent": None,
-            "objective_intent": None,
-            "proposal": None,
+            "artifact_intent": None, "objective_intent": None, "proposal": None,
         },
         used_handles=provider.used_handles,
     )
@@ -968,18 +945,10 @@ def _decision(
     proposal = result.proposal
     values = {
         "confirmation_request_id": result.confirmation_request_id,
-        "session_id": result.session_id,
-        "conversation_id": result.conversation_id,
-        "step_id": result.step_id,
-        "proposal_id": proposal.proposal_id,
-        "proposal_revision": proposal.proposal_revision,
-        "proposal_digest": proposal.proposal_digest,
-        "kind": kind,
-        "revision_request": (
-            "Revise the proposed review."
-            if kind is CollaborationConfirmationDecision.REVISE
-            else None
-        ),
+        "session_id": result.session_id, "conversation_id": result.conversation_id,
+        "step_id": result.step_id, "proposal_id": proposal.proposal_id,
+        "proposal_revision": proposal.proposal_revision, "proposal_digest": proposal.proposal_digest,
+        "kind": kind, "revision_request": "Revise the proposed review." if kind is CollaborationConfirmationDecision.REVISE else None,
     }
     values.update(changes)
     return LeadStepDecision(**values)
@@ -1064,8 +1033,10 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
     def history(self, conversation_id: str):
         return self.runtime.conversation_storage_services.event_store.read(self.session_id, conversation_id,)
 
-    async def record_book_readiness(self, *, seed_before_capture=False):
-        for path, content in _READINESS_DOCUMENTS:
+    async def record_book_readiness(self, *, seed_before_capture=False, preserve_documents=False):
+        documents = tuple((path, self.workspace.path(path).read_text(encoding="utf-8"))
+                          for path, _ in _READINESS_DOCUMENTS) if preserve_documents else _READINESS_DOCUMENTS
+        for path, content in documents:
             self.workspace.path(path).write_text(content, encoding="utf-8")
         if seed_before_capture:
             subprocess.run(["git", "add", "--", *(path for path, _ in _READINESS_DOCUMENTS)], cwd=self.workspace.root, check=True)
@@ -1085,7 +1056,7 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result.proposal)
         self.assertEqual((len(self.backend.calls) - call_count, len(self.backend.reference_calls) - read_count), (1, 1))
         self.assertEqual(tuple(item["content"] for item in self.backend.reference_contexts[-1]),
-                         tuple(content for _, content in _READINESS_DOCUMENTS))
+                         tuple(content for _, content in documents))
         readiness = self.runtime.inspect_core_document_readiness(self.session_id)
         self.assertEqual(readiness.complete_documents, tuple(path for path, _ in _READINESS_DOCUMENTS),
             (result.kind, result.next_action, result.state, result.validation_details,
@@ -1462,7 +1433,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             json.dumps({"response_type": "unknown_kind", "response_text": 7}), result_schema,
         )
         self.assertEqual(issues, (
-            '$.response_type: expected one of ["answer", "clarification_question", "critique", "proposal_drafting_recommendation", "specialist_consultation_proposal", "artifact_change_proposal"], got string',
+            '$.response_type: expected one of ["answer", "clarification_question", "critique", "proposal_drafting_recommendation", "specialist_consultation_proposal", "artifact_change_proposal", "core_document_readiness_assessment"], got string',
             "$.response_text: expected string, got integer",
         ))
 
@@ -1483,7 +1454,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             answer_variant["properties"]["task_result"],
         )
         self.assertEqual(issues, (
-            '$.response_type: expected one of ["answer", "clarification_question", "critique", "proposal_drafting_recommendation", "specialist_consultation_proposal", "artifact_change_proposal"], got object',
+            '$.response_type: expected one of ["answer", "clarification_question", "critique", "proposal_drafting_recommendation", "specialist_consultation_proposal", "artifact_change_proposal", "core_document_readiness_assessment"], got object',
             "$.response_text: expected string, got integer",
         ))
         self.assertNotIn(secret, repr(issues))
@@ -2528,7 +2499,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                     proposed = await self.runtime.propose_specialist_advisory(
                         self.session_id, conversation_id, PLOT_ARCHITECT,
                         _ADMISSION_BRIEF + "\n" + "Draft from the current synthetic causal brief.",
-                        authoring_scope=AuthoringScope(AuthoringActivity.DRAFT, (), (ArtifactReviewDomain.PLOT_STRUCTURE,),
+                        authoring_scope=AuthoringScope(AuthoringActivity.DRAFT, ("core_documents/global_outline.md",), (ArtifactReviewDomain.PLOT_STRUCTURE,),
                                                       "Draft from a synthetic causal brief.", "advisory_task", 1),
                         authoring_assessment=_fixture_assessment(),
                     )
@@ -3529,6 +3500,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
             _proposal_outcome(
                 assignments, activity="draft" if infeasible else "review",
                 authoring_assessment=assessment,
+                paths=("manuscript/part-01/opening.md",) if infeasible else (),
             ),
         )
         proposed = await self.runtime.lead_turn(
@@ -3613,6 +3585,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
         return conversation_id, proposed, decision_result, history, syntheses[0], results[0]
 
     async def test_unaffordable_continuation_finalizes_exact_result_without_authority(self):
+        await self.record_book_readiness()
         artifacts = {path: path.read_bytes() for path in self.workspace.root.rglob("*.md")}
         await self._budget_consultation(infeasible=True)
         self.assertEqual({path: path.read_bytes() for path in self.workspace.root.rglob("*.md")}, artifacts)
