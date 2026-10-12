@@ -378,7 +378,7 @@ def _execute(selection: CanonicalCollection, *, stream: TextIO, failfast: bool =
         captured.append(result)
         return result
     test_runner = unittest.TextTestRunner(
-        verbosity=2, failfast=failfast, resultclass=result_factory,
+        stream=stream, verbosity=2, failfast=failfast, resultclass=result_factory,
     )
     started = clock()
     interrupted = False
