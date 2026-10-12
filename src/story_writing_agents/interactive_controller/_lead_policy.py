@@ -62,6 +62,7 @@ from ..interactive_terminal._collaboration_view import (
     project_lead_error_result,
     project_lead_turn_result,
     project_editorial_state,
+    project_core_document_readiness,
     project_specialist_results,
     project_story_commit_decision_result,
 )
@@ -575,6 +576,8 @@ class InteractiveLeadAdapter:
     def _lead_turn_panel(self, turn: LeadTurnResult):
         panel = (project_lead_turn_result(turn) if self._read_events is None else
                  project_lead_turn_result(turn, public_response_events=self._read_events(turn.conversation_id)))
+        readiness_panel = project_core_document_readiness(self._session.inspect_core_document_readiness())
+        panel = Panel(panel.title, panel.items + (Section(readiness_panel.title, readiness_panel.items),), state=panel.state)
         editorial = self._session.inspect_editorial_state()
         if not editorial.revisions:
             return panel

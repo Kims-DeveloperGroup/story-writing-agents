@@ -61,6 +61,7 @@ from tests.test_lead_orchestration import (
     _LeadBackend,
     _decision,
     _specialist_outcome,
+    _live_scope,
 )
 
 
@@ -75,13 +76,11 @@ def _commit_decision(
     assert request is not None
     reviewed = applied.request.reviewed_proposal  # type: ignore[attr-defined]
     return StoryCommitDecisionRequest(
-        session_id=reviewed.session_id,
-        conversation_id=reviewed.conversation_id,
+        session_id=reviewed.session_id, conversation_id=reviewed.conversation_id,
         step_id=reviewed.step_id,
         confirmation_request_id=request.confirmation_request_id,
         application_result_event_id=request.application_result_event_id,
-        candidate_id=request.candidate.candidate_id,
-        request_digest=request.request_digest,
+        candidate_id=request.candidate.candidate_id, request_digest=request.request_digest,
         confirmation_id=confirmation_id,
         kind=kind,
         revision_request=revision_request,
@@ -147,21 +146,20 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
 
     async def reviewed_create(
         self, subject: str = "Reviewed update", *,
-        new_text: str = "Use restrained close-third narration.\n", user_brief: str | None = None,
+        new_text: str = "Use restrained close-third narration.\n", user_brief: str | None = None, readiness=False,
     ):
         from tests.recommendation_fixture import task_assessment
+        if readiness:
+            await self.record_book_readiness(seed_before_capture=True)
         conversation_id = self.conversation(subject)
         self.backend.enqueue(
             _artifact_outcome(
                 operations=lambda _call, material: [
-                    {
-                        "evidence_id": _reference_ids(material)[0],
-                        "kind": "replace",
-                        "new_text": new_text,
-                    }
+                    {"evidence_id": _reference_ids(material)[0], "kind": "replace", "new_text": new_text}
                 ],
                 evidence_status="empty",
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
+                authoring_scope=lambda call: _live_scope(call, activity='review', domains=('tone_execution',), paths=(_RULES,)),
             )
         )
         user_material = "\nSupplied replacement:\n" + new_text if user_brief is None else "\nSupplied narrative-style brief:\n" + user_brief
@@ -170,6 +168,10 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
             conversation_id,
             ((f"Update ${{{_RULES}}} with an exact narrative rule." + user_material + '\nYou may give bounded artifact review judgments and prepare a separate exact replacement proposal; preserve supplied facts and require separate execution confirmation.')),
         )
+        self.assertIsNotNone(proposed.proposal, (
+            proposed.kind, proposed.next_action, proposed.state, proposed.validation_details,
+            proposed.artifact_proposal is not None,
+        ))
         for assignment in proposed.proposal.assignments:
             self.backend.enqueue_for(
                 assignment.specialist_id,
@@ -201,13 +203,13 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         )
 
     async def applied_create(
-        self, subject: str = "Prepared local commit", *, seeded=False,
+        self, subject: str = "Prepared local commit", *, seeded=False, readiness=False,
         new_text: str = "Use restrained close-third narration.\n",
     ):
         turn = (
             await seed_reviewed_artifact(
                 self, self.conversation(subject), (("replace", _RULES, new_text),),
-            ) if seeded else await self.reviewed_create(subject, new_text=new_text)
+            ) if seeded else await self.reviewed_create(subject, new_text=new_text, readiness=readiness)
         )
         applied = await self.runtime.decide_artifact_application(
             _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
@@ -393,7 +395,7 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
         uncertain = LeadStoryCommitTests()
         uncertain.setUp()
         self.addCleanup(uncertain.doCleanups)
-        pending = await uncertain.applied_create("Unknown discussion with pending Commit")
+        pending = await uncertain.applied_create("Unknown discussion with pending Commit", readiness=True)
         conversation = pending.request.reviewed_proposal.conversation_id
         files_before, git_before = uncertain.artifact_snapshot(), uncertain.session_git_snapshot()
         uncertain.backend.enqueue(_SubmittedFailure(RuntimeError("uncertain pending discussion"), submission_uncertain=True))
@@ -419,7 +421,7 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
     async def test_exact_commit_uses_user_identity_and_no_remote_or_destructive_git(
         self,
     ) -> None:
-        applied = await self.applied_create("Exact commit")
+        applied = await self.applied_create("Exact commit", readiness=True)
         key, _pending, pin, descriptors = self.pending_commit(applied)
         request = applied.commit_request
         assert request is not None

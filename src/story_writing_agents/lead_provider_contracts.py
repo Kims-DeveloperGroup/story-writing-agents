@@ -240,6 +240,7 @@ class LeadProviderConstraints:
     premise_question_id: str | None = None
     adoption_intent: AuthoringIntent | None = None
     adoption_targets: tuple[str, ...] = ()
+    readiness_source_basis_ref: str | None = None
 
     def __post_init__(self) -> None:
         for values in (self.input_ids, self.task_revisions, self.reviewer_inputs,
@@ -259,6 +260,9 @@ class LeadProviderConstraints:
 
     def prompt_facts(self) -> dict[str, object]:
         return {
+            **({"source_basis_ref": self.readiness_source_basis_ref,
+                "core_document_readiness_rule": "Assess whole-book extent from actual USER directions/material; cite actual acquired whole-document READ IDs. Include all four documents and all seventeen criteria. Missing downstream documents permit grounded bootstrap, never manuscript drafting. Character and style both depend on both outlines; style need not wait for character completion. Reader secrecy requires USER nondisclosure plus an actual resolved author-side fact. Completion grants no review, Confirm, Apply or Commit authority."}
+               if self.readiness_source_basis_ref is not None else {}),
             **({"adoption_intent": self.adoption_intent.value, "adoption_targets": list(self.adoption_targets),
                 "adoption_rule": "Exact selected bytes are USER input only. Propose fresh work at the offered task@1 with the explicit intent and targets; retain adopted_idea in every assignment. Never import draft, READ, review or write authority."}
                if self.adoption_intent is not None else {}),
@@ -527,6 +531,13 @@ class LeadProviderConstraints:
 
     def rules(self, value: object, *, read_ids: tuple[str, ...] = (),
                  read_reviewers: tuple[tuple[str, str], ...] = ()) -> tuple[DomainValidationRule, ...]:
+        if type(value) is dict and "core_document_assessment" in value:
+            if (self.readiness_source_basis_ref is None
+                    or set(value) != {"kind", "message", "authoring_scope", "core_document_assessment"}
+                    or value.get("kind") != "answer" or value.get("authoring_scope") is not None
+                    or not visible_text(value.get("message"))):
+                return (DomainValidationRule.LEAD_OUTCOME_REJECTED,)
+            return ()
         if type(value) is dict and type(value.get("proposal")) is dict and "premise_decision" in value["proposal"]:
             if self.premise_question_id is None:
                 return (DomainValidationRule.LEAD_OUTCOME_REJECTED,)

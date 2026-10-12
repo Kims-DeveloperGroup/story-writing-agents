@@ -22,6 +22,7 @@ import story_writing_agents.conversations as conversations
 import story_writing_agents.conversations.context as context_owner
 import story_writing_agents.conversations.events as events_owner
 from story_writing_agents import editorial_state as editorial
+from story_writing_agents import core_document_readiness as core_readiness
 from story_writing_agents import lead_exploration as exploration
 from story_writing_agents.agents import (
     CHARACTER_CUSTODIAN,
@@ -283,14 +284,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                 "lead_recommendation_started",
                 "lead_recommendation_result",
             ),
-            CollaborationActorKind: (
-                "user",
-                "lead",
-                "specialist",
-                "runtime",
-                "artifact",
-                "git",
-            ),
+            CollaborationActorKind: ("user", "lead", "specialist", "runtime", "artifact", "git",),
             CollaborationDirection: (
                 "user_to_lead",
                 "user_to_runtime",
@@ -344,22 +338,9 @@ class CollaborationValueContractTests(unittest.TestCase):
                 "recovery_required",
             ),
             CollaborationConfirmationDecision: ("confirm", "reject", "revise"),
-            CollaborationAssignmentOutcomeKind: (
-                "succeeded",
-                "failed",
-                "cancelled",
-            ),
-            CollaborationSynthesisOutcomeKind: (
-                "not_attempted",
-                "succeeded",
-                "failed",
-                "cancelled",
-            ),
-            CollaborationExecutionOutcomeKind: (
-                "succeeded",
-                "failed",
-                "cancelled",
-            ),
+            CollaborationAssignmentOutcomeKind: ("succeeded", "failed", "cancelled",),
+            CollaborationSynthesisOutcomeKind: ("not_attempted", "succeeded", "failed", "cancelled",),
+            CollaborationExecutionOutcomeKind: ("succeeded", "failed", "cancelled",),
             CollaborationTerminalScope: ("assignment", "synthesis"),
             CollaborationInvocationKind: (
                     'lead_discussion',
@@ -369,11 +350,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                 "lead_synthesis",
                 "specialist_advisory",
             ),
-            CollaborationProviderCallKind: (
-                "reference_prelude",
-                "initial",
-                "continuation",
-            ),
+            CollaborationProviderCallKind: ("reference_prelude", "initial", "continuation",),
             CollaborationProviderCallState: ("prepared", "submitted"),
             LeadOutcomeKind: (
                 'exploration',
@@ -385,20 +362,8 @@ class CollaborationValueContractTests(unittest.TestCase):
                 "proposal",
             ),
             LeadOutcomeScope: ("story_specific", "workflow_meta", "premise_analysis"),
-            LeadEvidenceStatus: (
-                "not_applicable",
-                "verified",
-                "missing",
-                "empty",
-                "incomplete",
-                "conflicting",
-            ),
-            CollaborationEvidenceAcquisition: (
-                "attached_reference",
-                "core_status",
-                "zero_hit_search",
-                "read",
-            ),
+            LeadEvidenceStatus: ("not_applicable", "verified", "missing", "empty", "incomplete", "conflicting",),
+            CollaborationEvidenceAcquisition: ("attached_reference", "core_status", "zero_hit_search", "read",),
             CollaborationLeadOutcomeFailureCode: (
                 "evidence_validation_rejected",
                 "artifact_intent_rejected",
@@ -428,11 +393,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                 "review_incomplete",
                 "synthesis_rejected",
             ),
-            LeadProposalRelation: (
-                "new_step",
-                "revise_pending",
-                "continue_lineage",
-            ),
+            LeadProposalRelation: ("new_step", "revise_pending", "continue_lineage",),
             CollaborationAppendStatus: ("APPENDED", "ALREADY_COMMITTED"),
             CollaborationAppendFailure: (
                 "stale_sequence",
@@ -460,6 +421,13 @@ class CollaborationValueContractTests(unittest.TestCase):
     def test_all_schema_values_have_exact_fields_frozen_slots_and_nested_tuples(
         self,
     ) -> None:
+        self.assertEqual(core_readiness.CRITERIA, {
+            "core_documents/global_outline.md": ("plot_progression", "conflict", "ending", "required_setup"),
+            "core_documents/part_outlines.md": ("all_units", "transitions", "late_progression"),
+            "core_documents/character_sheets.md": ("roles", "relationships", "motivation",
+                                                  "character_settings", "character_change"),
+            "core_documents/narrative_rules.md": ("point_of_view", "tone", "expression", "narration", "exceptions"),
+        })
         history, proposal, result = executed_history()
         batch = batch_from_history(history, "batch_result")
         lead_evidence = make_lead_evidence()
@@ -474,11 +442,7 @@ class CollaborationValueContractTests(unittest.TestCase):
             "invocation_a",
             "call_a",
         )
-        lead_assignment = LeadAssignmentIntent(
-            PLOT_ARCHITECT,
-            "Review the outline causality.",
-            ("input_outline",),
-        )
+        lead_assignment = LeadAssignmentIntent(PLOT_ARCHITECT, "Review the outline causality.",("input_outline",),)
         lead_intent = LeadProposalIntent(
             LeadProposalRelation.NEW_STEP,
             "Check outline causality.",
@@ -547,29 +511,15 @@ class CollaborationValueContractTests(unittest.TestCase):
             (lead_evidence, ("scope", "status", "receipts")),
             (
                 lead_judgment,
-                ("kind", "message", "evidence", "authoring_scope", "trace", "authoring_admission"),
+                ("kind", "message", "evidence", "authoring_scope", "trace",
+                 "authoring_admission", "core_document_readiness"),
             ),
             (lead_failure, ("code", "invocation_id", "call_id")),
             (
                 proposal.basis.inputs[0],
-                (
-                    "input_id",
-                    "kind",
-                    "locator",
-                    "state",
-                    "revision_digest",
-                    "start_line",
-                    "end_line",
-                ),
+                ("input_id", "kind", "locator", "state", "revision_digest", "start_line", "end_line",),
             ),
-            (
-                proposal.basis.agent_profiles[0],
-                (
-                    "agent_id",
-                    "definition_fingerprint",
-                    "execution_fingerprint",
-                ),
-            ),
+            (proposal.basis.agent_profiles[0],("agent_id", "definition_fingerprint", "execution_fingerprint",),),
             (
                 proposal.basis,
                 (
@@ -583,7 +533,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                     "schema_version",
                     "shared_premises",
                     "editorial_refs",
-                    "editorial_context_digest", "authoring_admission",
+                    "editorial_context_digest", "authoring_admission", "core_document_readiness",
                 ),
             ),
             (
@@ -631,12 +581,7 @@ class CollaborationValueContractTests(unittest.TestCase):
             ),
             (
                 result.assignment_outcomes[0],
-                (
-                    "assignment_id",
-                    "outcome",
-                    "submitted_physical_calls",
-                    "reply_event_id",
-                ),
+                ("assignment_id", "outcome", "submitted_physical_calls", "reply_event_id",),
             ),
             (
                 result,
@@ -690,14 +635,11 @@ class CollaborationValueContractTests(unittest.TestCase):
                 ),
             ),
             (batch, ("batch_id", "expected_last_sequence", "events")),
-            (
-                lead_assignment,
-                ("agent_id", "instruction", "input_ids", "mode", "review_basis"),
-            ),
+            (lead_assignment,("agent_id", "instruction", "input_ids", "mode", "review_basis"),),
             (
                 lead_intent,
                 ("relation", "purpose", "assignments", "authoring_scope", "shared_premises",
-                 'premise_decision', "authoring_admission"),
+                 'premise_decision', "authoring_admission", "core_document_readiness"),
             ),
             (
                 lead_outcome,
@@ -713,6 +655,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                     "recommended_action",
                     "authoring_scope",
                     "trace", "authoring_assessment", "authoring_admission",
+                    "core_document_assessment", "core_document_readiness",
                 ),
             ),
             (
@@ -773,10 +716,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                 self.assertFalse(hasattr(value, "__dict__"))
                 with self.assertRaises(FrozenInstanceError):
                     setattr(value, expected_fields[0], None)
-        self.assertEqual(
-            proposal.participants,
-            (PLOT_ARCHITECT, CHARACTER_CUSTODIAN),
-        )
+        self.assertEqual(proposal.participants,(PLOT_ARCHITECT, CHARACTER_CUSTODIAN),)
         self.assertNotIn("participants", proposal.__dataclass_fields__)
         for nested in (
             proposal.assignments,
@@ -809,6 +749,9 @@ class CollaborationValueContractTests(unittest.TestCase):
                 replace(request.draft, text=invalid)
         with self.assertRaises(ValueError):
             editorial.EditorialRecordRequest("bad_select", editorial.EditorialAction.SELECT, "USER reason")
+        self.assertEqual(tuple(core_readiness.CriterionFinding.__dataclass_fields__),
+                         ("criterion_id", "criterion_judgment", "source_ids",
+                          "depends_on_author_decision_ids", "explanation"))
 
     def test_actor_direction_matrix_is_closed_and_exact(self) -> None:
         advisory = make_proposal(step_kind=CollaborationStepKind.SPECIALIST_ADVISORY)
@@ -963,10 +906,7 @@ class CollaborationValueContractTests(unittest.TestCase):
             make_proposal(assignments=(proposal.assignments[0],) * 2)
         with self.assertRaises(ValueError):
             make_proposal(
-                assignments=(
-                    replace(proposal.assignments[0], input_ids=("unknown",)),
-                    proposal.assignments[1],
-                )
+                assignments=(replace(proposal.assignments[0], input_ids=("unknown",)), proposal.assignments[1],)
             )
         with self.assertRaises(ValueError):
             make_proposal(profile_ids=(PLOT_ARCHITECT, CHARACTER_CUSTODIAN))
@@ -1168,8 +1108,8 @@ class CollaborationWireContractTests(unittest.TestCase):
                 encode_collaboration_proposal,
                 decode_collaboration_proposal,
                 proposal,
-                3482,
-                "c2f7995f1c70516cd7ce2e7efeff5ac4e28af9b59e02b49339451e10b16e328e",
+                3513,
+                "169e7e0c59711a061aea90757b45c6eba4adb21375a6a5b501a319d470a4a600",
             ),
             (
                 encode_collaboration_event_draft,
@@ -1183,14 +1123,14 @@ class CollaborationWireContractTests(unittest.TestCase):
                 decode_collaboration_event,
                 history[0],
                 694,
-                "4c4c7516957e8d26f2868d7e5235b6647bd15d2e7a68c8d1e65deb371a4834c5",
+                "1470ec4f48c495191539108339a20332d39a50a0b7f31731e931979839cf3b9a",
             ),
             (
                 encode_collaboration_batch,
                 decode_collaboration_batch,
                 batch,
-                6735,
-                "3e3a1c1c77a8f534b0b18575320a7eb7994632c47939fc476ac79651f30dd911",
+                6766,
+                "6a6e36e463c4cd899eb09c3417dbd27af433343584d174d8ba562ee055c2f028",
             ),
         )
         for encoder, decoder, value, size, digest in cases:
@@ -1203,9 +1143,7 @@ class CollaborationWireContractTests(unittest.TestCase):
                 self.assertFalse(wire.startswith(b"\xef\xbb\xbf"))
                 self.assertFalse(wire.endswith(b"\n"))
                 self.assertEqual(_canonical_json(json.loads(wire)), wire)
-        self.assertEqual(
-            collaboration_proposal_digest(proposal), proposal.proposal_digest
-        )
+        self.assertEqual(collaboration_proposal_digest(proposal), proposal.proposal_digest)
         self.assertEqual(collaboration_batch_digest(batch), batch.batch_digest)
 
     def test_artifact_public_decoders_clear_content_from_exception_graphs(
@@ -1278,10 +1216,7 @@ class CollaborationWireContractTests(unittest.TestCase):
             ),
         )
         for decoder, payload, expected_message, private_content in cases:
-            with self.subTest(
-                decoder=decoder.__name__,
-                expected_message=expected_message,
-            ):
+            with self.subTest(decoder=decoder.__name__, expected_message=expected_message,):
                 with self.assertRaises(ValueError) as raised:
                     decoder(payload)
                 failure = raised.exception
@@ -1311,10 +1246,7 @@ class CollaborationWireContractTests(unittest.TestCase):
 
     def test_every_proposal_dimension_and_order_changes_the_digest(self) -> None:
         base = make_proposal(
-            side_effects=(
-                CollaborationSideEffect.PROVIDER_INVOCATION,
-                CollaborationSideEffect.ARTIFACT_MUTATION,
-            )
+            side_effects=(CollaborationSideEffect.PROVIDER_INVOCATION, CollaborationSideEffect.ARTIFACT_MUTATION,)
         )
         inputs = base.basis.inputs
         assignments = base.assignments
@@ -1322,35 +1254,20 @@ class CollaborationWireContractTests(unittest.TestCase):
             "step_id": replace_proposal(base, step_id="step_b"),
             "proposal_id": replace_proposal(base, proposal_id="proposal_b"),
             "revision": replace_proposal(base, proposal_revision=2),
-            "step_kind": replace_proposal(
-                base,
-                step_kind=CollaborationStepKind.GIT_OPERATION,
-            ),
+            "step_kind": replace_proposal(base, step_kind=CollaborationStepKind.GIT_OPERATION,),
             "purpose": replace_proposal(base, purpose="Different visible purpose."),
-            "assignment_order": replace_proposal(
-                base,
-                assignments=tuple(reversed(assignments)),
-            ),
+            "assignment_order": replace_proposal(base, assignments=tuple(reversed(assignments)),),
             "assignment_instruction": replace_proposal(
                 base,
-                assignments=(
-                    replace(assignments[0], instruction="Different instruction."),
-                    assignments[1],
-                ),
+                assignments=(replace(assignments[0], instruction="Different instruction."), assignments[1],),
             ),
             "assignment_calls": make_proposal(
-                assignments=(
-                    replace(assignments[0], max_physical_calls=3),
-                    assignments[1],
-                ),
+                assignments=(replace(assignments[0], max_physical_calls=3), assignments[1],),
                 inputs=inputs,
                 side_effects=base.side_effects,
             ),
             "impact": replace_proposal(base, user_impact="Different user impact."),
-            "side_effect_order": replace_proposal(
-                base,
-                side_effects=tuple(reversed(base.side_effects)),
-            ),
+            "side_effect_order": replace_proposal(base, side_effects=tuple(reversed(base.side_effects)),),
             "physical_spent": make_proposal(physical_calls_spent=2, side_effects=base.side_effects),
             "route": make_proposal(route="different_route", side_effects=base.side_effects),
             "route_fingerprint": make_proposal(route_fingerprint=DIGEST_B, side_effects=base.side_effects),
@@ -1374,47 +1291,26 @@ class CollaborationWireContractTests(unittest.TestCase):
                     ),
                 ),
             ),
-            "context_policy": make_proposal(
-                context_policy_fingerprint=DIGEST_B,
-                side_effects=base.side_effects,
-            ),
-            "budget_policy": make_proposal(
-                budget_policy_fingerprint=DIGEST_B,
-                side_effects=base.side_effects,
-            ),
-            "input_order": replace_proposal(
-                base,
-                basis=replace(base.basis, inputs=tuple(reversed(inputs))),
-            ),
+            "context_policy": make_proposal(context_policy_fingerprint=DIGEST_B, side_effects=base.side_effects,),
+            "budget_policy": make_proposal(budget_policy_fingerprint=DIGEST_B, side_effects=base.side_effects,),
+            "input_order": replace_proposal(base, basis=replace(base.basis, inputs=tuple(reversed(inputs))),),
             "input_locator": replace_proposal(
                 base,
                 basis=replace(
                     base.basis,
-                    inputs=(
-                        replace(inputs[0], locator="$${core_documents/outline.md}:4-12"),
-                        inputs[1],
-                    ),
+                    inputs=(replace(inputs[0], locator="$${core_documents/outline.md}:4-12"), inputs[1],),
                 ),
             ),
             "input_state": replace_proposal(
                 base,
                 basis=replace(
                     base.basis,
-                    inputs=(
-                        replace(inputs[0], state=CollaborationInputState.ABSENT),
-                        inputs[1],
-                    ),
+                    inputs=(replace(inputs[0], state=CollaborationInputState.ABSENT), inputs[1],),
                 ),
             ),
             "input_revision": replace_proposal(
                 base,
-                basis=replace(
-                    base.basis,
-                    inputs=(
-                        replace(inputs[0], revision_digest=DIGEST_B),
-                        inputs[1],
-                    ),
-                ),
+                basis=replace(base.basis, inputs=(replace(inputs[0], revision_digest=DIGEST_B), inputs[1],),),
             ),
             "input_range": replace_proposal(
                 base,
@@ -1425,20 +1321,13 @@ class CollaborationWireContractTests(unittest.TestCase):
         for dimension, variant in variants.items():
             with self.subTest(dimension=dimension):
                 self.assertNotEqual(variant.proposal_digest, base.proposal_digest)
-                self.assertNotEqual(
-                    encode_collaboration_proposal(variant),
-                    encode_collaboration_proposal(base),
-                )
+                self.assertNotEqual(encode_collaboration_proposal(variant), encode_collaboration_proposal(base),)
 
     def test_duplicate_extra_missing_nonfinite_and_noncanonical_json_are_rejected(
         self,
     ) -> None:
         wire = encode_collaboration_proposal(make_proposal())
-        duplicate = wire.replace(
-            b'{"proposal":',
-            b'{"proposal":null,"proposal":',
-            1,
-        )
+        duplicate = wire.replace(b'{"proposal":', b'{"proposal":null,"proposal":', 1,)
         top = json.loads(wire)
         candidates = [
             duplicate,
@@ -1511,10 +1400,7 @@ class CollaborationWireContractTests(unittest.TestCase):
         decomposed = replace_proposal(make_proposal(), purpose="Cafe\u0301 review")
         self.assertNotEqual(composed.purpose, decomposed.purpose)
         self.assertNotEqual(composed.proposal_digest, decomposed.proposal_digest)
-        self.assertNotEqual(
-            encode_collaboration_proposal(composed),
-            encode_collaboration_proposal(decomposed),
-        )
+        self.assertNotEqual(encode_collaboration_proposal(composed), encode_collaboration_proposal(decomposed),)
         top = json.loads(encode_collaboration_proposal(composed))
         top["proposal"]["purpose"] = "Tampered"
         with self.assertRaises(ValueError):
@@ -1626,13 +1512,9 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
         self.assertEqual(len(collaboration_names), 75)
         for owner in (events_owner, context_owner):
             for name in (n for n in owner.__all__ if n not in exploration_names):
-                if name.startswith("Collaboration") or name.startswith(
-                    "COLLABORATION_"
-                ):
+                if name.startswith("Collaboration") or name.startswith("COLLABORATION_"):
                     with self.subTest(owner=owner.__name__, name=name):
-                        self.assertIs(
-                            getattr(owner, name), getattr(conversations, name)
-                        )
+                        self.assertIs(getattr(owner, name), getattr(conversations, name))
         callable_names = {
             name
             for name in conversations.__all__
@@ -1646,10 +1528,7 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
         callable_names.discard("CollaborationPayload")
         for name in callable_names:
             with self.subTest(metadata=name):
-                self.assertEqual(
-                    getattr(conversations, name).__module__,
-                    "story_writing_agents.conversations",
-                )
+                self.assertEqual(getattr(conversations, name).__module__, "story_writing_agents.conversations",)
         root_names = {
             name for name in conversations.__all__ if (name.startswith("Collaboration")) and name not in exploration_names
         }
@@ -1670,17 +1549,9 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
             self.assertFalse(hasattr(story_writing_agents, name))
         proposal = make_proposal()
         self.assertEqual(pickle.loads(pickle.dumps(proposal)), proposal)
-        self.assertIs(
-            pickle.loads(pickle.dumps(CollaborationProposal)),
-            CollaborationProposal,
-        )
+        self.assertIs(pickle.loads(pickle.dumps(CollaborationProposal)), CollaborationProposal,)
 
-        for name in (
-            'LeadTaskView',
-            'LeadMaterialChoice',
-            'LeadPublicResponseView',
-            'LeadTaskDecisionResult',
-        ):
+        for name in ('LeadTaskView', 'LeadMaterialChoice', 'LeadPublicResponseView', 'LeadTaskDecisionResult',):
             self.assertIs(getattr(context_owner, name), getattr(conversations, name))
             self.assertEqual(getattr(conversations, name).__module__, "story_writing_agents.conversations")
             self.assertNotIn(name, story_writing_agents.__all__)
@@ -1696,10 +1567,7 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
             DIGEST_A,
             2,
             3,
-            (
-                "2026-08-31T00:00:01+00:00",
-                "2026-08-31T00:00:02+00:00",
-            ),
+            ("2026-08-31T00:00:01+00:00", "2026-08-31T00:00:02+00:00",),
         )
         self.assertEqual(receipt.first_sequence, 2)
         for failure in CollaborationAppendFailure:
@@ -1721,9 +1589,7 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
         }
         for function, parameters in expected_signatures.items():
             with self.subTest(function=function.__name__):
-                self.assertEqual(
-                    tuple(inspect.signature(function).parameters), parameters
-                )
+                self.assertEqual(tuple(inspect.signature(function).parameters), parameters)
 
     def test_clean_import_orders_have_no_cwd_io_or_dynamic_forwarding(self) -> None:
         source = Path(__file__).resolve().parents[1] / "src"

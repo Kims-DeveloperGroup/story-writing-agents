@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from ..core_document_readiness import (
+    CoreDocumentAssessment, CoreDocumentReadinessBasis, targets_for_paths, validate_authoring_target_basis, assessment_from_dict as core_assessment_from_dict,
+    assessment_to_dict as core_assessment_to_dict, basis_from_dict as readiness_basis_from_dict,
+    basis_to_dict as readiness_basis_to_dict,
+)
+
 from dataclasses import replace
 
 from ..authoring_admission import (
@@ -518,8 +524,14 @@ class CollaborationLeadJudgmentPayload:
     trace: ReplyTrace | None = None
 
     authoring_admission: AuthoringAdmissionBasis | None = field(default=None, kw_only=True)
+    core_document_readiness: CoreDocumentReadinessBasis | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
+        if self.core_document_readiness is not None:
+            if (type(self.core_document_readiness) is not CoreDocumentReadinessBasis
+                    or self.kind is not LeadOutcomeKind.ANSWER or self.authoring_scope is not None
+                    or self.authoring_admission is not None):
+                raise ValueError("readiness judgment cannot carry authoring authority")
         if self.kind in {LeadOutcomeKind.EXPLORATION, LeadOutcomeKind.DISCUSSION}:
             raise ValueError("exploration requires its typed request-bound report")
         _require_enum(self.kind, LeadOutcomeKind, "lead judgment kind")
@@ -1299,6 +1311,7 @@ class LeadProposalIntent:
     premise_decision: PremiseQuestionIntent | None = field(default=None, kw_only=True)
 
     authoring_admission: AuthoringAdmissionBasis | None = field(default=None, kw_only=True)
+    core_document_readiness: CoreDocumentReadinessBasis | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         validation_call(
@@ -1368,8 +1381,19 @@ class LeadProviderOutcome:
     trace: ReplyTrace | None = field(default=None, kw_only=True)
     authoring_assessment: AuthoringAssessment | None = field(default=None, kw_only=True)
     authoring_admission: AuthoringAdmissionBasis | None = field(default=None, kw_only=True)
+    core_document_assessment: CoreDocumentAssessment | None = field(default=None, kw_only=True)
+    core_document_readiness: CoreDocumentReadinessBasis | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
+        if self.core_document_assessment is not None or (self.core_document_readiness is not None and self.kind is LeadOutcomeKind.ANSWER):
+            if (self.kind is not LeadOutcomeKind.ANSWER or self.authoring_scope is not None
+                    or self.authoring_assessment is not None or self.authoring_admission is not None
+                    or any((self.proposal, self.artifact_intent, self.objective_intent, self.recommended_action))):
+                raise ValueError("readiness assessment grants no authoring or proposal authority")
+            if self.core_document_assessment is not None:
+                core_assessment_from_dict(core_assessment_to_dict(self.core_document_assessment))
+            if self.core_document_readiness is not None and type(self.core_document_readiness) is not CoreDocumentReadinessBasis:
+                raise TypeError("readiness basis must be qualified and typed")
         validation_call('$.kind', _require_enum, self.kind, LeadOutcomeKind, 'lead outcome kind')
         if type(self.message) is not str:
             raise validation_failure(
@@ -1794,6 +1818,7 @@ class CollaborationProposalBasis:
     editorial_context_digest: str | None = field(default=None, kw_only=True)
 
     authoring_admission: AuthoringAdmissionBasis | None = field(default=None, kw_only=True)
+    core_document_readiness: CoreDocumentReadinessBasis | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         if type(self.schema_version) is not int or self.schema_version not in {1, 2}:
@@ -4281,6 +4306,11 @@ def _validate_captured_admission(
 ) -> None:
     if not required and (scope is None or scope.intent is not AuthoringIntent.AUTHORING):
         return
+    if scope is not None and (required or scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}):
+        if not scope.target_paths:
+            validate_authoring_target_basis(None, basis.core_document_readiness)
+        for target in targets_for_paths(scope.target_paths):
+            validate_authoring_target_basis(target, basis.core_document_readiness)
     admission = basis.authoring_admission
     if scope is None or type(admission) is not AuthoringAdmissionBasis:
         raise ValueError("official drafting requires qualified authoring admission")
@@ -4805,6 +4835,7 @@ def _lead_evidence_value(evidence: CollaborationLeadEvidence) -> dict[str, objec
 
 def _basis_value(basis: CollaborationProposalBasis) -> dict[str, object]:
     return {
+        "core_document_readiness": readiness_basis_to_dict(basis.core_document_readiness) if basis.core_document_readiness is not None else None,
         **({"authoring_admission": admission_basis_to_dict(basis.authoring_admission)}
            if basis.authoring_admission is not None else {}),
         **({"editorial_refs": [editorial_ref_to_dict(item) for item in basis.editorial_refs],
@@ -5045,6 +5076,8 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
         return value
     if type(payload) is CollaborationLeadJudgmentPayload:
         return {
+            **({"core_document_readiness": readiness_basis_to_dict(payload.core_document_readiness)}
+               if payload.core_document_readiness is not None else {}),
             **({"authoring_admission": admission_basis_to_dict(payload.authoring_admission)}
                if payload.authoring_admission is not None else {}),
             "evidence": _lead_evidence_value(payload.evidence),
@@ -5615,13 +5648,14 @@ def _decode_basis(value: object) -> CollaborationProposalBasis:
             "evidence",
             "inputs",
             "route",
-            "route_fingerprint",
+            "route_fingerprint", "core_document_readiness",
         } | ({"authoring_admission"} if type(value) is dict and "authoring_admission" in value else set()) | ({"schema_version", "shared_premises"} if type(value) is dict and value.get("schema_version") == 2 else set())
           | ({"editorial_refs"} if type(value) is dict and "editorial_refs" in value else set())
         | ({"editorial_context_digest"} if type(value) is dict and value.get("editorial_refs") else set()),
         label="proposal basis",
     )
     return CollaborationProposalBasis(
+        core_document_readiness=readiness_basis_from_dict(item["core_document_readiness"]) if item["core_document_readiness"] is not None else None,
         authoring_admission=(admission_basis_from_dict(item["authoring_admission"])
                              if "authoring_admission" in item else None),
         editorial_refs=tuple(editorial_ref_from_dict(entry) for entry in _array(item.get("editorial_refs", []), label="editorial references")),
@@ -6156,7 +6190,8 @@ def _decode_payload(value: object) -> CollaborationPayload:
         )
     if payload_type == "lead_judgment":
         admission = value.get("authoring_admission") if type(value) is dict else None
-        base = {k: v for k, v in value.items() if k != "authoring_admission"} if type(value) is dict else value
+        readiness = value.get("core_document_readiness") if type(value) is dict else None
+        base = {k: v for k, v in value.items() if k not in {"authoring_admission", "core_document_readiness"}} if type(value) is dict else value
         item = _object_with_optional_extensions(
             base,
             {"evidence", "kind", "message", "payload_type"},
@@ -6164,6 +6199,7 @@ def _decode_payload(value: object) -> CollaborationPayload:
             label="lead judgment payload",
         )
         return CollaborationLeadJudgmentPayload(
+            core_document_readiness=(readiness_basis_from_dict(readiness) if readiness is not None else None),
             authoring_admission=(admission_basis_from_dict(admission) if admission is not None else None),
             kind=_enum(LeadOutcomeKind, item["kind"], label="lead judgment kind"),
             message=_string(item["message"], label="lead judgment message"),

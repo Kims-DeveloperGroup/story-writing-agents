@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..core_document_readiness import AuthoringTarget, DEPENDENCIES, CoreDocumentReadiness, CoreDocumentReadinessNeeded, project_readiness
+
 from collections.abc import Iterable, Mapping
 from enum import StrEnum
 from ..editorial_state import EditorialStateProjection
@@ -224,6 +226,24 @@ def project_editorial_state(state: EditorialStateProjection) -> Panel:
                                   else "coverage unverified")))
     items.append(Field("Current manuscript", "not established by editorial selection or historical Apply; current source qualification remains required"))
     return Panel("Editorial direction", tuple(items))
+
+
+def project_core_document_readiness(readiness: CoreDocumentReadiness | CoreDocumentReadinessNeeded) -> Panel:
+    """Expose semantic status/currentness without review or execution authority."""
+    items = []
+    if type(readiness) is CoreDocumentReadinessNeeded:
+        items.append(Notice(readiness.message, label="needed information"))
+    elif type(readiness) is CoreDocumentReadiness:
+        for path, reasons in readiness.remaining:
+            items.append(Field(path, "Current whole-book criteria satisfied" if not reasons else "; ".join(reasons)))
+        available = tuple(target.value for target in AuthoringTarget
+                          if all(dependency.value in readiness.complete_documents for dependency in DEPENDENCIES[target]))
+        items.append(Field("Prerequisites permit targeted work", "; ".join(available)))
+        items.append(Notice("Actual supplied grounds and separate authoring admission remain required; initial outline construction and grounded analysis may proceed while extent is clarified.", label="next work"))
+    else:
+        raise TypeError("readiness view must be typed")
+    items.append(Notice("Document completion does not grant final review, Confirm, Apply or Commit authority.", label="authority"))
+    return Panel("Whole-book document readiness", tuple(items))
 
 
 def project_lead_turn_result(
@@ -773,6 +793,9 @@ def _payload_items(
         )
     if type(payload) is CollaborationLeadJudgmentPayload:
         return (
+            *((Section("Captured whole-book judgment", project_core_document_readiness(
+                project_readiness(payload.core_document_readiness, payload.core_document_readiness.sources)).items),)
+              if payload.core_document_readiness is not None else ()),
             *_authoring_scope_items(payload.authoring_scope),
             Field("Outcome", payload.kind.value),
             _message("Lead", payload.message, role=SemanticRole.AGENT),

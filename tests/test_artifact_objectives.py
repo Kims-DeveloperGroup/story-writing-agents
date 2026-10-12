@@ -86,7 +86,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         return lead._live_scope(call, activity=activity, paths=(OUTLINE,), task_index=index)
 
     async def start(self, conversation_id=None, *, message=DRAFT, objective_id=None,
-                    target_path=OUTLINE, specialist_ids=(PLOT_ARCHITECT,)):
+                    target_path=OUTLINE, specialist_ids=(PLOT_ARCHITECT,), authoring_paths=None):
         from tests.test_specialist_routing_runtime import scoped_proposal
         from tests.recommendation_fixture import task_assessment
 
@@ -102,15 +102,15 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         elif target_path is None:
             intent = None
         self.backend.enqueue(scoped_proposal(
-            *specialist_ids, paths=paths,
+            *specialist_ids, paths=authoring_paths if authoring_paths is not None else (paths),
             domains=(() if target_path is not None and specialist_ids == (PLOT_ARCHITECT,) else
                      tuple({"plot_architect": "plot_structure", "character_custodian": "character_world", "execution_specialist": "tone_execution"}[agent] for agent in specialist_ids)),
-            selected=self.objective_tasks.get(objective_id),
-            mutate=lambda value, _material: value.update(objective_intent=intent),
+            selected=self.objective_tasks.get(objective_id), mutate=lambda value, _material: value.update(objective_intent=intent),
             authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=('scene transitions', 'supporting dialogue')),
         ))
         proposed = await self.runtime.lead_turn(self.session_id, conversation_id,
-            (f"Draft {target_path or 'a synthetic scene'} from this brief: a lantern vanishes, its keeper is found, and it returns." + " Invent scene transitions and supporting dialogue; preserve the supplied brief facts."))
+            ((f"Draft {target_path or 'a synthetic scene'} from this brief: a lantern vanishes, its keeper is found, and it returns." + " Invent scene transitions and supporting dialogue; preserve the supplied brief facts."
+            + (" Explicit authoring paths: " + ", ".join(authoring_paths) if authoring_paths is not None else ""))))
         self.assertIs(proposed.kind, c.LeadOutcomeKind.PROPOSAL, proposed)
         self.assertEqual(proposed.proposal.participants, specialist_ids)
         if intent is not None:

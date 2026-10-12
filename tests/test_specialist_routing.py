@@ -5,10 +5,11 @@ import hashlib
 from pathlib import Path
 import unittest
 from story_writing_agents import lead_premise_decisions as premise
+from story_writing_agents import core_document_readiness as readiness
 
 from story_writing_agents import conversations as c
 from story_writing_agents.specialist_routing import (
-    ArtifactReviewDomain as Domain, AuthoringActivity as Activity, AuthoringScope,
+    ArtifactReviewDomain as Domain, AuthoringActivity as Activity, AuthoringIntent as Intent, AuthoringScope,
     ReviewBasis, SpecialistAssignmentMode as Mode, artifact_domain,
     required_authoring_domains, required_authoring_specialists,
     validate_specialist_assignment, validate_specialist_routing,
@@ -20,13 +21,11 @@ from tests import collaboration_contract_fixture as fixture
 
 class SpecialistRoutingTests(unittest.TestCase):
     def scope(self, **changes):
-        values = dict(activity=Activity.DRAFT, target_paths=(), domains=(Domain.PLOT_STRUCTURE,),
-                      interpretation="Draft a synthetic causally ordered outline.", task_id="task_a", task_revision=1)
+        values = dict(activity=Activity.DRAFT, target_paths=(), domains=(Domain.PLOT_STRUCTURE,), interpretation="Draft a synthetic causally ordered outline.", task_id="task_a", task_revision=1)
         values.update(changes)
         return AuthoringScope(**values)
     def mixed_scope(self):
-        return self.scope(schema_version=3, domains=tuple(Domain),
-                          contributions=tuple(Contribution(domain, Role.DRAFT_OWNER if domain is Domain.TONE_EXECUTION else Role.CONSTRAINT_ASSESSOR) for domain in Domain),
+        return self.scope(schema_version=3, domains=tuple(Domain), contributions=tuple(Contribution(domain, Role.DRAFT_OWNER if domain is Domain.TONE_EXECUTION else Role.CONSTRAINT_ASSESSOR) for domain in Domain),
                           dependency_slots=(Slot("setting", (Domain.TONE_EXECUTION,)),))
 
     def test_published_recommended_action_position_and_keyword_only_scope_are_preserved(self):
@@ -39,9 +38,7 @@ class SpecialistRoutingTests(unittest.TestCase):
             "Review a supplied candidate", "Prepare its separate review", "One candidate review",
             ("current_response",), ("core_documents/global_outline.md",))
         scope = self.scope(activity=Activity.REVIEW)
-        outcome = c.LeadProviderOutcome(c.LeadOutcomeKind.RECOMMENDATION, "Finished candidate",
-            c.LeadOutcomeScope.STORY_SPECIFIC, c.LeadEvidenceStatus.INCOMPLETE, (),
-            None, None, None, action, authoring_scope=scope)
+        outcome = c.LeadProviderOutcome(c.LeadOutcomeKind.RECOMMENDATION, "Finished candidate", c.LeadOutcomeScope.STORY_SPECIFIC, c.LeadEvidenceStatus.INCOMPLETE, (), None, None, None, action, authoring_scope=scope)
         self.assertIs(outcome.recommended_action, action)
         self.assertIs(outcome.authoring_scope, scope)
         parameters = inspect.signature(c.LeadProviderOutcome).parameters
@@ -51,9 +48,7 @@ class SpecialistRoutingTests(unittest.TestCase):
              "artifact_intent", "objective_intent", "recommended_action"))
         self.assertIs(parameters["authoring_scope"].kind, inspect.Parameter.KEYWORD_ONLY)
         with self.assertRaises(TypeError):
-            c.LeadProviderOutcome(c.LeadOutcomeKind.RECOMMENDATION, "Finished candidate",
-                c.LeadOutcomeScope.STORY_SPECIFIC, c.LeadEvidenceStatus.INCOMPLETE, (),
-                None, None, None, action, scope)
+            c.LeadProviderOutcome(c.LeadOutcomeKind.RECOMMENDATION, "Finished candidate", c.LeadOutcomeScope.STORY_SPECIFIC, c.LeadEvidenceStatus.INCOMPLETE, (), None, None, None, action, scope)
         basis_parameters = inspect.signature(c.CollaborationProposalBasis).parameters
         self.assertEqual(tuple((basis_parameters[key].default, basis_parameters[key].kind) for key in ("schema_version", "shared_premises")), ((1, inspect.Parameter.KEYWORD_ONLY), ((), inspect.Parameter.KEYWORD_ONLY)))
 
@@ -63,12 +58,26 @@ class SpecialistRoutingTests(unittest.TestCase):
                  ("core_documents/character_sheets.md", Domain.CHARACTER_WORLD, "character_custodian"),
                  ("core_documents/narrative_rules.md", Domain.TONE_EXECUTION, "execution_specialist"),
                  ("manuscript/part-01/opening.md", Domain.TONE_EXECUTION, "execution_specialist"))
+        empty = readiness.project_readiness(None, ())
+        target = readiness.AuthoringTarget
+        prerequisites = {
+            target.GLOBAL_OUTLINE: (),
+            target.PART_OUTLINES: (target.GLOBAL_OUTLINE.value,),
+            target.CHARACTER_SHEETS: (target.GLOBAL_OUTLINE.value, target.PART_OUTLINES.value),
+            target.NARRATIVE_RULES: (target.GLOBAL_OUTLINE.value, target.PART_OUTLINES.value),
+            target.MANUSCRIPT: (target.GLOBAL_OUTLINE.value, target.PART_OUTLINES.value,
+                                target.CHARACTER_SHEETS.value, target.NARRATIVE_RULES.value),
+        }
         for path, domain, owner in cases:
             with self.subTest(path=path):
                 self.assertIs(artifact_domain(path), domain)
                 scope = self.scope(target_paths=(path,), domains=())
                 self.assertEqual(required_authoring_domains(scope), (domain,))
                 self.assertEqual(required_authoring_specialists(scope), (owner,))
+                actual_target = target.MANUSCRIPT if path.startswith("manuscript/") else target(path)
+                needed = readiness.require_readiness(actual_target, empty)
+                self.assertEqual(needed.required_documents if needed else (), prerequisites[actual_target])
+        self.assertIsInstance(readiness.require_readiness(None, empty), readiness.CoreDocumentReadinessNeeded)
         self.assertEqual(required_authoring_specialists(self.scope(domains=tuple(Domain))),
                          ("plot_architect", "character_custodian", "execution_specialist"))
 
@@ -154,10 +163,18 @@ class SpecialistRoutingTests(unittest.TestCase):
         self.assertNotIn(b'authoring_scope', before)
         self.assertNotIn(b'review_basis', before)
         self.assertEqual(c.encode_collaboration_proposal(c.decode_collaboration_proposal(before)), before)
+        from tests.test_lead_orchestration import LeadOrchestrationTestCase
+        readiness_case = LeadOrchestrationTestCase()
+        readiness_case._setupAsyncioRunner()
+        self.addCleanup(readiness_case._tearDownAsyncioRunner)
+        self.addCleanup(readiness_case.doCleanups)
+        readiness_case._callSetUp()
+        readiness_basis = readiness_case._callMaybeAsync(readiness_case.record_book_readiness).basis
+        current_basis = replace(legacy.basis, core_document_readiness=readiness_basis)
         assignments = tuple(replace(a, input_ids=(*a.input_ids, 'user_input'), mode=Mode.DRAFT) for a in legacy.assignments)
-        scope = self.scope(domains=(Domain.PLOT_STRUCTURE, Domain.CHARACTER_WORLD))
+        scope = self.scope(domains=(Domain.PLOT_STRUCTURE, Domain.CHARACTER_WORLD), target_paths=("core_documents/global_outline.md",))
         values = {f.name:getattr(legacy,f.name) for f in fields(legacy) if f.name != "proposal_digest"}
-        values.update(authoring_scope=scope, assignments=assignments, basis=fixture.qualify_fixture_basis(legacy.basis, scope, user_text=_ADMISSION_BRIEF, assessment=_fixture_assessment()))
+        values.update(authoring_scope=scope, assignments=assignments, basis=fixture.qualify_fixture_basis(current_basis, scope, user_text=_ADMISSION_BRIEF, assessment=_fixture_assessment()))
         scoped = c.CollaborationProposal.create(**values)
         wire = c.encode_collaboration_proposal(scoped)
         self.assertEqual(c.decode_collaboration_proposal(wire), scoped)
@@ -173,24 +190,29 @@ class SpecialistRoutingTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     c.decode_collaboration_proposal(raw)
             else:
-                historical = c.decode_collaboration_proposal(raw)
-                self.assertEqual(c.encode_collaboration_proposal(historical), raw)
+                with self.assertRaisesRegex(ValueError, "proposal basis has missing or extra fields"):
+                    c.decode_collaboration_proposal(raw)
             for key in ("contributions", "dependency_slots"):
                 with self.assertRaises(ValueError): c.authoring_scope_from_dict(dict(c.authoring_scope_to_dict(historical_scope), **{key: []}))
             poisoned = json.loads(c.encode_collaboration_proposal(scoped))
             poisoned["proposal"]["basis"]["shared_premises"] = []
             with self.assertRaises(ValueError): c.decode_collaboration_proposal(json.dumps(poisoned, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode())
-        for change in ({'task_revision': 2}, {'interpretation': 'A different visible interpretation.'}, {'target_paths': ('core_documents/global_outline.md',)}):
+        review_scope = replace(scope, activity=Activity.REVIEW, intent=Intent.REVIEW_ONLY, interpretation="Review the supplied fixture candidate only.")
+        reviewed = fixture.replace_proposal(legacy, authoring_scope=review_scope,
+            assignments=tuple(replace(a, mode=Mode.REVIEW, review_basis=ReviewBasis(a.input_ids, "Review the supplied fixture candidate only."))
+                for a in legacy.assignments))
+        self.assertEqual(c.decode_collaboration_proposal(c.encode_collaboration_proposal(reviewed)), reviewed)
+        for change in ({'task_revision': 2}, {'interpretation': 'A different visible interpretation.'}, {'target_paths': ('core_documents/part_outlines.md',)}):
             changed_scope = replace(scope, **change)
             changed = c.CollaborationProposal.create(**dict(values, authoring_scope=changed_scope,
-                basis=fixture.qualify_fixture_basis(legacy.basis, changed_scope, user_text=_ADMISSION_BRIEF, assessment=_fixture_assessment())))
+                basis=fixture.qualify_fixture_basis(current_basis, changed_scope, user_text=_ADMISSION_BRIEF, assessment=_fixture_assessment())))
             self.assertNotEqual(changed.proposal_digest, scoped.proposal_digest)
         self.assertEqual(c.encode_collaboration_proposal(legacy), before)
         from story_writing_agents.conversations import events as owner
         scope3 = replace(scope, schema_version=3, contributions=tuple(Contribution(domain, Role.DRAFT_OWNER) for domain in scope.domains), dependency_slots=(Slot("setting", (Domain.PLOT_STRUCTURE,)),))
         source = owner.CollaborationPremiseSource(scoped.basis.inputs[0], None)
         premise = owner.CollaborationSharedPremise("setting", "Exact café 한글\r\n  ", (source,))
-        basis2 = fixture.qualify_fixture_basis(replace(legacy.basis, schema_version=2, shared_premises=(premise,)), scope3, user_text=_ADMISSION_BRIEF, assessment=_fixture_assessment())
+        basis2 = fixture.qualify_fixture_basis(replace(current_basis, schema_version=2, shared_premises=(premise,)), scope3, user_text=_ADMISSION_BRIEF, assessment=_fixture_assessment())
         current = c.CollaborationProposal.create(**dict(values, authoring_scope=scope3, basis=basis2))
         self.assertEqual(c.decode_collaboration_proposal(c.encode_collaboration_proposal(current)), current)
         self.assertNotEqual(current.proposal_digest, scoped.proposal_digest)

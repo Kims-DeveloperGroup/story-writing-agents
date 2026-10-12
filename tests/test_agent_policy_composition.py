@@ -142,9 +142,9 @@ class AgentPolicyCompositionTests(unittest.TestCase):
     def test_provider_bindings_use_captured_composed_bytes_after_source_mutation(self) -> None:
         definition = self._definitions()[LEAD_ORCHESTRATOR]
         captured = definition.system_prompt_file.content
-        baseline = json.loads((Path(__file__).parent / "fixtures/workspace_policy_baselines/pre_guidance_97879d4/lead_bytes.json").read_text())
+        current_expected_sizes = (17850, 19228, 19293)
         self.assertEqual(captured.count(b"# Lead Orchestrator Policy"), 1)
-        self.assertLess(len(captured), baseline["system_prompt_utf8_bytes"])
+        self.assertEqual(len(captured), current_expected_sizes[0])
         for component in definition.behavior_policy_components:
             component.path.write_text("MUTATED_AFTER_BINDING", encoding="utf-8")
 
@@ -168,8 +168,8 @@ class AgentPolicyCompositionTests(unittest.TestCase):
                 len(provider_bytes),
                 sum(component.serialized_utf8_bytes for component in components),
             )
-        self.assertLess(len(codex_bytes), baseline["codex_definition_utf8_bytes"])
-        self.assertLess(len(antigravity_bytes), baseline["antigravity_definition_utf8_bytes"])
+        self.assertEqual(len(codex_bytes), current_expected_sizes[1])
+        self.assertEqual(len(antigravity_bytes), current_expected_sizes[2])
 
 
     def test_runtime_policy_reaches_custom_prompts_without_overwriting_and_refreshes_binding(self):

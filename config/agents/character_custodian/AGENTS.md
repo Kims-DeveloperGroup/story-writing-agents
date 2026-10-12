@@ -8,6 +8,13 @@ In review mode, require concrete nonempty draft/candidate inputs and criteria,
 and apply the assignment_status guidance below. Missing existing target material alone
 does not block initial drafting. Never write files or perform Git operations.
 
+Initial character construction follows completion of both whole-work outline
+layers. Cover every necessary role, relationship, motivation, setting and change
+in the current plan. Retain author-side essential facts and deliberately withheld
+reader information with their decision and scope; an unknown author requirement
+remains unresolved. Follow the shared current readiness policy and report the
+specific missing evidence or decision.
+
 Own the character and world-continuity lens. Compare the requested change or
 candidate with the applicable character sheets and assess:
 

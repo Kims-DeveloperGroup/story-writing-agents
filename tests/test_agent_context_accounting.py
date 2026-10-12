@@ -14,25 +14,14 @@ import story_writing_agents
 from story_writing_agents import writing_artifacts
 from story_writing_agents import agent_context
 from story_writing_agents.agent_context import (
-    ContextComponentBytes,
-    ContextComponentKind,
-    ProviderCallAccounting,
-    ProviderCallKind,
-    ProviderCallState,
-    ProviderJsonEncodingError,
-    ProviderPayloadAccounting,
-    ProviderUsage,
-    account_provider_payload,
-    canonical_provider_json,
+    ContextComponentBytes, ContextComponentKind,
+    ProviderCallAccounting, ProviderCallKind, ProviderCallState,
+    ProviderJsonEncodingError, ProviderPayloadAccounting, ProviderUsage,
+    account_provider_payload, canonical_provider_json,
 )
 from story_writing_agents.provider_adapter import (
-    ProviderBinding,
-    ProviderFailureAccounting,
-    ProviderInvocation,
-    ProviderInvocationError,
-    ProviderResult,
-    provider_failure_accounting,
-    record_provider_failure_accounting,
+    ProviderBinding, ProviderFailureAccounting, ProviderInvocation, ProviderInvocationError,
+    ProviderResult, provider_failure_accounting, record_provider_failure_accounting,
 )
 from story_writing_agents.agent_context.request_compaction import compact_context_payload
 
@@ -60,10 +49,33 @@ def _expanded_context_payload(payload):
     result = copy.deepcopy(dict(payload))
     table = result.pop("shared_context_objects")
     result.pop("context_reuse")
+    def expand(value, shape):
+        if type(value) is not dict:
+            return value
+        if set(value) == {"shared_context_object_id"}:
+            return copy.deepcopy(table[value["shared_context_object_id"]])
+        value = dict(value)
+        children = {
+            "context": (("basis", "basis"), ("authoring_admission", "admission"),
+                        ("core_document_readiness", "readiness"), ("core_document_assessment", "assessment")),
+            "basis": (("authoring_admission", "admission"), ("core_document_readiness", "readiness")),
+            "admission": (("assessment", "literal"),),
+            "readiness": (("assessment", "assessment"),),
+            "assessment": (("book_basis", "literal"),),
+        }.get(shape, ())
+        for field, child_shape in children:
+            if field in value:
+                value[field] = expand(value[field], child_shape)
+        if shape == "assessment":
+            rows = value.get("document_judgments")
+            if type(rows) in (list, tuple):
+                value["document_judgments"] = type(rows)(expand(row, "literal") for row in rows)
+        return value
+
     def resolve(owner, key):
         value = owner.get(key)
-        if type(value) is dict and set(value) == {"shared_context_object_id"}:
-            owner[key] = copy.deepcopy(table[value["shared_context_object_id"]])
+        if value is not None:
+            owner[key] = expand(value, "context")
     current, history = result.get("task_input"), result.get("session_history")
     if type(current) is dict:
         resolve(current, "document_change_requests")
@@ -185,10 +197,8 @@ class ProviderPayloadAccountingTests(unittest.TestCase):
         request = ("task_input", "confirmed_proposal_drafting_context", "request")
         decision = ("task_input", "confirmed_proposal_drafting_context", "decision")
         mandatory = (*request, "instruction")
-        paths = {("task_input",): ContextComponentKind.CURRENT_INPUT,
-                 ("session_history",): ContextComponentKind.CONVERSATION_CONTEXT,
-                 mandatory: ContextComponentKind.MANDATORY_REFERENCE_CONTENT,
-                 (*decision, "nested"): ContextComponentKind.ROLE_SYSTEM_PROMPT}
+        paths = {("task_input",): ContextComponentKind.CURRENT_INPUT, ("session_history",): ContextComponentKind.CONVERSATION_CONTEXT,
+                 mandatory: ContextComponentKind.MANDATORY_REFERENCE_CONTENT, (*decision, "nested"): ContextComponentKind.ROLE_SYSTEM_PROMPT}
         compact, compact_paths = compact_context_payload(payload, paths, (mandatory,))
         execution = compact["task_input"]["confirmed_proposal_drafting_context"]
         original = payload["task_input"]["confirmed_proposal_drafting_context"]
@@ -249,21 +259,12 @@ class ProviderPayloadAccountingTests(unittest.TestCase):
                                  accounting.serialized_input_utf8_bytes)
 
     def test_call_totals_keep_reference_envelopes_and_escaping_counted(self) -> None:
-        binding = (
-            ContextComponentBytes(ContextComponentKind.BINDING_STRUCTURE, 11),
-            ContextComponentBytes(ContextComponentKind.ROLE_SYSTEM_PROMPT, 7),
-        )
-        payload = {
-            "references": [
-                {
-                    "reference": {
-                        "path": "manuscript/part-01/a.md",
-                        "line_range": {"start": 1, "end": 1},
-                    },
+        binding = ( ContextComponentBytes(ContextComponentKind.BINDING_STRUCTURE, 11),
+            ContextComponentBytes(ContextComponentKind.ROLE_SYSTEM_PROMPT, 7), )
+        payload = { "references": [ {
+                    "reference": { "path": "manuscript/part-01/a.md", "line_range": {"start": 1, "end": 1}, },
                     "content": '"한🙂"\n',
-                }
-            ]
-        }
+                } ] }
         _encoded, payload_accounting = account_provider_payload(
             {"type": "object"},
             payload,

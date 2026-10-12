@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from ..core_document_readiness import (
+    AuthoringTarget, CoreDocumentReadinessBasis, validate_authoring_target_basis,
+    basis_to_dict as readiness_basis_to_dict, basis_from_dict as readiness_basis_from_dict,
+)
 from ..authoring_admission import (
     AuthoringAdmissionBasis,
     admission_basis_to_dict,
@@ -235,8 +239,14 @@ class ConsensusPhaseRequest:
 
     authoring_admission: AuthoringAdmissionBasis | None = field(default=None, kw_only=True)
     authoring_direction: ConsensusMaterialHandle | None = field(default=None, kw_only=True)
+    authoring_target: AuthoringTarget | None = field(default=None, kw_only=True)
+    core_document_readiness: CoreDocumentReadinessBasis | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
+        if self.intent is AuthoringIntent.AUTHORING:
+            validate_authoring_target_basis(self.authoring_target, self.core_document_readiness)
+        elif self.authoring_target is not None or self.core_document_readiness is not None:
+            raise ValueError("review-only consensus cannot acquire an authoring target/readiness basis")
         if self.authoring_direction is not None and (
             type(self.authoring_direction) is not ConsensusMaterialHandle
             or not self.authoring_direction.locator.startswith("candidate:")
@@ -299,6 +309,8 @@ class ConsensusPhaseRequest:
                 raise ValueError("linked continuation reused source workflow identity")
         _digest(self.request_digest)
         if self.request_digest != consensus_request_digest(
+            authoring_target=None if self.authoring_target is None else self.authoring_target.value,
+            core_document_readiness=None if self.core_document_readiness is None else readiness_basis_to_dict(self.core_document_readiness),
             **(
                 {'authoring_admission': admission_basis_to_dict(self.authoring_admission)}
                 if self.authoring_admission is not None else {}
@@ -554,6 +566,8 @@ def prepare_consensus_phase(
     intent: AuthoringIntent = AuthoringIntent.AUTHORING,
     authoring_admission: AuthoringAdmissionBasis | None = None,
     authoring_direction: ConsensusMaterialHandle | None = None,
+    authoring_target: AuthoringTarget | None = None,
+    core_document_readiness: CoreDocumentReadinessBasis | None = None,
 ) -> tuple[ConsensusPhaseRequest, ConsensusConfirmationCapability]:
     """Create one durable request and its separate process-local capability."""
 
@@ -570,6 +584,8 @@ def prepare_consensus_phase(
     request = ConsensusPhaseRequest(
         authoring_admission=authoring_admission,
         authoring_direction=authoring_direction,
+        authoring_target=authoring_target,
+        core_document_readiness=core_document_readiness,
         intent=intent,
         workflow_id=workflow_id,
         phase_request_id=phase_request_id,
@@ -584,6 +600,8 @@ def prepare_consensus_phase(
         previous_result_event_id=previous_result_event_id,
         continuation=continuation,
         request_digest=consensus_request_digest(
+            authoring_target=None if authoring_target is None else authoring_target.value,
+            core_document_readiness=None if core_document_readiness is None else readiness_basis_to_dict(core_document_readiness),
             **(
                 {'authoring_admission': admission_basis_to_dict(authoring_admission)}
                 if authoring_admission is not None else {}
@@ -668,6 +686,8 @@ def prepare_next_consensus_phase(
     return prepare_consensus_phase(
         authoring_admission=current_request.authoring_admission,
         authoring_direction=current_request.authoring_direction,
+        authoring_target=current_request.authoring_target,
+        core_document_readiness=current_request.core_document_readiness,
         owner=owner,
         intent=current_request.intent,
         workflow_id=current_request.workflow_id,

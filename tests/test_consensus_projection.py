@@ -44,6 +44,8 @@ from story_writing_agents.consensus.serialization import (
 
 
 from story_writing_agents import authoring_admission as admission
+from story_writing_agents.core_document_readiness import (
+    AuthoringTarget, project_readiness, require_readiness)
 from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
 
 _FIXTURE_DRAFT = _ADMISSION_BRIEF + "\nSupplied opening: Nora discovers the letter is missing before the oath."
@@ -57,7 +59,8 @@ _MATERIAL_ASSESSMENT = _fixture_assessment(foundation_ids=("input_material",), u
 _RULING_ASSESSMENT = _fixture_assessment(user_id="ruling_input")
 
 def _fixture_qualification(texts, identity, workflow_id, material, assessment, *, input_kind,
-                           direction_material=None, ruling_material=None, source_revision_id="r0"):
+                           direction_material=None, ruling_material=None,
+                           source_revision_id="r0", authoring_target=None):
     user_input = input_kind is ConsensusInputKind.PROMPT and material.locator.startswith("candidate:")
     rows = (("user_input" if user_input else "input_material", material,
         admission.AdmissionSourceKind.USER if user_input else admission.AdmissionSourceKind.MATERIAL),
@@ -82,7 +85,8 @@ def _fixture_qualification(texts, identity, workflow_id, material, assessment, *
         "ruling": None if ruling_material is None else ruling_material.digest,
     }
     scope = {"session_id": identity.session_id, "conversation_id": identity.conversation_id,
-        "workflow_id": workflow_id, "input_kind": input_kind.value, "input_locator": material.locator,
+        "workflow_id": workflow_id, "input_kind": input_kind.value,
+             "authoring_target": None if authoring_target is None else authoring_target.value, "input_locator": material.locator,
         "direction_locator": None if direction_material is None else direction_material.locator,
         "ruling_locator": None if ruling_material is None else ruling_material.locator,
         "source_revision_id": source_revision_id, "intent": "authoring"}
@@ -96,11 +100,16 @@ def _unit_basis(identity, workflow_id, material, assessment, *, input_kind):
     return _fixture_qualification(
         _FIXTURE_TEXTS, identity, workflow_id, material, assessment,
         input_kind=input_kind, direction_material=_UNIT_DIRECTION,
+        authoring_target=AuthoringTarget.GLOBAL_OUTLINE,
     )
+
+def _qualify_readiness_fixture_port(self, identity, target):
+    return require_readiness(target, project_readiness(None, ()))
+
 
 def _qualify_fixture_port(self, identity, workflow_id, material, assessment, *, input_kind,
                           direction_material=None, ruling_material=None, source_revision_id="r0",
-                          source_workflow_id=None):
+                          source_workflow_id=None, authoring_target=None):
     if input_kind is ConsensusInputKind.CONTINUATION:
         original = self.load_workflow(
             identity.session_id,
@@ -117,6 +126,7 @@ def _qualify_fixture_port(self, identity, workflow_id, material, assessment, *, 
     return _fixture_qualification(
         self.fixture_materials, identity, workflow_id, material, assessment, input_kind=input_kind,
         direction_material=direction_material, ruling_material=ruling_material, source_revision_id=source_revision_id,
+        authoring_target=authoring_target,
     )
 
 def _capture_fixture_direction(self, text):
@@ -147,6 +157,7 @@ def _validate_fixture_port(self, request):
         ruling_material=None if continuation is None else continuation.ruling_material,
         source_revision_id="r0" if continuation is None else continuation.source_revision_id,
         source_workflow_id=None if continuation is None else continuation.source_workflow_id,
+        authoring_target=request.authoring_target,
     )
     if qualified != request.authoring_admission:
         raise ValueError("fixture captured authoring basis differs")
@@ -214,6 +225,7 @@ class ConsensusProjectionTests(unittest.TestCase):
                 candidate_material if intent is AuthoringIntent.REVIEW_ONLY else _INPUT_MATERIAL,
                 _MATERIAL_ASSESSMENT, input_kind=ConsensusInputKind.PROMPT,
             ),
+            authoring_target=None if intent is AuthoringIntent.REVIEW_ONLY else AuthoringTarget.GLOBAL_OUTLINE,
             authoring_direction=None if intent is AuthoringIntent.REVIEW_ONLY else _UNIT_DIRECTION,
         )
 
@@ -344,6 +356,7 @@ class ConsensusProjectionTests(unittest.TestCase):
                     _IDENTITY, "workflow-1", _INPUT_MATERIAL, _MATERIAL_ASSESSMENT,
                     input_kind=ConsensusInputKind.PROMPT,
                 )),
+                authoring_target=AuthoringTarget.GLOBAL_OUTLINE, core_document_readiness=None,
                 authoring_direction={"locator": _UNIT_DIRECTION.locator, "digest": _UNIT_DIRECTION.digest},
                 workflow_id="workflow-1",
                 phase_request_id="request-1",
@@ -400,10 +413,7 @@ class ConsensusProjectionTests(unittest.TestCase):
         awaiting = project_consensus((request_event,))
         self.assertEqual(
             (awaiting.state, awaiting.next_action),
-            (
-                ConsensusPhaseState.AWAITING_CONFIRMATION,
-                ConsensusNextAction.REQUEST_DECISION,
-            ),
+            (ConsensusPhaseState.AWAITING_CONFIRMATION, ConsensusNextAction.REQUEST_DECISION,),
         )
 
         cases = (
@@ -413,18 +423,8 @@ class ConsensusProjectionTests(unittest.TestCase):
                 ConsensusPhaseState.CONFIRMED,
                 ConsensusNextAction.START_CONFIRMED_PHASE,
             ),
-            (
-                ConsensusDecision.REJECT,
-                None,
-                ConsensusPhaseState.CONFIRMED,
-                ConsensusNextAction.WAIT_FOR_PHASE,
-            ),
-            (
-                ConsensusDecision.REVISE,
-                None,
-                ConsensusPhaseState.CONFIRMED,
-                ConsensusNextAction.WAIT_FOR_PHASE,
-            ),
+            (ConsensusDecision.REJECT, None, ConsensusPhaseState.CONFIRMED, ConsensusNextAction.WAIT_FOR_PHASE,),
+            (ConsensusDecision.REVISE, None, ConsensusPhaseState.CONFIRMED, ConsensusNextAction.WAIT_FOR_PHASE,),
             (
                 ConsensusDecision.CONFIRM,
                 ConsensusPhaseState.RUNNING,
@@ -640,6 +640,7 @@ class ConsensusProjectionTests(unittest.TestCase):
                     _INPUT_MATERIAL,
                     _MATERIAL_ASSESSMENT, input_kind=ConsensusInputKind.PROMPT,
                 ),
+                authoring_target=AuthoringTarget.GLOBAL_OUTLINE,
                 authoring_direction=_UNIT_DIRECTION,
             ),
             (ConsensusEvent("request-event", 1, request),),
@@ -656,9 +657,7 @@ class ConsensusProjectionTests(unittest.TestCase):
         )
         self.assertNotIn(b"capability", encoded)
         with self.assertRaisesRegex(ValueError, "duplicate fields"):
-            deserialize_consensus_workflow(
-                encoded.replace(b'{"events":', b'{"events":[],"events":', 1)
-            )
+            deserialize_consensus_workflow(encoded.replace(b'{"events":', b'{"events":[],"events":', 1))
         golden = (Path(__file__).parent / "fixtures/consensus_compatibility/authoring_v3_c20dc40.json").read_bytes()
         self.assertEqual(hashlib.sha256(golden).hexdigest(), "173023d5484c9e85c3ddf2fb2a08bcf3294c85e9a39c0ded51dc4bb96d554d2c")
         with self.assertRaises(ValueError):

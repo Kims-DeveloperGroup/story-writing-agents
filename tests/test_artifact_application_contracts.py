@@ -892,8 +892,8 @@ assert len(writing_artifacts.__all__) == len(set(writing_artifacts.__all__)) == 
                     resolved = resolve(target)
                     if resolved is not None and resolved != module:
                         edges.add((module, resolved))
-        self.assertEqual(len(modules), 156)
-        self.assertEqual(len(edges), 680)
+        self.assertEqual(len(modules), 157)
+        self.assertEqual(len(edges), 690)
         application_name = (
             "story_writing_agents.writing_artifacts.application_contracts"
         )

@@ -178,6 +178,7 @@ from story_writing_agents.workspace.initialization import (
 
 from tests.collaboration_contract_fixture import STEP_ID, contract_batches, make_proposal
 from tests.helpers import pristine_initialized_workspace
+from story_writing_agents.core_document_readiness import CoreDocumentReadinessNeeded
 
 
 _SESSION_DIRECTORY = "agent_states/orchestrator_state/provider_sessions"
@@ -1612,8 +1613,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 156)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 680)
+        self.assertEqual(len(modules), 157)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 690)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -6157,6 +6158,8 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         self.enterContext(mock.patch.object(
             RuntimeSession, "inspect_editorial_state",
             return_value=EditorialStateProjection("session", ())))
+        self.enterContext(mock.patch.object(RuntimeSession, "inspect_core_document_readiness",
+            return_value=CoreDocumentReadinessNeeded(("No current whole-book assessment.",))))
 
     class _Progress:
         def __init__(self) -> None:
@@ -6615,10 +6618,16 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             runner, self._Progress(), self._Picker(), self._Prompt(), output)
         specialists = (SimpleNamespace(name="first"), SimpleNamespace(name="second"))
         adapter._pending_specialist_panels = specialists; adapter._pending_elapsed = "00:00:07"
-        lead = SimpleNamespace(name="lead")
+        lead = terminal_module.Panel("Lead", ())
+        visible_lead = terminal_module.Panel("Lead", (
+            terminal_module.Section("Whole-book document readiness", (
+                terminal_module.Notice("No current whole-book assessment.", label="needed information"),
+                terminal_module.Notice("Document completion does not grant final review, Confirm, Apply or Commit authority.", label="authority"),
+            )),
+        ))
         with mock.patch.object(lead_policy_module, "project_lead_turn_result", return_value=lead):
             self.assertFalse(adapter._present_and_decide(self._terminal_turn(CollaborationStepState.COMPLETED)))
-        self.assertEqual(output.components[:3], [*specialists, lead])
+        self.assertEqual(output.components[:3], [*specialists, visible_lead])
         self.assertEqual(output.components[3].text, "Elapsed: 00:00:07")
 
     def test_recommendation_controls_route_exact_decisions_and_cancel_without_mutation(self) -> None:
@@ -6883,7 +6892,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         async def commit_decision(_session, decision):
             calls.append(decision)
             return self._raw(StoryCommitDecisionResult)
-        with mock.patch.object(RuntimeSession, "lead_turn", lead_turn), mock.patch.object(RuntimeSession, "decide_artifact_application", side_effect=AssertionError("Apply must not be re-entered")), mock.patch.object(RuntimeSession, "decide_story_commit", commit_decision), mock.patch.object(lead_policy_module, "project_lead_turn_result", return_value=SimpleNamespace()), mock.patch.object(lead_policy_module, "project_story_commit_decision_result", return_value=SimpleNamespace()):
+        with mock.patch.object(RuntimeSession, "lead_turn", lead_turn), mock.patch.object(RuntimeSession, "decide_artifact_application", side_effect=AssertionError("Apply must not be re-entered")), mock.patch.object(RuntimeSession, "decide_story_commit", commit_decision), mock.patch.object(lead_policy_module, "project_lead_turn_result", return_value=terminal_module.Panel("Lead", ())), mock.patch.object(lead_policy_module, "project_story_commit_decision_result", return_value=SimpleNamespace()):
             for kind in (StoryCommitDecision.COMMIT, StoryCommitDecision.REJECT):
                 lead_policy_module.InteractiveLeadAdapter(session, runner, self._Progress(), self._Picker(self._commit(kind.value)), self._Prompt(), self._Output()).submit(_UNIQUE_C, "Continue.")
                 sent = calls[-1]
@@ -6973,7 +6982,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             mock.patch.object(RuntimeSession, "lead_turn", lead_turn),
             mock.patch.object(RuntimeSession, "decide_artifact_application", application_decision),
             mock.patch.object(RuntimeSession, "decide_story_commit", commit_decision),
-            _object_return_patch(lead_policy_module, "project_lead_turn_result", SimpleNamespace()),
+            _object_return_patch(lead_policy_module, "project_lead_turn_result", terminal_module.Panel("Lead", ())),
             _object_return_patch(lead_policy_module, "project_artifact_application_decision_result",
                 SimpleNamespace()),
             _object_return_patch(lead_policy_module, "project_story_commit_decision_result",

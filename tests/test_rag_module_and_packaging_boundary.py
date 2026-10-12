@@ -345,8 +345,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 156)
-        self.assertEqual(len(edges), 680)
+        self.assertEqual(len(modules), 157)
+        self.assertEqual(len(edges), 690)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
@@ -373,6 +373,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.errors",
                 "story_writing_agents.git.story_commit_contracts",
                 "story_writing_agents.writing_artifacts", "story_writing_agents.authoring_admission",
+                "story_writing_agents.core_document_readiness",
             },
             "story_writing_agents.conversations.context": {
                 "story_writing_agents.lead_task_transitions",
@@ -386,6 +387,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.errors",
                 "story_writing_agents.git.story_commit_contracts",
                 "story_writing_agents.writing_artifacts", "story_writing_agents.authoring_admission",
+                "story_writing_agents.core_document_readiness",
             },
         }
         for source, expected in conversation_dependencies.items():

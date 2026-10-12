@@ -64,6 +64,7 @@ from story_writing_agents.writing_artifacts._storage import ArtifactRootSecurity
 from tests.test_lead_orchestration import (
     LeadOrchestrationTestCase,
     _LeadBackend,
+    _READINESS_DOCUMENTS,
     _decision,
     _live_material,
     _live_scope,
@@ -113,6 +114,7 @@ def _artifact_outcome(
     message: str = "I prepared an exact candidate for specialist review.",
     objective_intent: object = None,
     authoring_assessment: object = None,
+    authoring_scope=None,
 ):
     def respond(call, _provider):
         material = _live_material(call)
@@ -126,14 +128,13 @@ def _artifact_outcome(
                 evidence_ids(call, material) if callable(evidence_ids) else evidence_ids
             )
         )
+        scope = authoring_scope(call) if callable(authoring_scope) else authoring_scope
         return _provider_envelope(
             call,
             {
                 "recommended_action": None,
-                "artifact_intent": {
-                    "additional_review_domains": list(additional_review_domains),
-                    "operations": resolved_operations,
-                },
+                "artifact_intent": { "additional_review_domains": list(additional_review_domains),
+                    "operations": resolved_operations, },
                 "evidence_ids": resolved_evidence,
                 "evidence_status": evidence_status,
                 "kind": "proposal",
@@ -145,6 +146,7 @@ def _artifact_outcome(
                     if callable(objective_intent) else objective_intent
                 ),
                 **({"authoring_assessment": authoring_assessment(call, material) if callable(authoring_assessment) else authoring_assessment} if authoring_assessment is not None else {}),
+                **({} if scope is None else {"authoring_scope": scope}),
             },
         )
 
@@ -225,6 +227,8 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         from tests.recommendation_fixture import task_assessment
+        await self.record_book_readiness()
+        before_calls = len(self.backend.call_records)
         conversation_id = self.conversation("Complete missing core")
         self.workspace.path(_RULES).unlink(missing_ok=True)
         before = self.artifact_snapshot()
@@ -253,8 +257,8 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             tuple(item.specialist_id for item in proposed.proposal.assignments),
             (EXECUTION_SPECIALIST,),
         )
-        self.assertEqual(len(self.backend.call_records), 1)
-        self.assertEqual(self.backend.call_records[0][0], LEAD_ORCHESTRATOR)
+        self.assertEqual(len(self.backend.call_records) - before_calls, 1)
+        self.assertEqual(self.backend.call_records[before_calls][0], LEAD_ORCHESTRATOR)
         self.assertEqual(self.artifact_snapshot(), before)
 
         candidate = proposed.artifact_proposal.candidate.candidate
@@ -336,21 +340,18 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         from tests.recommendation_fixture import task_assessment
+        await self.record_book_readiness()
         rules = self.workspace.path(_RULES)
         rules.write_text("Always use past tense.\n", encoding="utf-8")
         conflict_id = self.conversation("Conflicting core edit")
         before = self.artifact_snapshot()
         self.backend.enqueue(
             _artifact_outcome(
-                operations=lambda _call, material: [
-                    {
-                        "evidence_id": _reference_ids(material)[0],
-                        "kind": "replace",
-                        "new_text": "Use present tense in dream passages.\n",
-                    }
-                ],
+                operations=lambda _call,
+                material: [ { "evidence_id": _reference_ids(material)[0], "kind": "replace", "new_text": "Use present tense in dream passages.\n", } ],
                 evidence_status="verified",
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
+                authoring_scope=lambda call: _live_scope(call, activity='review', domains=('tone_execution',), paths=(_RULES,)),
             )
         )
         proposed = await self.runtime.lead_turn(
@@ -359,6 +360,10 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             (f"Edit ${{{_RULES}}} even though the existing rule conflicts." + '\nSupplied requested candidate content:\n' + json.dumps(['Use present tense in dream passages.\n'])
              + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
         )
+        self.assertIsNotNone(proposed.proposal, (
+            proposed.kind, proposed.next_action, proposed.state, proposed.validation_details,
+            proposed.artifact_proposal is not None,
+        ))
         self.backend.enqueue_for(EXECUTION_SPECIALIST, _specialist_outcome("conflict"))
         self.backend.enqueue_for(
             LEAD_ORCHESTRATOR,
@@ -375,6 +380,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.assertIn("review is complete", revised.turn.message)
         self.assertEqual(self.artifact_snapshot(), before)
 
+        await self.record_book_readiness(preserve_documents=True)
         self.workspace.path(_INDEX).write_text("[next](second.md)\n", encoding="utf-8")
         self.workspace.path(_SECOND).write_text("Second scene.\n", encoding="utf-8")
         rename_id = self.conversation("Atomic manuscript rename repair")
@@ -382,18 +388,11 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.backend.enqueue(
             _artifact_outcome(
                 operations=lambda _call, material: [
-                    {
-                        "evidence_id": _reference_ids(material)[0],
-                        "kind": "replace",
-                        "new_text": "[next](third.md)\n",
-                    },
-                    {
-                        "evidence_id": _reference_ids(material)[1],
-                        "kind": "rename",
-                        "suggested_destination": _THIRD,
-                    },
+                    { "evidence_id": _reference_ids(material)[0], "kind": "replace", "new_text": "[next](third.md)\n", },
+                    {"evidence_id": _reference_ids(material)[1], "kind": "rename", "suggested_destination": _THIRD},
                 ],
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
+                authoring_scope=lambda call: _live_scope(call, activity='review', domains=('tone_execution',), paths=(_INDEX, _SECOND, _THIRD)),
             )
         )
         manuscript = await self.runtime.lead_turn(
@@ -478,6 +477,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         from tests.recommendation_fixture import task_assessment
+        await self.record_book_readiness()
         stale_id = self.conversation("Stale candidate")
         self.workspace.path(_RULES).unlink(missing_ok=True)
         self.backend.enqueue(
@@ -615,6 +615,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         from tests.recommendation_fixture import task_assessment
+        await self.record_book_readiness()
         conversation_id = self.conversation("Replace artifact candidate")
         self.workspace.path(_RULES).unlink(missing_ok=True)
         self.backend.enqueue(
@@ -689,6 +690,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         from tests.recommendation_fixture import task_assessment
+        await self.record_book_readiness()
         assessments = (
             "supports",
             "concern",
@@ -724,6 +726,8 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                     ),
                 )
 
+        self.workspace.path(_RULES).write_text(dict(_READINESS_DOCUMENTS)[_RULES], encoding="utf-8")
+        await self.record_book_readiness(preserve_documents=True)
         failed_id = self.conversation("Partial reviewer failure")
         self.backend.enqueue(
             _artifact_outcome(
@@ -740,17 +744,16 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             ("Prepare a new scene candidate." + '\nSupplied requested candidate content:\n' + json.dumps(['New scene.\n'])
              + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
         )
+        self.assertIsNotNone(proposed.proposal, (
+            proposed.kind, proposed.next_action, proposed.state, proposed.validation_details,
+            proposed.artifact_proposal is not None,
+        ))
         for assignment in proposed.proposal.assignments:
             response = (
                 (
                     lambda call, _provider: _provider_envelope(
                         call,
-                        {
-                            "assessment": "supports",
-                            "assignment_id": "wrong_assignment",
-                            "input_ids": [],
-                            "message": "Malformed reviewer identity.",
-                        },
+                        { "assessment": "supports", "assignment_id": "wrong_assignment", "input_ids": [], "message": "Malformed reviewer identity.", },
                     )
                 )
                 if assignment.specialist_id == PLOT_ARCHITECT
@@ -792,6 +795,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         from tests.recommendation_fixture import task_assessment
+        await self.record_book_readiness()
         failure_events = []
         for ordinal, malformed in enumerate(("omit_rationale",), start=1):
             mismatch_id = self.conversation(f"Synthesis mismatch {ordinal}")
@@ -929,6 +933,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
     async def test_reviewed_history_transfers_with_filesystem_sqlite_parity(
         self,
     ) -> None:
+        await self.record_book_readiness()
         conversation_id = self.conversation("Artifact storage parity")
         _proposed, decided = await self.reviewed_create(conversation_id)
         reviewed = decided.turn.artifact_proposal.reviewed_proposal
@@ -968,8 +973,11 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         from tests.recommendation_fixture import task_assessment
         reference_ids = []
         core_paths = ("core_documents/character_sheets.md", _OUTLINE, _RULES, "core_documents/part_outlines.md")
-        for path in (_RULES, "core_documents/part_outlines.md"):
-            self.workspace.path(path).write_text("Core reference fixture.\nSecond core reference line.\n", encoding="utf-8")
+        for path, content in _READINESS_DOCUMENTS:
+            if path in (_RULES, "core_documents/part_outlines.md"):
+                content = content.replace(". ", ".\n", 1)
+            self.workspace.path(path).write_text(content, encoding="utf-8")
+        await self.record_book_readiness(preserve_documents=True)
         conversation_id = self.conversation("Search read artifact intent")
         self.backend.enqueue(_visible_outcome("answer", "A prior visible answer."))
         await self.runtime.lead_turn(
@@ -988,11 +996,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                     "artifact_intent": {
                         "additional_review_domains": [],
                         "operations": [
-                            {
-                                "kind": "create",
-                                "new_text": "A searched scene candidate.\n",
-                                "suggested_path": "manuscript/part-02/searched.md",
-                            }
+                            {"kind": "create", "new_text": "A searched scene candidate.\n", "suggested_path": "manuscript/part-02/searched.md"}
                         ],
                     },
                     "evidence_ids": [*reference_ids, evidence_id],

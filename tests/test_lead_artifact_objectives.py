@@ -35,13 +35,14 @@ class LeadArtifactObjectiveTests(RecommendationCase):
             replace(editorial_request("authoring_memory"),
             draft=replace(editorial_request("authoring_memory").draft,
                           scope=scopes.EditorialScope.whole(path))))
+        await self.record_book_readiness(seed_before_capture=True)
         pristine = self.snapshots()
         original_result = lead._live_result
         with mock.patch.object(lead, "_live_result", side_effect=lambda call, value: original_result(call, {**value, "message": brief} if value.get("kind") == "proposal" else value)):
-            conversation_id, _ = await self.start(conversation_id, message=text, target_path=None, specialist_ids=ROSTER)
+            conversation_id, _ = await self.start(conversation_id, message=text, target_path=None, specialist_ids=ROSTER, authoring_paths=(path,))
         source = self.projection(conversation_id).offered_draft_sources[-1]
         scope = next(e.payload.authoring_scope for e in self.history(conversation_id) if e.event_id == source.event_id)
-        self.assertEqual(scope.target_paths, ())
+        self.assertEqual(scope.target_paths, (path,))
         self.assertEqual(self.projection(conversation_id).artifact_objectives, ())
         self.backend.enqueue(recommendation(message=brief,
             recommended_action=action(source_ids=(source.event_id,),

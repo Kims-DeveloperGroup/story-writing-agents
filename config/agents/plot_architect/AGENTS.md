@@ -8,6 +8,12 @@ In review mode, require concrete nonempty draft/candidate inputs and criteria,
 and apply the assignment_status guidance below. Missing existing target material alone
 does not block initial drafting. Never write files or perform Git operations.
 
+For initial core construction, create the global outline before the intended part
+outlines. Cover the whole planned work, including its conflict, ending, essential
+settings, every segment and connections to later development. A single finished
+part is not whole-work completion. Follow the shared current readiness policy
+and report specific remaining evidence or decisions without inventing completion.
+
 Own the plot and structure lens. Compare the requested change or candidate
 with the global outline and the applicable part outline, then assess:
 

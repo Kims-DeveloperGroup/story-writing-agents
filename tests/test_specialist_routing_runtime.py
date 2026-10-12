@@ -39,15 +39,9 @@ def _fixture_assessment(*, foundation_ids=("user_input",), user_id="user_input")
     foundation = admission.AdmissionEvidence("Story foundations", foundation_ids, "Literal supplied fixture facts.")
     direction = admission.AdmissionEvidence("Direction", (user_id,), "USER requests three outline scenes.")
     latitude = admission.AdmissionEvidence("Creative scope", (user_id,), "USER permits supporting details.")
-    decision = admission.AdmissionDecision(
-        "Supporting details", admission.DecisionCoverage.DELEGATED, (user_id,),
-        "USER explicitly delegates dialogue and minor places.",
-    )
-    return admission.AuthoringAssessment(
-        admission.AdmissionStatus.SUFFICIENT, (foundation,), direction, latitude,
-        ("supporting dialogue", "minor places"), ("no magic", "preserve motive", "unresolved ending"),
-        (decision,), (), "Constructed assessment of the explicit synthetic fixture brief.",
-    )
+    decision = admission.AdmissionDecision("Supporting details", admission.DecisionCoverage.DELEGATED, (user_id,), "USER explicitly delegates dialogue and minor places.",)
+    return admission.AuthoringAssessment(admission.AdmissionStatus.SUFFICIENT, (foundation,), direction, latitude,
+        ("supporting dialogue", "minor places"), ("no magic", "preserve motive", "unresolved ending"), (decision,), (), "Constructed assessment of the explicit synthetic fixture brief.",)
 
 OUTLINE = "core_documents/global_outline.md"
 CHARACTER = "core_documents/character_sheets.md"
@@ -60,10 +54,7 @@ _ADOPTION_DIRECTION = (
     "You may invent supporting dialogue and minor places; leave the ending unresolved."
 )
 
-def scoped_proposal(*agents, authoring_assessment=None, activity="draft", paths=(
-    OUTLINE,
-), domains=(), selected=None, revision=None,
-                    candidate_ids=None, kind="proposal", intent=None, mutate=None):
+def scoped_proposal(*agents, authoring_assessment=None, activity="draft", paths=(OUTLINE,), domains=(), selected=None, revision=None, candidate_ids=None, kind="proposal", intent=None, mutate=None):
     def respond(call, provider):
         material = _workflow_material(call.payload)
         tasks = material["authoring_tasks"]
@@ -207,11 +198,34 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertIsNone(refused.proposal)
         single = await self.proposal_for(self.conversation())
         self.assertEqual(single.proposal.participants, (PLOT_ARCHITECT,))
-        mixed = await self.proposal_for(self.conversation(), scoped_proposal(*ROSTER, paths=(
-            "manuscript/part-01/opening.md",
-        ), domains=("plot_structure", "character_world"),
-            authoring_assessment=_fixture_assessment(),
-        ))
+        readiness = await self.record_book_readiness()
+        from story_writing_agents.agent_context.sources import SessionHistorySourceAdapter
+        expected_snapshots = []
+        def mixed_with_snapshot(call, provider):
+            services = self.runtime.conversation_storage_services
+            expected_snapshots.append((SessionHistorySourceAdapter(services.catalog, services.event_store, self.session_id).capture(), call))
+            return scoped_proposal(*ROSTER, paths=(
+                "manuscript/part-01/opening.md", ), domains=("plot_structure", "character_world"), authoring_assessment=_fixture_assessment(), )(call, provider)
+        mixed = await self.proposal_for(self.conversation(), response=mixed_with_snapshot)
+        snapshot, observed_call = expected_snapshots[0]
+        prepared_call = next(event for event in snapshot.events()
+            if type(event.payload) is c.CollaborationProviderCallPayload
+            and (event.conversation_id, event.payload.call_id, event.payload.state) ==
+            (observed_call.scope.subject_id, observed_call.call_id, c.CollaborationProviderCallState.PREPARED))
+        submitted_call = next(event for event in self.history(prepared_call.conversation_id)
+            if type(event.payload) is c.CollaborationProviderCallPayload
+            and (event.payload.invocation_id, event.payload.call_id, event.payload.state) ==
+            (prepared_call.payload.invocation_id, observed_call.call_id, c.CollaborationProviderCallState.SUBMITTED))
+        services = self.runtime.conversation_storage_services
+        published = SessionHistorySourceAdapter(services.catalog, services.event_store, self.session_id).capture()
+        owner = next(row for row in published.conversations if row.metadata.conversation_id == submitted_call.conversation_id)
+        cutoff = next(position for position, row in enumerate(owner.records, 1) if row.event_id == submitted_call.event_id)
+        snapshot = replace(snapshot, conversations=tuple(
+            replace(owner, records=owner.records[:cutoff]) if row.metadata.conversation_id == submitted_call.conversation_id else row
+            for row in snapshot.conversations))
+        expected_basis = replace(readiness.basis, prior_assessment_refs=(snapshot.readiness_ref(snapshot.readiness_heads()[0]),),
+            history_coverage=snapshot.coverage, history_metadata=tuple((row.metadata.conversation_id, row.metadata.subject, row.metadata.status.value) for row in snapshot.conversations))
+        self.assertEqual(mixed.proposal.basis.core_document_readiness, expected_basis)
         self.assertEqual(mixed.proposal.participants, ROSTER)
         self.assertEqual(mixed.proposal.authoring_scope.domains, tuple(ArtifactReviewDomain))
         self.assertTrue(all(agent == LEAD_ORCHESTRATOR for agent, _ in self.backend.call_records))
@@ -708,6 +722,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(len(_submitted_calls(self.history(extra.conversation_id))), failed_calls + 1)
         self.assertNotEqual(c.project_collaboration_history(self.history(extra.conversation_id)).next_safe_action,
                             c.CollaborationNextAction.RETRY_LEAD_TURN)
+        await self.record_book_readiness(seed_before_capture=True)
         conversation = self.conversation()
         before = self.artifact_bytes()
         premise = "Synthetic tidal city 한글\r\nKeep the stated limit.  "
@@ -737,10 +752,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             material = _workflow_material(call.payload)
             draft_reply = next(reply["reply_event_id"] for reply in material["replies"] if reply["mode"] == "draft")
             return _synthesis_outcome(recommended_action=action(target_paths=(path,), source_ids=("user_input", "adopted_idea", draft_reply)))(call, provider)
-        (
-            drafted,
-            draft_result,
-        ) = await self.finish_draft(
+        (drafted, draft_result,) = await self.finish_draft(
             conversation,
             text=_ADOPTION_DIRECTION,
             adoption=selection,
@@ -976,6 +988,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual(self.history(archived),before)
 
     async def test_old_drafted_revision_cannot_authorize_revised_candidate(self):
+        readiness = await self.record_book_readiness()
         conversation=self.conversation()
         assessment = asdict(_fixture_assessment())
         from tests.test_lead_artifact_application import _application_decision
@@ -988,6 +1001,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             *ROSTER, domains=("character_world", "tone_execution"), mutate=two_owners,
             authoring_assessment=_fixture_assessment(),
         ))
+        self.assertIsNone(original.proposal.basis.core_document_readiness)
         old_source = c.project_collaboration_history(self.history(conversation)).offered_draft_sources[-1].event_id
         task_id=original.proposal.authoring_scope.task_id
         drifted = await self.proposal_for(conversation, recommendation(recommended_action=action(source_ids=(
@@ -1045,10 +1059,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         def successor(value, material):
             self.assertEqual([(t["task_id"], t["task_revision"]) for t in material["authoring_tasks"]], [(task_id, 2)])
             self.assertEqual(material["available_proposal_drafting_source_ids"], [])
-        (
-            pending,
-            revised,
-        ) = await self.finish_draft(conversation, response=scoped_proposal(
+        (pending, revised,) = await self.finish_draft(conversation, response=scoped_proposal(
             PLOT_ARCHITECT,
             selected=task_id,
             revision=2,
