@@ -53,8 +53,18 @@ Success is pretty-printed JSON:
 }
 ```
 
+When stdin and stdout are terminals, successful initialization then
+enters the normal interactive shell for the absolute initialized workspace,
+equivalent to `story chat --workspace /absolute/path/to/workspace`. The usual
+authentication, default-provider selection, and session lobby apply. The
+command returns the shell's exit status. Initialization failures never enter
+the shell. Redirecting stdin or stdout retains provider-free JSON output and exit
+status zero on initialization success. The parent terminal's directory does
+not change.
+
 Rerunning init against the unchanged ready root validates only; it does not
-rewrite, stage, or create another commit. There is no prompt-overwrite,
+rewrite, stage, or create another commit.
+Successful terminal validation also enters the shell. There is no prompt-overwrite,
 migration, compatibility, upgrade, or adoption option. A recognizable legacy
 workspace reports:
 
