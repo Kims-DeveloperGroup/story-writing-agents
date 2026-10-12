@@ -584,7 +584,7 @@ PYTHONPATH=src python -m tests.runner run \
   --json "$report_dir/affected.json"
 ```
 
-For runtime or test changes, CI requires two complementary full-suite shards.
+For runtime or test changes, CI requires four complementary full-suite shards.
 Hosted full shards use standard Ubuntu 24.04 ARM runners; static validation,
 the runtime fast lane and reconciliation use Ubuntu x64. Both architectures
 use the same locked dependencies and test inventory. Full-suite selection
@@ -592,12 +592,12 @@ includes test-only changes. The fixed timing limits still apply to every
 selected full shard; a diagnostic run never replaces this evidence.
 
 Independent task threads share a host queue with four executing test processes;
-a campaign still runs only two full shards. Local `tests.runner run` commands
+a campaign still runs only four full shards. Local `tests.runner run` commands
 enter this queue automatically. Queue waiting is separate from test wall time.
 
 Use the host campaign command to execute the lanes selected by the pinned
 workflow, plus the affected modules you specify. It captures static checks,
-fast and affected tests, both full shards, reconciliation, and the strict budget
+fast and affected tests, all four full shards, reconciliation, and the strict budget
 check. Prepare a clean checkout and its locked Python 3.11 `.venv` first:
 
 ```bash
@@ -615,9 +615,9 @@ PYTHONPATH=src .venv/bin/python -m tests.local_ci run \
 
 Choose `--timing-mode shared` for concurrent task feedback. Isolated mode drains
 active executions and reserves the host for the campaign; use it for performance
-measurements. Isolated campaigns run the two full shards sequentially on their
-executor by default; shared campaigns permit both concurrently. Set
-`--full-concurrency 1` or `2` to choose explicitly. Campaign metadata records the
+measurements. Isolated campaigns run the four full shards sequentially on their
+executor by default; shared campaigns permit four concurrently. Set
+`--full-concurrency 1`, `2`, `3`, or `4` to choose explicitly. Campaign metadata records the
 resolved value. The strict 1,080/540-second limits still apply in either mode.
 Run status and capability-authorized cancellation from a checkout containing
 the queue utilities; campaigns can target older prepared checkouts with
@@ -668,7 +668,7 @@ The frozen suite scope and measured limits are in [TEST_POLICY.md](TEST_POLICY.m
 1,080 seconds sequential equivalent and 540 seconds per shard. The checked-in
 budget contains exact canonical IDs and per-ID subtest caps; the CI gate compares
 it with the base commit and current Python 3.11 reports. Class timing weights
-only balance the two shards; they do not prove the run is under budget.
+only balance the four shards; they do not prove the run is under budget.
 
 <a id="contribution-guidelines"></a>
 

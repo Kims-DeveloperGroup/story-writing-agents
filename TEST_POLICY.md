@@ -3,7 +3,7 @@
 The canonical suite is a bounded regression sample. Its checked-in inventory is
 [`tests/fixtures/test_budget_v1.json`](tests/fixtures/test_budget_v1.json).
 The accepted ceilings are **1,080 seconds** of sequential-equivalent wall time
-for both complete shards and **540 seconds** for either shard. CI also stops a
+for all four complete shards and **540 seconds** for each shard. CI also stops a
 shard job after 15 minutes, including setup.
 
 ## Scope rule
@@ -30,7 +30,7 @@ shard job after 15 minutes, including setup.
 
 ## Verification rule
 
-`pr-validation` runs the fast tier and both full shards for any change under
+`pr-validation` runs the fast tier and all four full shards for any change under
 `src/`, `config/`, or `tests/`, or to the runtime dependency and test-policy
 files. It runs static validation for documentation-only changes. Local runtime
 work also runs affected exact test IDs or modules before the PR. CI reconciles
@@ -49,15 +49,15 @@ when recalibrating weights.
 
 Independent task threads share one host-wide queue with four executing top-level
 test processes. The limit covers every checkout and native or Lima executor;
-each campaign still runs only two full shards. Waiting jobs do not consume an
+each campaign schedules exactly four complementary full shards. Waiting jobs do not consume an
 execution slot. Use the host coordinator in `tests.local_ci`; guest workers must
 be admitted by that same host queue before they run.
 
 Shared campaigns provide concurrent feedback. Budget-restoration measurements
 use isolated campaigns: drain active jobs, reserve the host, then execute only
-the two complementary shards. Their default concurrency is one for isolated
-campaigns and two for shared campaigns; `--full-concurrency 1` or `2` overrides
-that scheduling choice, which remains explicit in campaign metadata. Both
+all four complementary shards. Their default concurrency is one for isolated
+campaigns and four for shared campaigns; `--full-concurrency 1`, `2`, `3`, or `4` overrides
+that scheduling choice, which remains explicit in campaign metadata. All four
 complete reports remain required even if the first shard fails. Queue waiting
 time is recorded separately from
 canonical test durations. Shared execution does not waive a failed timing gate,
