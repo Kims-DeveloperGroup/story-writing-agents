@@ -260,9 +260,8 @@ Mutating workflow automation requires `workflow:managed`. Continue independent w
 CI or a provider runs. Immediately before manual squash merge, the root audits current
 base/head, changed behavior since the provider review, every blocking finding, required
 checks/approvals, and mergeability. Do not enable auto-merge or merge queue.
-Post-merge verification checks Issue closure, Project `Done`, Development links, and remote
-branch cleanup; failures remain visible for repair. Managed post-merge verification needs
-`PROJECT_STATUS_TOKEN` with organization ProjectV2 read access.
+After merge, the root manually verifies Issue closure, Project `Done`, Development links,
+and remote branch cleanup; failures remain visible for repair.
 
 ### Explicit validation time allowance
 
