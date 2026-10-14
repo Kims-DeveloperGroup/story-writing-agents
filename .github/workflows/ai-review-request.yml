@@ -73,7 +73,7 @@ jobs:
        github.event.label.name == 'review:copilot-lite' ||
        github.event.label.name == 'review:copilot-balanced' ||
        github.event.label.name == 'review:codex')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       # No checkout: PR code never executes with this job's write token.
       - uses: actions/github-script@v7

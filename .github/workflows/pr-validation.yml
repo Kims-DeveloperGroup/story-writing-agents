@@ -30,7 +30,7 @@ jobs:
   classify:
     name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - classification skipped' || 'Classify changed paths' }}
     if: github.event_name != 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       runtime: ${{ steps.paths.outputs.runtime }}
       policy_only: ${{ steps.paths.outputs.policy_only }}
@@ -114,7 +114,7 @@ jobs:
   static:
     name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - static validation skipped' || 'Static validation' }}
     needs: classify
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -279,7 +279,7 @@ jobs:
     name: ${{ github.event_name == 'workflow_dispatch' && 'Diagnostic only - fast tier skipped' || 'Runtime fast tier' }}
     needs: classify
     if: needs.classify.outputs.runtime == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -350,7 +350,7 @@ jobs:
     if: >-
       always() && needs.classify.outputs.full == 'true' &&
       (needs.full.result == 'success' || needs.full.result == 'failure')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -397,7 +397,7 @@ jobs:
     if: >-
       always() && (github.event_name == 'workflow_dispatch' ||
       (needs.full.result == 'success' && needs.reconcile-full.result == 'failure'))
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
