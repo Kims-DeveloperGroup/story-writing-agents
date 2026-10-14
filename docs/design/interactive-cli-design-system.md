@@ -252,7 +252,7 @@ make the union nestable.
 | `Section` | Divides a panel or long record into a named logical region. |
 | `Field` | Associates one stable label with one value. The label remains visible when alignment degrades. |
 | `Notice` | Communicates status, guidance, warning, success, cancellation, empty, loading, or error meaning independent of color. |
-| `Message` | Presents attributed user, agent, or system content while preserving content boundaries. Inline remains the generic default; semantic speaker call sites may select the grouped chat-block header/body-rail/trailing-separator layout. Once emitted after acceptance, it is informative scrollback output rather than input-control state and must not be erased by later control cleanup. |
+| `Message` | Presents attributed user, agent, or system content while preserving content boundaries. Inline remains the generic default; semantic speaker call sites select the shared Box presentation for chat blocks, with a compact body rail below the full-layout minimum. Once emitted after acceptance, it is informative scrollback output rather than input-control state and must not be erased by later control cleanup. |
 | `Record` | Presents one atomic domain result or event with its metadata and content. |
 | `ListView` | Presents an ordered collection, count/position context, and an explicit empty state. Its items remain semantic records or fields, not preformatted terminal strings. |
 | `SuggestionPalette` | Presents noncommitting candidates anchored to an editable input buffer. It owns open/highlight state, never parser or runtime work. |
@@ -274,6 +274,28 @@ a `Panel` appears between its splitters without gaining another frame.
 Semantic models contain trusted roles and untrusted text, never ANSI, cursor
 sequences, padding calculated for a specific width, callbacks, streams,
 runtime services, or storage handles.
+
+### Shared Box presentation
+
+`Box` is the private framed-output presentation primitive shared by chat
+messages and the provider-output viewer. It reuses the viewer's continuous
+Unicode borders, display-cell-aware title fitting, and body padding. It adds
+no member to the semantic `Component` union and owns no input, scrolling,
+stream, or view state. Renderers supply content and semantic color roles.
+
+Chat uses rounded `╭╮╰╯` corners, `─` horizontal borders, `│` sides, and a
+`├─ Metadata … ┤` divider between the Markdown body and response metadata.
+Speaker accents color the outer border; blue labels and subdued values identify
+metadata. Plain and `NO_COLOR` output keep the same Unicode box structure.
+The provider-output viewer uses the same geometry with square `┌┐└┘` corners
+and retains its own viewport and controls. Generic `Panel` splitters retain
+their established presentation.
+
+Chat boxes fit 40–120 available terminal cells, reserving the terminal's last
+column. Below 40 cells, messages use a compact colored speaker and body rail;
+below three cells, the rail is omitted to leave room for content. Complete
+messages remain ordinary scrollback output. See the
+[current frame example and metadata rules](../reference/interactive-terminal.md#message-frames-markdown-and-response-metadata).
 
 ### Purpose-bound `StartupWelcome`
 

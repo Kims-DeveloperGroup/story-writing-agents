@@ -1264,7 +1264,7 @@ class ControllerContractTests(ControllerTestCase):
         controller._search_attached_conversations(controller_core_module.parse_interactive_line("/search Specialist review is recommended"))
         self.assertEqual(len(callbacks.records), 3)
         search = callbacks.records[1]
-        self.assertIn("+-- search ", search)
+        self.assertIn("╭─ search ", search)
         self.assertIn("specialist review is recommended", search)
         self.assertIn("judgment_event", search)
         self.assertIn(f"Citation: conversation {handle}", search)
@@ -1667,8 +1667,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 159)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 696)
+        self.assertEqual(len(modules), 160)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 699)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",

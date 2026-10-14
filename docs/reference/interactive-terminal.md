@@ -97,21 +97,25 @@ details. The terminal opens no history storage itself.
 
 Live conversation, saved history, transcripts, and search excerpts use distinct
 speaker-aware message frames. A message body is separated from its labeled
-metadata footer by a divider. Proposal disclosures, confirmation identities,
-Apply/Commit controls, and recovery guidance remain complete outside compact
-response metadata.
+metadata footer by a divider. Full frames use the shared Box presentation with
+rounded Unicode corners and continuous borders, reusing the existing
+provider-output viewer's box geometry. Proposal disclosures, confirmation
+identities, Apply/Commit controls, and recovery guidance remain complete outside
+compact response metadata.
 
 Frames are left-aligned and use
 `min(120, max(1, terminal_columns - 1))` physical cells. The complete layout
 starts at 40 available frame columns; smaller terminals use compact decoration
-and stacked fields that fit the window. Width is observed before new output and
-live redraws. Complete messages flow into ordinary terminal scrollback; earlier
-printed frames are not rewritten after a resize.
+and stacked fields that fit the window. Compact messages use a speaker header
+and `│` body rail; the rail is omitted below three cells. Width is observed
+before new output and live redraws. Complete messages flow into ordinary terminal
+scrollback; earlier printed frames are not rewritten after a resize.
 
 User headers and borders use magenta, Lead uses cyan, and specialists retain
 their role accents. Metadata labels/dividers use blue, with subdued values.
 Context, status, prompts, commands, and selected controls use semantic accents.
 Labels and frame structure retain the same meaning without color.
+Plain and `NO_COLOR` output preserve the Unicode box without ANSI decoration.
 
 Message prose supports headings, emphasis, lists, quotations, visible link
 destinations, inline code, and fenced code. Code whitespace and strict JSON
@@ -132,14 +136,14 @@ usage remain readable. The existing Message details setting expands diagnostics.
 Illustrative output and counts:
 
 ```text
-+-- Lead --------------------------------------------------+
-| Review workflow                                          |
-| 1. Ask Lead to propose a review.                         |
-| 2. Inspect the scope, then choose Confirm.               |
-+-- Metadata ----------------------------------------------+
-| Outcome: answer | Elapsed: 2.1s                          |
-| Input tokens: 1,248 | Output tokens: 312                 |
-+----------------------------------------------------------+
+╭─ Lead ───────────────────────────────────────────────────────────────╮
+│ Review workflow                                                      │
+│ 1. Ask Lead to propose a review.                                     │
+│ 2. Inspect the scope, then choose Confirm.                           │
+├─ Metadata ───────────────────────────────────────────────────────────┤
+│ Outcome: answer | Elapsed: 00:00:03                                  │
+│ Input tokens: 128 | Output tokens: 64                                │
+╰──────────────────────────────────────────────────────────────────────╯
 ```
 
 <a id="startup-welcome-and-authentication"></a>

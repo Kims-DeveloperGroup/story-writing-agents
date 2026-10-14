@@ -159,7 +159,7 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
                 _capability(CapabilityProfile.LINE, width=120),
             ).text
             self.assertIn("Outcome:", lead_rendered)
-            self.assertIn("-- Lead ", lead_rendered)
+            self.assertIn("╭─ Lead ", lead_rendered)
             self.assertIn("Next action:", lead_rendered)
             self.assertIn("State:", lead_rendered)
             self.assertIn("Artifact application", application_rendered)

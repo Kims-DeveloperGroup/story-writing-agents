@@ -7,6 +7,7 @@ import re
 from typing import TypeAlias
 from collections.abc import Iterable
 
+from ._box import Box
 from ._model import (
     CapabilityProfile,
     Choice,
@@ -1491,33 +1492,32 @@ def _chat_block_message_lines(
     lines: list[_SemanticLine] = []
     if available < 40:
         lines.extend((row, accent) for row in _word_wrapped_prefixed_lines(
-            f"-- {header} --", available, prefix=outer, fallback_prefix=""))
+            f"─ {header} ─", available, prefix=outer, fallback_prefix=""))
         for row in body:
-            lines.extend(_framed_markdown_lines(row, available, outer, boxed=False))
+            lines.extend(_framed_markdown_lines(row, available, outer, box=None, accent=message.accent))
         if message.metadata is not None:
-            lines.extend((outer + row, _MarkdownRole((MarkdownSpan(0, len(outer + row), ("blue",)),))) for row in _word_wrapped_prefixed_lines(
-                "-- Metadata --", available, prefix="", fallback_prefix=""))
-            for row in _metadata_lines(message.metadata, available):
-                dim = _metadata_line(row.text)
-                lines.extend(_framed_markdown_lines(dim, available, outer, boxed=False))
-        lines.append((outer + "-" * available, accent))
+            lines.extend((outer + row, _MarkdownRole((MarkdownSpan(0, len(outer + row), ("blue",)),)))
+                         for row in _word_wrapped_prefixed_lines(
+                             "─ Metadata ─", available, prefix="", fallback_prefix=""))
+            capacity = available - (1 if available == 3 else 2) if available >= 3 else available
+            for row in _metadata_lines(message.metadata, capacity):
+                lines.extend(_framed_markdown_lines(
+                    _metadata_line(row.text), available, outer, box=None, accent=message.accent))
+        lines.append((outer + "─" * available, accent))
     else:
-        def rail(label: str = "") -> str:
-            prefix = "+-- " + label + " " if label else "+"
-            return outer + prefix + "-" * max(0, available - _cell_width(prefix) - 1) + "+"
-
+        box = Box(available, rounded=True)
         headers = _word_wrapped_prefixed_lines(header, available - 6, prefix="", fallback_prefix="")
-        for label in headers:
-            lines.append((rail(label), accent))
+        lines.append((outer + box.top(headers[0]), accent))
+        lines.extend((outer + box.body_row(label), accent) for label in headers[1:])
         for row in body:
-            lines.extend(_framed_markdown_lines(row, available, outer, boxed=True))
+            lines.extend(_framed_markdown_lines(row, available, outer, box=box, accent=message.accent))
         if message.metadata is not None:
-            divider = rail("Metadata")
+            divider = outer + box.divider("Metadata")
             lines.append((divider, _MarkdownRole((MarkdownSpan(0, len(divider), ("blue",)),))))
-            for row in _metadata_lines(message.metadata, available - 4):
-                dim = _metadata_line(row.text)
-                lines.extend(_framed_markdown_lines(dim, available, outer, boxed=True))
-        lines.append((rail(), accent))
+            for row in _metadata_lines(message.metadata, box.body_width()):
+                lines.extend(_framed_markdown_lines(
+                    _metadata_line(row.text), available, outer, box=box, accent=message.accent))
+        lines.append((outer + box.bottom(), accent))
     lines.append(("", SemanticRole.DEFAULT))
     return lines
 
@@ -1549,22 +1549,30 @@ def _metadata_lines(value: str, capacity: int) -> tuple[MarkdownLine, ...]:
 
 
 def _framed_markdown_lines(
-    line: MarkdownLine, width: int, outer: str, *, boxed: bool,
+    line: MarkdownLine, width: int, outer: str, *, box: Box | None, accent: SpeakerAccent,
 ) -> list[_SemanticLine]:
-    """Wrap first, then carry style spans into the physical-cell-safe frame."""
-    capacity = max(1, width - 4) if boxed else width
+    """Wrap first, then retain prose styles and independent speaker rail accents."""
+    geometry = box if box is not None else Box(width)
+    rail = (geometry.body_prefix if box is not None or width >= 4
+            else geometry.body_prefix.rstrip() if width == 3 else "")
+    capacity = box.body_width() if box is not None else max(1, width - _cell_width(rail))
     chunks = _word_wrapped_prefixed_lines(line.text, capacity, prefix="", fallback_prefix="")
     rendered: list[_SemanticLine] = []
     offset = 0
     for chunk in chunks:
-        prefix = outer + ("| " if boxed else "")
-        suffix = " " * max(0, capacity - _cell_width(chunk)) + " |" if boxed else ""
+        prefix = outer + rail
+        text = outer + box.body_row(chunk) if box is not None else prefix + chunk
         stop = offset + len(chunk)
         spans = tuple(MarkdownSpan(
             len(prefix) + max(span.start, offset) - offset,
             len(prefix) + min(span.stop, stop) - offset, span.styles,
         ) for span in line.spans if span.start < stop and span.stop > offset)
-        rendered.append((prefix + chunk + suffix, _MarkdownRole(spans)))
+        border_style = (f"border_{accent.value}",)
+        if rail:
+            spans = (MarkdownSpan(len(outer), len(outer) + 1, border_style),) + spans
+        if box is not None:
+            spans += (MarkdownSpan(len(text) - 1, len(text), border_style),)
+        rendered.append((text, _MarkdownRole(spans)))
         offset = stop
     return rendered
 
@@ -2128,6 +2136,7 @@ def _decorate(text: str, role: _LineRole) -> str:
     if isinstance(role, _MarkdownRole):
         sgr = {"bold": "\x1b[1m", "italic": "\x1b[3m", "code": "\x1b[7m",
                "link": "\x1b[4m", "dim": "\x1b[2m", "blue": "\x1b[34m"}
+        sgr.update({f"border_{accent.value}": value for accent, value in _SPEAKER_HEADER_SGR.items()})
         rendered: list[str] = []
         offset = 0
         for span in role.spans:
