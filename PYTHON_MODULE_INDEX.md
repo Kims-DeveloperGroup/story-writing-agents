@@ -273,8 +273,8 @@ live composition, reference activation, collaboration presentation, and the term
 - `interactive_terminal._reference_activation`, `interactive_terminal._viewer_model`
 - `interactive_terminal._viewer_controls`, `interactive_terminal._viewer_render`
 
-Presentation consumes domain contracts without owning runtime state. `_markdown` owns pure sanitized prose projection;
-`_response_usage` joins exact scoped provider call identities. Live/history/transcript share message framing.
+Presentation consumes domain contracts without owning runtime state. Private `_box.Box` shares Unicode cell geometry.
+`_markdown` owns sanitized prose; `_response_usage` joins exact scoped call identities. Live/history/transcript share frames.
 The driver retains inline I/O, input exclusion, progress, lobby echo and exact restoration. Lazy `open_owned` lends
 validated LIVE transport; jsonl-viewer owns exchange raw/screen/cursor/mouse modes. Callback/fallback refuse before content.
 Resumable idle preserves partial decoding/typeahead. Main-thread termination and `InteractiveInputLifecycle` retain

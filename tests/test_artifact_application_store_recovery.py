@@ -423,8 +423,8 @@ class ArtifactApplicationBoundaryTests(_ApplicationStoreTestCase):
                     resolved = resolve(target)
                     if resolved is not None and resolved != module:
                         edges.add((module, resolved))
-        self.assertEqual(len(modules), 159)
-        self.assertEqual(len(edges), 696)
+        self.assertEqual(len(modules), 160)
+        self.assertEqual(len(edges), 699)
         store = "story_writing_agents.writing_artifacts._application_store"
         repository = "story_writing_agents.writing_artifacts.repository"
         self.assertEqual(

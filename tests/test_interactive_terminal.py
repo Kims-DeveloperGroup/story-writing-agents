@@ -1563,8 +1563,8 @@ class PromptAndRenderingTests(unittest.TestCase):
             citation_turn_id="turn_7", citation_sequence=9, citation_kind="reply")
         self.assertEqual(len(callbacks.records), 2)
         first, second = callbacks.records
-        self.assertTrue(first.startswith("+-- search c_0123456789 "))
-        self.assertTrue(second.startswith("+-- search c_fedcba9876 "))
+        self.assertTrue(first.startswith("╭─ search c_0123456789 "))
+        self.assertTrue(second.startswith("╭─ search c_fedcba9876 "))
         self.assertLess(first.index("council vessel"), first.index("Metadata"))
         self.assertLess(second.index("unsafe"), second.index("Metadata"))
         self.assertIn("Status: active", first); self.assertIn("Match: subject", first)
@@ -1805,9 +1805,9 @@ class PromptAndRenderingTests(unittest.TestCase):
                 terminal, callbacks = make_terminal()
                 terminal.write_agent(agent_id, "reply")
                 self.assertEqual(len(callbacks.records), 1)
-                self.assertTrue(callbacks.records[0].startswith(f"+-- {alias} "))
-                self.assertIn("| reply", callbacks.records[0])
-                self.assertNotIn("│", callbacks.records[0])
+                self.assertTrue(callbacks.records[0].startswith(f"╭─ {alias} "))
+                self.assertIn("│ reply", callbacks.records[0])
+                self.assertTrue(callbacks.records[0].splitlines()[-2].startswith("╰"))
 
     def test_every_written_block_is_sanitized_and_gets_one_record_lf(self) -> None:
         terminal, callbacks = make_terminal()

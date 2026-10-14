@@ -42,6 +42,7 @@ from story_writing_agents.interactive_terminal._model import (
     NestedScrollViewport,
     TerminalCapabilities,
     ViewState,
+    display_character_width,
 )
 from story_writing_agents.interactive_terminal._controls import (
     append_main_input_history,
@@ -772,6 +773,11 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         rows = rendered.text.split("\n")
         # 1 header line + 6 body lines + 1 footer line = 8 rows (strictly <= 10)
         self.assertEqual(len(rows), 8)
+        self.assertTrue(rows[0].startswith("┌") and rows[0].endswith("┐"))
+        self.assertTrue(rows[-1].startswith("└") and rows[-1].endswith("┘"))
+        self.assertTrue(all(row.startswith("│ ") and row.endswith("│") for row in rows[1:7]))
+        self.assertEqual({sum(display_character_width(c) for c in row) for row in rows}, {79})
+        self.assertNotIn("╭", rendered.text)
         self.assertIn("[► Lead]", rows[0])
         self.assertIn("(5–10 of 20)", rows[0])
         # Scrollbar thumb █ in body lines
@@ -1383,7 +1389,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
 
         viewport = NestedScrollViewport(
             view_id="a:1",
-            title="Agent",
+            title="Agent 界e\u0301\x1b[31m",
             total_lines=5,
             start_line=1,
             visible_lines=("line 1", "line 2"),
@@ -1394,7 +1400,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         state = MultiAgentScrollState((viewport,), 0)
 
         # Test valid terminal widths 1 through 5
-        for w in range(1, 6):
+        for w in (1, 2, 3, 4, 5, 20, 39, 40, 140):
             caps = TerminalCapabilities(
                 CapabilityProfile.ANSI,
                 w,
@@ -1406,6 +1412,9 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             )
             frame = render_nested_scroll_view(state, caps)
             self.assertIsNotNone(frame.text)
+            self.assertTrue(all(sum(display_character_width(c) for c in row) <= max(1, w - 1)
+                for row in frame.text.splitlines()))
+            self.assertNotIn("\x1b", frame.text); self.assertNotIn("╭", frame.text)
 
     def test_default_is_failure_recognizes_failed_state(self) -> None:
         from dataclasses import dataclass
@@ -3089,12 +3098,11 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
 
     def test_render_nested_scroll_view_reserves_terminal_width(self) -> None:
         """Verify render_nested_scroll_view reserves 1 column to avoid auto-wrap artifacts."""
-        from story_writing_agents.interactive_terminal._model import display_character_width
 
         lines = tuple(f"Content line {i} with plenty of text to fill up the whole width" for i in range(1, 15))
         view = NestedScrollViewport(
             view_id="a:1",
-            title="Agent",
+            title="Agent 界e\u0301",
             total_lines=len(lines),
             start_line=1,
             visible_lines=lines[:6],
@@ -3102,7 +3110,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             is_focused=True,
             buffer_lines=lines,
         )
-        for w in (20, 50, 80, 120):
+        for w in (20, 39, 40, 50, 80, 120, 140):
             caps = TerminalCapabilities(
                 CapabilityProfile.ANSI,
                 w,
@@ -3116,6 +3124,9 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             state_exp = MultiAgentScrollState((view,), 0, collapsed=False)
             frame_exp = render_nested_scroll_view(state_exp, caps)
             self.assertEqual(frame_exp.width, w)
+            self.assertIn("界e\u0301", frame_exp.text)
+            self.assertTrue(frame_exp.text.splitlines()[0].endswith("┐"))
+            self.assertTrue(frame_exp.text.splitlines()[-1].endswith("┘"))
             for row in frame_exp.text.split("\n"):
                 row_width = sum(display_character_width(c) for c in row)
                 self.assertLessEqual(row_width, w - 1)

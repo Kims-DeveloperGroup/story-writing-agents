@@ -3350,13 +3350,14 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             '_live_composer.py': {'._model'},
             '_model.py': set(),
             '_controls.py': {'._model'},
-            '_render.py': {'._advisory_progress', '._markdown', '._model'},
+            '_render.py': {'._advisory_progress', '._box', '._markdown', '._model'},
             '_viewer_model.py': set(),
             '_viewer_controls.py': {'._model', '._viewer_model'},
-            '_viewer_render.py': {'._model', '._viewer_model'},
+            '_viewer_render.py': {'._box', '._model', '._viewer_model'},
             '_reference_activation.py': {'..writing_artifacts', '._model'},
             '_driver.py': {'._external_view', '._input_lifecycle', '._live_composer', '._model', '._reference_activation', '._viewer_model'},
             '_core.py': {'..agent_context.progress', '..agents', '..conversations', '..errors', '..interactive_commands', '._advisory_progress', '._collaboration_view', '._controls', '._driver', '._external_view', '._live_composer', '._model', '._reference_activation', '._render', '._viewer_controls', '._viewer_model', '._viewer_render'},
+            '_box.py': {'._model'},
             '_markdown.py': {'._model'},
             '_response_usage.py': {'..conversations'},
         }
@@ -3373,7 +3374,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
                 for node in ast.walk(tree)
                 if isinstance(node, ast.ImportFrom) and node.level
             }
-            if filename in {"_markdown.py", "_response_usage.py"}:
+            if filename in {"_box.py", "_markdown.py", "_response_usage.py"}:
                 self.assertEqual(dependencies, expected)
                 continue
             with self.subTest(filename=filename):
@@ -3385,6 +3386,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
         modules = (
             "story_writing_agents.interactive_terminal._external_view",
             "story_writing_agents.interactive_terminal._input_lifecycle",
+            "story_writing_agents.interactive_terminal._box",
             "story_writing_agents.interactive_terminal._model",
             "story_writing_agents.interactive_terminal._controls",
             "story_writing_agents.interactive_terminal._render",

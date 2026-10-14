@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ._box import Box
 from ._model import (
     MultiAgentScrollState,
     RenderedFrame,
@@ -399,10 +400,8 @@ def render_nested_scroll_view(
         else focused.start_line
     )
     counter_str = f"({focused.start_line}–{end_line} of {focused.total_lines})"
-    header_left = f"┌─ {tabs_str} "
-    header_right = f" {counter_str} ─┐"
-    fill_len = max(0, render_width - len(header_left) - len(header_right))
-    header_line = _clip_cells(f"{header_left}{'─' * fill_len}{header_right}", render_width)
+    box = Box(render_width)
+    header_line = box.top(tabs_str, right_title=counter_str)
 
     # 2. Body Lines with Scrollbar
     h = focused.visible_height
@@ -415,24 +414,18 @@ def render_nested_scroll_view(
     )
 
     body_lines: list[str] = []
-    inner_width = max(1, render_width - 5)  # "│ " + content + " █│"
+    inner_width = box.body_width(right_marker="│")
     for y in range(h):
         line_content = (
             focused.visible_lines[y] if y < len(focused.visible_lines) else ""
         )
         safe_content = _clip_cells(line_content, inner_width, offset=focused.h_offset)
-        pad_needed = max(
-            0, inner_width - sum(display_character_width(c) for c in safe_content)
-        )
-        padded = safe_content + (" " * pad_needed)
         bar = "█" if thumb_pos <= y < thumb_pos + thumb_size else "│"
-        body_lines.append(_clip_cells(f"│ {padded} {bar}│", render_width))
+        body_lines.append(box.body_row(safe_content, right_marker=bar))
 
     # 3. Footer Line
     hints = "↑/↓: scroll • ←/→: pan • Tab: switch agent • t: toggle view • Enter/Esc: dismiss"
-    footer_left = f"└─ {hints} "
-    footer_fill = max(0, render_width - len(footer_left) - 1)
-    footer_line = _clip_cells(f"{footer_left}{'─' * footer_fill}┘", render_width)
+    footer_line = box.bottom(hints)
 
     all_rows = [header_line, *body_lines, footer_line]
     return RenderedFrame("\n".join(all_rows), width, len(all_rows), h_offset=focused.h_offset)
