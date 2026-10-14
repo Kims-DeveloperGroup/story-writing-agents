@@ -1556,47 +1556,24 @@ class PromptAndRenderingTests(unittest.TestCase):
                 with self.assertRaises((TypeError, ValueError)):
                     call()
 
-    def test_search_hits_have_exact_rows_citations_and_visible_controls(
-        self,
-    ) -> None:
+    def test_search_hits_have_exact_rows_citations_and_visible_controls(self) -> None:
         terminal, callbacks = make_terminal(width=240)
-        terminal.write_conversation_search_hit(
-            "c_0123456789",
-            "Opening scene",
-            "subject",
-            "council vessel",
-            archived=False,
-        )
-        terminal.write_conversation_search_hit(
-            "c_fedcba9876",
-            "Old\nsubject",
-            "event",
-            "unsafe\x1b\ntext",
-            archived=True,
-            citation_turn_id="turn_7",
-            citation_sequence=9,
-            citation_kind="reply",
-        )
-        self.assertEqual(
-            callbacks.records,
-            [
-                "[search c_0123456789]\n"
-                "  Status: active\n"
-                "  Match: subject\n"
-                "  Subject: Opening scene\n"
-                "  Citation: conversation c_0123456789\n"
-                "  Snippet: council vessel\n",
-                "[search c_fedcba9876]\n"
-                "  Status: archived\n"
-                "  Match: event\n"
-                "  Subject: Old\\x0asubject\n"
-                "  Citation: conversation c_fedcba9876, turn turn_7, "
-                "sequence 9, kind reply\n"
-                "  Snippet: unsafe\\x1b\\x0atext\n",
-            ],
-        )
+        terminal.write_conversation_search_hit("c_0123456789", "Opening scene", "subject", "council vessel", archived=False)
+        terminal.write_conversation_search_hit("c_fedcba9876", "Old\nsubject", "event", "unsafe\x1b\ntext", archived=True,
+            citation_turn_id="turn_7", citation_sequence=9, citation_kind="reply")
         self.assertEqual(len(callbacks.records), 2)
-        self.assertNotIn("\x1b", "".join(callbacks.records))
+        first, second = callbacks.records
+        self.assertTrue(first.startswith("+-- search c_0123456789 "))
+        self.assertTrue(second.startswith("+-- search c_fedcba9876 "))
+        self.assertLess(first.index("council vessel"), first.index("Metadata"))
+        self.assertLess(second.index("unsafe"), second.index("Metadata"))
+        self.assertIn("Status: active", first); self.assertIn("Match: subject", first)
+        self.assertIn("Subject: Opening scene", first); self.assertIn("Status: archived", second)
+        self.assertIn("Subject: Old\\x0asubject", second); self.assertIn("unsafe\\x1b\\x0atext", second)
+        self.assertIn("Citation: conversation c_fedcba9876, turn turn_7, sequence 9, kind reply", second)
+        self.assertNotIn("\x1b", first + second)
+        self.assertTrue(all(len(row) <= 120 for row in (first + second).splitlines()))
+
 
     def test_search_hits_reject_invalid_primitives_and_partial_citations(
         self,
@@ -1827,10 +1804,10 @@ class PromptAndRenderingTests(unittest.TestCase):
             with self.subTest(agent_id=agent_id):
                 terminal, callbacks = make_terminal()
                 terminal.write_agent(agent_id, "reply")
-                self.assertEqual(
-                    callbacks.records,
-                    [f"{alias}\n│ reply\n\n"],
-                )
+                self.assertEqual(len(callbacks.records), 1)
+                self.assertTrue(callbacks.records[0].startswith(f"+-- {alias} "))
+                self.assertIn("| reply", callbacks.records[0])
+                self.assertNotIn("│", callbacks.records[0])
 
     def test_every_written_block_is_sanitized_and_gets_one_record_lf(self) -> None:
         terminal, callbacks = make_terminal()

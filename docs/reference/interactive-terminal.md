@@ -61,7 +61,7 @@ implementation details unless another reference explicitly names them.
 
 ## Durable collaboration presentation
 
-`write_collaboration_events(events, after_sequence=N, show_details=False)`
+`write_collaboration_events(events, after_sequence=N, show_details=False, history_events=None)`
 validates that every event belongs to one session/conversation and arrives in
 strict durable sequence order before writing anything. It skips sequences at or
 before `N`, writes one semantic panel for each later event, and returns the last
@@ -86,6 +86,61 @@ It never removes the semantic content shown by compact mode. Plain, fixed-ANSI,
 tree, so color and terminal capability cannot change meaning. Unknown payload
 types, mixed scopes, and duplicate or out-of-order sequences fail closed before
 output.
+
+The optional `history_events` supplies the complete validated canonical call
+context when the displayed events are a bounded selection. This permits exact
+usage totals without estimating from a partial window. History and transcript
+presentation retains event/turn/sequence identity independently of Message
+details. The terminal opens no history storage itself.
+
+## Message frames, Markdown, and response metadata
+
+Live conversation, saved history, transcripts, and search excerpts use distinct
+speaker-aware message frames. A message body is separated from its labeled
+metadata footer by a divider. Proposal disclosures, confirmation identities,
+Apply/Commit controls, and recovery guidance remain complete outside compact
+response metadata.
+
+Frames are left-aligned and use
+`min(120, max(1, terminal_columns - 1))` physical cells. The complete layout
+starts at 40 available frame columns; smaller terminals use compact decoration
+and stacked fields that fit the window. Width is observed before new output and
+live redraws. Complete messages flow into ordinary terminal scrollback; earlier
+printed frames are not rewritten after a resize.
+
+User headers and borders use magenta, Lead uses cyan, and specialists retain
+their role accents. Metadata labels/dividers use blue, with subdued values.
+Context, status, prompts, commands, and selected controls use semantic accents.
+Labels and frame structure retain the same meaning without color.
+
+Message prose supports headings, emphasis, lists, quotations, visible link
+destinations, inline code, and fenced code. Code whitespace and strict JSON
+presentation remain literal. HTML, images, unsupported syntax, and parser
+failures remain readable as sanitized text. Source text stored in conversation
+history is unchanged.
+
+Response metadata includes outcome, measured elapsed time when available, and
+input/output tokens reported by the provider's response usage object. Counts
+include distinct submitted calls for that response's exact invocation, including
+corrective retries; specialist replies show their own invocation's usage.
+Additional per-call public responses show the individual call's usage.
+Missing or ambiguous counters display `unavailable`, while measured zero remains
+`0`. Counts are never estimated from message text or payload bytes, and cached
+input is not added to the provider's reported input count. Older records without
+usage remain readable. The existing Message details setting expands diagnostics.
+
+Illustrative output and counts:
+
+```text
++-- Lead --------------------------------------------------+
+| Review workflow                                          |
+| 1. Ask Lead to propose a review.                         |
+| 2. Inspect the scope, then choose Confirm.               |
++-- Metadata ----------------------------------------------+
+| Outcome: answer | Elapsed: 2.1s                          |
+| Input tokens: 1,248 | Output tokens: 312                 |
++----------------------------------------------------------+
+```
 
 <a id="startup-welcome-and-authentication"></a>
 <a id="main-prompt-live-suggestions"></a>

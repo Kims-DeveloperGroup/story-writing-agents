@@ -176,7 +176,7 @@ from story_writing_agents.workspace.initialization import (
     require_ready_session_resources,
 )
 
-from tests.collaboration_contract_fixture import STEP_ID, contract_batches, make_proposal
+from tests.collaboration_contract_fixture import STEP_ID, contract_batches, make_proposal, measured_batch, make_batch, make_draft, store_batch, RUNTIME, USER
 from tests.helpers import pristine_initialized_workspace
 from story_writing_agents.core_document_readiness import CoreDocumentReadinessNeeded
 
@@ -1215,6 +1215,49 @@ class ControllerContractTests(ControllerTestCase):
                 for item in execution_view.items
             )
         )
+        self.seed_session(workspace, "session_a", durable_state=SessionDurableState.READY)
+        services = controller._runtime.conversation_storage_services
+        metadata = services.catalog.create("session_a", "Measured history")
+        batches = contract_batches(metadata.conversation_id)
+        for name in ("proposal", "confirmation", "running", "calls", "result", "completion"):
+            services.event_store.append_batch(measured_batch(batches[name]))
+        history = services.event_store.read("session_a", metadata.conversation_id)
+        controller._attached_session_id = "session_a"
+        controller._focused_conversation = metadata
+        controller._show_message_details = False
+        callbacks.records.clear()
+        with mock.patch.object(services.event_store, "read", wraps=services.event_store.read) as read:
+            controller._write_focused_conversation_history_rows(controller_core_module.parse_interactive_line(f"/history {len(history)}"))
+        read.assert_called_once_with("session_a", metadata.conversation_id)
+        self.assertEqual(len(callbacks.records), len(history) + 1)
+        rendered = "".join(callbacks.records)
+        self.assertTrue(all(event.event_id in rendered and event.turn_id in rendered for event in history))
+        for label in ("Sequence:", "Step:", "From:", "To:", "Actors:", "Kind:"):
+            self.assertIn(label, rendered)
+        for event, block in zip(history, callbacks.records[:-1]):
+                self.assertIn(f"From: {event.sender.kind.value}" + (f":{event.sender.agent_id}" if event.sender.agent_id else ""), block)
+                self.assertIn(f"To: {event.recipient.kind.value}" + (f":{event.recipient.agent_id}" if event.recipient.agent_id else ""), block)
+        self.assertIn("Input tokens: 0 | Output tokens: 2", rendered)
+        self.assertLess(rendered.index(history[0].event_id), rendered.index(history[-1].event_id))
+        start = next(event.sequence for event in history if type(event.payload) is collaboration.CollaborationLeadJudgmentPayload)
+        future = store_batch(history, make_batch(history, "concurrent_history", replace(make_draft(
+            "future_notice", collaboration.CollaborationEventKind.MESSAGE, RUNTIME, USER,
+            collaboration.CollaborationMessagePayload("Concurrent private notice.")), conversation_id=metadata.conversation_id)))
+        callbacks.records.clear()
+        with mock.patch.object(services.event_store, "read", side_effect=[history, future]) as read:
+            controller._read_attached_conversation_transcript(controller_core_module.parse_interactive_line(
+                f"/transcript {metadata.conversation_id} 2 --from {start}"))
+        read.assert_any_call("session_a", metadata.conversation_id)
+        self.assertEqual(len(callbacks.records), 5)
+        rendered = "".join(callbacks.records)
+        selected = history[start - 1:start + 1]
+        self.assertTrue(all(event.event_id in rendered for event in selected))
+        self.assertNotIn(f"Event: {history[0].event_id}", rendered)
+        self.assertNotIn("future_notice", rendered); self.assertNotIn("Concurrent private notice.", rendered)
+        self.assertLess(rendered.index(selected[0].event_id), rendered.index(selected[1].event_id))
+        self.assertIn("Input tokens: 0 | Output tokens: 2", rendered)
+        handle = controller_core_module.visible_conversation_handle(metadata, services.catalog.list("session_a", include_archived=True))
+        self.assertIn(f"Continue with /transcript {handle} 2 --from {start + 2}.", rendered)
 
     def test_controller_and_composer_have_no_generic_status_sites(
         self,
@@ -1613,8 +1656,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 157)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 690)
+        self.assertEqual(len(modules), 159)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 696)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -6527,8 +6570,8 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 self._Picker(), self._Prompt(), output)
             self.assertFalse(adapter.submit(_UNIQUE_C, "ordinary"))
         self.assertEqual(sinks, [progress.observe]); self.assertEqual(progress.begins, [()])
-        self.assertIsInstance(output.components[-1], terminal_module.Notice)
-        self.assertEqual(output.components[-1].text, "Elapsed: 00:00:00")
+        self.assertIsInstance(output.components[-1], terminal_module.Panel)
+        self.assertIn("Elapsed: 00:00:00", output.components[-1].items[0].metadata)
 
     def test_provider_invocation_failure_writes_error_notice_without_crashing(self) -> None:
         import io
@@ -6625,10 +6668,10 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 terminal_module.Notice("Document completion does not grant final review, Confirm, Apply or Commit authority.", label="authority"),
             )),
         ))
-        with mock.patch.object(lead_policy_module, "project_lead_turn_result", return_value=lead):
+        with mock.patch.object(lead_policy_module, "project_lead_turn_result", return_value=lead) as project:
             self.assertFalse(adapter._present_and_decide(self._terminal_turn(CollaborationStepState.COMPLETED)))
-        self.assertEqual(output.components[:3], [*specialists, visible_lead])
-        self.assertEqual(output.components[3].text, "Elapsed: 00:00:07")
+        self.assertEqual(output.components, [*specialists, visible_lead])
+        self.assertEqual(project.call_args.kwargs["elapsed"], "00:00:07")
 
     def test_recommendation_controls_route_exact_decisions_and_cancel_without_mutation(self) -> None:
         from story_writing_agents import conversations as c
@@ -6802,7 +6845,8 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                     self.assertFalse(adapter.submit(_UNIQUE_C, label))
 
                     self.assertEqual(calls, [(_UNIQUE_C, label)])
-                    self.assertEqual(len(output.components), 3)
+                    self.assertEqual(len(output.components), 2)
+                    self.assertIn("Elapsed:", output.components[-1].items[0].metadata)
 
     def test_retry_lead_turn_keeps_fixed_diagnostic_copy_and_renders_error_role(self) -> None:
         session = RuntimeSession.__new__(RuntimeSession)

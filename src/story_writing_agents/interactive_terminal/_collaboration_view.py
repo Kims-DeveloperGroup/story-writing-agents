@@ -1,6 +1,8 @@
 """Project validated collaboration events into safe semantic terminal views."""
 
 from __future__ import annotations
+from dataclasses import replace
+from ..agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST
 
 from ..core_document_readiness import AuthoringTarget, DEPENDENCIES, CoreDocumentReadiness, CoreDocumentReadinessNeeded, project_readiness
 
@@ -52,6 +54,8 @@ from ..conversations import (
     CollaborationMessagePayload,
     CollaborationProposal,
     CollaborationProviderCallPayload,
+    CollaborationProviderCallState,
+    CollaborationInvocationKind,
     CollaborationSpecialistReplyPayload,
     CollaborationStepState,
     CollaborationStepStatePayload,
@@ -82,8 +86,10 @@ from ._model import (
     Record,
     Section,
     SemanticRole,
+    SpeakerAccent,
     ViewState,
 )
+from ._response_usage import ResponseUsage, response_footer, response_usage
 
 
 _STATE_GUIDANCE = {
@@ -122,6 +128,7 @@ def project_collaboration_event(
     input_references: Mapping[str, str] | None = None,
     candidate_paths: Mapping[str, tuple[str, ...]] | None = None,
     proposals: Mapping[str, CollaborationProposal] | None = None,
+    history_events: tuple[CollaborationEvent, ...] = (),
 ) -> Panel:
     """Return one complete semantic view for one validated durable event."""
 
@@ -135,6 +142,10 @@ def project_collaboration_event(
 
     items: list[Section | Field | Notice | Message | Record | ListView] = [
         Field("Sequence", str(event.sequence)),
+        Field("Event", event.event_id),
+        Field("Turn", event.turn_id),
+        Field("Kind", event.kind.value),
+        Field("Actors", f"{event.sender.agent_id or event.sender.kind.value} → {event.recipient.agent_id or event.recipient.kind.value}"),
         Field("From", _actor(event.sender.kind.value, event.sender.agent_id)),
         Field("To", _actor(event.recipient.kind.value, event.recipient.agent_id)),
         Field("Step", event.step_id),
@@ -154,6 +165,7 @@ def project_collaboration_event(
                 ),
             )
         )
+    items = list(_event_response_items(tuple(items), event, history_events))
     return Panel(
         f"Collaboration · {event.kind.value.replace('_', ' ')}",
         tuple(items),
@@ -248,6 +260,7 @@ def project_core_document_readiness(readiness: CoreDocumentReadiness | CoreDocum
 
 def project_lead_turn_result(
     result: LeadTurnResult, *, public_response_events: tuple[CollaborationEvent, ...] = (),
+    elapsed: str | None = None, show_details: bool = False,
 ) -> Panel:
     """Project one runtime-validated visible lead result without side effects."""
 
@@ -259,9 +272,8 @@ def project_lead_turn_result(
         else SemanticRole.AGENT
     )
     items: list[Section | Field | Notice | Message | Record | ListView] = [
-        Field("Outcome", result.kind.value),
         _message("Lead (provisional)" if result.exploration is not None else "Lead", result.message, role=role),
-        *_reply_trace_items(result.trace),
+        *(_reply_trace_items(result.trace) if show_details else ()),
     ]
     items.extend(
         Notice(line, label="validation", role=SemanticRole.ERROR)
@@ -277,7 +289,7 @@ def project_lead_turn_result(
     for public in result.public_responses:
         shown_above = (public is latest and public.response.acceptance.value == "accepted"
                        and public.response.response_text == result.message)
-        items.extend(_public_response_items(public.response, show_text=not shown_above))
+        items.extend(_public_response_items(public.response, show_text=not shown_above, usage=_public_usage(public_response_events, public.response), show_details=show_details))
     if result.exploration is not None:
         items.extend(_exploration_items(result.exploration))
     if result.premise_report is not None:
@@ -321,7 +333,9 @@ def project_lead_turn_result(
     if result.recommendation_request is not None:
         items.extend(_payload_items(result.recommendation_request, {}, {}, {}, session_id=result.session_id))
     items.extend(_public_response_omission_items(result, public_response_events))
-    return Panel("Lead", tuple(items), state=_event_state(result))
+    return Panel("Lead", _response_items(tuple(items), result.message,
+                 response_footer(result.kind.value, _live_usage(result, public_response_events), elapsed=elapsed),
+                 SpeakerAccent.CYAN), state=_event_state(result))
 
 
 
@@ -384,10 +398,11 @@ def _public_response_omission_items(
 
 def _public_response_items(
     response: LeadPublicResponse, *, show_text: bool = True,
+    usage: ResponseUsage | None = None, show_details: bool = True,
 ) -> tuple[Field | Message | Notice, ...]:
     items = [Field("Public response disposition", response.acceptance.value),
              Field("Provider call", f"{response.call_kind} #{response.ordinal} ({response.call_id})"),
-             (_message("Literal final response_text", response.response_text) if show_text else
+             (_message("Literal final response_text", response.response_text, metadata=response_footer(response.acceptance.value, usage or ResponseUsage())) if show_text else
               Notice("This call's accepted text is shown in the Lead response above."))]
     if response.repair_of_call_id is not None:
         items.append(Field("Repairs call", response.repair_of_call_id))
@@ -395,6 +410,8 @@ def _public_response_items(
         items.append(Notice("\n".join(response.validation_details),
                             label="Call validation", role=SemanticRole.ERROR))
     items.append(Notice("Selectable literal input; no draft, verified evidence or write authority."))
+    if usage is not None and not show_text:
+        items.append(Notice(response_footer(response.acceptance.value, usage), label="Response metadata"))
     return tuple(items)
 
 
@@ -418,6 +435,7 @@ def project_lead_error_result(
 def project_specialist_results(
     events: tuple[CollaborationEvent, ...],
     proposal: CollaborationProposal,
+    *, show_details: bool = False,
 ) -> tuple[Panel, ...]:
     """Join durable dispatch, reply, and outcome truth for one execution."""
 
@@ -540,7 +558,7 @@ def project_specialist_results(
                         reply.message,
                         role=SemanticRole.AGENT,
                     ),
-                    *_reply_trace_items(reply.trace),
+                    *(_reply_trace_items(reply.trace) if show_details else ()),
                 )
             )
         else:
@@ -554,7 +572,8 @@ def project_specialist_results(
         panels.append(
             Panel(
                 durable_assignment.specialist_id,
-                tuple(result_items),
+                (_event_response_items(tuple(result_items), reply_event, events)
+                 if reply_event is not None else tuple(result_items)),
                 state=(
                     ViewState.COMPLETED
                     if reply is not None
@@ -1348,17 +1367,122 @@ def _event_state(payload: object) -> ViewState:
     return ViewState.OPEN
 
 
+def _response_items(items: tuple, content: str, footer: str | None, accent: SpeakerAccent) -> tuple:
+    projected = []
+    for item in items:
+        if type(item) is Message:
+            item = replace(item, accent=accent,
+                           metadata=footer if footer is not None and item.content == content else item.metadata)
+        elif type(item) is Section:
+            item = replace(item, items=_response_items(item.items, content, footer, accent))
+        projected.append(item)
+    return tuple(projected)
+
+
+def _speaker_accent(role: str | None) -> SpeakerAccent:
+    return {LEAD_ORCHESTRATOR: SpeakerAccent.CYAN, PLOT_ARCHITECT: SpeakerAccent.YELLOW,
+            CHARACTER_CUSTODIAN: SpeakerAccent.GREEN, EXECUTION_SPECIALIST: SpeakerAccent.BLUE}.get(
+                role, SpeakerAccent.MAGENTA if role is None else SpeakerAccent.CYAN)
+
+
+def _live_usage(result: LeadTurnResult, events: tuple[CollaborationEvent, ...]) -> ResponseUsage:
+    if result.kind.value == "discussion":
+        kinds = frozenset({CollaborationInvocationKind.LEAD_DISCUSSION})
+    elif result.kind.value == "exploration":
+        kinds = frozenset({CollaborationInvocationKind.LEAD_EXPLORATION})
+    elif result.trace is not None and result.trace.origin.value == "runtime_fallback":
+        kinds = frozenset({CollaborationInvocationKind.LEAD, CollaborationInvocationKind.LEAD_SYNTHESIS,
+                           CollaborationInvocationKind.LEAD_EXPLORATION, CollaborationInvocationKind.LEAD_DISCUSSION})
+    else:
+        kinds = frozenset({CollaborationInvocationKind.LEAD, CollaborationInvocationKind.LEAD_SYNTHESIS})
+    return response_usage(events, session_id=result.session_id, conversation_id=result.conversation_id,
+                          turn_id=result.turn_id, step_id=result.step_id,
+                          invocation_id=result.provider_invocation_id, role=LEAD_ORCHESTRATOR,
+                          invocation_kinds=kinds)
+
+
+def _public_usage(events: tuple[CollaborationEvent, ...], response: LeadPublicResponse) -> ResponseUsage:
+    matches = tuple(event for event in events if type(event.payload) is CollaborationLeadPublicResponsePayload
+                    and event.payload.response == response)
+    if len(matches) != 1:
+        return ResponseUsage()
+    event = matches[0]
+    events = tuple(fact for fact in events if fact.sequence <= event.sequence)
+    return response_usage(events, session_id=event.session_id, conversation_id=event.conversation_id,
+                          turn_id=event.turn_id, step_id=event.step_id,
+                          invocation_id=response.invocation_id, role=LEAD_ORCHESTRATOR,
+                          invocation_kinds=frozenset({CollaborationInvocationKind.LEAD,
+                                                    CollaborationInvocationKind.LEAD_DISCUSSION}),
+                          call_id=response.call_id)
+
+
+def _event_response_items(items: tuple, event: CollaborationEvent, events: tuple[CollaborationEvent, ...]) -> tuple:
+    events = tuple(fact for fact in events if fact.sequence <= event.sequence)
+    payload = event.payload
+    role = event.sender.agent_id
+    accent = _speaker_accent(role)
+    content = ""
+    outcome = ""
+    invocation_id = getattr(payload, "provider_invocation_id", None)
+    kinds = frozenset({CollaborationInvocationKind.LEAD})
+    call_id = None
+    if type(payload) is CollaborationLeadJudgmentPayload:
+        content, outcome, role = payload.message, payload.kind.value, LEAD_ORCHESTRATOR
+    elif type(payload) is CollaborationSpecialistReplyPayload:
+        content, outcome = payload.message, payload.assessment.value
+        kinds = frozenset({CollaborationInvocationKind.SPECIALIST_ASSIGNMENT})
+    elif type(payload) is CollaborationLeadSynthesisPayload:
+        content, outcome, role = payload.message, "synthesis", LEAD_ORCHESTRATOR
+        kinds = frozenset({CollaborationInvocationKind.LEAD_SYNTHESIS})
+    elif type(payload) is ArtifactReviewSynthesisPayload:
+        content, outcome, role = payload.message, payload.decision.value, LEAD_ORCHESTRATOR
+        kinds = frozenset({CollaborationInvocationKind.LEAD_SYNTHESIS})
+    elif type(payload) is CollaborationLeadDiscussionPayload:
+        content, outcome, role = payload.report.response_text, payload.report.response_kind, LEAD_ORCHESTRATOR
+        kinds = frozenset({CollaborationInvocationKind.LEAD_DISCUSSION})
+    elif type(payload) is CollaborationLeadExplorationResultPayload:
+        content, outcome, role = payload.report.message, "exploration", LEAD_ORCHESTRATOR
+        kinds = frozenset({CollaborationInvocationKind.LEAD_EXPLORATION})
+        matched = tuple(fact.payload.invocation_id for fact in events
+                        if type(fact.payload) is CollaborationProviderCallPayload
+                        and fact.payload.call_id == payload.report.provider_call_id
+                        and (fact.session_id, fact.conversation_id, fact.turn_id, fact.step_id)
+                        == (event.session_id, event.conversation_id, event.turn_id, event.step_id))
+        invocation_id = next(iter(set(matched))) if len(set(matched)) == 1 else None
+    elif type(payload) is CollaborationLeadPublicResponsePayload:
+        response = payload.response
+        content, outcome, role = response.response_text, response.acceptance.value, LEAD_ORCHESTRATOR
+        invocation_id, call_id = response.invocation_id, response.call_id
+        kinds = frozenset({CollaborationInvocationKind.LEAD, CollaborationInvocationKind.LEAD_DISCUSSION})
+    elif type(payload) is CollaborationMessagePayload and (role == LEAD_ORCHESTRATOR or invocation_id is not None):
+        content, outcome = payload.content, "response"
+        role = payload.trace.role if payload.trace is not None else role or LEAD_ORCHESTRATOR
+        kinds = frozenset({CollaborationInvocationKind.LEAD, CollaborationInvocationKind.LEAD_SYNTHESIS,
+                           CollaborationInvocationKind.LEAD_EXPLORATION, CollaborationInvocationKind.LEAD_DISCUSSION})
+    else:
+        return _response_items(items, content, None, accent)
+    usage = response_usage(events, session_id=event.session_id, conversation_id=event.conversation_id,
+                           turn_id=event.turn_id, step_id=event.step_id,
+                           invocation_id=invocation_id, role=role or LEAD_ORCHESTRATOR,
+                           invocation_kinds=kinds, call_id=call_id)
+    return _response_items(items, content, response_footer(outcome, usage), _speaker_accent(role))
+
+
 def _message(
     sender: str,
     content: str,
     *,
     role: SemanticRole = SemanticRole.DEFAULT,
+    metadata: str | None = None,
+    accent: SpeakerAccent = SpeakerAccent.CYAN,
 ) -> Message:
     return Message(
         sender,
         content,
         role=role,
         presentation=MessagePresentation.CHAT_BLOCK,
+        metadata=metadata,
+        accent=accent,
     )
 
 

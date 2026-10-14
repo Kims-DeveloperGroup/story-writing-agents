@@ -273,12 +273,12 @@ live composition, reference activation, collaboration presentation, and the term
 - `interactive_terminal._reference_activation`, `interactive_terminal._viewer_model`
 - `interactive_terminal._viewer_controls`, `interactive_terminal._viewer_render`
 
-Presentation modules may consume public runtime/domain contracts but never own runtime state.
-Collaboration notices render bounded validation details and scope-v3 duties, dependency choices and qualified
-captured sources before confirmation without owning runtime authority.
-External viewer loading is lazy. Borrowed views retain Story-owned presentation; `open_owned` lends only validated LIVE streams and the persistent reader, while jsonl-viewer owns exchange-view raw/screen/cursor/mouse modes. Callback/fallback transports refuse before content.
-The driver retains input exclusion, progress checks, lobby echo guard, and exact baseline resumption. Readiness failures cross the persistent reader as resumable idle then rethrow outside it, preserving partial decoding and typeahead.
-Default termination scopes restore the original terminal and require main-thread ownership. `InteractiveInputLifecycle` retains native-auth settings handoff and lobby cleanup. Private model/render/control modules are not APIs.
+Presentation consumes domain contracts without owning runtime state. `_markdown` owns pure sanitized prose projection;
+`_response_usage` joins exact scoped provider call identities. Live/history/transcript share message framing.
+The driver retains inline I/O, input exclusion, progress, lobby echo and exact restoration. Lazy `open_owned` lends
+validated LIVE transport; jsonl-viewer owns exchange raw/screen/cursor/mouse modes. Callback/fallback refuse before content.
+Resumable idle preserves partial decoding/typeahead. Main-thread termination and `InteractiveInputLifecycle` retain
+native-auth handoff and lobby cleanup. Model/render/control internals are not public APIs.
 
 ### Interactive support
 

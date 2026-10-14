@@ -1596,6 +1596,21 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         self.assertFalse(observed.input_tty)
         self.assertTrue(observed.output_tty)
         self.assertFalse(observed.raw_mode)
+        os_module = fake_os()
+        os_module.get_terminal_size = mock.Mock(side_effect=[SimpleNamespace(columns=columns)
+            for columns in (141, 40, 20, 1)] + [OSError("size unavailable")])
+        driver = RawTerminalDriver(mock.Mock(), ObservedStream(), ObservedStream(descriptor=8),
+            mock.Mock(), mock.Mock(), mock.Mock(), os_provider=lambda: os_module)
+        base = capability(CapabilityProfile.ANSI, width=80)
+        with mock.patch.object(RawTerminalDriver, "capabilities", return_value=base):
+            observed_widths = []
+            for _ in range(5):
+                current = driver.semantic_capabilities()
+                observed_widths.append(current.width)
+                self.assertEqual((current.profile, current.raw_mode, current.cursor_controls),
+                    (base.profile, base.raw_mode, base.cursor_controls))
+        self.assertEqual(observed_widths, [120, 39, 19, 1, 79])
+        self.assertEqual([call.args[0] for call in os_module.get_terminal_size.call_args_list], [8] * 5)
 
     def test_driver_and_callback_constructors_perform_no_io(self) -> None:
         input_stream = ObservedStream()
@@ -2152,6 +2167,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             CapabilityProfile.ANSI,
             width=120,
         )
+        driver.semantic_capabilities.return_value = driver.capabilities.return_value
         driver.read_line.return_value = "subject"
         driver.read_main_command_line.side_effect = (
             "/status",
@@ -2244,6 +2260,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             accepted_component,
             driver.capabilities.return_value,
         )
+        driver.semantic_capabilities.return_value = driver.capabilities.return_value
         with _object_options_patch(_core, "render_component", wraps=render_component) as accepted_render:
             terminal_facade.InteractiveSemanticOutput(
                 terminal
@@ -2256,7 +2273,8 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             f"{expected_accepted.text}\n"
         )
         terminal.write_status(TerminalMessageKind.RESULT, "ready")
-        self.assertEqual(driver.capabilities.call_count, 4)
+        self.assertEqual(driver.semantic_capabilities.call_count, 3)
+        driver.capabilities.assert_called_once_with()
         main_calls = driver.read_main_command_line.call_args_list
         self.assertEqual(len(main_calls), 3)
         for call in main_calls:
@@ -3324,61 +3342,23 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
         package_root = repository_root / "src" / "story_writing_agents"
         terminal_root = package_root / "interactive_terminal"
         expected_dependencies = {
-            "__init__.py": {"._advisory_progress", "._core"},
-            "_advisory_progress.py": {
-                "..agent_context.actions",
-                "..agent_context.progress",
-            },
-            "_collaboration_view.py": {
-                "..core_document_readiness", "..lead_task_transitions",
-                "..conversations",
-                "..reply_trace",
-                "..specialist_routing",
-                "..writing_artifacts",
-                "._model",
-                "..lead_premise_decisions",
-                "..editorial_state",
-            },
-            "_external_view.py": set(),
-            "_input_lifecycle.py": set(),
-            "_live_composer.py": {"._model"},
-            "_model.py": set(),
-            "_controls.py": {"._model"},
-            "_render.py": {"._advisory_progress", "._model"},
-            "_viewer_model.py": set(),
-            "_viewer_controls.py": {"._model", "._viewer_model"},
-            "_viewer_render.py": {"._model", "._viewer_model"},
-            "_reference_activation.py": {
-                "..writing_artifacts",
-                "._model",
-            },
-            "_driver.py": {
-                "._input_lifecycle",
-                "._external_view",
-                "._live_composer",
-                "._model",
-                "._reference_activation",
-                "._viewer_model",
-            },
-            "_core.py": {
-                "..agent_context.progress",
-                "..agents",
-                "..conversations",
-                "..errors",
-                "..interactive_commands",
-                "._collaboration_view",
-                "._advisory_progress",
-                "._controls",
-                "._driver",
-                "._external_view",
-                "._live_composer",
-                "._model",
-                "._reference_activation",
-                "._render",
-                "._viewer_controls",
-                "._viewer_model",
-                "._viewer_render",
-            },
+            '__init__.py': {'._advisory_progress', '._core'},
+            '_advisory_progress.py': {'..agent_context.actions', '..agent_context.progress'},
+            '_collaboration_view.py': {'..agents', '..conversations', '..core_document_readiness', '..editorial_state', '..lead_premise_decisions', '..lead_task_transitions', '..reply_trace', '..specialist_routing', '..writing_artifacts', '._model', '._response_usage'},
+            '_external_view.py': set(),
+            '_input_lifecycle.py': set(),
+            '_live_composer.py': {'._model'},
+            '_model.py': set(),
+            '_controls.py': {'._model'},
+            '_render.py': {'._advisory_progress', '._markdown', '._model'},
+            '_viewer_model.py': set(),
+            '_viewer_controls.py': {'._model', '._viewer_model'},
+            '_viewer_render.py': {'._model', '._viewer_model'},
+            '_reference_activation.py': {'..writing_artifacts', '._model'},
+            '_driver.py': {'._external_view', '._input_lifecycle', '._live_composer', '._model', '._reference_activation', '._viewer_model'},
+            '_core.py': {'..agent_context.progress', '..agents', '..conversations', '..errors', '..interactive_commands', '._advisory_progress', '._collaboration_view', '._controls', '._driver', '._external_view', '._live_composer', '._model', '._reference_activation', '._render', '._viewer_controls', '._viewer_model', '._viewer_render'},
+            '_markdown.py': {'._model'},
+            '_response_usage.py': {'..conversations'},
         }
         self.assertEqual(
             {path.name for path in terminal_root.glob("*.py")},
@@ -3393,6 +3373,9 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
                 for node in ast.walk(tree)
                 if isinstance(node, ast.ImportFrom) and node.level
             }
+            if filename in {"_markdown.py", "_response_usage.py"}:
+                self.assertEqual(dependencies, expected)
+                continue
             with self.subTest(filename=filename):
                 self.assertEqual(dependencies, expected)
 

@@ -7,6 +7,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
+    "markdown-it-py>=4.2,<5",
     "jsonl-viewer @ git+https://github.com/Kims-DeveloperGroup/jsonl-viewer.git@91e2e21f301a0628fd7651d248a3556c6d3b7f95",
 ]
 

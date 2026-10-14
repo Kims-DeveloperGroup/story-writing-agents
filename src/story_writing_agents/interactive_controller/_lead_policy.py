@@ -159,6 +159,7 @@ class InteractiveLeadAdapter:
         "_session",
         "_recover_authentication",
         "_read_events",
+        "_show_details",
         "_pending_elapsed",
         "_pending_specialist_panels",
     )
@@ -174,6 +175,7 @@ class InteractiveLeadAdapter:
         *,
         recover_authentication: Callable[[str], bool] | None = None,
         read_events: Callable[[str], tuple[CollaborationEvent, ...]] | None = None,
+        show_details: bool = False,
     ) -> None:
         if not isinstance(session, RuntimeSession):
             raise TypeError("session must be a RuntimeSession")
@@ -187,6 +189,9 @@ class InteractiveLeadAdapter:
         self._semantic_output = semantic_output
         self._recover_authentication = recover_authentication
         self._read_events = read_events
+        if type(show_details) is not bool:
+            raise TypeError("show_details must be a bool")
+        self._show_details = show_details
         self._pending_elapsed: str | None = None
         self._pending_specialist_panels: tuple[object, ...] = ()
 
@@ -574,8 +579,11 @@ class InteractiveLeadAdapter:
             return False
 
     def _lead_turn_panel(self, turn: LeadTurnResult):
-        panel = (project_lead_turn_result(turn) if self._read_events is None else
-                 project_lead_turn_result(turn, public_response_events=self._read_events(turn.conversation_id)))
+        panel = project_lead_turn_result(
+            turn, public_response_events=() if self._read_events is None else self._read_events(turn.conversation_id),
+            elapsed=self._pending_elapsed, show_details=self._show_details,
+        )
+        self._pending_elapsed = None
         readiness_panel = project_core_document_readiness(self._session.inspect_core_document_readiness())
         panel = Panel(panel.title, panel.items + (Section(readiness_panel.title, readiness_panel.items),), state=panel.state)
         editorial = self._session.inspect_editorial_state()
@@ -740,6 +748,7 @@ class InteractiveLeadAdapter:
                 self._pending_specialist_panels = project_specialist_results(
                     self._read_events(turn.conversation_id),
                     proposal,
+                    show_details=self._show_details,
                 )
             turn = result.turn
 

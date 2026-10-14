@@ -51,6 +51,7 @@ from ..structured_output_validation import (
     raise_validation,
 )
 from dataclasses import asdict, dataclass, field
+from ..agent_context import ProviderUsage
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, NoReturn, TypeVar
@@ -526,7 +527,10 @@ class CollaborationLeadJudgmentPayload:
     authoring_admission: AuthoringAdmissionBasis | None = field(default=None, kw_only=True)
     core_document_readiness: CoreDocumentReadinessBasis | None = field(default=None, kw_only=True)
 
+    provider_invocation_id: str | None = field(default=None, kw_only=True)
+
     def __post_init__(self) -> None:
+        _validate_response_invocation(self.provider_invocation_id)
         if self.core_document_readiness is not None:
             if (type(self.core_document_readiness) is not CoreDocumentReadinessBasis
                     or self.kind is not LeadOutcomeKind.ANSWER or self.authoring_scope is not None
@@ -2487,7 +2491,10 @@ class CollaborationMessagePayload:
     validation_invocation_id: str | None = None
     validation_call_id: str | None = None
 
+    provider_invocation_id: str | None = field(default=None, kw_only=True)
+
     def __post_init__(self) -> None:
+        _validate_response_invocation(self.provider_invocation_id)
         _validate_visible_text(self.content, label="collaboration message")
         if self.trace is not None and type(self.trace) is not ReplyTrace:
             raise TypeError("collaboration message trace must be ReplyTrace or None")
@@ -2542,7 +2549,10 @@ class CollaborationSpecialistReplyPayload:
     premise_analysis: PremiseAnalysis | None = field(default=None, kw_only=True)
     premise_conflicts: tuple[PremiseConflict, ...] = field(default=(), kw_only=True)
 
+    provider_invocation_id: str | None = field(default=None, kw_only=True)
+
     def __post_init__(self) -> None:
+        _validate_response_invocation(self.provider_invocation_id)
         validation_call(
             '$.proposal_id',
             _validate_identifier,
@@ -2652,7 +2662,10 @@ class CollaborationLeadSynthesisPayload:
     trace: ReplyTrace | None = None
     premise_report: PremiseDecisionReport | None = field(default=None, kw_only=True)
 
+    provider_invocation_id: str | None = field(default=None, kw_only=True)
+
     def __post_init__(self) -> None:
+        _validate_response_invocation(self.provider_invocation_id)
         validation_call(
             '$.proposal_id',
             _validate_identifier,
@@ -2851,7 +2864,10 @@ class ArtifactReviewSynthesisPayload:
     reply_event_ids: tuple[str, ...]
     unresolved_input_ids: tuple[str, ...]
 
+    provider_invocation_id: str | None = field(default=None, kw_only=True)
+
     def __post_init__(self) -> None:
+        _validate_response_invocation(self.provider_invocation_id)
         _validate_identifier(self.candidate_id, label="artifact candidate ID")
         _validate_positive_integer(
             self.candidate_revision,
@@ -3812,6 +3828,8 @@ class CollaborationProviderCallPayload:
     state: CollaborationProviderCallState
     validation_details: tuple[str, ...] = ()
 
+    usage: ProviderUsage | None = field(default=None, kw_only=True)
+
     def __post_init__(self) -> None:
         if type(self.invocation_id) is not str or type(self.call_id) is not str:
             raise TypeError("provider invocation and call IDs must be exact text")
@@ -3836,6 +3854,11 @@ class CollaborationProviderCallPayload:
             "provider call state",
         )
         validate_details(self.validation_details)
+        if self.usage is not None:
+            if type(self.usage) is not ProviderUsage:
+                raise TypeError("provider call usage must be ProviderUsage or None")
+            if self.state is not CollaborationProviderCallState.SUBMITTED:
+                raise ValueError("only submitted calls carry provider usage")
         if self.validation_details and self.state is not CollaborationProviderCallState.SUBMITTED:
             raise ValueError("only submitted calls may carry validation details")
         if self.invocation_kind in {
@@ -3881,7 +3904,10 @@ class CollaborationLeadMaterialCapturePayload:
 class CollaborationLeadDiscussionPayload:
     report: LeadDiscussionReport
 
+    provider_invocation_id: str | None = field(default=None, kw_only=True)
+
     def __post_init__(self) -> None:
+        _validate_response_invocation(self.provider_invocation_id)
         if type(self.report) is not LeadDiscussionReport:
             raise TypeError("lead_discussion requires an exact LeadDiscussionReport")
 
@@ -5024,7 +5050,7 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
     if type(payload) is CollaborationLeadMaterialCapturePayload:
         return {"payload_type": "lead_material_capture", "capture": task_value_to_dict(payload.capture)}
     if type(payload) is CollaborationLeadDiscussionPayload:
-        return {"payload_type": "lead_discussion", "report": task_value_to_dict(payload.report)}
+        return {**_response_invocation_fields(payload), "payload_type": "lead_discussion", "report": task_value_to_dict(payload.report)}
     if type(payload) is CollaborationLeadPublicResponsePayload:
         return {"payload_type": "lead_public_response", "response": task_value_to_dict(payload.response)}
 
@@ -5064,6 +5090,7 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
         return {"payload_type": "editorial_record", "record": editorial_revision_to_dict(payload.record)}
     if type(payload) is CollaborationMessagePayload:
         value = {
+            **_response_invocation_fields(payload),
             "content": payload.content,
             "payload_type": "message",
             **_reply_trace_fields(payload.trace),
@@ -5076,6 +5103,7 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
         return value
     if type(payload) is CollaborationLeadJudgmentPayload:
         return {
+            **_response_invocation_fields(payload),
             **({"core_document_readiness": readiness_basis_to_dict(payload.core_document_readiness)}
                if payload.core_document_readiness is not None else {}),
             **({"authoring_admission": admission_basis_to_dict(payload.authoring_admission)}
@@ -5098,6 +5126,7 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
         }
     if type(payload) is CollaborationSpecialistReplyPayload:
         return {
+            **_response_invocation_fields(payload),
             **({"premise_analysis": premise_value_to_dict(payload.premise_analysis)} if payload.premise_analysis is not None else {}),
             **({"premise_conflicts": premise_value_to_dict(payload.premise_conflicts)} if payload.premise_conflicts else {}),
             "assignment_id": payload.assignment_id,
@@ -5115,6 +5144,7 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
         }
     if type(payload) is CollaborationLeadSynthesisPayload:
         return {
+            **_response_invocation_fields(payload),
             **({"premise_report": premise_value_to_dict(payload.premise_report)} if payload.premise_report is not None else {}),
             "evidence": _lead_evidence_value(payload.evidence),
             "execution_attempt_id": payload.execution_attempt_id,
@@ -5173,6 +5203,7 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
         }
     if type(payload) is CollaborationProviderCallPayload:
         value = {
+            **({"usage": asdict(payload.usage)} if payload.usage is not None else {}),
             "call_id": payload.call_id,
             "call_kind": payload.call_kind.value,
             "invocation_id": payload.invocation_id,
@@ -5205,6 +5236,7 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
         }
     if type(payload) is ArtifactReviewSynthesisPayload:
         return {
+            **_response_invocation_fields(payload),
             "candidate_digest": payload.candidate_digest,
             "candidate_id": payload.candidate_id,
             "candidate_revision": payload.candidate_revision,
@@ -6044,6 +6076,12 @@ def _decode_objective_sources(value: object) -> tuple[ArtifactDraftSource, ...]:
 
 
 def _decode_payload(value: object) -> CollaborationPayload:
+    if type(value) is dict and "provider_invocation_id" in value:
+        if value.get("payload_type") not in {"message", "lead_judgment", "specialist_reply", "lead_synthesis", "lead_discussion", "artifact_review_synthesis"}:
+            raise ValueError("provider invocation correlation is not supported by this payload")
+        invocation_id = _string(value["provider_invocation_id"], label="response provider invocation ID")
+        base = {key: item for key, item in value.items() if key != "provider_invocation_id"}
+        return replace(_decode_payload(base), provider_invocation_id=invocation_id)
     if type(value) is not dict:
         raise ValueError("collaboration payload must be an object")
     payload_type = value.get("payload_type")
@@ -6515,10 +6553,12 @@ def _decode_payload(value: object) -> CollaborationPayload:
                 "payload_type",
                 "role",
                 "state",
-            } | ({"validation_details"} if "validation_details" in value else set()),
+            } | ({"validation_details"} if "validation_details" in value else set())
+            | ({"usage"} if "usage" in value else set()),
             label="provider-call payload",
         )
         return CollaborationProviderCallPayload(
+            usage=_decode_provider_usage(item["usage"]) if "usage" in item else None,
             invocation_id=_string(
                 item["invocation_id"],
                 label="provider invocation ID",
@@ -7575,6 +7615,24 @@ def _enum(
         return validation_call("$", enum_type, text)
     except ValueError as failure:
         raise_validation(carry_validation(ValueError(f'{label} is not supported'), failure))
+
+
+def _validate_response_invocation(value: str | None) -> None:
+    if value is not None:
+        if type(value) is not str:
+            raise TypeError("response provider invocation ID must be exact text")
+        _validate_identifier(value, label="response provider invocation ID")
+
+
+def _response_invocation_fields(payload: object) -> dict[str, object]:
+    invocation_id = getattr(payload, "provider_invocation_id", None)
+    return {} if invocation_id is None else {"provider_invocation_id": invocation_id}
+
+
+def _decode_provider_usage(value: object) -> ProviderUsage:
+    item = _object(value, {"input_tokens", "output_tokens", "cached_input_tokens"}, label="provider usage")
+    return ProviderUsage(**{name: None if count is None else _integer(count, label=name)
+                            for name, count in item.items()})
 
 
 def _validate_identifier(value: str, *, label: str) -> str:

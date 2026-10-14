@@ -1104,18 +1104,12 @@ class InteractiveTerminal:
 
         status = "archived" if archived else "active"
         self._write_component(
-            Record(
-                f"search {safe_handle}",
-                fields=(
-                    Field("Status", status),
-                    Field("Match", safe_match_kind),
-                    Field("Subject", safe_subject),
-                    Field("Citation", citation),
-                    Field("Snippet", safe_snippet),
-                ),
-                role=(SemanticRole.MUTED if archived else SemanticRole.DEFAULT),
-                state=ViewState.COMPLETED,
-            )
+            Message(f"search {safe_handle}", safe_snippet,
+                    presentation=MessagePresentation.CHAT_BLOCK,
+                    metadata=(f"Status: {status}\nMatch: {safe_match_kind}\nSubject: {safe_subject}\nCitation: {citation}\n"
+                              "Outcome: search excerpt\nInput tokens: unavailable | Output tokens: unavailable"),
+                    role=SemanticRole.MUTED if archived else SemanticRole.DEFAULT,
+                    state=ViewState.COMPLETED)
         )
 
     def write_conversation_transcript_event(
@@ -1170,6 +1164,7 @@ class InteractiveTerminal:
         *,
         after_sequence: int = 0,
         show_details: bool = False,
+        history_events: tuple[CollaborationEvent, ...] | None = None,
     ) -> int:
         """Render one durable collaboration suffix exactly once in order."""
 
@@ -1178,7 +1173,13 @@ class InteractiveTerminal:
         if type(show_details) is not bool:
             raise TypeError("show_details must be a bool")
         validate_collaboration_event_order(events)
-        input_references, candidate_paths, proposals = collaboration_view_context(events)
+        context_events = events if history_events is None else history_events
+        validate_collaboration_event_order(context_events)
+        if events and context_events and (
+            events[0].session_id, events[0].conversation_id
+        ) != (context_events[0].session_id, context_events[0].conversation_id):
+            raise ValueError("history events must share the selected session and conversation")
+        input_references, candidate_paths, proposals = collaboration_view_context(context_events)
         cursor = after_sequence
         for event in events:
             if event.sequence <= after_sequence:
@@ -1190,6 +1191,7 @@ class InteractiveTerminal:
                     input_references=input_references,
                     candidate_paths=candidate_paths,
                     proposals=proposals,
+                    history_events=context_events,
                 )
             )
             cursor = event.sequence
@@ -1252,7 +1254,7 @@ class InteractiveTerminal:
         self._write_component(
             Message(
                 alias,
-                format_agent_reply_content(_required_text("text", text)),
+                _required_text("text", text),
                 role=SemanticRole.AGENT,
                 state=ViewState.COMPLETED,
                 presentation=MessagePresentation.CHAT_BLOCK,
@@ -3149,7 +3151,7 @@ def build_stream_terminal(
     terminal._advisory_progress = run_advisory_progress
     terminal._debate_progress = run_debate_progress
     terminal._live_composer = driver.run_live_composer
-    terminal._capability_provider = driver.capabilities
+    terminal._capability_provider = driver.semantic_capabilities
     return terminal
 
 

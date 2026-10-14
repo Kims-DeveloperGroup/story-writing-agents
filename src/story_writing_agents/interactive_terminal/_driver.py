@@ -619,6 +619,22 @@ class RawTerminalDriver:
             return
         self._write_raw_text(text)
 
+    def semantic_capabilities(self) -> TerminalCapabilities:
+        """Observe cursor-safe output width without changing input ownership."""
+        capabilities = self.capabilities()
+        if not capabilities.output_tty:
+            return capabilities
+        columns = capabilities.width
+        try:
+            observed = self._os_provider().get_terminal_size(
+                _stream_descriptor(self._output_stream)
+            ).columns
+            if type(observed) is int and observed > 0:
+                columns = observed
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+        return _capabilities_with_width(capabilities, min(120, max(1, columns - 1)))
+
     def write_accepted_input(self, text: str) -> None:
         """Project rendered accepted input according to the selected input mode."""
 

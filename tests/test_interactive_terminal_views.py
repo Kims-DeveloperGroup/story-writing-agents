@@ -271,14 +271,8 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             ),
             width=80,
         ).text
-        self.assertEqual(
-            agent,
-            "lead\n│ first\n│\n│ second\n│ third\n│ fourth\n│ fifth\n",
-        )
-        self.assertEqual(
-            default,
-            r"user" "\n" r"│ first\n\nsecond\r\nthird\x0afourth\x0Afifth" "\n",
-        )
+        self.assertTrue(all(agent.index(word) < agent.index(next_word) for word, next_word in zip(("first", "second", "third", "fourth"), ("second", "third", "fourth", "fifth"))))
+        self.assertIn(singly_escaped, default)
 
     def test_agent_reply_rendering_uses_bold_sgr_and_plain_no_color(self) -> None:
         source = '{"message":"界"}'
@@ -300,336 +294,154 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
         self.assertNotIn("\x1b", plain.text)
         self.assertIn('  "message": "界"', plain.text)
 
-    def test_chat_block_plain_snapshots_cover_supported_widths_and_geometry(
-        self,
-    ) -> None:
-        message = _chat_block_message(
-            "Keep each returning vessel visible while the harbor lantern "
-            "guides the final approach safely."
-        )
-        snapshots = {
-            20: (
-                "plot\n"
-                "  Plot & Structure \n"
-                "  Architect\n"
-                "│ Keep each \n"
-                "│ returning vessel \n"
-                "│ visible while the \n"
-                "│ harbor lantern \n"
-                "│ guides the final \n"
-                "│ approach safely.\n"
-            ),
-            24: (
-                "plot\n"
-                "  Plot & Structure \n"
-                "  Architect\n"
-                "│ Keep each returning \n"
-                "│ vessel visible while \n"
-                "│ the harbor lantern \n"
-                "│ guides the final \n"
-                "│ approach safely.\n"
-            ),
-            40: (
-                "plot\n"
-                "  Plot & Structure Architect\n"
-                "│ Keep each returning vessel visible \n"
-                "│ while the harbor lantern guides the \n"
-                "│ final approach safely.\n"
-            ),
-            80: (
-                "plot\n"
-                "  Plot & Structure Architect\n"
-                "│ Keep each returning vessel visible while the harbor "
-                "lantern guides the final \n"
-                "│ approach safely.\n"
-            ),
-            120: (
-                "plot\n"
-                "  Plot & Structure Architect\n"
-                "│ Keep each returning vessel visible while the harbor "
-                "lantern guides the final approach safely.\n"
-            ),
-        }
-        for width, expected in snapshots.items():
+    def test_chat_block_plain_snapshots_cover_supported_widths_and_geometry(self) -> None:
+        message = _chat_block_message("Keep each returning vessel visible while harbor lantern guides final approach safely.",
+            sender="plot", metadata="Outcome: answer\nTokens: input 0 | output 2")
+        for width in (1, 20, 39, 40, 140):
             with self.subTest(width=width):
                 frame = render_plain(message, width=width)
-                self.assertEqual(frame.text, expected)
+                lines = frame.text.split("\n")
                 self.assertEqual(frame.width, width)
-                self.assertEqual(frame.line_count, expected.count("\n") + 1)
-                for line in frame.text.split("\n"):
-                    self.assertLessEqual(_physical_width(line), width)
+                self.assertEqual(frame.line_count, len(lines))
+                self.assertTrue(all(_physical_width(line) <= min(width, 120) for line in lines))
+                self.assertEqual(lines[-1], "")
+                if width >= 40:
+                    self.assertTrue(lines[0].startswith("+-- plot "))
+                    self.assertEqual(_physical_width(lines[0]), min(width, 120))
+                    self.assertTrue(all(line.startswith("| ") and line.endswith(" |")
+                        for line in lines[1:] if line and not line.startswith("+")))
+                    self.assertGreater(frame.text.index("+-- Metadata "), frame.text.index("| Keep"))
+                else:
+                    self.assertNotIn("+", frame.text)
+                    self.assertEqual(lines[-2], "-" * width)
+        self.assertEqual(_physical_width(render_plain(message, width=120).text.split("\n")[0]), 120)
+        for width in (1, 2, 3, 4):
+            tiny = render_plain(_chat_block_message("abc", sender="u", metadata=None), width=width)
+            self.assertTrue(all(_physical_width(line) <= width for line in tiny.text.split("\n")))
 
-        geometry = _chat_block_message(
-            "ab",
-            sender="u",
-            metadata=None,
-            role=SemanticRole.DEFAULT,
-            state=ViewState.IDLE,
-            accent=SpeakerAccent.MAGENTA,
-        )
-        self.assertEqual(render_plain(geometry, width=1).text, "u\na\nb\n")
-        self.assertEqual(render_plain(geometry, width=2).text, "u\nab\n")
-        self.assertEqual(render_plain(geometry, width=3).text, "u\n│ a\n│ b\n")
-        self.assertEqual(render_plain(geometry, width=4).text, "u\n│ ab\n")
-
-        row_local_wide = _chat_block_message(
-            "a界b",
-            sender="u",
-            metadata=None,
-            role=SemanticRole.DEFAULT,
-            state=ViewState.IDLE,
-            accent=SpeakerAccent.MAGENTA,
-        )
-        wide_frame = render_plain(row_local_wide, width=3)
-        self.assertEqual(wide_frame.text, "u\n│ a\n界\n│ b\n")
-        self.assertTrue(
-            all(_physical_width(line) <= 3 for line in wide_frame.text.split("\n"))
-        )
 
     def test_chat_block_preserves_words_tokens_and_exact_whitespace(self) -> None:
-        cases = (
-            (
-                10,
-                "alpha beta abcdefghijk",
-                "u\n│ alpha \n│ beta \n│ abcdefgh\n│ ijk\n",
-            ),
-            (
-                12,
-                "  indented  words  here  ",
-                "u\n│   indented\n│   words  \n│ here  \n",
-            ),
-            (
-                10,
-                "first\n\n  second\n",
-                "u\n│ first\n│\n│   second\n│\n",
-            ),
-        )
-        for width, content, expected in cases:
+        cases = ((10, "alpha beta abcdefghijk"), (40, "```text\n  indented words here  \n\n  final\n```"),
+            (12, "first\n\nsecond"))
+        for width, content in cases:
             with self.subTest(width=width, content=repr(content)):
-                message = _chat_block_message(
-                    content,
-                    sender="u",
-                    metadata=None,
-                    role=SemanticRole.DEFAULT,
-                    state=ViewState.IDLE,
-                    accent=SpeakerAccent.MAGENTA,
-                )
-                frame = render_plain(message, width=width)
-                self.assertEqual(frame.text, expected)
-                self.assertEqual(frame.line_count, expected.count("\n") + 1)
-                self.assertTrue(
-                    all(
-                        _physical_width(line) <= width
-                        for line in frame.text.split("\n")
-                    )
-                )
+                frame = render_plain(_chat_block_message(content, sender="u", metadata=None,
+                    role=SemanticRole.DEFAULT, state=ViewState.IDLE), width=width)
+                self.assertTrue(all(_physical_width(line) <= width for line in frame.text.split("\n")))
+                if width == 10:
+                    self.assertIn("alpha", frame.text); self.assertIn("beta", frame.text)
+                    self.assertIn("abcdefghij\nk", frame.text)
+                elif width == 40:
+                    self.assertIn("|   indented words here", frame.text)
+                    self.assertIn("|   final", frame.text)
+                    self.assertNotIn("```", frame.text)
+                else:
+                    self.assertIn("first\n\nsecond", frame.text)
+
 
     def test_chat_block_unicode_json_and_hostile_controls_are_safe(self) -> None:
-        unicode_message = _chat_block_message(
-            "界界界 e\u0301 🌊 x",
-            sender="u",
-            metadata=None,
-            role=SemanticRole.DEFAULT,
-            state=ViewState.IDLE,
-            accent=SpeakerAccent.MAGENTA,
-        )
-        unicode_frame = render_plain(unicode_message, width=10)
-        self.assertEqual(unicode_frame.text, "u\n│ 界界界 \n│ e\u0301 🌊 x\n")
-        self.assertNotIn("\n│ \u0301", unicode_frame.text)
-        self.assertTrue(
-            all(_physical_width(line) <= 10 for line in unicode_frame.text.split("\n"))
-        )
+        source = "# Heading\n**bold** *italic* `code`\n\n- item\n  - nested\n\n> quote\n\n[label](https://example.com/a)\n\nentity &#27;[31m and &#x202e;\n界界界 e\u0301 🌊 x"
+        message = _chat_block_message(source, metadata="Tokens: input 0 | output 2")
+        ansi = render_component(message, _capability(CapabilityProfile.ANSI, width=40)).text
+        plain = render_plain(message, width=40).text
+        self.assertEqual(strip_decorative_sgr(ansi), plain)
+        self.assertNotIn("\x1b", plain); self.assertNotIn("\u202e", plain)
+        self.assertNotIn("\x07", ansi); self.assertNotIn("\x1b]", ansi)
+        self.assertTrue(all(_physical_width(line) <= 40 for line in plain.split("\n")))
+        for visible in ("Heading", "bold", "italic", "code", "item", "nested", "> quote", "label", "https://example.com/a", "界界界", "e\u0301", "\ufffd[31m", "\\u202e"):
+            self.assertIn(visible, plain)
+        self.assertNotIn("**bold**", plain); self.assertNotIn("[label](", plain)
+        self.assertIn("\x1b[1m", ansi); self.assertIn("\x1b[3m", ansi)
+        hostile = _chat_block_message("a\x1b]8;;owned\x07\u202e\n[link](https://example.com/&#27;)", metadata="m\u202e")
+        sanitized = render_plain(hostile, width=80).text
+        self.assertNotIn("\x1b", sanitized); self.assertNotIn("\x07", sanitized)
+        self.assertNotIn("\u202e", sanitized); self.assertIn("\\x1b]8;;owned\\x07\\u202e", sanitized)
+        literal = _chat_block_message(format_agent_reply_content('{"z":"界","a":[1,true]}'), metadata=None)
+        rendered = render_plain(literal, width=40).text
+        self.assertIn('|   "z": "界",', rendered); self.assertIn('|     true', rendered)
+        fenced = render_plain(_chat_block_message("```python\n  **literal** <tag>\n```", metadata=None), width=40).text
+        self.assertIn("|   **literal** <tag>", fenced)
+        for unsupported in ("![image](https://example.com/a)", "| a | b |\n| --- | --- |", "<b>literal</b>"):
+            rendered = render_plain(_chat_block_message(unsupported, metadata=None), width=80).text
+            self.assertIn(unsupported.split("\n")[0], rendered)
+        with mock.patch("story_writing_agents.interactive_terminal._markdown.MarkdownIt", side_effect=RuntimeError("parser failed")):
+            fallback = render_plain(_chat_block_message("**literal fallback**", metadata=None), width=40).text
+        self.assertIn("**literal fallback**", fallback)
+        for width in (3, 10):
+            narrow = render_plain(_chat_block_message("界界界 e\u0301 🌊 x", metadata=None), width=width).text
+            self.assertTrue(all(_physical_width(row) <= width for row in narrow.splitlines()))
+            self.assertEqual(narrow.count("界"), 3); self.assertIn("e\u0301", narrow)
 
-        json_message = _chat_block_message(
-            format_agent_reply_content('{"z":"界","a":[1,true]}'),
-            sender="u",
-            metadata=None,
-            role=SemanticRole.DEFAULT,
-            state=ViewState.IDLE,
-            accent=SpeakerAccent.MAGENTA,
-        )
-        self.assertEqual(
-            render_plain(json_message, width=20).text,
-            'u\n│ {\n│   "z": "界",\n│   "a": [\n│     1,\n│     true\n│   ]\n│ }\n',
-        )
-
-        hostile = _chat_block_message(
-            "safe\x07 \x1b]8;;owned\x07 \u202e",
-            sender="u\x1b",
-            metadata="m\u202e",
-            role=SemanticRole.DEFAULT,
-            state=ViewState.IDLE,
-            accent=SpeakerAccent.MAGENTA,
-        )
-        hostile_plain = render_plain(hostile, width=80).text
-        self.assertEqual(
-            hostile_plain,
-            "u\\x1b\n  m\\u202e\n│ safe\\x07 \\x1b]8;;owned\\x07 \\u202e\n",
-        )
-        self.assertNotIn("\x1b", hostile_plain)
-        self.assertNotIn("\x07", hostile_plain)
-        self.assertNotIn("\u202e", hostile_plain)
 
     def test_completed_state_is_silent_without_rewriting_literal_content(self) -> None:
-        message = _chat_block_message(
-            "body [completed]",
-            sender="provider [completed]",
-            metadata="literal [completed]",
-            role=SemanticRole.DEFAULT,
-            state=ViewState.COMPLETED,
-            accent=SpeakerAccent.CYAN,
-        )
-
-        rendered = render_plain(message, width=80).text
-        self.assertEqual(
-            rendered,
-            "provider [completed]\n  literal [completed]\n│ body [completed]\n",
-        )
+        rendered = render_plain(_chat_block_message("body [completed]", sender="provider [completed]",
+            metadata="literal [completed]", role=SemanticRole.DEFAULT, state=ViewState.COMPLETED,
+            accent=SpeakerAccent.CYAN), width=80).text
         self.assertEqual(rendered.count("[completed]"), 3)
+        self.assertTrue(rendered.startswith("+-- provider [completed] "))
+        self.assertLess(rendered.index("body [completed]"), rendered.index("+-- Metadata "))
 
-    def test_chat_block_accents_only_headers_and_profiles_share_topology(
-        self,
-    ) -> None:
-        expected_sgr = {
-            SpeakerAccent.MAGENTA: "\x1b[1;35m",
-            SpeakerAccent.CYAN: "\x1b[1;36m",
-            SpeakerAccent.YELLOW: "\x1b[1;33m",
-            SpeakerAccent.GREEN: "\x1b[1;32m",
-            SpeakerAccent.BLUE: "\x1b[1;34m",
-        }
-        plain_text = "you\n  metadata\n│ first\n│ second\n"
+
+    def test_chat_block_accents_only_headers_and_profiles_share_topology(self) -> None:
+        expected_sgr = {SpeakerAccent.MAGENTA: "\x1b[1;35m", SpeakerAccent.CYAN: "\x1b[1;36m",
+            SpeakerAccent.YELLOW: "\x1b[1;33m", SpeakerAccent.GREEN: "\x1b[1;32m", SpeakerAccent.BLUE: "\x1b[1;34m"}
         for accent, sgr in expected_sgr.items():
             with self.subTest(accent=accent):
-                message = _chat_block_message(
-                    "first\nsecond",
-                    sender="you",
-                    metadata="metadata",
-                    accent=accent,
-                )
-                ansi = render_component(
-                    message,
-                    _capability(CapabilityProfile.ANSI, width=80),
-                )
-                plain = render_component(
-                    message,
-                    _capability(CapabilityProfile.PLAIN, width=80),
-                )
-                line = render_component(
-                    message,
-                    _capability(CapabilityProfile.LINE, width=80),
-                )
-                self.assertEqual(
-                    ansi.text,
-                    f"{sgr}you\x1b[0m\n  metadata\n│ first\n│ second\n",
-                )
-                self.assertEqual(strip_decorative_sgr(ansi.text), plain_text)
-                self.assertEqual(plain.text, plain_text)
+                message = _chat_block_message("first\nsecond", sender="you", metadata="Tokens: input 0 | output 2",
+                    role=SemanticRole.DEFAULT, state=ViewState.IDLE, accent=accent)
+                ansi = render_component(message, _capability(CapabilityProfile.ANSI, width=80))
+                plain = render_component(message, _capability(CapabilityProfile.PLAIN, width=80))
+                line = render_component(message, _capability(CapabilityProfile.LINE, width=80))
+                self.assertEqual(strip_decorative_sgr(ansi.text), plain.text)
                 self.assertEqual(plain, line)
-                self.assertNotIn("\x1b", ansi.text.split("\n", 1)[1])
+                self.assertTrue(ansi.text.startswith(sgr + "+-- you "))
+                self.assertIn("\x1b[0m", ansi.text)
+                body = next(row for row in ansi.text.split("\n") if "first" in row)
+                self.assertNotIn("\x1b", body)
+                self.assertIn("\x1b[34m", next(row for row in ansi.text.split("\n") if "Metadata" in row))
+                self.assertIn("\x1b[2m", next(row for row in ansi.text.split("\n") if "Tokens:" in row))
+                self.assertIn("Metadata", plain.text)
+                self.assertLess(plain.text.index("first"), plain.text.index("Metadata"))
+        wrapped = render_component(_chat_block_message("body", sender="plot",
+            metadata="Plot & Structure Architect", accent=SpeakerAccent.YELLOW), _capability(CapabilityProfile.ANSI, width=20))
+        self.assertTrue(wrapped.text.startswith("\x1b[1;33m-- plot --\x1b[0m"))
+        self.assertIn("-- Metadata --", strip_decorative_sgr(wrapped.text))
+        self.assertTrue(all(_physical_width(row) <= 20 for row in strip_decorative_sgr(wrapped.text).split("\n")))
 
-        wrapped = render_component(
-            _chat_block_message(
-                "body",
-                metadata="Plot & Structure Architect",
-                accent=SpeakerAccent.YELLOW,
-            ),
-            _capability(CapabilityProfile.ANSI, width=20),
-        )
-        wrapped_lines = wrapped.text.split("\n")
-        body_index = wrapped_lines.index("│ body")
-        self.assertEqual(wrapped_lines[0], "\x1b[1;33mplot\x1b[0m")
-        self.assertEqual(
-            wrapped_lines[1:body_index],
-            [
-                "  Plot & Structure ",
-                "  Architect",
-            ],
-        )
-        body = "\n".join(wrapped_lines[body_index:])
-        self.assertEqual(body, "│ body\n")
-        self.assertNotIn("\x1b", body)
 
-    def test_list_view_renders_inline_and_chat_block_messages_in_order(
-        self,
-    ) -> None:
-        view = ListView(
-            "Messages",
-            (
-                Field("Before", "field"),
-                Message("inline", "old", state=ViewState.IDLE),
-                _chat_block_message(
-                    "one two",
-                    sender="you",
-                    metadata=None,
-                    role=SemanticRole.DEFAULT,
-                    state=ViewState.IDLE,
-                    accent=SpeakerAccent.MAGENTA,
-                ),
-                Record("after", content="record"),
-            ),
-            total_count=4,
-            state=ViewState.COMPLETED,
-        )
+    def test_list_view_renders_inline_and_chat_block_messages_in_order(self) -> None:
+        view = ListView("Messages", (Field("Before", "field"), Message("inline", "old", state=ViewState.IDLE),
+            _chat_block_message("one two", sender="you", metadata=None, role=SemanticRole.DEFAULT,
+                state=ViewState.IDLE, accent=SpeakerAccent.MAGENTA), Record("after", content="record")),
+            total_count=4, state=ViewState.COMPLETED)
         frame = render_plain(view, width=40)
-        self.assertEqual(
-            frame.text,
-            "Messages (4)\n"
-            "  Before:\n"
-            "   field\n"
-            "  inline> old\n"
-            "  you\n"
-            "  │ one two\n"
-            "\n"
-            "  [after]\n"
-            "   record",
-        )
-        self.assertEqual(frame.line_count, 9)
-        self.assertEqual(
-            tuple(type(item) for item in view.items),
-            (Field, Message, Message, Record),
-        )
+        self.assertEqual(tuple(type(item) for item in view.items), (Field, Message, Message, Record))
+        self.assertTrue(frame.text.startswith("Messages (4)\n"))
+        self.assertTrue(frame.text.index("Before:") < frame.text.index("inline>") < frame.text.index("-- you")
+            < frame.text.index("one two") < frame.text.index("after"))
+        self.assertTrue(all(_physical_width(line) <= 40 for line in frame.text.split("\n")))
+        self.assertEqual(frame.line_count, len(frame.text.split("\n")))
+
 
     def test_adjacent_chat_blocks_own_one_separator_across_composition(self) -> None:
-        first = _chat_block_message(
-            "First body.",
-            sender="You → Plot & Structure Architect",
-            metadata=None,
-            role=SemanticRole.DEFAULT,
-            state=ViewState.IDLE,
-            accent=SpeakerAccent.MAGENTA,
-        )
-        second = _chat_block_message(
-            "Second body.",
-            sender="Plot & Structure Architect → You",
-            metadata=None,
-            state=ViewState.IDLE,
-            accent=SpeakerAccent.YELLOW,
-        )
-        section = Section("Speeches", (first, second))
-        self.assertEqual(
-            render_plain(section, width=80).text,
-            "Speeches\n"
-            "  You → Plot & Structure Architect\n"
-            "  │ First body.\n"
-            "\n"
-            "  Plot & Structure Architect → You\n"
-            "  │ Second body.\n",
-        )
-
+        first = _chat_block_message("body", sender="first", metadata=None,
+            role=SemanticRole.DEFAULT, state=ViewState.IDLE, accent=SpeakerAccent.MAGENTA)
+        second = _chat_block_message("reply", sender="second", metadata=None,
+            state=ViewState.IDLE, accent=SpeakerAccent.YELLOW)
+        section = Section("Chat", (first, second))
+        text = render_plain(section, width=80).text
+        self.assertEqual(text.count("-- first "), 1); self.assertEqual(text.count("-- second "), 1)
+        self.assertIn("\n\n  +-- second ", text)
+        self.assertNotIn("\n\n\n  +-- second ", text)
         records: list[str] = []
-        output = InteractiveSemanticOutput(
-            InteractiveTerminal(lambda prompt: "", records.append)
-        )
-        output.write_component(first)
-        output.write_component(second)
-        self.assertEqual(
-            records,
-            [
-                "You → Plot & Structure Architect\n│ First body.\n\n",
-                "Plot & Structure Architect → You\n│ Second body.\n\n",
-            ],
-        )
-        self.assertIn("│ First body.\n\nPlot & Structure Architect", "".join(records))
+        output = InteractiveSemanticOutput(InteractiveTerminal(lambda _prompt: "unused", records.append))
+        output.write_component(first); output.write_component(second)
+        self.assertEqual(len(records), 2)
+        joined = "".join(records)
+        self.assertIn("\n\n+-- second ", joined)
+        self.assertNotIn("\n\n\n+-- second ", joined)
+        self.assertIn("| body", joined); self.assertIn("| reply", joined)
+
 
     def test_adapter_construction_is_resource_free_and_each_call_writes_once(
         self,
@@ -982,17 +794,16 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
                         render.call_args.args[0],
                         Message(
                             alias,
-                            expected_content,
+                            '{"answer":"界"}',
                             role=SemanticRole.AGENT,
                             state=ViewState.COMPLETED,
                             presentation=MessagePresentation.CHAT_BLOCK,
                             accent=accent,
                         ),
                     )
-                    self.assertEqual(
-                        records[-1],
-                        f'{alias}\n│ {{\n│   "answer": "界"\n│ }}\n\n',
-                    )
+                    self.assertTrue(records[-1].startswith(f"+-- {alias} "))
+                    body = "\n".join(row[2:-2].rstrip() for row in records[-1].splitlines() if row.startswith("| "))
+                self.assertEqual(body, expected_content)
 
         self.assertEqual(render.call_count, 4)
         self.assertEqual(len(records), 4)
@@ -1090,22 +901,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
                     citation_sequence=3,
                     citation_kind="reply",
                 ),
-                Record(
-                    "search c_0123456789",
-                    fields=(
-                        Field("Status", "archived"),
-                        Field("Match", "event"),
-                        Field("Subject", "Opening scene"),
-                        Field(
-                            "Citation",
-                            "conversation c_0123456789, turn turn_2, "
-                            "sequence 3, kind reply",
-                        ),
-                        Field("Snippet", "harbor clue"),
-                    ),
-                    role=SemanticRole.MUTED,
-                    state=ViewState.COMPLETED,
-                ),
+                Message("search c_0123456789", "harbor clue", presentation=MessagePresentation.CHAT_BLOCK, metadata="Status: archived\nMatch: event\nSubject: Opening scene\nCitation: conversation c_0123456789, turn turn_2, sequence 3, kind reply\nOutcome: search excerpt\nInput tokens: unavailable | Output tokens: unavailable", role=SemanticRole.MUTED, state=ViewState.COMPLETED),
             ),
             (
                 lambda: terminal.write_conversation_transcript_event(

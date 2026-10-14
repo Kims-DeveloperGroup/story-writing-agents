@@ -107,6 +107,7 @@ from .agents import (
 )
 from .agent_context.accounting import (
     ProviderCallAccounting,
+    ProviderUsage,
     ProviderCallKind,
     ProviderCallState,
 )
@@ -2123,6 +2124,7 @@ class _AccountingContextProvider:
             role=self._role,
             invocation_kind=self._invocation_kind,
             validation_details=details,
+            usage=accounting.usage,
         )
 
     @property
@@ -2167,6 +2169,7 @@ class _CollaborationInvocationResult:
     )
     trace: ReplyTrace | None = None
     pending_validation: tuple[str, tuple[tuple[str, tuple[str, ...]], ...]] | None = None
+    provider_invocation_id: str | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         if self.trace is not None and type(self.trace) is not ReplyTrace:
@@ -4468,6 +4471,7 @@ class StoryRuntime:
             evidence=request.basis.evidence, recommendation_request=request,
             trace=getattr(source.payload, "trace", None),
             validation_details=validation_details,
+            provider_invocation_id=getattr(source.payload, "provider_invocation_id", None),
         )
 
     def _recommendation_closure_draft(
@@ -4888,7 +4892,8 @@ class StoryRuntime:
             LeadOutcomeKind.ANSWER, closure.payload.message, None, None, None,
             CollaborationNextAction.CONTINUE_WITH_LEAD,
             CollaborationLeadEvidence(LeadOutcomeScope.WORKFLOW_META, LeadEvidenceStatus.NOT_APPLICABLE, ()),
-            validation_details=validation_details)
+            validation_details=validation_details,
+            provider_invocation_id=lead_result.provider_invocation_id)
 
     def _exploration_admission_barrier(self, snapshot: SessionHistorySnapshot) -> None:
         """Block only new exploration/adoption against an owner's unresolved boundary."""
@@ -5333,6 +5338,8 @@ class StoryRuntime:
                         proposal, projection.current_state, projection.confirmation_request_id,
                         CollaborationNextAction.SUBMIT_CONFIRMATION, evidence=proposal.basis.evidence,
                         trace=None if judgment is None else judgment.payload.trace,
+
+                        provider_invocation_id=None if judgment is None else judgment.payload.provider_invocation_id,
                     )
                     return LeadTaskDecisionResult(session_id, conversation_id, decision.action,
                                                   decision.task_ref, transition.event_id, turn)
@@ -5474,6 +5481,7 @@ class StoryRuntime:
         session_id: str, conversation_id: str, turn_id: str, step_id: str,
         report: LeadDiscussionReport, projection: CollaborationHistoryProjection, *,
         validation_details: tuple[str, ...] = (),
+        provider_invocation_id: str | None = None,
     ) -> LeadTurnResult:
         pending = projection.next_safe_action
         if pending not in {
@@ -5509,6 +5517,8 @@ class StoryRuntime:
                 if pending is CollaborationNextAction.SUBMIT_COMMIT_DECISION else None
             ),
             story_commit_preparation_request=preparation,
+
+            provider_invocation_id=provider_invocation_id,
         )
 
     async def decide_lead_task(
@@ -7790,6 +7800,7 @@ class StoryRuntime:
                 item.submission_uncertain,
                 item.artifact_binding,
                 item.generation_pin,
+                provider_invocation_id=item.provider_invocation_id,
             )
         return item
 
@@ -8330,6 +8341,7 @@ class StoryRuntime:
                 0 if result is None else result.submitted_physical_calls,
                 failure,
                 False if result is None else result.submission_uncertain,
+                provider_invocation_id=None if result is None else result.provider_invocation_id,
             )
         assert result is not None
         return result
@@ -8544,6 +8556,7 @@ class StoryRuntime:
                         origin=origin,
                     ),
                     pending_validation=pending_validation,
+                    provider_invocation_id=provider.invocation_id,
                 )
 
             decoded: object | None = None
@@ -9002,6 +9015,7 @@ class StoryRuntime:
                         payload=replace(
                             invocation_result.value,
                             trace=invocation_result.trace,
+                            provider_invocation_id=invocation_result.provider_invocation_id,
                         ),
                     )
                 )
@@ -9126,12 +9140,14 @@ class StoryRuntime:
                     collaboration_value = replace(
                         value.collaboration,
                         trace=synthesis_result.trace,
+                        provider_invocation_id=synthesis_result.provider_invocation_id,
                     )
-                    artifact_value = value.artifact
+                    artifact_value = replace(value.artifact, provider_invocation_id=synthesis_result.provider_invocation_id)
                 elif type(value) is _LeadSynthesisResult:
                     collaboration_value = replace(
                         value.collaboration,
                         trace=synthesis_result.trace,
+                        provider_invocation_id=synthesis_result.provider_invocation_id,
                     )
                     recommended_action = value.recommended_action
                     artifact_value = None
@@ -9356,11 +9372,15 @@ class StoryRuntime:
         if proposal.premise_decision is not None:
             if synthesis_payload is not None and synthesis_payload.premise_report is not None and result.overall_outcome is CollaborationExecutionOutcomeKind.SUCCEEDED:
                 return self._premise_report_turn(session_id, events[-1].conversation_id, events, projection,
-                    synthesis_payload.message, validation_details=validation_details)
+                    synthesis_payload.message, validation_details=validation_details,
+                    provider_invocation_id=None if synthesis_payload is None else synthesis_payload.provider_invocation_id,
+                    )
             return LeadTurnResult(session_id, events[-1].conversation_id, turn_id, proposal.step_id,
                 LeadOutcomeKind.RECOMMENDATION, "Premise analysis did not produce a confirmed choice; recorded calls remain charged. Clarify and freshly propose.",
                 None, projection.current_state, None, CollaborationNextAction.CONTINUE_WITH_LEAD,
-                validation_details=validation_details)
+                validation_details=validation_details,
+                provider_invocation_id=None if synthesis_payload is None else synthesis_payload.provider_invocation_id,
+                )
         next_intent = (
             synthesis_payload.next_intent if synthesis_payload is not None else None
         )
@@ -9417,7 +9437,7 @@ class StoryRuntime:
                     kind=CollaborationEventKind.MESSAGE,
                     sender=_LEAD_ACTOR,
                     recipient=_USER_ACTOR,
-                    payload=CollaborationMessagePayload(notice),
+                    payload=CollaborationMessagePayload(notice, provider_invocation_id=None if synthesis_payload is None else synthesis_payload.provider_invocation_id),
                 ),
                 self._terminal_state_draft(
                     events=events,
@@ -9473,6 +9493,7 @@ class StoryRuntime:
                 CollaborationNextAction.SUBMIT_CONFIRMATION,
                 next_proposal.basis.evidence,
                 validation_details=validation_details,
+                provider_invocation_id=None if synthesis_payload is None else synthesis_payload.provider_invocation_id,
             )
 
         state = {
@@ -9535,7 +9556,7 @@ class StoryRuntime:
                 kind=CollaborationEventKind.MESSAGE,
                 sender=_LEAD_ACTOR,
                 recipient=_USER_ACTOR,
-                payload=CollaborationMessagePayload(message),
+                payload=CollaborationMessagePayload(message, provider_invocation_id=None if synthesis_payload is None else synthesis_payload.provider_invocation_id),
             )
         ]
         if state is CollaborationStepState.INTERRUPTED:
@@ -9584,6 +9605,7 @@ class StoryRuntime:
             None,
             CollaborationNextAction.CONTINUE_WITH_LEAD,
             validation_details=validation_details,
+            provider_invocation_id=None if synthesis_payload is None else synthesis_payload.provider_invocation_id,
         )
 
     def _execution_validation_details(
@@ -9864,7 +9886,7 @@ class StoryRuntime:
                 kind=CollaborationEventKind.MESSAGE,
                 sender=_LEAD_ACTOR,
                 recipient=_USER_ACTOR,
-                payload=CollaborationMessagePayload(message),
+                payload=CollaborationMessagePayload(message, provider_invocation_id=None if artifact_synthesis is None else artifact_synthesis.provider_invocation_id),
             )
         ]
         if reviewed_proposal is not None:
@@ -10007,6 +10029,7 @@ class StoryRuntime:
             ArtifactProposalResult(state, candidate, reviewed_proposal),
             application_payload,
             validation_details=validation_details,
+            provider_invocation_id=None if artifact_synthesis is None else artifact_synthesis.provider_invocation_id,
         )
 
     def _terminal_state_draft(
@@ -11278,6 +11301,7 @@ class StoryRuntime:
                     session_id=session_id, conversation_id=conversation_id, turn_id=turn_id, step_id=step_id,
                     message="The offered current authoring task cannot fit preparation and full final review within its twelve-call lineage. Clarify or freshly propose a task revision.",
                     validation_details=("existing scope3 task retains preparation and full-review physical floor",),
+                    provider_invocation_id=None if provider is None else provider.invocation_id,
                 )
             premise_question_id = self._new_id("q") if (
                 preparation is None and previous_proposal is None
@@ -11353,6 +11377,7 @@ class StoryRuntime:
                         session_id=session_id, conversation_id=conversation_id, turn_id=turn_id, step_id=step_id,
                         message="No exact completed local source can offer a fresh revision. Focus its source conversation or clarify before proposing new work.",
                         validation_details=("fresh successor requires an exact completed local scope3 source",),
+                        provider_invocation_id=None if provider is None else provider.invocation_id,
                     )
             if preparation is not None:
                 request = cast(LeadRecommendationRequestPayload, preparation.request_event.payload)
@@ -12228,6 +12253,7 @@ class StoryRuntime:
                                 decoded.kind, decoded.message, decoded_evidence, decoded.authoring_scope,
                                 core_document_readiness=decoded.core_document_readiness if decoded.core_document_assessment is not None else None,
                                 authoring_admission=decoded.authoring_admission,
+                                provider_invocation_id=None if provider is None else provider.invocation_id,
                             ),
                         )
                         self._recommendation_request_draft(
@@ -12366,6 +12392,7 @@ class StoryRuntime:
                                 if previous_proposal is not None
                                 else None
                             ),
+                            provider_invocation_id=None if provider is None else provider.invocation_id,
                         )
                     submitted_before_correction = provider.submitted_physical_calls
                     try:
@@ -12423,6 +12450,7 @@ class StoryRuntime:
                                     if previous_proposal is not None
                                     else None
                                 ),
+                                provider_invocation_id=None if provider is None else provider.invocation_id,
                             )
                         if (
                             provider.submitted_physical_calls
@@ -12459,6 +12487,7 @@ class StoryRuntime:
                                 if previous_proposal is not None
                                 else None
                             ),
+                            provider_invocation_id=None if provider is None else provider.invocation_id,
                         )
                 assert result is not None
                 if decoded_discussion is None and interaction_mode is not LeadInteractionMode.EXPLORATION:
@@ -12516,6 +12545,7 @@ class StoryRuntime:
                             if previous_proposal is not None
                             else None
                         ),
+                        provider_invocation_id=None if provider is None else provider.invocation_id,
                     )
                 if provider is None or provider.last_submitted_call_id is None:
                     raise
@@ -12671,13 +12701,15 @@ class StoryRuntime:
                     session_id=session_id, conversation_id=conversation_id,
                     turn_id=turn_id, step_id=step_id, kind=CollaborationEventKind.LEAD_DISCUSSION,
                     sender=_RUNTIME_ACTOR, recipient=_USER_ACTOR,
-                    payload=CollaborationLeadDiscussionPayload(decoded_discussion),
+                    payload=CollaborationLeadDiscussionPayload(decoded_discussion, provider_invocation_id=provider.invocation_id),
                 ),))
                 projection = self.conversation_storage_services.event_store.read_context(session_id, conversation_id)
                 provider._public_accepted_call_id = provider.last_submitted_call_id
                 return self._discussion_turn(
                     session_id, conversation_id, turn_id, step_id, decoded_discussion,
                     projection, validation_details=provider.validation_details,
+
+                    provider_invocation_id=None if provider is None else provider.invocation_id,
                 )
             if interaction_mode is LeadInteractionMode.EXPLORATION:
                 assert decoded_exploration is not None
@@ -12699,6 +12731,7 @@ class StoryRuntime:
                     next_action=CollaborationNextAction.CONTINUE_WITH_LEAD,
                     interaction_mode=interaction_mode, exploration=decoded_exploration,
                     validation_details=provider.validation_details,
+                    provider_invocation_id=None if provider is None else provider.invocation_id,
                 )
             if outcome.kind is LeadOutcomeKind.PROPOSAL:
                 if outcome.artifact_intent is not None:
@@ -12757,6 +12790,7 @@ class StoryRuntime:
                                 "declared preparation and full final-review floor exceeds "
                                 "the remaining budget",
                             ),
+                            provider_invocation_id=None if provider is None else provider.invocation_id,
                         )
                 intent = outcome.proposal
                 assert intent is not None
@@ -12792,6 +12826,7 @@ class StoryRuntime:
                             "declared preparation and full final-review floor exceeds "
                             "the remaining budget",
                         ),
+                        provider_invocation_id=None if provider is None else provider.invocation_id,
                     )
                 request_id = self._new_id("c")
                 message_event = self._draft(
@@ -12810,6 +12845,7 @@ class StoryRuntime:
                         outcome.trace,
                         core_document_readiness=outcome.core_document_readiness if outcome.core_document_assessment is not None else None,
                         authoring_admission=outcome.authoring_admission,
+                        provider_invocation_id=None if provider is None else provider.invocation_id,
                     ),
                 )
                 proposal_event = self._draft(
@@ -12869,6 +12905,7 @@ class StoryRuntime:
                     evidence,
                     trace=outcome.trace,
                     validation_details=provider.validation_details,
+                    provider_invocation_id=None if provider is None else provider.invocation_id,
                 )
 
             refreshed = self.conversation_storage_services.event_store.read_context(
@@ -12887,6 +12924,7 @@ class StoryRuntime:
                     outcome.trace,
                     authoring_admission=outcome.authoring_admission,
                     core_document_readiness=outcome.core_document_readiness if outcome.core_document_assessment is not None else None,
+                    provider_invocation_id=None if provider is None else provider.invocation_id,
                 ),
             )
             final_drafts = (
@@ -12948,6 +12986,7 @@ class StoryRuntime:
                 evidence,
                 trace=outcome.trace,
                 validation_details=provider.validation_details,
+                provider_invocation_id=None if provider is None else provider.invocation_id,
             )
         finally:
             primary = sys.exception()
@@ -13107,6 +13146,8 @@ class StoryRuntime:
                 outcome.trace,
                 core_document_readiness=outcome.core_document_readiness if outcome.core_document_assessment is not None else None,
                 authoring_admission=outcome.authoring_admission,
+
+                provider_invocation_id=None if public_response_provider is None else public_response_provider.invocation_id,
             ),
         )
         candidate_payload = ArtifactReviewCandidatePayload(
@@ -13203,6 +13244,8 @@ class StoryRuntime:
                 candidate_payload,
             ),
             trace=outcome.trace,
+
+            provider_invocation_id=None if public_response_provider is None else public_response_provider.invocation_id,
         )
 
     @classmethod
@@ -14173,6 +14216,8 @@ class StoryRuntime:
                                      origin_control_event_id=control.event_id,
                                      associated_task_ref=control.payload.receipt.source_task_ref),
                 current,
+
+                provider_invocation_id=invocation_id,
             )
         return LeadTurnResult(
             session_id,
@@ -14186,6 +14231,7 @@ class StoryRuntime:
             None,
             CollaborationNextAction.RETRY_LEAD_TURN,
             None,
+            provider_invocation_id=invocation_id,
         )
 
     def _structured_fallback_lead_result(
@@ -14199,6 +14245,7 @@ class StoryRuntime:
         state: CollaborationStepState | None = None,
         validation_details: tuple[str, ...] = (),
         message: str = _SAFE_STRUCTURED_FALLBACK_MESSAGE,
+        provider_invocation_id: str | None = None,
     ) -> LeadTurnResult:
         """Persist one visible no-action answer after exhausted schema repair."""
 
@@ -14228,6 +14275,7 @@ class StoryRuntime:
                         payload=CollaborationMessagePayload(
                             message,
                             trace,
+                            provider_invocation_id=provider_invocation_id,
                         ),
                     ),
                 ),
@@ -14251,6 +14299,7 @@ class StoryRuntime:
             evidence,
             trace=trace,
             validation_details=validation_details,
+            provider_invocation_id=provider_invocation_id,
         )
 
     @staticmethod
@@ -15184,6 +15233,7 @@ class StoryRuntime:
     def _premise_report_turn(
         self, session_id, conversation_id, events, projection, message=None,
         *, validation_details=(),
+        provider_invocation_id: str | None = None,
     ) -> LeadTurnResult:
         report = projection.premise_report
         if report is None:
@@ -15247,6 +15297,7 @@ class StoryRuntime:
             premise_report_ref=PremiseReportRef(conversation_id,
                 cast(str, projection.premise_report_event_id), report.report_digest, report.spec.question_id),
             validation_details=validation_details,
+            provider_invocation_id=provider_invocation_id,
         )
 
     def _validate_premise_control(self, session_id, conversation_id, selection, events, projection):
@@ -17873,6 +17924,7 @@ class StoryRuntime:
         role: str,
         invocation_kind: CollaborationInvocationKind,
         validation_details: tuple[str, ...] = (),
+        usage: ProviderUsage | None = None,
     ) -> None:
         projection = self.conversation_storage_services.event_store.read_context(
             session_id,
@@ -17898,6 +17950,7 @@ class StoryRuntime:
                         call_kind=call_kind,
                         state=state,
                         validation_details=validation_details,
+                        usage=usage,
                     ),
                 ),
             ),

@@ -603,6 +603,13 @@ decision = LeadTaskDecision.from_task(
 result = await runtime.decide_lead_task(decision)
 ```
 
+`LeadTurnResult.provider_invocation_id` is an optional, keyword-only host
+correlation identity. When present, it identifies the exact provider invocation
+behind the visible reply. Canonical submitted-call events may retain validated
+`ProviderUsage` counters for that invocation; the terminal derives footer totals
+from those events. Legacy results without the identity remain valid. This field
+adds no provider dispatch, confirmation, Apply, or Git authority.
+
 Inspection returns `CollaborationHistoryProjection`. `available_tasks` contains exact task references, labels, status, scope, goal, source events, pending controls, and submitted call IDs. `selectable_materials` contains whole text, a preview, its exact reference, and available response acceptance/call facts. `public_responses` keeps the public response records separate from the current execution projection; `discussion_context` identifies the current USER task transition, including a Resume or New Task that is still clarifying its intent. Such follow-ups keep the same planned task/revision, selected inputs, and submitted-call budget until a matching fresh proposal is admitted.
 
 Each available task exposes `ref.task_id`, `ref.task_revision`, and lifecycle

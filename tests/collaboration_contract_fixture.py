@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from story_writing_agents.agent_context.accounting import ProviderUsage
 
 from story_writing_agents.agents import (
     CHARACTER_CUSTODIAN,
@@ -753,6 +754,23 @@ def provider_call_drafts(
             ),
         ),
     )
+
+
+def measured_batch(batch: CollaborationEventBatch) -> CollaborationEventBatch:
+    """Attach native usage and exact host invocations without changing legacy fixtures."""
+    events = []
+    for draft in batch.events:
+        payload = draft.payload
+        if type(payload) is CollaborationProviderCallPayload and payload.state is CollaborationProviderCallState.SUBMITTED:
+            payload = replace(payload, usage=ProviderUsage(0, 2, 7))
+        elif type(payload) is CollaborationLeadJudgmentPayload:
+            payload = replace(payload, provider_invocation_id="invocation_lead")
+        elif type(payload) is CollaborationSpecialistReplyPayload:
+            payload = replace(payload, provider_invocation_id=f"invocation_{payload.assignment_id}")
+        elif type(payload) is CollaborationLeadSynthesisPayload:
+            payload = replace(payload, provider_invocation_id="invocation_synthesis")
+        events.append(replace(draft, payload=payload))
+    return replace(batch, events=tuple(events))
 
 
 def store_batch(
