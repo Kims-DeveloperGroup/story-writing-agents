@@ -993,14 +993,14 @@ class PtyCliProcess:
         *,
         after: int = 0,
         timeout: float = _PROCESS_DEADLINE_SECONDS,
+        readiness: Callable[[], bool] | None = None,
     ) -> str:
-        """Read until one semantic fragment appears or a bounded failure occurs."""
+        """Wait for a semantic fragment and optional readiness within one deadline."""
 
         encoded = expected.encode("utf-8")
 
         def captured_contains_expected() -> bool:
-            captured = self.normalized_bytes[after:]
-            return encoded in captured or encoded in _ANSI_SGR_BYTES.sub(b"", captured)
+            return (encoded in (captured := self.normalized_bytes[after:]) or encoded in _ANSI_SGR_BYTES.sub(b"", captured)) and (readiness is None or readiness())
 
         deadline = time.monotonic() + timeout
         while not captured_contains_expected():
@@ -1689,7 +1689,7 @@ print(f"SHELL_VALUE={input('shell> ')}")
         process.wait_for_text("3/14 occurrences • Search all text='개요'", after=mark)
         process.send_bytes(b"q\x1b[<65;8;8M\x1b[<0;8;8mafter-viewer\n")
         process.wait_for_text("AFTER_VIEWER=after-viewer")
-        process.wait_for_text("native> ")
+        process.wait_for_text("native> ", readiness=lambda: termios.tcgetattr(process.master_fd) == process.original_terminal_attributes)
         self.assertEqual(termios.tcgetattr(process.master_fd), process.original_terminal_attributes)
         mark = process.output_mark()
         process.send_line("opaque-native-input")
