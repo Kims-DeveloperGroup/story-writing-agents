@@ -593,9 +593,9 @@ PYTHONPATH=src python -m tests.runner run \
 ```
 
 For runtime or test changes, CI requires four complementary full-suite shards.
-Hosted full shards use standard Ubuntu 24.04 ARM runners; static validation,
-the runtime fast lane and reconciliation use Ubuntu x64. Both architectures
-use the same locked dependencies and test inventory. Full-suite selection
+Hosted full shards, static validation, the runtime fast lane, and reconciliation
+use standard Ubuntu 24.04 x64 runners with the same locked dependencies and test
+inventory. Full-suite selection
 includes test-only changes. The fixed timing limits still apply to every
 selected full shard; a diagnostic run never replaces this evidence.
 
