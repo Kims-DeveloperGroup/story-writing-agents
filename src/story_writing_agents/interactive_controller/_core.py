@@ -135,6 +135,7 @@ from ..interactive_terminal import (
     InteractiveTerminal,
     ListView,
     Message,
+    MessagePresentation,
     Notice,
     Panel,
     Picker,

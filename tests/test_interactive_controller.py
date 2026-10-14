@@ -1258,6 +1258,17 @@ class ControllerContractTests(ControllerTestCase):
         self.assertIn("Input tokens: 0 | Output tokens: 2", rendered)
         handle = controller_core_module.visible_conversation_handle(metadata, services.catalog.list("session_a", include_archived=True))
         self.assertIn(f"Continue with /transcript {handle} 2 --from {start + 2}.", rendered)
+        callbacks.records.clear()
+        controller._collaboration_history_service = controller_core_module.CollaborationHistoryService(
+            controller_core_module.CollaborationHistorySearchScope("session_a", include_archived=False), conversation_storage_services=services)
+        controller._search_attached_conversations(controller_core_module.parse_interactive_line("/search Specialist review is recommended"))
+        self.assertEqual(len(callbacks.records), 3)
+        search = callbacks.records[1]
+        self.assertIn("+-- search ", search)
+        self.assertIn("specialist review is recommended", search)
+        self.assertIn("judgment_event", search)
+        self.assertIn(f"Citation: conversation {handle}", search)
+        self.assertIn("Input tokens: unavailable | Output tokens: unavailable", search)
 
     def test_controller_and_composer_have_no_generic_status_sites(
         self,

@@ -23,7 +23,7 @@ from tests.collaboration_contract_fixture import (
     USER,
     awaiting_history,
     executed_history,
-    contract_batches, measured_batch, store_batch,
+    contract_batches, measured_batch,
 )
 from tests.test_interactive_terminal_composer import _capability
 from tests.test_lead_artifact_application import _application_decision
@@ -32,19 +32,16 @@ from story_writing_agents.conversations import (
     ArtifactReviewDecision,
     ArtifactReviewSynthesisPayload,
     ArtifactApplicationDecisionKind,
-    CollaborationLeadJudgmentPayload,
     CollaborationLeadSynthesisPayload,
     CollaborationEventKind,
     CollaborationMessagePayload,
     CollaborationProviderCallPayload, CollaborationProviderCallState, CollaborationProviderCallKind,
-    CollaborationNextAction,
     CollaborationStepStatePayload,
     CollaborationStepState,
     CollaborationExecutionResult,
     CollaborationSpecialistAssessment,
     CollaborationSpecialistReplyPayload,
-    LeadTurnResult,
-    LeadOutcomeKind,
+    project_collaboration_history,
 )
 from story_writing_agents.git.story_commit_contracts import StoryCommitDecision
 
@@ -85,6 +82,28 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             view = _collaboration_view.project_collaboration_event(artifact, history_events=measured)
             rendered_artifact = render_component(view, _capability(CapabilityProfile.LINE, width=120)).text
             self.assertIn(f"Input tokens: 0 | Output tokens: {2 * len(calls)}", rendered_artifact)
+            services = case.runtime.conversation_storage_services
+            metadata = services.catalog.create(case.session_id, "Measured host finalization")
+            batches = contract_batches(metadata.conversation_id)
+            for name in ("proposal", "confirmation", "running", "calls", "result"):
+                batch = measured_batch(batches[name])
+                drafts = tuple(replace(draft, session_id=case.session_id,
+                    payload=replace(draft.payload, message="**Visible response**") if type(draft.payload) is CollaborationLeadSynthesisPayload else draft.payload) for draft in batch.events)
+                services.event_store.append_batch(replace(batch, events=drafts))
+            known = services.event_store.read(case.session_id, metadata.conversation_id)
+            origin = next(event for event in known if type(event.payload) is CollaborationLeadSynthesisPayload)
+            origin_call = next(event for event in known if type(event.payload) is CollaborationProviderCallPayload and event.payload.state is CollaborationProviderCallState.SUBMITTED and event.payload.invocation_id == origin.payload.provider_invocation_id)
+            before_calls = len(case.backend.calls)
+            finalized = case.runtime._finalize_known_result_locked(case.session_id, known, project_collaboration_history(known))
+            self.assertEqual(len(case.backend.calls), before_calls)
+            final_history = services.event_store.read(case.session_id, metadata.conversation_id)
+            finalization_notice = next(event for event in final_history if event.turn_id == finalized.turn_id and type(event.payload) is CollaborationMessagePayload and event.sender.kind.value == "lead")
+            self.assertNotEqual(finalized.turn_id, origin.turn_id)
+            self.assertEqual(finalized.provider_invocation_id, origin.payload.provider_invocation_id)
+            self.assertEqual(finalization_notice.payload.provider_invocation_id, finalized.provider_invocation_id)
+            self.assertEqual(finalization_notice.payload.content, finalized.message)
+            result_event = next(event for event in known if type(event.payload) is CollaborationExecutionResult and event.payload.synthesis_result_event_id == origin.event_id)
+            self.assertLess(result_event.sequence, finalization_notice.sequence)
 
             records: list[str] = []
             cursor = InteractiveTerminal(input, records.append).write_collaboration_events(
@@ -209,18 +228,8 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Outcome: answer", footer); self.assertIn("Elapsed: 2.1s", footer)
         self.assertIn("Input tokens: 0 | Output tokens: 2", footer)
         self.assertIn("Input tokens: unavailable | Output tokens: 0", response_footer("answer", ResponseUsage(None, 0)))
-        judgment = next(event for event in history if type(event.payload) is CollaborationLeadJudgmentPayload)
-        saved = replace(judgment, payload=replace(judgment.payload, kind=LeadOutcomeKind.ANSWER,
-            message="**Visible response**", provider_invocation_id=lead.payload.invocation_id))
-        live = LeadTurnResult(lead.session_id, lead.conversation_id, lead.turn_id, lead.step_id,
-            LeadOutcomeKind.ANSWER, saved.payload.message, None, None, None, CollaborationNextAction.CONTINUE_WITH_LEAD,
-            evidence=judgment.payload.evidence, provider_invocation_id=lead.payload.invocation_id)
-        measured_history = ()
-        batches = contract_batches(lead.conversation_id)
-        for name in ("proposal", "confirmation", "running", "calls", "result"):
-            measured_history = store_batch(measured_history, measured_batch(batches[name]))
-        live_view = _collaboration_view.project_lead_turn_result(live, public_response_events=measured_history, elapsed="2.1s")
-        saved_view = _collaboration_view.project_collaboration_event(saved, history_events=measured_history)
+        live_view = _collaboration_view.project_lead_turn_result(finalized, public_response_events=final_history, elapsed="2.1s")
+        saved_view = _collaboration_view.project_collaboration_event(finalization_notice, history_events=final_history)
         for view in (live_view, saved_view):
             rendered = render_component(view, _capability(CapabilityProfile.LINE, width=120)).text
             self.assertEqual(rendered.count("Visible response"), 1)
@@ -228,6 +237,13 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Input tokens: 0 | Output tokens: 2", rendered)
             self.assertGreater(rendered.index("Metadata"), rendered.index("Visible response"))
         self.assertIn("Elapsed: 2.1s", render_component(live_view, _capability(CapabilityProfile.LINE, width=120)).text)
+        strict = dict(session_id=finalized.session_id, conversation_id=finalized.conversation_id,
+            turn_id=finalized.turn_id, step_id=finalized.step_id, invocation_id=finalized.provider_invocation_id,
+            role=origin_call.payload.role, invocation_kinds=frozenset({origin_call.payload.invocation_kind}))
+        self.assertEqual(response_usage(final_history, **strict), ResponseUsage())
+        for unlinked in (replace(finalized, message="Unlinked host response."), replace(finalized, provider_invocation_id="foreign_invocation")):
+            view = _collaboration_view.project_lead_turn_result(unlinked, public_response_events=final_history)
+            self.assertIn("Input tokens: unavailable | Output tokens: unavailable", render_component(view, _capability(CapabilityProfile.LINE, width=120)).text)
 
 
 

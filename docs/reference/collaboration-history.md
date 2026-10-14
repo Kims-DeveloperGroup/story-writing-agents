@@ -486,6 +486,11 @@ turn, step, and role. It is not a provider response-schema field or execution
 authority. Legacy absence and unknown/ambiguous attribution yield unavailable
 terminal counters; the terminal never guesses from prose, speaker, or ordering.
 
+A finalized Lead synthesis may appear in a later host turn. Its canonical notice,
+execution result, and synthesis-event link must uniquely identify the original
+provider turn before those counters can be used. The visible message retains
+its own turn identity; missing or ambiguous links leave its counters unavailable.
+
 `provider_call_accounting` contains no request or response content. It records
 one invocation/call identity, contiguous ordinal, canonical agent role,
 invocation kind (`lead`, `specialist_assignment`, `lead_synthesis`, or

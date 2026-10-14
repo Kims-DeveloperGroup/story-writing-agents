@@ -158,12 +158,14 @@ class _InlineRoleSpan:
 class _InlineRole:
     """Decorate ordered non-overlapping semantic spans within a base row."""
 
-    __slots__ = ("base", "spans")
+    __slots__ = ("base", "spans", "emphasized_prefix_stop")
 
     def __init__(
         self,
         base: SemanticRole,
         spans: tuple[_InlineRoleSpan, ...],
+        *,
+        emphasized_prefix_stop: int = 0,
     ) -> None:
         if not isinstance(base, SemanticRole):
             raise TypeError("base must be a SemanticRole")
@@ -171,6 +173,10 @@ class _InlineRole:
             type(span) is not _InlineRoleSpan for span in spans
         ):
             raise TypeError("spans must be a tuple of _InlineRoleSpan values")
+        if type(emphasized_prefix_stop) is not int or emphasized_prefix_stop < 0:
+            raise ValueError("emphasized prefix stop must be a non-negative integer")
+        if spans and emphasized_prefix_stop > spans[0].start:
+            raise ValueError("emphasized prefix must precede independent semantic spans")
         previous_stop = 0
         for span in spans:
             if span.start < previous_stop or span.start >= span.stop:
@@ -180,6 +186,7 @@ class _InlineRole:
             previous_stop = span.stop
         self.base = base
         self.spans = spans
+        self.emphasized_prefix_stop = emphasized_prefix_stop
 
 
 class _SpeakerHeaderRole:
@@ -970,7 +977,9 @@ def _form_picker_choice_lines(
                 indent=detail_indent,
             )
         )
-    return _emphasize_choice(lines, choice, highlighted=highlighted, selected=selected)
+    return _emphasize_choice(
+        lines, choice, highlighted=highlighted, selected=selected, prefix_length=len(prefix),
+    )
 
 
 def _form_picker_summary_start(picker: Picker, width: int) -> int | None:
@@ -1789,11 +1798,21 @@ def _picker_lines(
 
 def _emphasize_choice(
     lines: Iterable[_SemanticLine], choice: Choice, *, highlighted: bool, selected: bool,
+    prefix_length: int | None = None,
 ) -> list[_SemanticLine]:
     rendered = list(lines)
     if rendered and choice.enabled and (highlighted or selected):
-        text, _role = rendered[0]
-        rendered[0] = text, _MarkdownRole((MarkdownSpan(0, len(text), ("bold", "code")),))
+        text, role = rendered[0]
+        if prefix_length is None:
+            rendered[0] = text, _MarkdownRole((MarkdownSpan(0, len(text), ("bold", "code")),))
+        elif isinstance(role, _InlineRole):
+            rendered[0] = text, _InlineRole(
+                role.base, role.spans, emphasized_prefix_stop=min(prefix_length, len(text)),
+            )
+        elif isinstance(role, SemanticRole):
+            rendered[0] = text, _InlineRole(
+                role, (), emphasized_prefix_stop=min(prefix_length, len(text)),
+            )
     return rendered
 
 
@@ -2124,7 +2143,9 @@ def _decorate(text: str, role: _LineRole) -> str:
         return f"{_SPEAKER_HEADER_SGR[role.accent]}{text}{_RESET}"
     if isinstance(role, _InlineRole):
         rendered: list[str] = []
-        offset = 0
+        offset = role.emphasized_prefix_stop
+        if offset:
+            rendered.append(f"{_ROLE_SGR[role.base]}\x1b[1m\x1b[7m{text[:offset]}{_RESET}")
         for span in role.spans:
             rendered.append(_decorate(text[offset : span.start], role.base))
             rendered.append(_decorate(text[span.start : span.stop], span.role))

@@ -4893,7 +4893,7 @@ class StoryRuntime:
             CollaborationNextAction.CONTINUE_WITH_LEAD,
             CollaborationLeadEvidence(LeadOutcomeScope.WORKFLOW_META, LeadEvidenceStatus.NOT_APPLICABLE, ()),
             validation_details=validation_details,
-            provider_invocation_id=lead_result.provider_invocation_id)
+            provider_invocation_id=lead_result.payload.invocation_id)
 
     def _exploration_admission_barrier(self, snapshot: SessionHistorySnapshot) -> None:
         """Block only new exploration/adoption against an owner's unresolved boundary."""

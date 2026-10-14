@@ -1385,6 +1385,59 @@ def _speaker_accent(role: str | None) -> SpeakerAccent:
                 role, SpeakerAccent.MAGENTA if role is None else SpeakerAccent.CYAN)
 
 
+def _finalized_synthesis_source(
+    notice: CollaborationEvent, events: tuple[CollaborationEvent, ...],
+) -> CollaborationEvent | None:
+    """Bind a host finalization notice to its exact immutable synthesis source."""
+    payload = notice.payload
+    if (type(payload) is not CollaborationMessagePayload
+            or payload.provider_invocation_id is None
+            or notice.sender.agent_id != LEAD_ORCHESTRATOR
+            or notice.recipient.kind.value != "user"):
+        return None
+    events = tuple(event for event in events if event.sequence <= notice.sequence)
+    notices = tuple(event for event in events
+                    if type(event.payload) is CollaborationMessagePayload
+                    and event.payload.provider_invocation_id == payload.provider_invocation_id
+                    and event.sender.agent_id == LEAD_ORCHESTRATOR
+                    and (event.session_id, event.conversation_id, event.turn_id, event.step_id)
+                    == (notice.session_id, notice.conversation_id, notice.turn_id, notice.step_id))
+    if len(notices) != 1 or notices[0] != notice:
+        return None
+    sources = tuple(event for event in events
+                    if type(event.payload) is CollaborationLeadSynthesisPayload
+                    and event.payload.provider_invocation_id == payload.provider_invocation_id)
+    if len(sources) != 1:
+        return None
+    source = sources[0]
+    if (source.sender.agent_id != LEAD_ORCHESTRATOR
+            or source.recipient.kind.value != "user"
+            or source.turn_id == notice.turn_id
+            or (source.session_id, source.conversation_id, source.step_id)
+            != (notice.session_id, notice.conversation_id, notice.step_id)):
+        return None
+    executions = tuple(event for event in events
+                       if type(event.payload) is CollaborationExecutionResult
+                       and event.payload.synthesis_result_event_id == source.event_id)
+    if len(executions) != 1:
+        return None
+    execution = executions[0]
+    synthesis = source.payload
+    result = execution.payload
+    if (type(synthesis) is not CollaborationLeadSynthesisPayload
+            or type(result) is not CollaborationExecutionResult
+            or (execution.session_id, execution.conversation_id, execution.turn_id,
+                execution.step_id)
+            != (source.session_id, source.conversation_id, source.turn_id, source.step_id)
+            or (result.proposal_id, result.proposal_revision, result.proposal_digest,
+                result.execution_attempt_id)
+            != (synthesis.proposal_id, synthesis.proposal_revision, synthesis.proposal_digest,
+                synthesis.execution_attempt_id)
+            or not source.sequence < execution.sequence < notice.sequence):
+        return None
+    return source
+
+
 def _live_usage(result: LeadTurnResult, events: tuple[CollaborationEvent, ...]) -> ResponseUsage:
     if result.kind.value == "discussion":
         kinds = frozenset({CollaborationInvocationKind.LEAD_DISCUSSION})
@@ -1395,6 +1448,21 @@ def _live_usage(result: LeadTurnResult, events: tuple[CollaborationEvent, ...]) 
                            CollaborationInvocationKind.LEAD_EXPLORATION, CollaborationInvocationKind.LEAD_DISCUSSION})
     else:
         kinds = frozenset({CollaborationInvocationKind.LEAD, CollaborationInvocationKind.LEAD_SYNTHESIS})
+    notices = tuple(event for event in events
+                    if type(event.payload) is CollaborationMessagePayload
+                    and event.payload.provider_invocation_id == result.provider_invocation_id
+                    and event.payload.content == result.message
+                    and event.sender.agent_id == LEAD_ORCHESTRATOR
+                    and (event.session_id, event.conversation_id, event.turn_id, event.step_id)
+                    == (result.session_id, result.conversation_id, result.turn_id, result.step_id))
+    if CollaborationInvocationKind.LEAD_SYNTHESIS in kinds and len(notices) == 1:
+        source = _finalized_synthesis_source(notices[0], events)
+        if source is not None:
+            return response_usage(tuple(event for event in events if event.sequence <= source.sequence),
+                session_id=source.session_id, conversation_id=source.conversation_id,
+                turn_id=source.turn_id, step_id=source.step_id,
+                invocation_id=result.provider_invocation_id, role=LEAD_ORCHESTRATOR,
+                invocation_kinds=frozenset({CollaborationInvocationKind.LEAD_SYNTHESIS}))
     return response_usage(events, session_id=result.session_id, conversation_id=result.conversation_id,
                           turn_id=result.turn_id, step_id=result.step_id,
                           invocation_id=result.provider_invocation_id, role=LEAD_ORCHESTRATOR,
@@ -1461,8 +1529,14 @@ def _event_response_items(items: tuple, event: CollaborationEvent, events: tuple
                            CollaborationInvocationKind.LEAD_EXPLORATION, CollaborationInvocationKind.LEAD_DISCUSSION})
     else:
         return _response_items(items, content, None, accent)
-    usage = response_usage(events, session_id=event.session_id, conversation_id=event.conversation_id,
-                           turn_id=event.turn_id, step_id=event.step_id,
+    usage_source = _finalized_synthesis_source(event, events)
+    if usage_source is None:
+        usage_source = event
+    else:
+        events = tuple(fact for fact in events if fact.sequence <= usage_source.sequence)
+        kinds = frozenset({CollaborationInvocationKind.LEAD_SYNTHESIS})
+    usage = response_usage(events, session_id=usage_source.session_id, conversation_id=usage_source.conversation_id,
+                           turn_id=usage_source.turn_id, step_id=usage_source.step_id,
                            invocation_id=invocation_id, role=role or LEAD_ORCHESTRATOR,
                            invocation_kinds=kinds, call_id=call_id)
     return _response_items(items, content, response_footer(outcome, usage), _speaker_accent(role))
