@@ -993,14 +993,14 @@ class PtyCliProcess:
         *,
         after: int = 0,
         timeout: float = _PROCESS_DEADLINE_SECONDS,
+        readiness: Callable[[], bool] | None = None,
     ) -> str:
-        """Read until one semantic fragment appears or a bounded failure occurs."""
+        """Wait for a semantic fragment and optional readiness within one deadline."""
 
         encoded = expected.encode("utf-8")
 
         def captured_contains_expected() -> bool:
-            captured = self.normalized_bytes[after:]
-            return encoded in captured or encoded in _ANSI_SGR_BYTES.sub(b"", captured)
+            return (encoded in (captured := self.normalized_bytes[after:]) or encoded in _ANSI_SGR_BYTES.sub(b"", captured)) and (readiness is None or readiness())
 
         deadline = time.monotonic() + timeout
         while not captured_contains_expected():
@@ -1569,6 +1569,9 @@ class InteractiveCliPtyTests(unittest.TestCase):
 
     def _exercise_external_library_pty(self, *, edit_query: bool, termination_signal: int | None = None, termination_during_view: bool = False) -> None:
         gate = self.temporary_root / f"viewer-ready-{edit_query}-{termination_signal}"
+        def viewer_rows(data: bytes) -> list[str]:
+            frame = data[data.rfind(b"\x1b[1;1H\x1b[2K"):]
+            return [_ANSI_SGR_BYTES.sub(b"", line).removesuffix(b"\x1b[H").decode("utf-8") for line in re.split(rb"\x1b\[\d+;1H\x1b\[2K", frame)[1:]]
         source = r'''
 import json
 import os
@@ -1609,10 +1612,7 @@ print(f"SHELL_VALUE={input('shell> ')}")
 '''
         before = _durable_tree(self.workspace.root)
         process = self._spawn_python(source, environment_overrides={
-            "TERM": "xterm-256color",
-            "STORY_PTY_VIEWER_GATE": str(gate),
-            "PYTHONPATH": os.pathsep.join((str(_SOURCE_ROOT), str(_REPOSITORY_ROOT / "vendor/jsonl-viewer/src"))),
-        }, terminal_columns=120)
+            "TERM": "xterm-256color", "STORY_PTY_VIEWER_GATE": str(gate)}, terminal_columns=120)
         process.wait_for_text("story[lobby]> ")
         process.send_line("seed")
         process.wait_for_text("INTER_READER_READY")
@@ -1643,25 +1643,25 @@ print(f"SHELL_VALUE={input('shell> ')}")
             self.assertIn(b"\x1b[?1000l\x1b[?1006l\x1b[H\x1b[2J\x1b[?25h\x1b[?1049l", process.raw_bytes)
             self.assertEqual(process.final_terminal_attributes, process.original_terminal_attributes)
             return
-        current = _ANSI_SGR_BYTES.sub(b"", process.normalized_bytes[process.normalized_bytes.rfind(b"\x1b[H\x1b[2J") + 7:]).decode("utf-8")
-        row, line = next((index + 1, line) for index, line in enumerate(current.splitlines()) if '"content"' in line)
+        current = viewer_rows(process.normalized_bytes)
+        row, line = next((index + 1, line) for index, line in enumerate(current) if '"content"' in line)
         column = line.index('"content"') + 1
         mark = process.output_mark(); process.send_bytes(f"\x1b[<0;{column};{row}M".encode())
         process.wait_for_text("? help • q close", after=mark)
-        painted = process.text_after(mark); rows = _ANSI_SGR_BYTES.sub(b"", painted.encode()).decode().splitlines()
+        painted = process.text_after(mark); rows = viewer_rows(painted.encode())
         if any(line.strip() == "^" for line in rows):
             caret = next(i for i, line in enumerate(rows) if line.strip() == "^"); self.assertEqual(rows[caret - 1][rows[caret].index("^")], '"')
         else: self.assertRegex(painted, r'\x1b\[(?:[0-9]+;)*7(?:;[0-9]+)*m"')
         mark = process.output_mark(); process.send_bytes(f"\x1b[<65;{column};{row}M".encode())
         process.wait_for_text("? help • q close", after=mark)
-        painted = process.text_after(mark); rows = _ANSI_SGR_BYTES.sub(b"", painted.encode()).decode().splitlines()
+        painted = process.text_after(mark); rows = viewer_rows(painted.encode())
         if any(line.strip() == "^" for line in rows):
             caret = next(i for i, line in enumerate(rows) if line.strip() == "^"); self.assertEqual(rows[caret - 1][rows[caret].index("^")], "}")
         else: self.assertRegex(painted, r"\x1b\[(?:[0-9]+;)*7(?:;[0-9]+)*m\}")
         self.assertNotIn(f"65;{column};{row}M", process.normalized_text)
         mark = process.output_mark()
         process.wait_for_text("? help • q close", after=mark)
-        self.assertNotRegex(process.text_after(mark), r"\x1b\[[0-9;]*4[;m]")
+        self.assertNotRegex(process.text_after(mark), r"\x1b\[(?:[0-9]+;)*4(?:;[0-9]+)*m")
         mark = process.output_mark()
         query = b"wrong\x15" + "개요".encode() if edit_query else "개요".encode()
         process.send_bytes(b"/" + query[:-1])
@@ -1674,7 +1674,7 @@ print(f"SHELL_VALUE={input('shell> ')}")
         process.wait_for_text("? help • q close", after=selected)
         captured = process.normalized_text
         footer = captured.rfind("? help • q close")
-        active = captured[:footer + len("? help • q close")].rsplit("\x1b[H\x1b[2J", 1)[1]
+        active = captured[:footer + len("? help • q close")].rsplit("\x1b[1;1H\x1b[2K", 1)[1]
         self.assertIn('"content": "개요 ⟦개요⟧ 0"', active)
         for draft, prompt in ((b"/JKdraft", "Search query: JKdraft│"), (b"g999", "Go to source line: 999│")):
             mark = process.output_mark()
@@ -1683,13 +1683,13 @@ print(f"SHELL_VALUE={input('shell> ')}")
             self.assertFalse(termios.tcgetattr(process.master_fd)[3] & termios.ICANON)
             mark = process.output_mark()
             process.send_bytes(b"\x1b")
-            process.wait_for_text("\x1b[H\x1b[2J" + active, after=mark)
+            process.wait_for_text("\x1b[1;1H\x1b[2K" + active, after=mark)
         mark = process.output_mark()
         process.send_bytes(b"n")
         process.wait_for_text("3/14 occurrences • Search all text='개요'", after=mark)
         process.send_bytes(b"q\x1b[<65;8;8M\x1b[<0;8;8mafter-viewer\n")
         process.wait_for_text("AFTER_VIEWER=after-viewer")
-        process.wait_for_text("native> ")
+        process.wait_for_text("native> ", readiness=lambda: termios.tcgetattr(process.master_fd) == process.original_terminal_attributes)
         self.assertEqual(termios.tcgetattr(process.master_fd), process.original_terminal_attributes)
         mark = process.output_mark()
         process.send_line("opaque-native-input")
