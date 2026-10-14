@@ -271,19 +271,33 @@ scalar JSON values, duplicate keys, non-finite values, and serialization
 failures return the original content exactly; no formatter result is written
 back to the transcript or provider result.
 
-`Message` retains its compatible inline layout by default. Controller call
-sites that represent a user or agent speaker select the chat-block layout: a
-full speaker header directly above a default-styled `│ ` body rail, followed by
-one unrailed terminal-default separator row. That separator belongs to the
-message, so adjacent writes and collection items have one visible blank row
-between speakers; explicit blank body lines remain railed. Only the header
-receives its stable bold accent—user magenta, lead cyan,
-plot yellow, character green, and execution blue—so long message bodies remain
-legible on either terminal theme. Sanitization precedes Unicode physical-cell
-measurement and word wrapping; whitespace-only bodies, strict-JSON projection,
-embedded LF, and CJK/full-width glyphs retain their meaning. If the rail would
-make a leading display glyph impossible to place, only that physical row drops
-the rail; narrower layouts fall back without losing or duplicating body text.
+`Message` retains its compatible inline layout by default. User and agent
+chat blocks use a speaker header, framed body, and a separately labeled metadata
+footer, followed by one terminal-default separator row. Speaker accents extend
+to the frame: user magenta, lead cyan, plot yellow, character green, and
+execution blue. Metadata labels and dividers use blue while values are subdued;
+message prose keeps the terminal's normal foreground.
+
+The frame is left-aligned, capped at 120 physical cells, and reserves one cell
+at the observed terminal's right margin. A full frame uses at least 40 available
+columns; narrower layouts use compact decoration and stacked metadata. Dynamic
+source and decoded Markdown tokens are sanitized before physical-cell wrapping.
+Code whitespace, strict-JSON presentation, explicit blank lines, and CJK/full-
+width characters retain their meaning. Extremely narrow rows drop decoration
+rather than clipping message text. New writes and existing live redraws observe
+current width; completed ordinary scrollback is not rewritten after resize.
+
+Markdown is a presentation projection only. Provider/runtime source text is
+never rewritten by rendering. HTML, images, unsupported constructs, and parser
+failures remain visible as sanitized literal text. Renderer-owned styling never
+accepts escape sequences supplied by message prose or decoded entities.
+
+Response counters originate only in validated native-provider response usage.
+The runtime saves optional usage on submitted-call records and identifies each
+response's exact invocation. The terminal counts distinct submitted call IDs,
+including corrective retries, independently for input/output. Missing or
+ambiguous attribution is unavailable, not zero or a text-derived estimate.
+Older records without counters or invocation identities remain readable.
 
 Search/history/transcript renderers validate IDs, sequences, metadata, and
 citations. Controller views construct typed semantic components from validated
@@ -298,16 +312,13 @@ session/conversation lists, search, transcript, and focused history. #86 routes
 composer lifecycle notices plus composition and confirmation input through the
 same foundation; no internal generic composer-status call remains. #87 uses
 that safe renderer for bounded live and complete numbered picker projections
-without installing a shell consumer. The semantic renderer produces the same
-structured text in plain and fixed ANSI profiles: it
-sanitizes dynamic content before wrapping or styling, counts ANSI as zero
-display cells, uses local resets, and permits only reset, bold emphasis, and
-foreground SGR 31 through 37. The `AGENT` role uses bold with the terminal's
-default foreground and does not inspect or select a background. The renderer
-emits no background, dim, blink, OSC, query, or cursor sequence. Removing those
-allowed decorative sequences yields the exact
-plain structure.
-
+without installing a shell consumer. The semantic renderer produces the same structured text in plain and fixed
+ANSI profiles. It sanitizes dynamic content before wrapping and styling, counts
+ANSI as zero display cells, uses local resets, and permits only renderer-owned
+reset, bold/dim emphasis, italic/underline, inverse selection, and fixed
+foreground colors 31 through 37. Message body foreground stays terminal-default.
+The renderer emits no background, blink, OSC, query, or cursor sequence.
+Removing allowed decorative sequences yields the exact plain structure.
 The separate ranged-viewer renderer keeps the same safety order and may additionally
 use fixed inverse SGR 7 for selected rows, including a fixed bold/inverse/cyan
 combination for the active selected row. Its plain `>` and `*` markers retain

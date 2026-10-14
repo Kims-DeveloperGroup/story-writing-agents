@@ -1273,12 +1273,13 @@ class PickerRenderingTests(unittest.TestCase):
             "  5. [available] Epsilon\n"
             "  6. [available] Zeta\n"
             "  7. [available] Eta\n"
-            "\x1b[36m  8. [highlighted] Theta\x1b[0m\n"
+            "\x1b[1m\x1b[7m  8. [highlighted] Theta\x1b[0m\n"
             "\x1b[32m  Selected outside view: 10. [selected] Kappa\x1b[0m",
         )
         allowed = {
             "\x1b[0m",
             "\x1b[1m",
+            "\x1b[7m",
             "\x1b[31m",
             "\x1b[32m",
             "\x1b[33m",
@@ -1434,7 +1435,7 @@ class PickerRenderingTests(unittest.TestCase):
         self.assertEqual(strip_decorative_sgr(ansi.text), expected)
         self.assertIn("— \x1b[37mCurrent: KO\x1b[0m", ansi.text)
         self.assertIn(
-            "\x1b[32m  2. Persona (selected)        — \x1b[0m"
+            "\x1b[32m\x1b[1m\x1b[7m  2. \x1b[0m\x1b[32mPersona (selected)        — \x1b[0m"
             "\x1b[33mPending: noir\x1b[0m",
             ansi.text,
         )
@@ -1444,7 +1445,7 @@ class PickerRenderingTests(unittest.TestCase):
             ansi.text,
         )
         self.assertIn(
-            "\x1b[36m> 3. Apply Changes \x1b[0m"
+            "\x1b[36m\x1b[1m\x1b[7m> 3. \x1b[0m\x1b[36mApply Changes \x1b[0m"
             "\x1b[33m(*Required)\x1b[0m",
             ansi.text,
         )
@@ -1638,7 +1639,7 @@ class PickerRenderingTests(unittest.TestCase):
         self.assertNotIn("\x1b[31m", plain.text)
         self.assertNotIn("\x00", plain.text)
         self.assertIn(
-            "\x1b[36m> 1. Current e\u0301",
+            "\x1b[36m\x1b[1m\x1b[7m> 1. \x1b[0m\x1b[36mCurrent e\u0301",
             ansi.text,
         )
         self.assertIn("\x1b[37mCurrent: one\x1b[0m", ansi.text)
@@ -2084,11 +2085,11 @@ class PickerRenderingTests(unittest.TestCase):
             ansi.text,
         )
         self.assertIn(
-            "\x1b[32m  3. [selected] Selected (*Required)\x1b[0m",
+            "\x1b[1m\x1b[7m  3. [selected] Selected (*Required)\x1b[0m",
             ansi.text,
         )
         self.assertIn(
-            "\x1b[36m  4. [highlighted] Highlighted (*Required)\x1b[0m",
+            "\x1b[1m\x1b[7m  4. [highlighted] Highlighted (*Required)\x1b[0m",
             ansi.text,
         )
 
@@ -2137,7 +2138,7 @@ class PickerRenderingTests(unittest.TestCase):
             _capabilities(CapabilityProfile.ANSI),
         )
         self.assertIn(
-            "\x1b[32m  1. [selected] [highlighted] Save (*Required)\x1b[0m",
+            "\x1b[1m\x1b[7m  1. [selected] [highlighted] Save (*Required)\x1b[0m",
             combined_ansi.text,
         )
         self.assertNotIn("\x1b[33m", combined_ansi.text)
@@ -2313,7 +2314,7 @@ class PickerRenderingTests(unittest.TestCase):
                     ),
                     selected_id="option",
                 ),
-                "\x1b[32m",
+                "\x1b[1m\x1b[7m",
             ),
             (
                 "highlighted",
@@ -2329,7 +2330,7 @@ class PickerRenderingTests(unittest.TestCase):
                     ),
                     highlighted_id="option",
                 ),
-                "\x1b[36m",
+                "\x1b[1m\x1b[7m",
             ),
             (
                 "selected-highlighted",
@@ -2346,7 +2347,7 @@ class PickerRenderingTests(unittest.TestCase):
                     highlighted_id="option",
                     selected_id="option",
                 ),
-                "\x1b[32m",
+                "\x1b[1m\x1b[7m",
             ),
         )
         for label, component, expected_sgr in precedence:

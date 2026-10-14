@@ -1022,7 +1022,13 @@ class LeadTurnResult:
     discussion: LeadDiscussionReport | None = None
     public_responses: tuple[LeadPublicResponseView, ...] = ()
 
+    provider_invocation_id: str | None = field(default=None, kw_only=True)
+
     def __post_init__(self) -> None:
+        if self.provider_invocation_id is not None:
+            if type(self.provider_invocation_id) is not str:
+                raise TypeError("response provider invocation ID must be exact text")
+            _validate_identifier(self.provider_invocation_id, label="response provider invocation ID")
         if self.kind is LeadOutcomeKind.DISCUSSION:
             for value, label in ((self.session_id, "session ID"),
                                  (self.conversation_id, "conversation ID"),
@@ -4882,6 +4888,7 @@ def _project_validated_collaboration_history(
                         payload,
                         state=CollaborationProviderCallState.PREPARED,
                         validation_details=(),
+                usage=None,
                     ):
                         raise ValueError(
                             "submitted provider call drifts from its preparation"

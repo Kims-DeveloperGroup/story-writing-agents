@@ -365,6 +365,9 @@ class LeadRecommendationRecoveryTests(RecommendationCase):
         from story_writing_agents.writing_artifacts.authorization import ReferenceAuthorizationError, ReferenceAuthorizationErrorCode, ReferenceOperationFailure
         for fault in ("missing", "corrupt", "unfinished", "uncertain"):
             conversation_id, turn = await self.reference_offer()
+            request_event = self.payload_events(conversation_id, c.LeadRecommendationRequestPayload)[-1]
+            self.assertIsNotNone(turn.provider_invocation_id)
+            self.assertEqual(self.runtime._recommendation_turn_result(request_event).provider_invocation_id, turn.provider_invocation_id)
             error = BackendProtocolError("Synthetic unresolved preparation")
             self.backend.enqueue(lead._SubmittedFailure(error, submission_uncertain=fault == "uncertain"))
             inspect_type = type(self.runtime.artifacts)
@@ -383,6 +386,7 @@ class LeadRecommendationRecoveryTests(RecommendationCase):
             calls, history = len(self.backend.calls), self.history(conversation_id)
             restarted = StoryRuntime(self.control_workspace, self.backend)
             blocked = await restarted.lead_turn(self.session_id, conversation_id, "Do not replay uncertain work.")
+            self.assertIsNone(blocked.provider_invocation_id)
             self.assertIs(blocked.next_action, c.CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME if fault == "uncertain"
                           else c.CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY)
             self.assertEqual(len(self.backend.calls), calls)

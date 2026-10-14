@@ -471,6 +471,26 @@ restart recovery, including concurrent specialist calls. The details contain
 no raw provider values, unknown property names, or parser error text. Older
 message payloads omit these fields and still decode.
 
+`provider_call_accounting` may also persist a submitted call's optional
+`usage` object with exactly `input_tokens`, `output_tokens`, and
+`cached_input_tokens`. Counters are nonnegative exact integers or null; at least
+one must be known. These are validated native-provider response counters, not
+estimates. Prepared-call records cannot carry usage. Older records omit this
+object and remain readable without a storage migration.
+
+Host-visible messages, Lead judgments, specialist replies, Lead syntheses,
+Lead discussion results, and artifact-review syntheses may carry an optional
+`provider_invocation_id`. This host-owned identity binds
+their usage to the exact provider invocation in the same session, conversation,
+turn, step, and role. It is not a provider response-schema field or execution
+authority. Legacy absence and unknown/ambiguous attribution yield unavailable
+terminal counters; the terminal never guesses from prose, speaker, or ordering.
+
+A finalized Lead synthesis may appear in a later host turn. Its canonical notice,
+execution result, and synthesis-event link must uniquely identify the original
+provider turn before those counters can be used. The visible message retains
+its own turn identity; missing or ambiguous links leave its counters unavailable.
+
 `provider_call_accounting` contains no request or response content. It records
 one invocation/call identity, contiguous ordinal, canonical agent role,
 invocation kind (`lead`, `specialist_assignment`, `lead_synthesis`, or

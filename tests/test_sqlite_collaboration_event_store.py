@@ -53,7 +53,7 @@ from story_writing_agents.conversation_storage.sqlite import (
 )
 from story_writing_agents.workspace.core import Workspace
 
-from tests.collaboration_contract_fixture import contract_batches
+from tests.collaboration_contract_fixture import contract_batches, measured_batch
 from tests.sqlite_conversation_storage_fixture import (
     database_path,
     initialized_workspace,
@@ -315,6 +315,7 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
     def test_fresh_direct_append_persists_exact_rows_and_refreshes_lexical_index(
         self,
     ) -> None:
+        self.batch = measured_batch(self.batch)
         generation_before = self.lexical_generation()
 
         receipt = self.store.append_batch(self.batch)

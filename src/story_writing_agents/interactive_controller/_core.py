@@ -57,6 +57,7 @@ from ..conversations import (
     CollaborationHistoryProjection,
     CollaborationNextAction,
     CollaborationReadableFieldKey,
+    CollaborationEvent,
     CollaborationReadableRecord,
     CollaborationStepState,
     ConversationMetadata,
@@ -134,6 +135,7 @@ from ..interactive_terminal import (
     InteractiveTerminal,
     ListView,
     Message,
+    MessagePresentation,
     Notice,
     Panel,
     Picker,
@@ -869,6 +871,15 @@ class InteractiveController:
         if agent_id == "artifact_store":
             return "artifact_store"
         return agent_id.replace("_", " ")
+
+    @staticmethod
+    def _canonical_readable_event(record: CollaborationReadableRecord) -> CollaborationEvent:
+        """Preserve one validated readable record's canonical event envelope and payload."""
+        return CollaborationEvent(**{name: getattr(record, name) for name in (
+            "schema_version", "session_id", "conversation_id", "turn_id", "step_id", "event_id",
+            "batch_id", "batch_ordinal", "batch_size", "batch_digest", "sequence", "timestamp",
+            "sender", "recipient", "kind", "payload",
+        )})
 
     @staticmethod
     def _collaboration_record_view(record: CollaborationReadableRecord) -> Record:
@@ -2128,6 +2139,7 @@ class InteractiveController:
                 self._picker_input,
                 self._prompt_input,
                 self._semantic_output,
+                show_details=self._show_message_details,
                 recover_authentication=(
                     getattr(self._auth_coordinator, "recover", None)
                 ),
@@ -5344,14 +5356,11 @@ class InteractiveController:
             return
 
         displayed = records if action.count is None else records[-action.count :]
-        total_count = len(displayed)
-        for position, event in enumerate(displayed, start=1):
-            self._write_counted_list_row(
-                "History",
-                self._collaboration_record_view(event),
-                position=position,
-                total_count=total_count,
-            )
+        self._terminal.write_collaboration_events(
+            tuple(self._canonical_readable_event(record) for record in displayed),
+            show_details=self._show_message_details,
+            history_events=tuple(self._canonical_readable_event(record) for record in records),
+        )
         self._semantic_output.write_component(
             Record(
                 "context",
@@ -5987,18 +5996,11 @@ class InteractiveController:
                 )
                 self._write_counted_list_row(
                     "Search results",
-                    Record(
-                        f"search {handle}",
-                        fields=(
-                            Field(
-                                "Status",
-                                "active",
-                            ),
-                            Field("Subject (display only)", metadata.subject),
-                            Field("Citation", citation_value),
-                            Field("Snippet", hit.snippet),
-                        ),
-                        role=SemanticRole.DEFAULT,
+                    Message(
+                        f"search {handle}", hit.snippet,
+                        presentation=MessagePresentation.CHAT_BLOCK,
+                        metadata=(f"Status: active\nSubject (display only): {metadata.subject}\nCitation: {citation_value}\n"
+                                  "Outcome: search excerpt\nInput tokens: unavailable | Output tokens: unavailable"),
                         state=ViewState.COMPLETED,
                     ),
                     position=position,
@@ -6145,14 +6147,20 @@ class InteractiveController:
                 self._present_transcript_service_failure(exc)
                 return
 
-            total_count = len(page.records)
-            for position, event in enumerate(page.records, start=1):
-                self._write_counted_list_row(
-                    "Transcript",
-                    self._collaboration_record_view(event),
-                    position=position,
-                    total_count=total_count,
-                )
+            try:
+                selected_events = tuple(self._canonical_readable_event(record) for record in page.records)
+                history_events = self._conversation_storage_services.event_store.read(session_id, metadata.conversation_id)
+                current = {event.event_id: event for event in history_events}
+                if any(current.get(event.event_id) != event for event in selected_events):
+                    raise ValueError("selected transcript snapshot changed")
+                if selected_events:
+                    history_events = tuple(event for event in history_events if event.sequence <= selected_events[-1].sequence)
+            except Exception as exc:
+                self._present_transcript_service_failure(exc)
+                return
+            self._terminal.write_collaboration_events(
+                selected_events, show_details=self._show_message_details, history_events=history_events,
+            )
             self._write_notice(
                 f"Transcript page returned {len(page.records)} records.",
                 label="result",

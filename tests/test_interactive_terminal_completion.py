@@ -1134,7 +1134,7 @@ class CompletionRenderingTests(unittest.TestCase):
             ansi.text,
             "\x1b[35mSuggestions [open]\x1b[0m\n"
             "  - /say\n"
-            "\x1b[36m  > [highlighted] /status\x1b[0m",
+            "\x1b[1m\x1b[7m  > [highlighted] /status\x1b[0m",
         )
         self.assertEqual(
             narrow.text,

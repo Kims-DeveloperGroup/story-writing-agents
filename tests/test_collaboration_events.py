@@ -18,6 +18,9 @@ from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 
 import story_writing_agents
+from story_writing_agents.agent_context.accounting import ProviderUsage
+from story_writing_agents.lead_task_transitions import LeadDiscussionReport
+from story_writing_agents.conversations import CollaborationLeadDiscussionPayload, ArtifactReviewSynthesisPayload
 import story_writing_agents.conversations as conversations
 import story_writing_agents.conversations.context as context_owner
 import story_writing_agents.conversations.events as events_owner
@@ -511,8 +514,7 @@ class CollaborationValueContractTests(unittest.TestCase):
             (lead_evidence, ("scope", "status", "receipts")),
             (
                 lead_judgment,
-                ("kind", "message", "evidence", "authoring_scope", "trace",
-                 "authoring_admission", "core_document_readiness"),
+                ('kind', 'message', 'evidence', 'authoring_scope', 'trace', 'authoring_admission', 'core_document_readiness', 'provider_invocation_id'),
             ),
             (lead_failure, ("code", "invocation_id", "call_id")),
             (
@@ -660,51 +662,15 @@ class CollaborationValueContractTests(unittest.TestCase):
             ),
             (
                 specialist_reply,
-                (
-                    "proposal_id",
-                    "proposal_revision",
-                    "proposal_digest",
-                    "execution_attempt_id",
-                    "assignment_id",
-                    "dispatch_event_id",
-                    "assessment",
-                    "message",
-                    "input_ids",
-                    "mode",
-                    "trace",
-                    'premise_analysis',
-                    'premise_conflicts',
-                ),
+                ('proposal_id', 'proposal_revision', 'proposal_digest', 'execution_attempt_id', 'assignment_id', 'dispatch_event_id', 'assessment', 'message', 'input_ids', 'mode', 'trace', 'premise_analysis', 'premise_conflicts', 'provider_invocation_id'),
             ),
             (
                 lead_synthesis,
-                (
-                    "proposal_id",
-                    "proposal_revision",
-                    "proposal_digest",
-                    "execution_attempt_id",
-                    "message",
-                    "reply_event_ids",
-                    "unresolved_input_ids",
-                    "evidence",
-                    "next_intent",
-                    "authoring_scope",
-                    "trace",
-                    'premise_report',
-                ),
+                ('proposal_id', 'proposal_revision', 'proposal_digest', 'execution_attempt_id', 'message', 'reply_event_ids', 'unresolved_input_ids', 'evidence', 'next_intent', 'authoring_scope', 'trace', 'premise_report', 'provider_invocation_id'),
             ),
             (
                 provider_call,
-                (
-                    "invocation_id",
-                    "call_id",
-                    "ordinal",
-                    "role",
-                    "invocation_kind",
-                    "call_kind",
-                    "state",
-                    "validation_details",
-                ),
+                ('invocation_id', 'call_id', 'ordinal', 'role', 'invocation_kind', 'call_kind', 'state', 'validation_details', 'usage'),
             ),
         )
         for value, expected_fields in values_and_fields:
@@ -1017,38 +983,73 @@ class CollaborationValueContractTests(unittest.TestCase):
 
 
 class CollaborationWireContractTests(unittest.TestCase):
-    def test_validation_message_correlation_round_trips_and_old_message_decodes(
-        self,
-    ) -> None:
+    def test_validation_message_correlation_round_trips_and_old_message_decodes(self) -> None:
         detail = "Original response:\n$.action.result: rejected by a domain result rule"
-        correlated = make_draft(
-            "validation_message", CollaborationEventKind.MESSAGE, RUNTIME, USER,
-            CollaborationMessagePayload(
-                detail, validation_details=(detail,),
-                validation_invocation_id="invocation_1",
-                validation_call_id="call_1",
-            ),
-        )
+        correlated = make_draft("validation_message", CollaborationEventKind.MESSAGE, RUNTIME, USER,
+            CollaborationMessagePayload(detail, validation_details=(detail,),
+                validation_invocation_id="invocation_1", validation_call_id="call_1",
+                provider_invocation_id="host_invocation"))
         wire = encode_collaboration_event_draft(correlated)
         self.assertEqual(decode_collaboration_event_draft(wire), correlated)
         payload = json.loads(wire)["payload"]
-        self.assertEqual(payload["validation_invocation_id"], "invocation_1")
-        self.assertEqual(payload["validation_call_id"], "call_1")
-
-        old = make_draft(
-            "old_message", CollaborationEventKind.MESSAGE, RUNTIME, USER,
-            CollaborationMessagePayload("Visible old message."),
-        )
-        old_wire = encode_collaboration_event_draft(old)
-        self.assertEqual(decode_collaboration_event_draft(old_wire), old)
-        self.assertNotIn("validation_invocation_id", json.loads(old_wire)["payload"])
-        self.assertNotIn("validation_call_id", json.loads(old_wire)["payload"])
+        self.assertEqual((payload["validation_invocation_id"], payload["validation_call_id"],
+            payload["provider_invocation_id"]), ("invocation_1", "call_1", "host_invocation"))
         for missing in ("validation_invocation_id", "validation_call_id"):
             with self.subTest(missing=missing):
-                malformed = json.loads(wire)
-                del malformed["payload"][missing]
+                malformed = json.loads(wire); del malformed["payload"][missing]
                 with self.assertRaises(ValueError):
                     decode_collaboration_event_draft(_canonical_json(malformed))
+        history, _, _ = executed_history()
+        discussion = dataclasses.replace(history[0], kind=CollaborationEventKind.LEAD_DISCUSSION,
+            sender=RUNTIME, recipient=USER, payload=CollaborationLeadDiscussionPayload(
+                LeadDiscussionReport(response_kind="answer", response_text="Visible discussion.",
+                    origin_control_event_id="exact_control_origin")))
+        artifact = dataclasses.replace(history[0], kind=CollaborationEventKind.ARTIFACT_REVIEW_SYNTHESIS,
+            sender=LEAD, recipient=USER, payload=ArtifactReviewSynthesisPayload("candidate_a", 1,
+                DIGEST_A, "proposal_a", 1, DIGEST_B, ATTEMPT_ID, ArtifactReviewDecision.PROPOSE,
+                "Visible synthesis.", "Reviewed rationale.", "Review only.", "No application.", ("reply_a",), ()))
+        self.assertEqual(tuple(field.name for field in dataclasses.fields(discussion.payload)),
+            ("report", "provider_invocation_id"))
+        self.assertTrue(dataclasses.fields(artifact.payload)[-1].kw_only)
+        self.assertEqual(dataclasses.fields(artifact.payload)[-1].name, "provider_invocation_id")
+        response_types = {CollaborationLeadJudgmentPayload, CollaborationSpecialistReplyPayload,
+            CollaborationLeadSynthesisPayload, CollaborationLeadDiscussionPayload, ArtifactReviewSynthesisPayload}
+        samples = [event for event in history if type(event.payload) in response_types]
+        samples.extend((discussion, artifact))
+        self.assertEqual({type(event.payload) for event in samples}, response_types)
+        for event in samples:
+            legacy = encode_collaboration_event(event)
+            self.assertNotIn("provider_invocation_id", json.loads(legacy)["payload"])
+            self.assertEqual(decode_collaboration_event(legacy), event)
+            linked = dataclasses.replace(event, payload=dataclasses.replace(event.payload,
+                provider_invocation_id="exact_host_invocation"))
+            self.assertEqual(decode_collaboration_event(encode_collaboration_event(linked)), linked)
+            malformed = json.loads(encode_collaboration_event(linked))
+            malformed["payload"]["provider_invocation_id"] = 1
+            with self.assertRaises((TypeError, ValueError)):
+                decode_collaboration_event(_canonical_json(malformed))
+        old = make_draft("old_message", CollaborationEventKind.MESSAGE, RUNTIME, USER,
+            CollaborationMessagePayload("Visible old message."))
+        old_wire = encode_collaboration_event_draft(old)
+        self.assertEqual(decode_collaboration_event_draft(old_wire), old)
+        self.assertFalse({"validation_invocation_id", "validation_call_id", "provider_invocation_id"}
+            & json.loads(old_wire)["payload"].keys())
+        submitted = next(event for event in history if type(event.payload) is CollaborationProviderCallPayload
+            and event.payload.state is CollaborationProviderCallState.SUBMITTED)
+        self.assertNotIn("usage", json.loads(encode_collaboration_event(submitted))["payload"])
+        for usage in (ProviderUsage(0, 2, 7), ProviderUsage(input_tokens=0), ProviderUsage(output_tokens=3)):
+            measured = dataclasses.replace(submitted, payload=dataclasses.replace(submitted.payload, usage=usage))
+            self.assertEqual(decode_collaboration_event(encode_collaboration_event(measured)), measured)
+        prepared = dataclasses.replace(submitted.payload, state=CollaborationProviderCallState.PREPARED)
+        with self.assertRaises(ValueError):
+            dataclasses.replace(prepared, usage=ProviderUsage(1, 2))
+        measured = dataclasses.replace(submitted, payload=dataclasses.replace(submitted.payload, usage=ProviderUsage(0, 2)))
+        value = json.loads(encode_collaboration_event(measured))
+        for usage in ({}, {"input_tokens": True}, {"output_tokens": -1}, {"input_tokens": 1.5},
+            {"input_tokens": 1, "unknown": 2}, "estimated"):
+            malformed = dict(value, payload=dict(value["payload"], usage=usage))
+            with self.assertRaises((TypeError, ValueError)):
+                decode_collaboration_event(_canonical_json(malformed))
 
     def test_failure_closure_codes_round_trip_with_null_only_for_unsubmitted_request(self):
         for code in CollaborationLeadOutcomeFailureCode:

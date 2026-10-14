@@ -345,8 +345,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 157)
-        self.assertEqual(len(edges), 690)
+        self.assertEqual(len(modules), 159)
+        self.assertEqual(len(edges), 696)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
@@ -361,6 +361,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.errors",
             },
             "story_writing_agents.conversations.events": {
+                "story_writing_agents.agent_context",
                 "story_writing_agents.lead_task_transitions",
                 "story_writing_agents.lead_exploration",
                 "story_writing_agents.lead_premise_decisions",
@@ -895,7 +896,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
         with (_REPOSITORY_ROOT / "pyproject.toml").open("rb") as handle:
             project = tomllib.load(handle)["project"]
         self.assertEqual(project["version"], "0.1.0")
-        self.assertEqual(project["dependencies"], [_JSONL_VIEWER_REQUIREMENT])
+        self.assertEqual(project["dependencies"], ["markdown-it-py>=4.2,<5", _JSONL_VIEWER_REQUIREMENT])
         self.assertEqual(
             project["optional-dependencies"],
             {
@@ -921,7 +922,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
         )
         story = packages["story-writing-agents"]
         self.assertEqual(story["version"], "0.1.0")
-        self.assertEqual(story["dependencies"], [{"name": "jsonl-viewer"}])
+        self.assertEqual(story["dependencies"], [{"name": "jsonl-viewer"}, {"name": "markdown-it-py"}])
         self.assertEqual(
             story["optional-dependencies"],
             {"rag": [{"name": "generic-rag"}]},
@@ -938,9 +939,11 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     "name": "jsonl-viewer",
                     "git": f"{_JSONL_VIEWER_REPOSITORY}?rev={_JSONL_VIEWER_PIN}",
                 },
+                {"name": "markdown-it-py", "specifier": ">=4.2,<5"},
             ],
         )
         self.assertEqual(story["metadata"]["provides-extras"], ["rag", "viewer"])
+        self.assertEqual((packages["markdown-it-py"]["version"], packages["markdown-it-py"]["dependencies"]), ("4.2.0", [{"name": "mdurl"}]))
 
         submodules = configparser.ConfigParser()
         submodules.read(_REPOSITORY_ROOT / ".gitmodules", encoding="utf-8")

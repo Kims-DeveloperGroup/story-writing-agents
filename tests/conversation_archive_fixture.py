@@ -19,7 +19,7 @@ from story_writing_agents.conversation_storage import (
     ConversationArchiveSession,
 )
 
-from tests.collaboration_contract_fixture import contract_batches, store_batch
+from tests.collaboration_contract_fixture import contract_batches, measured_batch, store_batch
 from tests.helpers import pristine_initialized_workspace
 
 
@@ -38,6 +38,7 @@ def collaboration_history(
     conversation_id: str = "conversation_a",
     *,
     terminal: str = "completed",
+    measured: bool = False,
 ) -> tuple[CollaborationEvent, ...]:
     """Return one deterministic history built from the shared atomic families."""
 
@@ -58,7 +59,7 @@ def collaboration_history(
     )
     history: tuple[CollaborationEvent, ...] = ()
     for name in names:
-        history = store_batch(history, batches[name])
+        history = store_batch(history, measured_batch(batches[name]) if measured else batches[name])
     return history
 
 
@@ -159,7 +160,7 @@ def nonempty_archive() -> ConversationArchive:
     )
 
 
-def representative_archive() -> ConversationArchive:
+def representative_archive(*, measured: bool = False) -> ConversationArchive:
     """Cover empty, completed, and outcome-unknown catalog histories."""
 
     return archive_from_conversations(
@@ -174,7 +175,7 @@ def representative_archive() -> ConversationArchive:
             conversation_id="conversation_completed",
             subject="Unicode 대화 🌙",
             subject_revision=4,
-            events=collaboration_history("conversation_completed"),
+            events=collaboration_history("conversation_completed", measured=measured),
         ),
         archive_conversation(
             session_id="session_a",
@@ -182,7 +183,7 @@ def representative_archive() -> ConversationArchive:
             subject="Archived outcome unknown",
             subject_revision=2,
             status=ConversationStatus.ARCHIVED,
-            events=collaboration_history("conversation_unknown", terminal="unknown"),
+            events=collaboration_history("conversation_unknown", terminal="unknown", measured=measured),
         ),
     )
 

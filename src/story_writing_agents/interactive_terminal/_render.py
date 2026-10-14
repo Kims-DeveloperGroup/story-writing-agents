@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from typing import TypeAlias
+from collections.abc import Iterable
 
 from ._model import (
     CapabilityProfile,
@@ -37,6 +38,7 @@ from ._model import (
     sanitize_terminal_text,
 )
 from ._advisory_progress import render_detailed_advisory_progress
+from ._markdown import MarkdownLine, MarkdownSpan, literal_lines, project_markdown
 
 
 _RESET = "\x1b[0m"
@@ -58,7 +60,7 @@ _SPEAKER_HEADER_SGR = {
     SpeakerAccent.GREEN: "\x1b[1;32m",
     SpeakerAccent.BLUE: "\x1b[1;34m",
 }
-_DECORATIVE_SGR = re.compile(r"\x1b\[(?:0|1|3[1-7]|1;3[1-7])m")
+_DECORATIVE_SGR = re.compile(r"\x1b\[(?:0|1|2|3|4|7|3[1-7]|1;3[1-7])m")
 _FORM_SUMMARY_MIN_CONTENT_CELLS = 20
 _ADVISORY_PROGRESS_FRAMES = (
     "[█▓▒░░░░░░░░░░░░░]",
@@ -156,12 +158,14 @@ class _InlineRoleSpan:
 class _InlineRole:
     """Decorate ordered non-overlapping semantic spans within a base row."""
 
-    __slots__ = ("base", "spans")
+    __slots__ = ("base", "spans", "emphasized_prefix_stop")
 
     def __init__(
         self,
         base: SemanticRole,
         spans: tuple[_InlineRoleSpan, ...],
+        *,
+        emphasized_prefix_stop: int = 0,
     ) -> None:
         if not isinstance(base, SemanticRole):
             raise TypeError("base must be a SemanticRole")
@@ -169,6 +173,10 @@ class _InlineRole:
             type(span) is not _InlineRoleSpan for span in spans
         ):
             raise TypeError("spans must be a tuple of _InlineRoleSpan values")
+        if type(emphasized_prefix_stop) is not int or emphasized_prefix_stop < 0:
+            raise ValueError("emphasized prefix stop must be a non-negative integer")
+        if spans and emphasized_prefix_stop > spans[0].start:
+            raise ValueError("emphasized prefix must precede independent semantic spans")
         previous_stop = 0
         for span in spans:
             if span.start < previous_stop or span.start >= span.stop:
@@ -178,6 +186,7 @@ class _InlineRole:
             previous_stop = span.stop
         self.base = base
         self.spans = spans
+        self.emphasized_prefix_stop = emphasized_prefix_stop
 
 
 class _SpeakerHeaderRole:
@@ -191,7 +200,15 @@ class _SpeakerHeaderRole:
         self.accent = accent
 
 
-_LineRole: TypeAlias = SemanticRole | _InlineRole | _SpeakerHeaderRole
+class _MarkdownRole:
+    """Carry renderer-owned Markdown styles over exact plain-text intervals."""
+    __slots__ = ("spans",)
+
+    def __init__(self, spans: tuple[MarkdownSpan, ...]) -> None:
+        self.spans = spans
+
+
+_LineRole: TypeAlias = SemanticRole | _InlineRole | _SpeakerHeaderRole | _MarkdownRole
 _SemanticLine: TypeAlias = tuple[str, _LineRole]
 
 
@@ -434,6 +451,8 @@ def format_agent_reply_content(content: str) -> str:
 
 def _normalize_agent_reply_newlines(content: str) -> str:
     """Decode only common singly escaped newline spellings in model prose."""
+    if "`" in content or re.search(r"(?m)^(?: {4}|\t|\s*~~~)", content):
+        return content
 
     if "\\" not in content:
         return content
@@ -569,7 +588,8 @@ def render_input_prompt(
 
     lines: list[tuple[str, SemanticRole]] = []
     for item in view.context:
-        lines.extend(_component_lines(item, capabilities.width, indent=0))
+        lines.extend((text, SemanticRole.INFO if index == 0 else role)
+                     for index, (text, role) in enumerate(_component_lines(item, capabilities.width, indent=0)))
     if view.initial_value is not None:
         lines.extend(
             _component_lines(
@@ -957,7 +977,9 @@ def _form_picker_choice_lines(
                 indent=detail_indent,
             )
         )
-    return lines
+    return _emphasize_choice(
+        lines, choice, highlighted=highlighted, selected=selected, prefix_length=len(prefix),
+    )
 
 
 def _form_picker_summary_start(picker: Picker, width: int) -> int | None:
@@ -1125,7 +1147,7 @@ def _numbered_picker_choice_lines(
             continuation_prefix=" " * len(prefix),
             base_role=role,
         )
-    return [
+    return _emphasize_choice([
         (line, role)
         for line in _wrap(
             text,
@@ -1134,7 +1156,7 @@ def _numbered_picker_choice_lines(
             initial_prefix=prefix,
             continuation_prefix=" " * len(prefix),
         )
-    ]
+    ], choice, highlighted=highlighted, selected=selected)
 
 
 def _picker_empty_or_notice_lines(
@@ -1243,7 +1265,7 @@ def _input_prompt_lines(
     if not identity.endswith(">"):
         identity = f"{identity} >"
     lines.extend(
-        (line, SemanticRole.COMMAND)
+        (line, SemanticRole.SUCCESS)
         for line in _wrap(f"{identity} ", width, indent=0)
     )
     return lines
@@ -1257,7 +1279,7 @@ def _form_input_prompt_lines(
 
     prompt = view.prompt
     lines: list[_SemanticLine] = [
-        (line, SemanticRole.COMMAND)
+        (line, SemanticRole.INFO)
         for line in _wrap(prompt.name, width, indent=0)
     ]
     if prompt.scope is not None:
@@ -1296,7 +1318,7 @@ def _form_input_prompt_lines(
         )
         lines.append(("", SemanticRole.DEFAULT))
     lines.extend(
-        (line, SemanticRole.COMMAND)
+        (line, SemanticRole.SUCCESS)
         for line in _wrap("New value > ", width, indent=0)
     )
     return lines
@@ -1452,75 +1474,101 @@ def _message_lines(
 
 
 def _chat_block_message_lines(
-    message: Message,
-    width: int,
-    *,
-    indent: int,
+    message: Message, width: int, *, indent: int,
 ) -> list[_SemanticLine]:
-    """Render one grouped speaker rail with a trailing block separator."""
+    """Keep speaker, Markdown body, and response metadata in distinct frames."""
+    outer = " " * max(0, min(indent, max(width - 1, 0)))
+    available = max(1, min(120, width - len(outer)))
+    header = f"{_inline(message.sender)}{_semantic_suffix(message.state, message.role)}"
+    accent = _SpeakerHeaderRole(message.accent)
+    content = format_agent_reply_content(message.content) if message.role is SemanticRole.AGENT else message.content
+    try:
+        parsed = json.loads(content, object_pairs_hook=_reject_duplicate_object_pairs,
+                            parse_constant=_reject_nonfinite_constant)
+        body = literal_lines(content) if isinstance(parsed, (dict, list)) else project_markdown(content)
+    except (TypeError, ValueError, RecursionError):
+        body = project_markdown(content)
+    lines: list[_SemanticLine] = []
+    if available < 40:
+        lines.extend((row, accent) for row in _word_wrapped_prefixed_lines(
+            f"-- {header} --", available, prefix=outer, fallback_prefix=""))
+        for row in body:
+            lines.extend(_framed_markdown_lines(row, available, outer, boxed=False))
+        if message.metadata is not None:
+            lines.extend((outer + row, _MarkdownRole((MarkdownSpan(0, len(outer + row), ("blue",)),))) for row in _word_wrapped_prefixed_lines(
+                "-- Metadata --", available, prefix="", fallback_prefix=""))
+            for row in _metadata_lines(message.metadata, available):
+                dim = _metadata_line(row.text)
+                lines.extend(_framed_markdown_lines(dim, available, outer, boxed=False))
+        lines.append((outer + "-" * available, accent))
+    else:
+        def rail(label: str = "") -> str:
+            prefix = "+-- " + label + " " if label else "+"
+            return outer + prefix + "-" * max(0, available - _cell_width(prefix) - 1) + "+"
 
-    header = (
-        f"{_inline(message.sender)}"
-        f"{_semantic_suffix(message.state, message.role)}"
-    )
-    header_role = _SpeakerHeaderRole(message.accent)
-    header_indent = " " * max(0, min(indent, max(width - 1, 0)))
-    lines: list[_SemanticLine] = [
-        (line, header_role)
-        for line in _word_wrapped_prefixed_lines(
-            header,
-            width,
-            prefix=header_indent,
-            fallback_prefix="",
-        )
-    ]
-    if message.metadata is not None:
-        metadata_indent = " " * max(0, min(indent + 2, max(width - 1, 0)))
-        lines.extend(
-            (line, SemanticRole.DEFAULT)
-            for line in _word_wrapped_prefixed_lines(
-                _inline(message.metadata),
-                width,
-                prefix=metadata_indent,
-                fallback_prefix="",
-            )
-        )
-    content = (
-        format_agent_reply_content(message.content)
-        if message.role is SemanticRole.AGENT
-        else message.content
-    )
-    lines.extend(
-        (line, SemanticRole.DEFAULT)
-        for line in _chat_block_body_lines(content, width, indent=indent)
-    )
+        headers = _word_wrapped_prefixed_lines(header, available - 6, prefix="", fallback_prefix="")
+        for label in headers:
+            lines.append((rail(label), accent))
+        for row in body:
+            lines.extend(_framed_markdown_lines(row, available, outer, boxed=True))
+        if message.metadata is not None:
+            divider = rail("Metadata")
+            lines.append((divider, _MarkdownRole((MarkdownSpan(0, len(divider), ("blue",)),))))
+            for row in _metadata_lines(message.metadata, available - 4):
+                dim = _metadata_line(row.text)
+                lines.extend(_framed_markdown_lines(dim, available, outer, boxed=True))
+        lines.append((rail(), accent))
     lines.append(("", SemanticRole.DEFAULT))
     return lines
 
 
-def _chat_block_body_lines(value: str, width: int, *, indent: int) -> list[str]:
-    """Word-wrap one sanitized body under a physical-cell-safe speaker rail."""
+def _metadata_line(text: str) -> MarkdownLine:
+    spans: list[MarkdownSpan] = []
+    offset = 0
+    for match in re.finditer(r"(?:Outcome|Elapsed|Input tokens|Output tokens):", text):
+        if match.start() > offset:
+            spans.append(MarkdownSpan(offset, match.start(), ("dim",)))
+        spans.append(MarkdownSpan(match.start(), match.end(), ("blue",)))
+        offset = match.end()
+    if offset < len(text):
+        spans.append(MarkdownSpan(offset, len(text), ("dim",)))
+    return MarkdownLine(text, tuple(spans))
 
-    safe = sanitize_terminal_text(value)
-    safe_indent = max(0, min(indent, max(width - 1, 0)))
-    base_indent = " " * safe_indent
-    remaining_width = width - safe_indent
-    if remaining_width >= 3:
-        prefix = f"{base_indent}│ "
-        fallback_prefix = base_indent
-    else:
-        prefix = base_indent
-        fallback_prefix = ""
-    return [
-        rendered
-        for source in safe.split("\n")
-        for rendered in _word_wrapped_prefixed_lines(
-            source,
-            width,
-            prefix=prefix,
-            fallback_prefix=fallback_prefix,
-        )
-    ]
+
+def _metadata_lines(value: str, capacity: int) -> tuple[MarkdownLine, ...]:
+    lines: list[MarkdownLine] = []
+    for row in literal_lines(value):
+        fields = row.text.split(" | ")
+        standard = all(re.match(r"^(?:Outcome|Elapsed|Input tokens|Output tokens):", part)
+                       for part in fields)
+        if standard and _cell_width(row.text) > capacity:
+            lines.extend(MarkdownLine(part) for part in fields)
+        else:
+            lines.append(row)
+    return tuple(lines)
+
+
+def _framed_markdown_lines(
+    line: MarkdownLine, width: int, outer: str, *, boxed: bool,
+) -> list[_SemanticLine]:
+    """Wrap first, then carry style spans into the physical-cell-safe frame."""
+    capacity = max(1, width - 4) if boxed else width
+    chunks = _word_wrapped_prefixed_lines(line.text, capacity, prefix="", fallback_prefix="")
+    rendered: list[_SemanticLine] = []
+    offset = 0
+    for chunk in chunks:
+        prefix = outer + ("| " if boxed else "")
+        suffix = " " * max(0, capacity - _cell_width(chunk)) + " |" if boxed else ""
+        stop = offset + len(chunk)
+        spans = tuple(MarkdownSpan(
+            len(prefix) + max(span.start, offset) - offset,
+            len(prefix) + min(span.stop, stop) - offset, span.styles,
+        ) for span in line.spans if span.start < stop and span.stop > offset)
+        rendered.append((prefix + chunk + suffix, _MarkdownRole(spans)))
+        offset = stop
+    return rendered
+
+
 
 
 def _word_wrapped_prefixed_lines(
@@ -1748,6 +1796,26 @@ def _picker_lines(
     return lines
 
 
+def _emphasize_choice(
+    lines: Iterable[_SemanticLine], choice: Choice, *, highlighted: bool, selected: bool,
+    prefix_length: int | None = None,
+) -> list[_SemanticLine]:
+    rendered = list(lines)
+    if rendered and choice.enabled and (highlighted or selected):
+        text, role = rendered[0]
+        if prefix_length is None:
+            rendered[0] = text, _MarkdownRole((MarkdownSpan(0, len(text), ("bold", "code")),))
+        elif isinstance(role, _InlineRole):
+            rendered[0] = text, _InlineRole(
+                role.base, role.spans, emphasized_prefix_stop=min(prefix_length, len(text)),
+            )
+        elif isinstance(role, SemanticRole):
+            rendered[0] = text, _InlineRole(
+                role, (), emphasized_prefix_stop=min(prefix_length, len(text)),
+            )
+    return rendered
+
+
 def _choice_lines(
     choice: Choice,
     width: int,
@@ -1779,7 +1847,7 @@ def _choice_lines(
             continuation_prefix=" " * len(marker),
             base_role=role,
         )
-    return [
+    return _emphasize_choice([
         (line, role)
         for line in _wrap(
             text,
@@ -1788,7 +1856,7 @@ def _choice_lines(
             initial_prefix=marker,
             continuation_prefix=" " * len(marker),
         )
-    ]
+    ], choice, highlighted=highlighted, selected=selected)
 
 
 def _state_label(state: ViewState) -> str:
@@ -2057,13 +2125,27 @@ def _cell_width(text: str) -> int:
 def _decorate(text: str, role: _LineRole) -> str:
     """Apply one fixed local style without parsing dynamic text as markup."""
 
+    if isinstance(role, _MarkdownRole):
+        sgr = {"bold": "\x1b[1m", "italic": "\x1b[3m", "code": "\x1b[7m",
+               "link": "\x1b[4m", "dim": "\x1b[2m", "blue": "\x1b[34m"}
+        rendered: list[str] = []
+        offset = 0
+        for span in role.spans:
+            rendered.append(text[offset:span.start])
+            prefix = "".join(sgr[style] for style in span.styles)
+            rendered.append(prefix + text[span.start:span.stop] + _RESET)
+            offset = span.stop
+        rendered.append(text[offset:])
+        return "".join(rendered)
     if isinstance(role, _SpeakerHeaderRole):
         if not text:
             return text
         return f"{_SPEAKER_HEADER_SGR[role.accent]}{text}{_RESET}"
     if isinstance(role, _InlineRole):
         rendered: list[str] = []
-        offset = 0
+        offset = role.emphasized_prefix_stop
+        if offset:
+            rendered.append(f"{_ROLE_SGR[role.base]}\x1b[1m\x1b[7m{text[:offset]}{_RESET}")
         for span in role.spans:
             rendered.append(_decorate(text[offset : span.start], role.base))
             rendered.append(_decorate(text[span.start : span.stop], span.role))

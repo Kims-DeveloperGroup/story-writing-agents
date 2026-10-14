@@ -543,13 +543,13 @@ class SemanticInputRenderingTests(unittest.TestCase):
         self.assertEqual(no_color.plain_text, expected_plain)
         self.assertEqual(
             ansi.text,
-            "Mode: chat\n"
-            "Target: plot\n"
-            "Next line: 1\n"
-            "Lines: 0\n"
-            "Characters: 0\n"
+            "\x1b[36mMode: chat\x1b[0m\n"
+            "\x1b[36mTarget: plot\x1b[0m\n"
+            "\x1b[36mNext line: 1\x1b[0m\n"
+            "\x1b[36mLines: 0\x1b[0m\n"
+            "\x1b[36mCharacters: 0\x1b[0m\n"
             "\x1b[36m[info] Use /send to submit or /cancel to discard.\x1b[0m\n"
-            "\x1b[35mcompose[chat:plot:1]>\x1b[0m ",
+            "\x1b[32mcompose[chat:plot:1]>\x1b[0m ",
         )
         self.assertEqual(strip_decorative_sgr(ansi.text), expected_plain)
         self.assertFalse(ansi.text.endswith("\n"))
@@ -609,7 +609,7 @@ class SemanticInputRenderingTests(unittest.TestCase):
         self.assertIn("text", plain.text)
         self.assertIn(r"ask\x1b[2J>", plain.text)
         self.assertNotIn("\x07", plain.text)
-        allowed = {"\x1b[0m", "\x1b[1m", "\x1b[31m", "\x1b[35m"}
+        allowed = {"\x1b[0m", "\x1b[1m", "\x1b[31m", "\x1b[32m", "\x1b[36m"}
         sequences = re.findall(r"\x1b\[[0-9;]*[A-Za-z]", ansi.text)
         self.assertTrue(sequences)
         self.assertTrue(set(sequences).issubset(allowed))
@@ -1099,8 +1099,8 @@ class SemanticInputDriverTests(unittest.TestCase):
             [termios_double.TCSANOW, termios_double.TCSADRAIN],
         )
         rendered = "".join(output.records)
-        self.assertIn("\x1b[35mcompose[chat:plot:1]>\x1b[0m ", rendered)
-        self.assertNotIn(r"\x1b[35mcompose", rendered)
+        self.assertIn("\x1b[32mcompose[chat:plot:1]>\x1b[0m ", rendered)
+        self.assertNotIn(r"\x1b[32mcompose", rendered)
         self.assertIn("界e\u0301", rendered)
         initial_calls = [call for call in provider.call_args_list if call == mock.call("")]
         self.assertEqual(len(initial_calls), 1)

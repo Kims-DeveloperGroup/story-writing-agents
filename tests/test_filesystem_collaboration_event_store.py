@@ -50,6 +50,7 @@ from story_writing_agents.workspace.core import Workspace
 from tests.collaboration_contract_fixture import (
     SESSION_ID,
     contract_batches,
+    measured_batch,
 )
 from tests.helpers import pristine_initialized_workspace
 
@@ -167,7 +168,7 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
             self.assertFalse(value.history_path.exists())
             self.assertFalse(value.lock_path.exists())
 
-            batch = contract_batches(value.conversation_id)["proposal"]
+            batch = measured_batch(contract_batches(value.conversation_id)["proposal"])
             receipt = value.store.append_batch(batch)
             events = value.store.read(SESSION_ID, value.conversation_id)
 

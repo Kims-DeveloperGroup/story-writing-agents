@@ -199,7 +199,7 @@ class FilesystemConversationArchiveCompositionTests(unittest.TestCase):
 class FilesystemConversationArchiveRoundTripTests(unittest.TestCase):
     def test_real_layout_round_trip_is_byte_and_codec_exact(self) -> None:
         workspace = initialized_workspace(self)
-        payload = representative_archive()
+        payload = representative_archive(measured=True)
         receipt = _import(workspace, payload)
         first = _export(workspace)
         second = _export(workspace)

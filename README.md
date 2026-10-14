@@ -112,6 +112,15 @@ for responsibilities, authority limits, concrete story workflows,
 provider-call examples, visible states, and recovery behavior. The exact API
 contract remains in [Lead agent workflows and reviewed artifact proposals](docs/guides/lead-agent.md).
 
+Chat prose uses distinct colored message frames with Markdown presentation and
+a labeled metadata footer. Frames adapt to new writes and live redraws, with a
+40-column full layout, a 120-column maximum, and compact layouts for narrower
+terminals. Input/output token counters come from provider response usage;
+missing counters are displayed as unavailable. Messages remain complete in
+ordinary terminal scrollback. See
+[message frames and metadata](docs/reference/interactive-terminal.md#message-frames-markdown-and-response-metadata)
+for the layout, color fallback, and usage-attribution rules.
+
 ## Install
 
 Choose one Python environment. Do not create a standard-library virtual

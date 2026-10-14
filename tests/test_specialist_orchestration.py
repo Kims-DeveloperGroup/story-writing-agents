@@ -1085,6 +1085,11 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         reply_events = _events(history, CollaborationEventKind.SPECIALIST_REPLY)
         self.assertEqual(len(reply_events), 2)
         synthesis = _payloads(history, CollaborationLeadSynthesisPayload)[0]
+        synthesis_call = next(event.payload for event in history if type(event.payload) is CollaborationProviderCallPayload
+            and event.payload.invocation_kind is CollaborationInvocationKind.LEAD_SYNTHESIS
+            and event.payload.state is CollaborationProviderCallState.SUBMITTED)
+        self.assertEqual(synthesis.provider_invocation_id, synthesis_call.invocation_id)
+        self.assertEqual(decision.turn.provider_invocation_id, synthesis_call.invocation_id)
         self.assertIs(synthesis.trace.origin, ReplyTraceOrigin.PROVIDER)
         self.assertEqual(synthesis.trace.action, "synthesis")
         self.assertEqual(synthesis.reply_event_ids, tuple(event.event_id for event in reply_events))
@@ -1434,10 +1439,17 @@ class SpecialistAccountingAcceptanceTests(LeadOrchestrationTestCase):
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
         failing.enabled = True
 
-        with self.assertRaisesRegex(RuntimeError, "injected durable append failure"):
-            await runtime.decide_lead_step(
-                _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-            )
+        captured = []
+        invoke = runtime._run_collaboration_invocation
+        async def record(**arguments):
+            result = await invoke(**arguments)
+            captured.append(result)
+            return result
+        with mock.patch.object(runtime, "_run_collaboration_invocation", side_effect=record):
+            with self.assertRaisesRegex(RuntimeError, "injected durable append failure"):
+                await runtime.decide_lead_step(
+                    _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+                )
 
         self.assertEqual(failing.failures, 1)
         self.assertEqual(runtime._live_execution_markers, set())
@@ -1445,6 +1457,11 @@ class SpecialistAccountingAcceptanceTests(LeadOrchestrationTestCase):
             project_collaboration_history(self.history(conversation_id)).current_state,
             CollaborationStepState.RUNNING,
         )
+        submitted = [event.payload for event in self.history(conversation_id) if type(event.payload) is CollaborationProviderCallPayload
+            and event.payload.state is CollaborationProviderCallState.SUBMITTED
+            and event.payload.invocation_kind in {CollaborationInvocationKind.SPECIALIST_ASSIGNMENT, CollaborationInvocationKind.LEAD_SYNTHESIS}]
+        self.assertEqual({result.provider_invocation_id for result in captured}, {call.invocation_id for call in submitted})
+        self.assertEqual(len(captured), 2)
 
 
 if __name__ == "__main__":
