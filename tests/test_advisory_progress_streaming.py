@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import re
 import unittest
 from unittest import mock
 
@@ -53,6 +54,9 @@ from story_writing_agents.interactive_terminal._controls import (
 from story_writing_agents.interactive_terminal._viewer_render import render_nested_scroll_view
 from story_writing_agents.provider_adapter import ProviderInvocation
 
+
+def _without_sgr(text):
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 def _ansi_terminal_capabilities():
     return TerminalCapabilities(
@@ -770,7 +774,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         state = MultiAgentScrollState((view,), focused_index=0)
         capabilities = _ansi_terminal_capabilities()
         rendered = render_nested_scroll_view(state, capabilities)
-        rows = rendered.text.split("\n")
+        rows = _without_sgr(rendered.text).split("\n")
         # 1 header line + 6 body lines + 1 footer line = 8 rows (strictly <= 10)
         self.assertEqual(len(rows), 8)
         self.assertTrue(rows[0].startswith("┌") and rows[0].endswith("┐"))
@@ -786,6 +790,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         # Footer navigation hints
         self.assertIn("↑/↓: scroll", rows[-1])
         self.assertIn("Tab: switch agent", rows[-1])
+
 
     def test_to_scroll_state_projection(self) -> None:
         mock_terminal = mock.create_autospec(InteractiveTerminal, instance=True)
@@ -1041,8 +1046,8 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         collapsed_frame = render_nested_scroll_view(collapsed_state, capabilities)
         self.assertEqual(collapsed_frame.line_count, 1)
         self.assertEqual(len(collapsed_frame.text.splitlines()), 1)
-        self.assertIn("press 't' to expand", collapsed_frame.text)
-        self.assertIn("[! Lead]", collapsed_frame.text)
+        self.assertIn("↑/↓: scroll", collapsed_frame.text)
+        self.assertIn("[Focused • ! Lead]", collapsed_frame.text)
         self.assertIn("First error line", collapsed_frame.text)
 
     def test_advisory_progress_state_render_collapsed(self) -> None:
@@ -1113,6 +1118,72 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         progress.dismiss_failure_snapshot()
         self.assertIsNone(state.failure_snapshot)
 
+        from dataclasses import replace
+        from story_writing_agents.interactive_terminal._output_history import OutputHistory
+        from story_writing_agents.interactive_terminal._pointer import PointerEvent
+        history = OutputHistory()
+        caps = _ansi_terminal_capabilities()
+        lines = tuple(f"界e\u0301 {i}" for i in range(20))
+        view = NestedScrollViewport("same:op", "Agent", 20, 1, lines[:4], 4, True,
+                                    buffer_lines=lines)
+        original = MultiAgentScrollState((view,), 0)
+        history.retain(original)
+        history.retain(original)
+        self.assertEqual([frame.identity for frame in history.frames], [1, 2])
+        self.assertEqual(view.start_line, 1)
+        layout = history.render(caps, 30)
+        first, second = layout.hits
+        self.assertFalse(history.handle_pointer(PointerEvent(0, 2, first.top, False), layout))
+        history.handle_pointer(PointerEvent(0, 2, first.top, True), layout)
+        self.assertEqual(history.focused_id, first.identity)
+        focused = history.render(caps, 30)
+        self.assertEqual("\n".join(focused.lines).count("Focused"), 1)
+        self.assertIn("\x1b[", "\n".join(focused.lines))
+        plain = history.render(replace(caps, profile=CapabilityProfile.PLAIN, decorative_sgr=False), 30)
+        self.assertEqual("\n".join(plain.lines).count("Focused"), 1)
+        self.assertNotIn("\x1b[", "\n".join(plain.lines))
+        history.handle_pointer(PointerEvent(0, 2, second.top, True), layout)
+        self.assertTrue(history.render(replace(caps, profile=CapabilityProfile.PLAIN, decorative_sgr=False), 1).lines[0].startswith(">"))
+        history.handle_pointer(PointerEvent(0, 2, first.top, True), layout)
+        history.handle_pointer(PointerEvent(65, 2, second.top + 1, True), layout)
+        self.assertEqual(history.focused_id, first.identity)
+        self.assertEqual(history.frames[1].view.start_line, 4)
+        self.assertEqual(history.frames[0].view.start_line, 1)
+        self.assertTrue(history.handle_key(KeyEvent(KeyKind.DOWN)))
+        self.assertEqual(history.frames[0].view.start_line, 2)
+        self.assertTrue(history.handle_key(KeyEvent(KeyKind.ENTER)))
+        self.assertIsNone(history.focused_id)
+        history.handle_pointer(PointerEvent(0, 2, first.bottom, True), layout)
+        self.assertTrue(history.handle_key(KeyEvent(KeyKind.ESCAPE)))
+        history.handle_pointer(PointerEvent(0, 2, first.top + 1, True), layout)
+        self.assertFalse(history.handle_key(KeyEvent(KeyKind.TEXT, text="x")))
+        self.assertIsNone(history.focused_id)
+        history.handle_pointer(PointerEvent(0, 2, first.top, True), layout)
+        history.handle_pointer(PointerEvent(0, 2, len(layout.lines) + 1, True), layout)
+        self.assertIsNone(history.focused_id)
+        bottom = history.render(caps, 6)
+        history.handle_pointer(PointerEvent(64, 1, 1, True), bottom)
+        older = history.render(caps, 6)
+        self.assertNotEqual(older, bottom)
+        history.retain(original)
+        self.assertEqual(history.render(caps, 6), older)
+        resized = history.render(replace(caps, width=20), 6)
+        self.assertTrue(all(hit.right == 19 and 1 <= hit.top <= hit.bottom <= 6
+                            for hit in resized.hits))
+        for row in resized.lines:
+            self.assertLessEqual(sum(display_character_width(char) for char in row), 19)
+        for narrow, height in ((caps, 0), (replace(caps, width=7), 6)):
+            history.handle_pointer(PointerEvent(0, 2, first.top, True), layout)
+            self.assertEqual(history.render(narrow, height).lines, ())
+            self.assertIsNone(history.focused_id)
+            self.assertFalse(history.handle_key(KeyEvent(KeyKind.ENTER)))
+        history = OutputHistory()
+        history.retain(MultiAgentScrollState((view,), 0, collapsed=True))
+        collapsed = history.render(caps, 1)
+        history.handle_pointer(PointerEvent(0, 2, 1, True), collapsed)
+        self.assertIn("\x1b[1;7;36m", history.render(caps, 1).lines[0])
+        self.assertNotIn("press 't'", history.render(caps, 1).lines[0])
+
     def test_thought_delta_coalesces_consecutive_thinking_rows_and_bounds_buffer(self) -> None:
         state = AdvisoryProgressState()
         req = AdvisoryProgressRequest("lead", "op1", "Thinking task")
@@ -1147,28 +1218,10 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
 
     def test_transition_nested_scroll_aliases_and_dynamic_visible_lines(self) -> None:
         all_lines = tuple(f"Line {i + 1}" for i in range(20))
-        v1 = NestedScrollViewport(
-            view_id="lead:1",
-            title="Lead",
-            total_lines=20,
-            start_line=1,
-            visible_lines=all_lines[:5],
-            visible_height=5,
-            is_focused=True,
-            state=ViewState.IDLE,
-            buffer_lines=all_lines,
-        )
-        v2 = NestedScrollViewport(
-            view_id="critic:2",
-            title="Critic",
-            total_lines=20,
-            start_line=1,
-            visible_lines=all_lines[:5],
-            visible_height=5,
-            is_focused=False,
-            state=ViewState.IDLE,
-            buffer_lines=all_lines,
-        )
+        v1 = NestedScrollViewport("lead:1", "Lead", 20, 1, all_lines[:5], 5, True,
+                                  buffer_lines=all_lines)
+        v2 = NestedScrollViewport("critic:2", "Critic", 20, 1, all_lines[:5], 5, False,
+                                  buffer_lines=all_lines)
         state = MultiAgentScrollState((v1, v2), 0)
 
         # Test tab navigation aliases: ']' advances tab, '[' recedes tab
@@ -1387,16 +1440,8 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             render_nested_scroll_view,
         )
 
-        viewport = NestedScrollViewport(
-            view_id="a:1",
-            title="Agent 界e\u0301\x1b[31m",
-            total_lines=5,
-            start_line=1,
-            visible_lines=("line 1", "line 2"),
-            visible_height=2,
-            is_focused=True,
-            buffer_lines=("line 1", "line 2", "line 3", "line 4", "line 5"),
-        )
+        viewport = NestedScrollViewport("a:1", "Agent 界e\u0301\x1b[31m", 5, 1, ("line 1", "line 2"), 2, True,
+                                        buffer_lines=("line 1", "line 2", "line 3", "line 4", "line 5"))
         state = MultiAgentScrollState((viewport,), 0)
 
         # Test valid terminal widths 1 through 5
@@ -1413,8 +1458,9 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             frame = render_nested_scroll_view(state, caps)
             self.assertIsNotNone(frame.text)
             self.assertTrue(all(sum(display_character_width(c) for c in row) <= max(1, w - 1)
-                for row in frame.text.splitlines()))
-            self.assertNotIn("\x1b", frame.text); self.assertNotIn("╭", frame.text)
+                for row in _without_sgr(frame.text).splitlines()))
+            self.assertNotIn("\x1b", _without_sgr(frame.text)); self.assertNotIn("╭", frame.text)
+
 
     def test_default_is_failure_recognizes_failed_state(self) -> None:
         from dataclasses import dataclass
@@ -2289,52 +2335,14 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         self.assertEqual(len(state.agent_buffers), 0)
 
     def test_nested_scroll_viewport_h_offset_validation_and_default(self) -> None:
-        viewport = NestedScrollViewport(
-            view_id="test:1",
-            title="Agent",
-            total_lines=1,
-            start_line=1,
-            visible_lines=("line 1",),
-            visible_height=1,
-            is_focused=True,
-        )
-        self.assertEqual(viewport.h_offset, 0)
-
-        viewport_with_offset = NestedScrollViewport(
-            view_id="test:1",
-            title="Agent",
-            total_lines=1,
-            start_line=1,
-            visible_lines=("line 1",),
-            visible_height=1,
-            is_focused=True,
-            h_offset=8,
-        )
-        self.assertEqual(viewport_with_offset.h_offset, 8)
-
+        values = dict(view_id="test:1", title="Agent", total_lines=1, start_line=1,
+                      visible_lines=("line 1",), visible_height=1, is_focused=False)
+        self.assertEqual(NestedScrollViewport(**values).h_offset, 0)
+        self.assertEqual(NestedScrollViewport(**values, h_offset=8).h_offset, 8)
         with self.assertRaises(ValueError):
-            NestedScrollViewport(
-                view_id="test:1",
-                title="Agent",
-                total_lines=1,
-                start_line=1,
-                visible_lines=("line 1",),
-                visible_height=1,
-                is_focused=True,
-                h_offset=-1,
-            )
-
+            NestedScrollViewport(**values, h_offset=-1)
         with self.assertRaises(ValueError):
-            NestedScrollViewport(
-                view_id="test:1",
-                title="Agent",
-                total_lines=1,
-                start_line=1,
-                visible_lines=("line 1",),
-                visible_height=1,
-                is_focused=True,
-                h_offset="invalid",  # type: ignore[arg-type]
-            )
+            NestedScrollViewport(**values, h_offset="invalid")
 
     def test_clip_cells_horizontal_scroll_offset_and_markers(self) -> None:
         from story_writing_agents.interactive_terminal._viewer_render import _clip_cells
@@ -2373,26 +2381,8 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             _clip_cells("abc", 10, offset="invalid")  # type: ignore[arg-type]
 
     def test_transition_nested_scroll_horizontal_scrolling(self) -> None:
-        viewport_1 = NestedScrollViewport(
-            view_id="a1:1",
-            title="Agent 1",
-            total_lines=10,
-            start_line=1,
-            visible_lines=("line 1", "line 2"),
-            visible_height=2,
-            is_focused=True,
-            h_offset=0,
-        )
-        viewport_2 = NestedScrollViewport(
-            view_id="a2:1",
-            title="Agent 2",
-            total_lines=10,
-            start_line=1,
-            visible_lines=("line 1", "line 2"),
-            visible_height=2,
-            is_focused=False,
-            h_offset=0,
-        )
+        viewport_1 = NestedScrollViewport("a1:1", "Agent 1", 10, 1, ("line 1", "line 2"), 2, True)
+        viewport_2 = NestedScrollViewport("a2:1", "Agent 2", 10, 1, ("line 1", "line 2"), 2, False)
         state = MultiAgentScrollState((viewport_1, viewport_2), 0)
 
         # Pan right with RIGHT key
@@ -2428,37 +2418,17 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         self.assertEqual(state_a2_pan.views[1].h_offset, 4)
 
     def test_render_nested_scroll_view_with_horizontal_offset(self) -> None:
-        long_line = "This is a very long text line that easily exceeds standard terminal widths."
-        viewport = NestedScrollViewport(
-            view_id="a:1",
-            title="Agent",
-            total_lines=1,
-            start_line=1,
-            visible_lines=(long_line,),
-            visible_height=1,
-            is_focused=True,
-            h_offset=10,
-        )
-        state = MultiAgentScrollState((viewport,), 0)
-        caps = TerminalCapabilities(
-            CapabilityProfile.ANSI,
-            30,
-            input_tty=True,
-            output_tty=True,
-            raw_mode=True,
-            cursor_controls=True,
-            decorative_sgr=True,
-        )
-        rendered = render_nested_scroll_view(state, caps)
+        from dataclasses import replace
+        view = NestedScrollViewport("a:1", "Agent", 1, 1,
+                                    ("This is a very long text line that easily exceeds standard terminal widths.",),
+                                    1, True, h_offset=10)
+        rendered = render_nested_scroll_view(MultiAgentScrollState((view,), 0),
+                                            replace(_ansi_terminal_capabilities(), width=30))
         self.assertEqual(rendered.h_offset, 10)
-        rows = rendered.text.split("\n")
-        # Body line (row index 1) contains overflow indicators
-        body_row = rows[1]
-        self.assertIn("←", body_row)
-        self.assertIn("→", body_row)
-        # Footer contains pan hint
-        footer_row = rows[-1]
-        self.assertIn("←/→: pan", footer_row)
+        self.assertIn("←", rendered.text.splitlines()[1])
+        self.assertIn("→", rendered.text.splitlines()[1])
+        self.assertIn("Focused", rendered.text.splitlines()[-1])
+        self.assertIn("←/→: pan", render_nested_scroll_view(MultiAgentScrollState((view,), 0), _ansi_terminal_capabilities()).text)
 
     def test_run_advisory_progress_frame_persists_when_keep_frame_true(self) -> None:
         capabilities = _ansi_terminal_capabilities()
@@ -2709,34 +2679,14 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
     def test_nested_scroll_inspector_focus_cycling_and_frame_retention_on_success(self) -> None:
         """Verify inspector cycles focus across viewports on Tab and retains frame with newline when keep_frame=True."""
         out = io.StringIO()
-        driver = RawTerminalDriver(
-            lambda _p: "",
-            io.StringIO(),
-            out,
-            lambda s, e: (s, None),
-            lambda s, e, h: (s, None),
-            lambda h, t: h,
-        )
-        v1 = NestedScrollViewport(
-            view_id="a1:1",
-            title="Agent 1",
-            total_lines=3,
-            start_line=1,
-            visible_lines=("agent 1 line",),
-            visible_height=1,
-            is_focused=True,
-            state=ViewState.IDLE,
-        )
-        v2 = NestedScrollViewport(
-            view_id="a2:1",
-            title="Agent 2",
-            total_lines=3,
-            start_line=1,
-            visible_lines=("agent 2 line",),
-            visible_height=1,
-            is_focused=False,
-            state=ViewState.IDLE,
-        )
+        driver = RawTerminalDriver(lambda _p: "", io.StringIO(), out,
+                                   lambda s, e: (s, None), lambda s, e, h: (s, None), lambda h, t: h)
+        v1 = NestedScrollViewport('a1:1', 'Agent 1', 3, 1, ('agent 1 line',), 1, True)
+        v2 = NestedScrollViewport('a2:1', 'Agent 2', 3, 1, ('agent 2 line',), 1, False)
+        out.fileno = lambda: 8
+        driver._os_provider = lambda: mock.Mock(get_terminal_size=lambda _: mock.Mock(columns=40, lines=250))
+        self.assertEqual(driver._text_viewer_geometry(80), (40, 200))
+        self.assertEqual(driver._text_viewer_geometry(80, bounded_height=False), (40, 250))
         initial_state = MultiAgentScrollState((v1, v2), 0)
 
         fake_config = mock.MagicMock()
@@ -2748,7 +2698,8 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             mock.patch.object(RawTerminalDriver, "_prepare_input", return_value=(fake_caps, fake_config)),
             mock.patch("story_writing_agents.interactive_terminal._driver._activate_terminal"),
             mock.patch("story_writing_agents.interactive_terminal._driver._restore_terminal_or_raise"),
-            mock.patch.object(RawTerminalDriver, "_read_character", side_effect=["\t", "q"]),
+            mock.patch.object(RawTerminalDriver, "_read_character", side_effect=["\t", *"\x1b[<0;5;248M", "q"]),
+            mock.patch.object(RawTerminalDriver, "_escape_continuation_is_ready", return_value=True),
             mock.patch.object(RawTerminalDriver, "_clear_progress_frame") as mock_clear,
         ):
             final_state = driver.run_nested_scroll_inspector(
@@ -2758,14 +2709,15 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                 keep_frame=True,
             )
 
-        # Tab switched focus to agent 2
-        self.assertEqual(final_state.focused_index, 1)
-        self.assertFalse(final_state.views[0].is_focused)
-        self.assertTrue(final_state.views[1].is_focused)
+        # Mouse coordinates must use physical row 248, not the capped viewer height.
+        self.assertEqual(final_state.focused_index, 0)
+        self.assertTrue(final_state.views[0].is_focused)
+        self.assertFalse(final_state.views[1].is_focused)
 
-        # _clear_progress_frame was called once during Tab redraw, but NOT upon exit because keep_frame=True
-        self.assertEqual(mock_clear.call_count, 1)
+        # Clear before Tab/pointer redraws, but NOT upon exit because keep_frame=True
+        self.assertEqual(mock_clear.call_count, 3)
         self.assertTrue(out.getvalue().endswith("\r\n"))
+        self.assertIn("\x1b[250;1H", out.getvalue())
 
     def test_provide_scroll_state_on_success_sets_idle_state_and_does_not_record_error(self) -> None:
         """Verify success response passes ViewState.IDLE and does not record result message as an error."""
@@ -3099,7 +3051,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
     def test_render_nested_scroll_view_reserves_terminal_width(self) -> None:
         """Verify render_nested_scroll_view reserves 1 column to avoid auto-wrap artifacts."""
 
-        lines = tuple(f"Content line {i} with plenty of text to fill up the whole width" for i in range(1, 15))
+        lines = tuple(f"界e\u0301 Content line {i} with plenty of text to fill up the whole width" for i in range(1, 15))
         view = NestedScrollViewport(
             view_id="a:1",
             title="Agent 界e\u0301",
@@ -3125,9 +3077,9 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             frame_exp = render_nested_scroll_view(state_exp, caps)
             self.assertEqual(frame_exp.width, w)
             self.assertIn("界e\u0301", frame_exp.text)
-            self.assertTrue(frame_exp.text.splitlines()[0].endswith("┐"))
-            self.assertTrue(frame_exp.text.splitlines()[-1].endswith("┘"))
-            for row in frame_exp.text.split("\n"):
+            self.assertTrue(_without_sgr(frame_exp.text).splitlines()[0].endswith("┐"))
+            self.assertTrue(_without_sgr(frame_exp.text).splitlines()[-1].endswith("┘"))
+            for row in _without_sgr(frame_exp.text).split("\n"):
                 row_width = sum(display_character_width(c) for c in row)
                 self.assertLessEqual(row_width, w - 1)
 
@@ -3135,9 +3087,10 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             state_col = MultiAgentScrollState((view,), 0, collapsed=True)
             frame_col = render_nested_scroll_view(state_col, caps)
             self.assertEqual(frame_col.width, w)
-            for row in frame_col.text.split("\n"):
+            for row in _without_sgr(frame_col.text).split("\n"):
                 row_width = sum(display_character_width(c) for c in row)
                 self.assertLessEqual(row_width, w - 1)
+
 
     def test_collapsed_rendering_multi_agent_indicators(self) -> None:
         """Verify multi-agent collapsed indicators (current/total) in live and nested scroll rendering."""
@@ -3188,7 +3141,13 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         caps = _ansi_terminal_capabilities()
         scroll_state_0 = MultiAgentScrollState((v1, v2), 0, collapsed=True)
         frame_0 = render_nested_scroll_view(scroll_state_0, caps)
-        self.assertIn("[► Agent Alpha] (1/2)", frame_0.text)
+        self.assertIn("[Focused • ► Agent Alpha] (1/2)", frame_0.text)
+        self.assertIn("\x1b[1;7;36m", frame_0.text)
+        self.assertNotIn("press 't'", frame_0.text)
+        from dataclasses import replace
+        plain = render_nested_scroll_view(scroll_state_0, replace(caps, profile=CapabilityProfile.PLAIN, decorative_sgr=False))
+        self.assertNotIn("\x1b[", plain.text)
+        self.assertIn("Focused", plain.text)
 
         scroll_state_1 = MultiAgentScrollState((v1, v2), 1, collapsed=True)
         frame_1 = render_nested_scroll_view(scroll_state_1, caps)

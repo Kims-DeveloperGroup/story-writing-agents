@@ -156,7 +156,7 @@ class MainInputHistoryContractTests(unittest.TestCase):
                 "_fallback_read_line",
                 "_fallback_capabilities",
                 "_history_append",
-                "_history_state",
+                "_history_state", "_output_history", "_inspector_anchored", "_inspector_top", "_inspector_width",
                 "_input_stream",
                 "_input_latch",
                 "_input_session_active",

@@ -286,6 +286,34 @@ every 500 ms during idle; input restores the visible phase, and help/prompts pau
 blinking. The raw host emits `idle` without changing its five-method interface.
 Partial UTF-8 and buffered input survive these nonfatal polling pauses.
 
+## Retained agent-output history
+
+Agent JSON/progress frames kept by the existing `/progress` retention rules remain
+available in a scrollable output-history area above the main prompt. The history
+includes each agent's retained frame from earlier operations in the current shell,
+including across conversation and session switches. It is discarded when the shell
+exits. These are the same bounded previews shown during inspection; opening an old
+frame does not reload files or call a provider.
+
+Left-click a frame's header, border, or body to focus it. The focused frame uses the
+selected-control accent and a `Focused` marker; the marker also appears with
+`NO_COLOR`. A `>` in the history gutter keeps focus visible when a frame's header
+and footer are clipped. Arrows and paging keys navigate the focused frame. The mouse wheel over
+a frame scrolls its content, while the left history gutter scrolls through earlier
+frames. New output follows the bottom only when you are already viewing the bottom.
+
+Click the prompt or press Escape to return to the unchanged input draft and cursor.
+Enter while an output frame is focused returns to input without submitting the
+draft. Typing printable text returns to input and preserves the first character.
+History navigation does not add entries to command history or change conversation
+focus.
+
+The history area fits above the prompt and its controls and is omitted when the
+terminal is too short to show both. Line-fallback terminals retain their ordinary
+output behavior. Mouse reporting is scoped to Story's active history/inspector
+interaction and is released before native authentication or an external viewer.
+Terminal keyboard shortcuts and preferences are unchanged.
+
 ## Safety
 
 `sanitize_terminal_text` preserves ordinary Unicode/newlines and neutralizes
