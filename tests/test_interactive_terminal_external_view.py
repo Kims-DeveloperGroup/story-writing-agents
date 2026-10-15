@@ -209,7 +209,11 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
         leaky = PortableTerminalScreen()
         leaky.write("\x1b[?1049h\x1b[27;1H" + "x" * 91 + "\x1b[?1049l")
         self.assertNotEqual(leaky.snapshot(), before_leak)
-        for characters, resize, failure in (("q", False, None), ("\x1b", False, None),
+        pager_keys = "b bgG Gbgq"
+        legacy_keys = "\x1b[5~\x1b[6~\x1b[5~\x1b[H\x1b[F\x1b[6~\x1b[F\x1b[5~\x1b[Hq"
+        pager_frames = {}
+        for characters, resize, failure in ((pager_keys, False, None), (legacy_keys, False, None),
+                (pager_keys, True, None), (legacy_keys, True, None), ("q", False, None), ("\x1b", False, None),
                 ("\x03", False, None), ("", False, None), ("qq", False, None),
                 ("jk\x1b[B\x1b[A\x1b[6~\x1b[5~\x1b[F\x1b[Hq", True, None),
                 ("\x1b[6~" * 80 + "q", False, None),
@@ -258,6 +262,17 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
             self.assertEqual(writes, []); fallback.assert_not_called()
             self.assertEqual(termios.events.count("activate"), termios.events.count("restore"))
             self.assertTrue(all(len(frame.split("\n")) <= size[1] for size, frame in frames))
+            if characters in (pager_keys, legacy_keys):
+                ranges = [tuple(map(int, re.search(r"Transcript (\d+)-(\d+)/(\d+)", frame.split("\n")[-1]).groups())) for _, frame in frames]
+                body, total = frames[-1][0][1] - 1, ranges[-1][2]
+                maximum = total - body
+                expected = [(offset + 1, min(offset + body, total), total) for offset in (0, body, 0, maximum, maximum - body, 0)]
+                self.assertEqual(ranges, ([ranges[0]] if resize else []) + expected)
+                if characters == pager_keys:
+                    pager_frames[resize] = frames
+                else:
+                    self.assertEqual(frames, pager_frames[resize])
+                self.assertIn("b/Space page", frames[0][1]); self.assertIn("g/G top/bottom", frames[0][1])
             if resize:
                 self.assertEqual(frames[-1][0], (47, 10)); self.assertIn("Transcript 1-", frames[-1][1])
             transcript = "".join(output.records)
@@ -273,7 +288,7 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
         self.assertEqual(plain_writes, [])
 
     def test_physical_input_has_no_viewer_bindings_prompts_or_history(self) -> None:
-        text = "/gqjkb nNmh?cJK개요😀e\u0301"
+        text = "/gGqjkb nNmh?cJK개요😀e\u0301"
         controls = "\r\n\x08\x7f\x01\x05\x15\x0b\x17\x03\x04\t"
         names = ("enter", "enter", "backspace", "backspace", "ctrl_a", "ctrl_e", "ctrl_u", "ctrl_k", "ctrl_w", "interrupt", "eof", "unknown")
         driver, _input, output, fallback, termios = _raw_driver(text + controls)

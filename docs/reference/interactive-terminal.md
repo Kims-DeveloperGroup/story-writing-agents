@@ -244,7 +244,8 @@ runtime authorization rather than embedded by the control.
 snapshot. Without `COUNT`, it includes the complete history from sequence 1 or
 `--from`; an explicit count keeps the existing bounded page. Message frames,
 request/result notices, and continuation hints all remain inside the viewer.
-Arrows or `j`/`k` scroll, Page Up/Down move a screen, and Home/End reach its bounds.
+Arrows or `j`/`k` scroll, `b`/Space move to the previous/next screen, and `g`/`G`
+reach the beginning/end (`G` is Shift+G). Page Up/Down and Home/End remain aliases.
 `q`, Escape, Ctrl-C, and EOF close the view. Closing restores the preceding shell
 screen and clears transcript content, matching `/exchanges`. Unsupported
 terminals receive a content-free notice rather than printed transcript rows.
