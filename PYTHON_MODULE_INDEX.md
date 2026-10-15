@@ -257,25 +257,25 @@ exchange, lead, session, and runtime concerns in focused private policy modules.
 
 Only `_core` composes the private policies. Other subsystems must not import those policies;
 the controller may depend on runtime/storage/terminal facades, never the reverse.
-The existing `_lead_policy` to `interactive_terminal._collaboration_view` and `_exchange_viewer` to `interactive_terminal._external_view` imports are narrow presentation bridges, not general private access. Exchanges validate the pinned four-export viewer contract and use its owned terminal transport.
+The existing `_lead_policy` to `interactive_terminal._collaboration_view` and `_exchange_viewer` to `interactive_terminal._external_view` imports are narrow presentation bridges, not general private access. Exchanges validate the pinned four-export viewer contract and use its owned terminal transport. Transcript selection uses one validated immutable store snapshot.
 
 ### Interactive terminal and presentation
 
 Responsibility: own terminal models, rendering, controls, input lifecycle, external viewer,
 live composition, reference activation, collaboration presentation, and the terminal driver.
-`interactive_terminal` is the supported presentation facade.
+`interactive_terminal` is the supported presentation facade. `InteractiveTranscriptViewer` owns transient transcript viewport state without storage ownership.
 
 - `interactive_terminal`, `interactive_terminal._core`, `interactive_terminal._model`
 - `interactive_terminal._driver`, `interactive_terminal._input_lifecycle`
 - `interactive_terminal._controls`, `interactive_terminal._render`
 - `interactive_terminal._advisory_progress`, `interactive_terminal._collaboration_view`
-- `interactive_terminal._external_view`, `interactive_terminal._live_composer`
+- `interactive_terminal._external_view`, `interactive_terminal._transcript_view`, `interactive_terminal._live_composer`
 - `interactive_terminal._reference_activation`, `interactive_terminal._viewer_model`
 - `interactive_terminal._viewer_controls`, `interactive_terminal._viewer_render`
 
 Presentation consumes domain contracts without owning runtime state. Private `_box.Box` shares Unicode cell geometry.
 `_markdown` owns sanitized prose; `_response_usage` joins exact scoped call identities. Live/history/transcript share frames.
-The driver retains inline I/O, input exclusion, progress, lobby echo and exact restoration. Lazy `open_owned` lends
+The driver retains inline I/O, input exclusion, progress, lobby echo and exact restoration; borrowed external views use physical row painting/clearing. Lazy `open_owned` lends
 validated LIVE transport; jsonl-viewer owns exchange raw/screen/cursor/mouse modes. Callback/fallback refuse before content.
 Resumable idle preserves partial decoding/typeahead. Main-thread termination and `InteractiveInputLifecycle` retain
 native-auth handoff and lobby cleanup. Model/render/control internals are not public APIs.

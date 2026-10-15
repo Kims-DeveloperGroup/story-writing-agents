@@ -56,8 +56,10 @@ Follow a hit with its visible handle:
 [hint] Continue with /transcript c_12ab34cd56 1 --from 2.
 ```
 
-The capable renderer may decorate these records, but their semantic fields and
-the result/hint sentences remain the same.
+The request, records, result, and continuation hint appear inside the transient
+viewer. Closing clears them and restores the preceding shell screen, as
+`/exchanges` does. Without `COUNT`, the viewer instead includes the complete
+conversation, starting at `--from` when supplied.
 
 ## Search authority
 
@@ -105,10 +107,12 @@ cursor binds session/conversation, next sequence, limits, snapshot last
 sequence, and tail-batch digest. Any append makes the cursor stale; start a
 fresh read rather than joining two snapshots.
 
-The interactive `/transcript` hint deliberately prints a new command instead
-of retaining an in-memory cursor. Each command reads a fresh current snapshot.
-Direct Python callers that require snapshot continuity use
-`continue_history()`.
+Inside an explicitly bounded `/transcript` viewer, the continuation hint shows a
+new command rather than retaining a storage cursor. Each invocation reads one
+fresh validated snapshot; scrolling stays within that snapshot, even if the
+conversation later changes. Without `COUNT`, the complete selected suffix is
+available in the viewer. Direct Python callers that require snapshot continuity
+use `continue_history()`.
 
 ## Public boundaries
 

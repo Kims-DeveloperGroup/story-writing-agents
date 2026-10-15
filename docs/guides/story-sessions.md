@@ -142,19 +142,25 @@ without deleting its stored identity/history. `--all` includes archives.
 Archived history remains part of required Lead session memory and can be sent
 to the configured provider. Archive is not a privacy opt-out or deletion.
 
-`/history` reads the focused schema-v2 collaboration history and explains its
-current state and next safe action. `/search` performs bounded literal search
-over readable event fields in active conversations. Subjects are display-only
-metadata and never create a hit. `/transcript` reads a fresh bounded structured
-page for an active or archived conversation without changing focus. These
-reads do not call a provider or mutate history.
+`/history` reads focused schema-v2 collaboration history and explains its current
+state and next safe action. `/search` performs bounded literal search over
+readable event fields in active conversations; subjects are display metadata.
+`/transcript` opens a transient viewer for a fresh snapshot of an active or
+archived conversation without changing focus. Without a count, browse the complete
+history from sequence 1 or `--from`; an explicit count retains the bounded page.
+These reads do not call a provider or mutate history.
 
 Use bare `/transcript` to choose from the attached session's active and archived
 conversations in catalog order. Each choice shows `Subject (conversation_id)`
-with the full ID to distinguish duplicate subjects. Selection resolves the ID
-again before reading. An empty catalog, cancellation, Ctrl-C, or EOF reads no
-transcript and leaves attachment, focus, and conversation history unchanged. An explicit ID
-skips the picker and accepts the optional count and start sequence.
+with the full ID, so duplicate subjects remain distinguishable. Selection
+resolves the ID again before reading. An empty catalog, picker cancellation,
+Ctrl-C, or EOF reads no transcript and leaves attachment, focus, and history
+unchanged. An explicit ID skips the picker and accepts optional count and start
+sequence. Arrows or `j`/`k` scroll; Page Up/Down and Home/End navigate longer
+histories. Close with `q`, Escape, Ctrl-C, or EOF. Closing clears the transcript
+view and restores the previous shell screen, matching `/exchanges`; headings,
+results, and hints also disappear. Unsupported terminals receive a content-free
+notice.
 
 Example:
 

@@ -1244,20 +1244,55 @@ class ControllerContractTests(ControllerTestCase):
             "future_notice", collaboration.CollaborationEventKind.MESSAGE, RUNTIME, USER,
             collaboration.CollaborationMessagePayload("Concurrent private notice.")), conversation_id=metadata.conversation_id)))
         callbacks.records.clear()
-        with mock.patch.object(services.event_store, "read", side_effect=[history, future]) as read:
-            controller._read_attached_conversation_transcript(controller_core_module.parse_interactive_line(
-                f"/transcript {metadata.conversation_id} 2 --from {start}"))
-        read.assert_any_call("session_a", metadata.conversation_id)
-        self.assertEqual(len(callbacks.records), 5)
-        rendered = "".join(callbacks.records)
-        selected = history[start - 1:start + 1]
-        self.assertTrue(all(event.event_id in rendered for event in selected))
-        self.assertNotIn(f"Event: {history[0].event_id}", rendered)
-        self.assertNotIn("future_notice", rendered); self.assertNotIn("Concurrent private notice.", rendered)
-        self.assertLess(rendered.index(selected[0].event_id), rendered.index(selected[1].event_id))
-        self.assertIn("Input tokens: 0 | Output tokens: 2", rendered)
         handle = controller_core_module.visible_conversation_handle(metadata, services.catalog.list("session_a", include_archived=True))
-        self.assertIn(f"Continue with /transcript {handle} 2 --from {start + 2}.", rendered)
+        with mock.patch.object(terminal_module.InteractiveTranscriptViewer, "open", autospec=True) as view, mock.patch.object(controller._runtime, "lead_turn", side_effect=AssertionError("provider call")):
+            with mock.patch.object(services.event_store, "read", side_effect=[history, future]) as read:
+                controller._read_attached_conversation_transcript(controller_core_module.parse_interactive_line(
+                    f"/transcript {metadata.conversation_id} 2 --from {start}"))
+            read.assert_called_once_with("session_a", metadata.conversation_id)
+            self.assertEqual(callbacks.records, [])
+            self.assertEqual(view.call_args.args[1], history[start - 1:start + 1])
+            self.assertEqual(view.call_args.kwargs["history_events"], history[:start + 1])
+            self.assertFalse(view.call_args.kwargs["show_details"])
+            self.assertIn(f"Continue with /transcript {handle} 2 --from {start + 2}.", view.call_args.kwargs["continuation"].text)
+            # Exceed both legacy record and byte caps without changing persisted history.
+            long_history = store_batch(history, make_batch(history, "large_history", *(replace(make_draft(
+                f"large_{index}", collaboration.CollaborationEventKind.MESSAGE, RUNTIME, USER,
+                collaboration.CollaborationMessagePayload("**개요** e\u0301🙂 " + "x" * 600)),
+                conversation_id=metadata.conversation_id) for index in range(101))))
+            for command, expected in ((f"/transcript {metadata.conversation_id}", long_history),
+                    (f"/transcript {metadata.conversation_id} --from {start}", long_history[start - 1:])):
+                with mock.patch.object(services.event_store, "read", return_value=long_history) as read:
+                    controller._read_attached_conversation_transcript(controller_core_module.parse_interactive_line(command))
+                read.assert_called_once_with("session_a", metadata.conversation_id)
+                self.assertEqual(view.call_args.args[1], expected)
+                self.assertEqual(view.call_args.kwargs["history_events"], long_history)
+                self.assertIsNone(view.call_args.kwargs["continuation"])
+                self.assertEqual(callbacks.records, [])
+            with mock.patch.object(services.event_store, "read", return_value=long_history):
+                controller._read_attached_conversation_transcript(controller_core_module.parse_interactive_line(f"/transcript {metadata.conversation_id} 100"))
+            self.assertLess(len(view.call_args.args[1]), 100)
+            self.assertIsNotNone(view.call_args.kwargs["continuation"])
+            services.catalog.archive("session_a", metadata.conversation_id)
+            controller._read_attached_conversation_transcript(controller_core_module.parse_interactive_line(f"/transcript {metadata.conversation_id}"))
+            self.assertEqual(view.call_args.args[1], history)
+            empty = services.catalog.create("session_a", "Empty transcript")
+            controller._read_attached_conversation_transcript(controller_core_module.parse_interactive_line(f"/transcript {empty.conversation_id}"))
+            self.assertEqual(view.call_args.args[1], ())
+            self.assertIs(view.call_args.kwargs["result"].state, terminal_module.ViewState.EMPTY)
+            before = view.call_count
+            with mock.patch.object(terminal_module.InteractivePickerInput, "read_picker", return_value=ControlOutcome(ControlOutcomeKind.CANCEL)):
+                controller._read_attached_conversation_transcript(controller_core_module.parse_interactive_line("/transcript"))
+            controller._read_attached_conversation_transcript(controller_core_module.parse_interactive_line("/transcript unknown"))
+            self.assertEqual(view.call_count, before)
+        self.assertEqual(controller._attached_session_id, "session_a")
+        self.assertEqual(controller._focused_conversation, metadata)
+        self.assertEqual(services.event_store.read("session_a", metadata.conversation_id), history)
+        services.catalog.unarchive("session_a", metadata.conversation_id)
+        callbacks.records.clear()
+        controller._read_attached_conversation_transcript(controller_core_module.parse_interactive_line(f"/transcript {metadata.conversation_id}"))
+        self.assertEqual(len(callbacks.records), 1)
+        self.assertIn("Transcripts require terminal transient display support.", callbacks.records[0])
         callbacks.records.clear()
         controller._collaboration_history_service = controller_core_module.CollaborationHistoryService(
             controller_core_module.CollaborationHistorySearchScope("session_a", include_archived=False), conversation_storage_services=services)
@@ -1667,8 +1702,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 160)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 699)
+        self.assertEqual(len(modules), 161)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 705)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",

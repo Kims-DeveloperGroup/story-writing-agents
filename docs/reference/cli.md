@@ -388,12 +388,16 @@ input. See [Lead recovery](../guides/lead-agent.md#submitted-lead-outcome-unavai
 require attachment; history requires an active focus. Directives and debate
 inspection are session-scoped but do not require conversation focus.
 
-Bare `/transcript` opens a picker for active and archived conversations in the
-attached session, in catalog order. Each choice shows `Subject (conversation_id)`
-with the full ID, so duplicate subjects remain distinguishable. Selection resolves
-the ID again before reading a fresh page. An empty catalog, cancellation, Ctrl-C,
-or EOF reads no transcript and leaves attachment, focus, and conversation history unchanged.
-An explicit ID skips the picker and retains the optional count and start sequence.
+Bare `/transcript` opens the attached session's active and archived conversation
+picker, in catalog order. Choices show `Subject (conversation_id)` with full IDs.
+Selection resolves the ID again before reading one fresh validated snapshot.
+An empty catalog, picker cancellation, Ctrl-C, or EOF reads no transcript and
+preserves attachment, focus, and history. An explicit ID skips the picker.
+Without `COUNT`, browse the complete conversation from sequence 1 or `--from`;
+with a count, browse the existing bounded page. Close with `q`, Escape, Ctrl-C,
+or EOF. Like `/exchanges`, closing clears the viewer and restores the preceding
+shell screen without transcript rows, headings, results, or hints in scrollback.
+Unsupported terminals receive only a content-free notice.
 
 Ordinary non-slash text is literal Lead input. It requires an attached session
 and focused active conversation; no agent selector is accepted. The retired

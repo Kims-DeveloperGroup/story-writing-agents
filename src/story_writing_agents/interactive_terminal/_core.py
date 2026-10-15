@@ -144,6 +144,7 @@ from ._render import (
     render_picker_viewport,
     render_startup_welcome_frame,
 )
+from ._transcript_view import prepare_transcript_components, run_transcript_view
 from ._reference_activation import (
     ReferenceInputFailure,
     ReferenceInputFailureKind,
@@ -1944,6 +1945,39 @@ class InteractiveExternalViewer:
         if not callable(operation):
             raise TypeError("operation must be callable")
         self._open_owned(operation)
+
+
+class InteractiveTranscriptViewer:
+    """Bind transient rich transcript presentation without owning history storage."""
+
+    __slots__ = ("_viewer",)
+
+    def __init__(self, terminal: InteractiveTerminal) -> None:
+        self._viewer = InteractiveExternalViewer(terminal)
+
+    def open(
+        self,
+        events: tuple[CollaborationEvent, ...],
+        *,
+        request: Record,
+        result: Notice,
+        continuation: Notice | None = None,
+        show_details: bool = False,
+        history_events: tuple[CollaborationEvent, ...] | None = None,
+    ) -> None:
+        """Show one immutable supplied transcript and discard its viewport on close."""
+        components = prepare_transcript_components(
+            events,
+            request=request,
+            result=result,
+            continuation=continuation,
+            show_details=show_details,
+            history_events=history_events,
+        )
+        self._viewer.open(
+            lambda host: run_transcript_view(host, components),
+            transient_only=True,
+        )
 
 
 class InteractiveAdvisoryProgress:

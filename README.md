@@ -295,6 +295,11 @@ for the retained command registry. The management and inspection commands are
 `/search`, `/transcript`, `/inspect`, `/exchanges`, `/history`, `/status`,
 `/help`, and `/quit`.
 
+`/transcript` opens an isolated, scrollable conversation snapshot. Without a
+count it shows the complete selected history; explicit count/start arguments
+support targeted inspection. Closing clears the view and restores the preceding
+shell screen, matching `/exchanges`.
+
 The exact grammar is in the [CLI reference](docs/reference/cli.md) and
 [interactive parser reference](docs/reference/interactive-command-parser.md).
 
