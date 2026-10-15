@@ -526,6 +526,7 @@ class InputLatchAndDriverTests(unittest.TestCase):
             view = NestedScrollViewport("a:1", "Agent", 3, 1, ("first",), 1, False,
                                         buffer_lines=("first", "second", "third"))
             driver._output_history.retain(MultiAgentScrollState((view,), 0))
+            output.fileno.return_value = 8
             driver._os_provider = lambda: mock.Mock(get_terminal_size=lambda _: mock.Mock(columns=40, lines=250))
             with mock.patch.object(RawTerminalDriver, "_escape_continuation_is_ready", return_value=True):
                 self.assertEqual(driver.read_main_line("main> ", lambda _: ()), "drafxt")

@@ -2683,6 +2683,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                                    lambda s, e: (s, None), lambda s, e, h: (s, None), lambda h, t: h)
         v1 = NestedScrollViewport('a1:1', 'Agent 1', 3, 1, ('agent 1 line',), 1, True)
         v2 = NestedScrollViewport('a2:1', 'Agent 2', 3, 1, ('agent 2 line',), 1, False)
+        out.fileno = lambda: 8
         driver._os_provider = lambda: mock.Mock(get_terminal_size=lambda _: mock.Mock(columns=40, lines=250))
         self.assertEqual(driver._text_viewer_geometry(80), (40, 200))
         self.assertEqual(driver._text_viewer_geometry(80, bounded_height=False), (40, 250))
