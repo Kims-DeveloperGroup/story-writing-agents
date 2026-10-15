@@ -518,17 +518,16 @@ class InputLatchAndDriverTests(unittest.TestCase):
                     self.assertEqual(termios.attributes, original)
 
         from story_writing_agents.interactive_terminal._model import MultiAgentScrollState, NestedScrollViewport
-        click = "\x1b[<0;2;16M"
-        scripted = "draft\x1b[D" + click + "\x1b[B\r" + click + "x" + click + "\x1b[<0;2;18M"
+        click = "\x1b[<0;2;248M"
+        scripted = "draft\x1b[D" + click + "\x1b[B\r" + click + "x" + click + "\x1b[<0;2;250M"
         scripted += "\x1b[<x;2;3M\x1b[<0;" + "1" * 100 + ";3M\r"
         with _session_driver(*(bytes([byte]) for byte in scripted.encode())) as (driver, termios, _, output, fallback):
             original = list(termios.attributes)
             view = NestedScrollViewport("a:1", "Agent", 3, 1, ("first",), 1, False,
                                         buffer_lines=("first", "second", "third"))
             driver._output_history.retain(MultiAgentScrollState((view,), 0))
-            with mock.patch.object(RawTerminalDriver, "_escape_continuation_is_ready", return_value=True), mock.patch.object(
-                RawTerminalDriver, "_text_viewer_geometry", return_value=(40, 18)
-            ):
+            driver._os_provider = lambda: mock.Mock(get_terminal_size=lambda _: mock.Mock(columns=40, lines=250))
+            with mock.patch.object(RawTerminalDriver, "_escape_continuation_is_ready", return_value=True):
                 self.assertEqual(driver.read_main_line("main> ", lambda _: ()), "drafxt")
             rendered = "".join(call.args[0] for call in output.write.call_args_list)
             self.assertIn("Focused", rendered)

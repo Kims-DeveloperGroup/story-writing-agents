@@ -59,6 +59,7 @@ class OutputHistory:
     def render(self, capabilities: TerminalCapabilities, height: int) -> HistoryLayout:
         """Render only intersecting frames and reserve column one as a gutter."""
         if height <= 0 or capabilities.width < 8 or not self._frames:
+            self.focused_id = None
             return HistoryLayout()
         heights = [1 if frame.collapsed else min(6, frame.view.visible_height) + 2 for frame in self._frames]
         total = sum(heights)

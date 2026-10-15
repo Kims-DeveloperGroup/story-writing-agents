@@ -1046,7 +1046,7 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         collapsed_frame = render_nested_scroll_view(collapsed_state, capabilities)
         self.assertEqual(collapsed_frame.line_count, 1)
         self.assertEqual(len(collapsed_frame.text.splitlines()), 1)
-        self.assertIn("press 't' to expand", collapsed_frame.text)
+        self.assertIn("↑/↓: scroll", collapsed_frame.text)
         self.assertIn("[Focused • ! Lead]", collapsed_frame.text)
         self.assertIn("First error line", collapsed_frame.text)
 
@@ -1172,7 +1172,17 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                             for hit in resized.hits))
         for row in resized.lines:
             self.assertLessEqual(sum(display_character_width(char) for char in row), 19)
-        self.assertEqual(history.render(caps, 0).lines, ())
+        for narrow, height in ((caps, 0), (replace(caps, width=7), 6)):
+            history.handle_pointer(PointerEvent(0, 2, first.top, True), layout)
+            self.assertEqual(history.render(narrow, height).lines, ())
+            self.assertIsNone(history.focused_id)
+            self.assertFalse(history.handle_key(KeyEvent(KeyKind.ENTER)))
+        history = OutputHistory()
+        history.retain(MultiAgentScrollState((view,), 0, collapsed=True))
+        collapsed = history.render(caps, 1)
+        history.handle_pointer(PointerEvent(0, 2, 1, True), collapsed)
+        self.assertIn("\x1b[1;7;36m", history.render(caps, 1).lines[0])
+        self.assertNotIn("press 't'", history.render(caps, 1).lines[0])
 
     def test_thought_delta_coalesces_consecutive_thinking_rows_and_bounds_buffer(self) -> None:
         state = AdvisoryProgressState()
@@ -2669,34 +2679,13 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
     def test_nested_scroll_inspector_focus_cycling_and_frame_retention_on_success(self) -> None:
         """Verify inspector cycles focus across viewports on Tab and retains frame with newline when keep_frame=True."""
         out = io.StringIO()
-        driver = RawTerminalDriver(
-            lambda _p: "",
-            io.StringIO(),
-            out,
-            lambda s, e: (s, None),
-            lambda s, e, h: (s, None),
-            lambda h, t: h,
-        )
-        v1 = NestedScrollViewport(
-            view_id="a1:1",
-            title="Agent 1",
-            total_lines=3,
-            start_line=1,
-            visible_lines=("agent 1 line",),
-            visible_height=1,
-            is_focused=True,
-            state=ViewState.IDLE,
-        )
-        v2 = NestedScrollViewport(
-            view_id="a2:1",
-            title="Agent 2",
-            total_lines=3,
-            start_line=1,
-            visible_lines=("agent 2 line",),
-            visible_height=1,
-            is_focused=False,
-            state=ViewState.IDLE,
-        )
+        driver = RawTerminalDriver(lambda _p: "", io.StringIO(), out,
+                                   lambda s, e: (s, None), lambda s, e, h: (s, None), lambda h, t: h)
+        v1 = NestedScrollViewport('a1:1', 'Agent 1', 3, 1, ('agent 1 line',), 1, True)
+        v2 = NestedScrollViewport('a2:1', 'Agent 2', 3, 1, ('agent 2 line',), 1, False)
+        driver._os_provider = lambda: mock.Mock(get_terminal_size=lambda _: mock.Mock(columns=40, lines=250))
+        self.assertEqual(driver._text_viewer_geometry(80), (40, 200))
+        self.assertEqual(driver._text_viewer_geometry(80, bounded_height=False), (40, 250))
         initial_state = MultiAgentScrollState((v1, v2), 0)
 
         fake_config = mock.MagicMock()
@@ -2708,7 +2697,8 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
             mock.patch.object(RawTerminalDriver, "_prepare_input", return_value=(fake_caps, fake_config)),
             mock.patch("story_writing_agents.interactive_terminal._driver._activate_terminal"),
             mock.patch("story_writing_agents.interactive_terminal._driver._restore_terminal_or_raise"),
-            mock.patch.object(RawTerminalDriver, "_read_character", side_effect=["\t", "q"]),
+            mock.patch.object(RawTerminalDriver, "_read_character", side_effect=["\t", *"\x1b[<0;5;248M", "q"]),
+            mock.patch.object(RawTerminalDriver, "_escape_continuation_is_ready", return_value=True),
             mock.patch.object(RawTerminalDriver, "_clear_progress_frame") as mock_clear,
         ):
             final_state = driver.run_nested_scroll_inspector(
@@ -2718,14 +2708,15 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
                 keep_frame=True,
             )
 
-        # Tab switched focus to agent 2
-        self.assertEqual(final_state.focused_index, 1)
-        self.assertFalse(final_state.views[0].is_focused)
-        self.assertTrue(final_state.views[1].is_focused)
+        # Mouse coordinates must use physical row 248, not the capped viewer height.
+        self.assertEqual(final_state.focused_index, 0)
+        self.assertTrue(final_state.views[0].is_focused)
+        self.assertFalse(final_state.views[1].is_focused)
 
-        # _clear_progress_frame was called once during Tab redraw, but NOT upon exit because keep_frame=True
-        self.assertEqual(mock_clear.call_count, 1)
+        # Clear before Tab/pointer redraws, but NOT upon exit because keep_frame=True
+        self.assertEqual(mock_clear.call_count, 3)
         self.assertTrue(out.getvalue().endswith("\r\n"))
+        self.assertIn("\x1b[250;1H", out.getvalue())
 
     def test_provide_scroll_state_on_success_sets_idle_state_and_does_not_record_error(self) -> None:
         """Verify success response passes ViewState.IDLE and does not record result message as an error."""
@@ -3150,6 +3141,12 @@ class InteractiveAdvisoryProgressIntegrationTests(unittest.IsolatedAsyncioTestCa
         scroll_state_0 = MultiAgentScrollState((v1, v2), 0, collapsed=True)
         frame_0 = render_nested_scroll_view(scroll_state_0, caps)
         self.assertIn("[Focused • ► Agent Alpha] (1/2)", frame_0.text)
+        self.assertIn("\x1b[1;7;36m", frame_0.text)
+        self.assertNotIn("press 't'", frame_0.text)
+        from dataclasses import replace
+        plain = render_nested_scroll_view(scroll_state_0, replace(caps, profile=CapabilityProfile.PLAIN, decorative_sgr=False))
+        self.assertNotIn("\x1b[", plain.text)
+        self.assertIn("Focused", plain.text)
 
         scroll_state_1 = MultiAgentScrollState((v1, v2), 1, collapsed=True)
         frame_1 = render_nested_scroll_view(scroll_state_1, caps)

@@ -1336,11 +1336,11 @@ class RawTerminalDriver:
 
         if not callable(renderer):
             raise TypeError("renderer must be callable")
-        width, height = self._text_viewer_geometry(capabilities.width)
+        width, height = self._text_viewer_geometry(capabilities.width, bounded_height=False)
         capabilities = _capabilities_with_width(capabilities, width)
         bounded_views = []
         for view in state.views:
-            visible_height = min(view.visible_height, max(1, height - 3))
+            visible_height = min(view.visible_height, max(1, min(height, _MAX_VIEWER_HEIGHT) - 3))
             bounded_views.append(replace(view, visible_height=visible_height,
                                          visible_lines=view.visible_lines[:visible_height]))
         rendered = renderer(replace(state, views=tuple(bounded_views)), capabilities)
@@ -1366,9 +1366,9 @@ class RawTerminalDriver:
         top = max(1, height - len(lines) + 1)
         if self._inspector_anchored:
             growth = max(0, len(lines) - old_count)
-            prefix = ("\x1b[999B" + "\r\n" * growth if growth else "") + f"\x1b[{top};1H"
+            prefix = (f"\x1b[{height};1H" + "\r\n" * growth if growth else "") + f"\x1b[{top};1H"
         else:
-            prefix = "\x1b[999B\r"
+            prefix = f"\x1b[{height};1H"
             self._inspector_anchored = True
         self._inspector_top = top
         self._inspector_width = width
@@ -4295,8 +4295,10 @@ class RawTerminalDriver:
             raise ValueError("rendered viewer height exceeds the live height")
         self._write_live_text(f"{_VIEWER_SCREEN_REDRAW}{frame.text}")
 
-    def _text_viewer_geometry(self, fallback_width: int) -> tuple[int, int]:
-        """Observe bounded live columns and rows without retaining resize state."""
+    def _text_viewer_geometry(
+        self, fallback_width: int, *, bounded_height: bool = True,
+    ) -> tuple[int, int]:
+        """Observe live geometry; inline absolute rows use physical height."""
 
         width = fallback_width
         height = _DEFAULT_VIEWER_HEIGHT
@@ -4309,7 +4311,7 @@ class RawTerminalDriver:
             if type(columns) is int and columns > 0:
                 width = min(columns, 120)
             if type(lines) is int and lines > 0:
-                height = min(lines, _MAX_VIEWER_HEIGHT)
+                height = min(lines, _MAX_VIEWER_HEIGHT) if bounded_height else lines
         except Exception:
             pass
         return width, height
@@ -4420,7 +4422,7 @@ class RawTerminalDriver:
         """
 
         if display_state.history_enabled:
-            width, history_screen_height = self._text_viewer_geometry(width)
+            width, history_screen_height = self._text_viewer_geometry(width, bounded_height=False)
             width = max(1, width - 1)
             if live_capabilities is not None:
                 live_capabilities = _capabilities_with_width(live_capabilities, width)
@@ -4502,13 +4504,13 @@ class RawTerminalDriver:
 
         output_lines = [*input_lines, *panel_lines]
         if display_state.history_enabled:
-            available = max(0, history_screen_height - len(output_lines) - 1)
+            available = max(0, min(history_screen_height, _MAX_VIEWER_HEIGHT) - len(output_lines) - 1)
             history_capabilities = live_capabilities or _capabilities_with_width(self.capabilities(), width)
             layout = self._output_history.render(history_capabilities, available)
             display_state.history_layout = layout
             if layout.lines:
                 if not display_state.history_anchored:
-                    self._write_live_text("\x1b[999B")
+                    self._write_live_text(f"\x1b[{history_screen_height};1H")
                     display_state.history_anchored = True
                 output_lines = [*layout.lines, *output_lines]
                 cursor_row += len(layout.lines)
@@ -4529,7 +4531,7 @@ class RawTerminalDriver:
             old_top = max(1, history_screen_height - old_count + 1)
             payload = (
                 f"\x1b[{min(top, old_top)};1H{_CLEAR_TO_END}"
-                + ("\x1b[999B" + "\r\n" * growth if growth else "")
+                + (f"\x1b[{history_screen_height};1H" + "\r\n" * growth if growth else "")
                 + f"\x1b[{top};1H" + "\n".join(output_lines)
                 + move_to_cursor + _CARRIAGE_RETURN + _CURSOR_RIGHT * cursor_column
             )

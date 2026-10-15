@@ -381,9 +381,11 @@ def render_nested_scroll_view(
             else ""
         )
         compact_line = _clip_cells(
-            f"[{'Focused • ' if focused.is_focused else ''}{prefix} {focused.title}]{multi_indicator} {counter_str}{content} • press 't' to expand",
+            f"[{'Focused • ' if focused.is_focused else ''}{prefix} {focused.title}]{multi_indicator} {counter_str}{content} • ↑/↓: scroll • Enter/Esc: input",
             render_width,
         )
+        if focused.is_focused and capabilities.decorative_sgr:
+            compact_line = f"{_ACTIVE_SELECTED}{compact_line}{_RESET}"
         return RenderedFrame(compact_line, width, 1, h_offset=focused.h_offset)
 
     # 1. Header / Tab Row
