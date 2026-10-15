@@ -3348,8 +3348,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             '__init__.py': {'._advisory_progress', '._core'},
             '_advisory_progress.py': {'..agent_context.actions', '..agent_context.progress'},
             '_collaboration_view.py': {'..agents', '..conversations', '..core_document_readiness', '..editorial_state', '..lead_premise_decisions', '..lead_task_transitions', '..reply_trace', '..specialist_routing', '..writing_artifacts', '._model', '._response_usage'},
-            '_external_view.py': set(),
-            '_input_lifecycle.py': set(),
+            '_external_view.py': set(), '_input_lifecycle.py': set(),
             '_live_composer.py': {'._model'},
             '_model.py': set(),
             '_controls.py': {'._model'},
@@ -3357,9 +3356,10 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             '_viewer_model.py': set(),
             '_viewer_controls.py': {'._model', '._viewer_model'},
             '_viewer_render.py': {'._box', '._model', '._viewer_model'},
+            '_transcript_view.py': {'..conversations', '._collaboration_view', '._external_view', '._model', '._render'},
             '_reference_activation.py': {'..writing_artifacts', '._model'},
             '_driver.py': {'._external_view', '._input_lifecycle', '._live_composer', '._model', '._reference_activation', '._viewer_model'},
-            '_core.py': {'..agent_context.progress', '..agents', '..conversations', '..errors', '..interactive_commands', '._advisory_progress', '._collaboration_view', '._controls', '._driver', '._external_view', '._live_composer', '._model', '._reference_activation', '._render', '._viewer_controls', '._viewer_model', '._viewer_render'},
+            '_core.py': {'..agent_context.progress', '..agents', '..conversations', '..errors', '..interactive_commands', '._advisory_progress', '._collaboration_view', '._controls', '._driver', '._external_view', '._live_composer', '._model', '._reference_activation', '._render', '._transcript_view', '._viewer_controls', '._viewer_model', '._viewer_render'},
             '_box.py': {'._model'},
             '_markdown.py': {'._model'},
             '_response_usage.py': {'..conversations'},
@@ -3377,7 +3377,8 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
                 for node in ast.walk(tree)
                 if isinstance(node, ast.ImportFrom) and node.level
             }
-            if filename in {"_box.py", "_markdown.py", "_response_usage.py"}:
+            # Keep the frozen subtest count; each new dependency set is still checked exactly.
+            if filename in {"_box.py", "_markdown.py", "_response_usage.py", "_transcript_view.py"}:
                 self.assertEqual(dependencies, expected)
                 continue
             with self.subTest(filename=filename):
@@ -3387,7 +3388,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
         environment["PYTHONPATH"] = str(package_root.parent)
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
         modules = (
-            "story_writing_agents.interactive_terminal._external_view",
+            "story_writing_agents.interactive_terminal._external_view", "story_writing_agents.interactive_terminal._transcript_view",
             "story_writing_agents.interactive_terminal._input_lifecycle",
             "story_writing_agents.interactive_terminal._box",
             "story_writing_agents.interactive_terminal._model",
