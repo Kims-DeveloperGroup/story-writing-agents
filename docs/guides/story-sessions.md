@@ -156,9 +156,11 @@ with the full ID, so duplicate subjects remain distinguishable. Selection
 resolves the ID again before reading. An empty catalog, picker cancellation,
 Ctrl-C, or EOF reads no transcript and leaves attachment, focus, and history
 unchanged. An explicit ID skips the picker and accepts optional count and start
-sequence. Arrows or `j`/`k` scroll; Page Up/Down and Home/End navigate longer
-histories. Close with `q`, Escape, Ctrl-C, or EOF. Closing clears the transcript
-view and restores the previous shell screen, matching `/exchanges`; headings,
+sequence. Arrows or `j`/`k` scroll; `b`/Space move to the previous/next screen,
+and `g`/`G` jump to the beginning/end (`G` is Shift+G). Page Up/Down and Home/End
+remain aliases for longer histories. Close with `q`, Escape, Ctrl-C, or EOF.
+Closing clears the transcript view and restores the previous shell screen,
+matching `/exchanges`; headings,
 results, and hints also disappear. Unsupported terminals receive a content-free
 notice.
 

@@ -33,8 +33,9 @@ or the complete remaining history from `--from`. Supplying `COUNT` retains the
 existing bounded page and its continuation hint. Each invocation reads one
 validated snapshot; browsing never rereads storage or includes later appends.
 
-Use arrows or `j`/`k` to scroll, Page Up/Down to move a screen, and Home/End to
-reach the beginning/end. Close with `q`, Escape, Ctrl-C, or EOF. Like `/exchanges`,
+Use arrows or `j`/`k` to scroll, `b`/Space to move to the previous/next screen,
+and `g`/`G` to reach the beginning/end (`G` is Shift+G). Page Up/Down and
+Home/End remain aliases. Close with `q`, Escape, Ctrl-C, or EOF. Like `/exchanges`,
 closing clears the viewer and restores the previous shell screen. Request
 headings, message frames, results, and hints stay inside the viewer. Terminals
 without transient display support receive only a content-free notice.

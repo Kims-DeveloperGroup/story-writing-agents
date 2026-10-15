@@ -123,7 +123,7 @@ def run_transcript_view(
             visible.append(
                 _footer(
                     f"Transcript {offset + 1}-{min(offset + body_height, len(cached_rows))}"
-                    f"/{len(cached_rows)} | ↑↓/jk PgUp/PgDn Home/End | q/Esc close",
+                    f"/{len(cached_rows)} | b/Space page | g/G top/bottom | ↑↓/jk | q/Esc close",
                     width,
                 )
             )
@@ -144,11 +144,11 @@ def run_transcript_view(
             offset -= 1
         elif event in {"key\tdown", "text\tj"}:
             offset += 1
-        elif event == "key\tpage_up":
+        elif event in {"key\tpage_up", "text\tb"}:
             offset -= body_height
-        elif event == "key\tpage_down":
+        elif event in {"key\tpage_down", "text\t "}:
             offset += body_height
-        elif event == "key\thome":
+        elif event in {"key\thome", "text\tg"}:
             offset = 0
-        elif event == "key\tend":
+        elif event in {"key\tend", "text\tG"}:
             offset = maximum_offset
