@@ -381,7 +381,7 @@ def render_nested_scroll_view(
             else ""
         )
         compact_line = _clip_cells(
-            f"[{prefix} {focused.title}]{multi_indicator} {counter_str}{content} • press 't' to expand",
+            f"[{'Focused • ' if focused.is_focused else ''}{prefix} {focused.title}]{multi_indicator} {counter_str}{content} • press 't' to expand",
             render_width,
         )
         return RenderedFrame(compact_line, width, 1, h_offset=focused.h_offset)
@@ -389,7 +389,7 @@ def render_nested_scroll_view(
     # 1. Header / Tab Row
     tab_parts: list[str] = []
     for i, v in enumerate(state.views):
-        if i == state.focused_index % len(state.views):
+        if i == state.focused_index % len(state.views) and v.is_focused:
             tab_parts.append(f"[► {v.title}]")
         else:
             tab_parts.append(f"[{v.title}]")
@@ -425,9 +425,11 @@ def render_nested_scroll_view(
 
     # 3. Footer Line
     hints = "↑/↓: scroll • ←/→: pan • Tab: switch agent • t: toggle view • Enter/Esc: dismiss"
-    footer_line = box.bottom(hints)
+    footer_line = box.bottom(("Focused • " if focused.is_focused else "") + hints)
 
     all_rows = [header_line, *body_lines, footer_line]
+    if focused.is_focused and capabilities.decorative_sgr:
+        all_rows = [f"{_ACTIVE_SELECTED}{row}{_RESET}" for row in all_rows]
     return RenderedFrame("\n".join(all_rows), width, len(all_rows), h_offset=focused.h_offset)
 
 

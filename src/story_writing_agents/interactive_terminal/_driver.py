@@ -15,6 +15,9 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from typing import TextIO, TypeAlias, TypeVar
 
+from ._output_history import HistoryLayout, OutputHistory
+from ._pointer import PointerEvent, decode_pointer
+
 from ._input_lifecycle import (
     LiveDecoderSpec,
     LiveInputIdle,
@@ -93,6 +96,8 @@ _SUGGESTION_HEADER = "[suggestions]"
 _CARRIAGE_RETURN = "\r"
 _CLEAR_TO_END = "\x1b[J"
 _CURSOR_UP = "\x1b[A"
+_MOUSE_ENABLE = "\x1b[?1000h\x1b[?1006h"
+_MOUSE_DISABLE = "\x1b[?1006l\x1b[?1000l"
 _CURSOR_RIGHT = "\x1b[C"
 _SGR_RESET = "\x1b[0m"
 _DEFAULT_TERMINAL_WIDTH = 80
@@ -147,6 +152,7 @@ class _DiscardingEscapeSequence:
 
 
 _DISCARDING_ESCAPE_SEQUENCE = _DiscardingEscapeSequence()
+_DISCARDING_MOUSE_SEQUENCE = _DiscardingEscapeSequence()
 _EscapeSequenceState: TypeAlias = str | _DiscardingEscapeSequence | None
 
 
@@ -156,6 +162,12 @@ class _LiveEditorState:
 
     escape_sequence: _EscapeSequenceState = None
     rendered_cursor_row: int = 0
+    pointer_event: PointerEvent | None = None
+    history_layout: HistoryLayout = HistoryLayout()
+    history_top: int = 1
+    history_enabled: bool = False
+    history_anchored: bool = False
+    history_line_count: int = 0
 
 
 @dataclass(slots=True)
@@ -493,6 +505,10 @@ class RawTerminalDriver:
         "_fallback_capabilities",
         "_history_append",
         "_history_state",
+        "_output_history",
+        "_inspector_anchored",
+        "_inspector_top",
+        "_inspector_width",
         "_input_stream",
         "_input_latch",
         "_input_session_active",
@@ -557,6 +573,10 @@ class RawTerminalDriver:
         self._main_transition = main_transition
         self._history_append = history_append
         self._history_state = MainInputHistoryState()
+        self._output_history = OutputHistory()
+        self._inspector_anchored = False
+        self._inspector_top = 1
+        self._inspector_width = 1
         self._progress_active = False
         self._progress_frame = 0
         self._progress_renderer: Callable[[int], str] | None = None
@@ -603,6 +623,7 @@ class RawTerminalDriver:
                         self._live_configuration = configuration
                     self._input_session_configuration = None
                     self._input_session_active = False
+                    self._output_history = OutputHistory()
                     self._native_input_handoff_active = False
 
     @contextmanager
@@ -1031,13 +1052,14 @@ class RawTerminalDriver:
                         except TypeError:
                             scroll_state = scroll_state_provider()
                         if scroll_state.views:
-                            self.run_nested_scroll_inspector(
+                            scroll_state = self.run_nested_scroll_inspector(
                                 scroll_state,
                                 nested_scroll_transition,
                                 nested_scroll_renderer,
                                 toggle_callback=toggle_callback,
                                 keep_frame=True,
                             )
+                            self._output_history.retain(scroll_state)
                         elif self._progress_rows > 0:
                             try:
                                 self._write_raw_text("\r\n")
@@ -1081,12 +1103,13 @@ class RawTerminalDriver:
                     except TypeError:
                         scroll_state = scroll_state_provider()
                     if scroll_state.views:
-                        self.run_nested_scroll_inspector(
+                        scroll_state = self.run_nested_scroll_inspector(
                             scroll_state,
                             nested_scroll_transition,
                             nested_scroll_renderer,
                             toggle_callback=toggle_callback,
                         )
+                        self._output_history.retain(scroll_state)
                 except BaseException as exc:
                     inspector_failure = exc
                 finally:
@@ -1194,6 +1217,8 @@ class RawTerminalDriver:
             except BaseException as failure:
                 lifecycle_failure = failure
             else:
+                self._write_live_text(_MOUSE_ENABLE)
+                self._inspector_anchored = False
                 self._redraw_nested_scroll_frame(state, capabilities, renderer)
                 escape_sequence: _EscapeSequenceState = None
                 while True:
@@ -1217,6 +1242,27 @@ class RawTerminalDriver:
                             character,
                         )
                         escape_sequence = escape_state.escape_sequence
+                        pointer = escape_state.pointer_event
+                        if pointer is not None:
+                            self._redraw_nested_scroll_frame(state, capabilities, renderer)
+                            if pointer.pressed and pointer.button == 0 and pointer.row == self._inspector_top:
+                                column = 4
+                                for index, view in enumerate(state.views):
+                                    label = f"[► {view.title}]" if index == state.focused_index % len(state.views) else f"[{view.title}]"
+                                    size = sum(display_character_width(c) for c in sanitize_terminal_text(label))
+                                    if column <= pointer.column < min(column + size, self._inspector_width - 1):
+                                        state = replace(state, focused_index=index, views=tuple(
+                                            replace(view, is_focused=(position == index))
+                                            for position, view in enumerate(state.views)
+                                        ))
+                                        break
+                                    column += size + 1
+                                self._redraw_nested_scroll_frame(state, capabilities, renderer)
+                        if pointer is not None and pointer.pressed and pointer.button in {64, 65}:
+                            wheel = KeyEvent(KeyKind.UP if pointer.button == 64 else KeyKind.DOWN)
+                            for _ in range(3):
+                                state = transition(state, wheel)
+                            self._redraw_nested_scroll_frame(state, capabilities, renderer)
                         if event is not None:
                             old_collapsed = state.collapsed
                             state = transition(state, event)
@@ -1253,6 +1299,10 @@ class RawTerminalDriver:
             active_failure = failure
         finally:
             try:
+                self._write_live_text(_MOUSE_DISABLE)
+            except BaseException as failure:
+                active_failure = active_failure or failure
+            try:
                 _restore_terminal_or_raise(
                     configuration, lifecycle_failure or active_failure
                 )
@@ -1286,26 +1336,44 @@ class RawTerminalDriver:
 
         if not callable(renderer):
             raise TypeError("renderer must be callable")
-        rendered = renderer(state, capabilities)
+        width, height = self._text_viewer_geometry(capabilities.width)
+        capabilities = _capabilities_with_width(capabilities, width)
+        bounded_views = []
+        for view in state.views:
+            visible_height = min(view.visible_height, max(1, height - 3))
+            bounded_views.append(replace(view, visible_height=visible_height,
+                                         visible_lines=view.visible_lines[:visible_height]))
+        rendered = renderer(replace(state, views=tuple(bounded_views)), capabilities)
         if not isinstance(rendered, RenderedFrame):
             raise TypeError("rendered frame must be a RenderedFrame")
         if rendered.width != capabilities.width:
             raise ValueError("rendered frame width must match terminal capabilities width")
         lines = rendered.text.split("\n")
+        plain_lines = [line.replace("\x1b[1;7;36m", "").replace(_SGR_RESET, "") for line in lines]
         if (
             not lines
             or any(
                 sanitize_terminal_text(line) != line
                 or any(character in line for character in ("\r", "\x1b"))
                 or sum(display_character_width(c) for c in line) > capabilities.width
-                for line in lines
+                for line in plain_lines
             )
         ):
             raise ValueError("rendered frame must contain safe text rows within capability width")
-        if self._progress_rows > 0:
+        old_count = self._progress_rows
+        if old_count > 0:
             self._clear_progress_frame()
+        top = max(1, height - len(lines) + 1)
+        if self._inspector_anchored:
+            growth = max(0, len(lines) - old_count)
+            prefix = ("\x1b[999B" + "\r\n" * growth if growth else "") + f"\x1b[{top};1H"
+        else:
+            prefix = "\x1b[999B\r"
+            self._inspector_anchored = True
+        self._inspector_top = top
+        self._inspector_width = width
         self._progress_rows = len(lines)
-        self._write_raw_text("\r" + rendered.text)
+        self._write_raw_text(prefix + rendered.text)
 
     async def run_live_composer(
         self,
@@ -3620,6 +3688,11 @@ class RawTerminalDriver:
                 # cannot use the same failed output collaborator.
                 pass
 
+        if display_state.history_enabled:
+            try:
+                self._write_live_text(_MOUSE_DISABLE)
+            except BaseException as failure:
+                active_failure = active_failure or failure
         _restore_terminal_or_raise(configuration, active_failure)
         if active_failure is not None:
             raise active_failure
@@ -3652,6 +3725,23 @@ class RawTerminalDriver:
         """
 
         control_state = initial_state
+        ordinary_transition = transition
+        display_state.history_enabled = (
+            type(initial_state) in {MainInputControlState, MainCommandControlState}
+            and bool(self._output_history.frames)
+        )
+        def transition(state, event):
+            if display_state.history_enabled and self._output_history.handle_key(event):
+                display_state.rendered_cursor_row = self._redraw_live_display(
+                    prompt, configuration.width, display_state, state,
+                    suggestion_provider, rendered_input, live_capabilities,
+                    palette_projector, palette_renderer, input_frame_provider,
+                )
+                return state, None
+            return ordinary_transition(state, event)
+
+        if display_state.history_enabled:
+            self._write_live_text(_MOUSE_ENABLE)
         display_state.rendered_cursor_row = self._redraw_live_display(
             prompt,
             configuration.width,
@@ -3715,6 +3805,22 @@ class RawTerminalDriver:
                     display_state,
                     character,
                 )
+                if display_state.pointer_event is not None:
+                    pointer = display_state.pointer_event
+                    display_state.pointer_event = None
+                    if display_state.history_enabled:
+                        display_state.rendered_cursor_row = self._redraw_live_display(
+                            prompt, configuration.width, display_state, control_state,
+                            suggestion_provider, rendered_input, live_capabilities,
+                            palette_projector, palette_renderer, input_frame_provider,
+                        )
+                        local = replace(pointer, row=pointer.row - display_state.history_top + 1)
+                        self._output_history.handle_pointer(local, display_state.history_layout)
+                        display_state.rendered_cursor_row = self._redraw_live_display(
+                            prompt, configuration.width, display_state, control_state,
+                            suggestion_provider, rendered_input, live_capabilities,
+                            palette_projector, palette_renderer, input_frame_provider,
+                        )
                 if event is not None:
                     control_state, outcome, changed = _apply_control_event(
                         control_state,
@@ -3846,14 +3952,17 @@ class RawTerminalDriver:
         if type(outcome) is ReferenceInputFailure:
             bindings.write_failure(outcome.kind)
             return state, None, True
-        updated = self._run_live_reference_activation(
-            state,
-            outcome,
-            configuration,
-            display_state,
-            capabilities,
-            bindings,
-        )
+        if display_state.history_enabled:
+            self._write_live_text(_MOUSE_DISABLE)
+        try:
+            updated = self._run_live_reference_activation(
+                state, outcome, configuration, display_state, capabilities, bindings,
+            )
+        finally:
+            if display_state.history_enabled:
+                display_state.history_anchored = False
+                display_state.history_line_count = 0
+                self._write_live_text(_MOUSE_ENABLE)
         return updated, None, True
 
     def _run_live_reference_activation(
@@ -4310,6 +4419,11 @@ class RawTerminalDriver:
         propagates for the owning read boundary to clear and restore resources.
         """
 
+        if display_state.history_enabled:
+            width, history_screen_height = self._text_viewer_geometry(width)
+            width = max(1, width - 1)
+            if live_capabilities is not None:
+                live_capabilities = _capabilities_with_width(live_capabilities, width)
         line_state = _control_line_state(control_state)
         active_input = _resolve_contextual_input_frame(
             rendered_input,
@@ -4387,20 +4501,40 @@ class RawTerminalDriver:
                 panel_lines.extend(rendered_palette.text.split("\n"))
 
         output_lines = [*input_lines, *panel_lines]
+        if display_state.history_enabled:
+            available = max(0, history_screen_height - len(output_lines) - 1)
+            history_capabilities = live_capabilities or _capabilities_with_width(self.capabilities(), width)
+            layout = self._output_history.render(history_capabilities, available)
+            display_state.history_layout = layout
+            if layout.lines:
+                if not display_state.history_anchored:
+                    self._write_live_text("\x1b[999B")
+                    display_state.history_anchored = True
+                output_lines = [*layout.lines, *output_lines]
+                cursor_row += len(layout.lines)
+                display_state.history_top = history_screen_height - len(output_lines) + 1
         move_to_top = _CURSOR_UP * display_state.rendered_cursor_row
         move_to_cursor = _CURSOR_UP * (len(output_lines) - 1 - cursor_row)
         payload = "".join(
             (
-                _CARRIAGE_RETURN,
-                move_to_top,
-                _CARRIAGE_RETURN,
-                _CLEAR_TO_END,
-                "\n".join(output_lines),
-                move_to_cursor,
-                _CARRIAGE_RETURN,
+                _CARRIAGE_RETURN, move_to_top, _CARRIAGE_RETURN, _CLEAR_TO_END,
+                "\n".join(output_lines), move_to_cursor, _CARRIAGE_RETURN,
                 _CURSOR_RIGHT * cursor_column,
             )
         )
+        if display_state.history_enabled and display_state.history_line_count:
+            old_count = display_state.history_line_count
+            growth = max(0, len(output_lines) - old_count)
+            top = max(1, history_screen_height - len(output_lines) + 1)
+            old_top = max(1, history_screen_height - old_count + 1)
+            payload = (
+                f"\x1b[{min(top, old_top)};1H{_CLEAR_TO_END}"
+                + ("\x1b[999B" + "\r\n" * growth if growth else "")
+                + f"\x1b[{top};1H" + "\n".join(output_lines)
+                + move_to_cursor + _CARRIAGE_RETURN + _CURSOR_RIGHT * cursor_column
+            )
+        if display_state.history_enabled:
+            display_state.history_line_count = len(output_lines)
         self._write_live_text(payload)
         return cursor_row
 
@@ -5049,6 +5183,10 @@ def _consume_escape_character(
     sequence = state.escape_sequence
     assert sequence is not None
 
+    if sequence is _DISCARDING_MOUSE_SEQUENCE:
+        if character in {"M", "m"} or ord(character) < 0x20 or character == "\x7f":
+            state.escape_sequence = None
+        return None, False
     if sequence is _DISCARDING_ESCAPE_SEQUENCE:
         if ord(character) < 0x20 or character == "\x7f" or "@" <= character <= "~":
             state.escape_sequence = None
@@ -5068,8 +5206,13 @@ def _consume_escape_character(
         state.escape_sequence = None
         return None, False
 
+    if sequence.startswith("\x1b[<") and character not in {"M", "m"}:
+        if len(sequence) >= _MAX_ESCAPE_SEQUENCE_LENGTH:
+            state.escape_sequence = _DISCARDING_MOUSE_SEQUENCE
+        return None, False
     if "@" <= character <= "~":
         state.escape_sequence = None
+        state.pointer_event = decode_pointer(sequence)
         return _escape_event(sequence), False
     if len(sequence) >= _MAX_ESCAPE_SEQUENCE_LENGTH:
         # Bound storage in a distinct discard state so a later valid-looking

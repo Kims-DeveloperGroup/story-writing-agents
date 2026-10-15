@@ -517,6 +517,29 @@ class InputLatchAndDriverTests(unittest.TestCase):
                 with driver.native_input_handoff():
                     self.assertEqual(termios.attributes, original)
 
+        from story_writing_agents.interactive_terminal._model import MultiAgentScrollState, NestedScrollViewport
+        click = "\x1b[<0;2;16M"
+        scripted = "draft\x1b[D" + click + "\x1b[B\r" + click + "x" + click + "\x1b[<0;2;18M"
+        scripted += "\x1b[<x;2;3M\x1b[<0;" + "1" * 100 + ";3M\r"
+        with _session_driver(*(bytes([byte]) for byte in scripted.encode())) as (driver, termios, _, output, fallback):
+            original = list(termios.attributes)
+            view = NestedScrollViewport("a:1", "Agent", 3, 1, ("first",), 1, False,
+                                        buffer_lines=("first", "second", "third"))
+            driver._output_history.retain(MultiAgentScrollState((view,), 0))
+            with mock.patch.object(RawTerminalDriver, "_escape_continuation_is_ready", return_value=True), mock.patch.object(
+                RawTerminalDriver, "_text_viewer_geometry", return_value=(40, 18)
+            ):
+                self.assertEqual(driver.read_main_line("main> ", lambda _: ()), "drafxt")
+            rendered = "".join(call.args[0] for call in output.write.call_args_list)
+            self.assertIn("Focused", rendered)
+            self.assertIn("second", rendered)
+            self.assertIn(driver_module._MOUSE_ENABLE, rendered)
+            self.assertTrue(rendered.endswith(driver_module._MOUSE_DISABLE))
+            self.assertEqual(driver._history_state.entries, ("drafxt",))
+            self.assertIsNone(driver._output_history.focused_id)
+            self.assertEqual(termios.attributes, original)
+            fallback.assert_not_called()
+
     def test_driver_construction_does_not_inspect_resources(self) -> None:
         fallback = mock.Mock(return_value="unused")
         driver, input_stream, output_stream = _resource_free_driver(fallback)

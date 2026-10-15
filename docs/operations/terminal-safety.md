@@ -432,6 +432,31 @@ indicator failure surface because they await silently. Advisory turns no longer
 write `[routing]` or `[waiting]` notices; their established result, cancellation,
 context, and error records remain the authoritative output.
 
+## Retained output and mouse focus
+
+The terminal driver owns one shell-lifetime history of eligible retained
+agent-output snapshots. Per-operation progress state remains separate. History
+copies the final immutable per-agent viewport once per retained operation, uses
+distinct chronological identities, and preserves the existing sanitization and
+preview limits. It does not persist content, read storage, or replay providers.
+Conversation/session switches keep the shell-local history; shell exit releases it.
+
+The main prompt renders a bounded history viewport with renderer-derived pointer
+hit regions. Only a left-button press can focus a frame. Releases, unsupported or
+malformed reports, and wheel navigation cannot submit input or become draft text.
+Frame focus preserves the input draft, cursor, and command-history navigation.
+Focused Enter returns to input without committing; printable input transfers back
+exactly once. Focus has a visible text marker independently of decorative SGR,
+including a gutter marker when only a clipped frame body is visible.
+
+SGR mouse reporting belongs to the existing raw-input owner. History interaction
+uses the same persistent reader and input operation rather than acquiring another
+one. Mouse modes are released on cleanup and before native-authentication or
+external-viewer handoffs. The separate viewer continues to own its own terminal
+modes. Pointer geometry is refreshed with terminal size and does not authorize
+control sequences from provider text. No application preferences or macOS keyboard
+hooks are used.
+
 ## Typed errors, never raw diagnostics
 
 Input/action-output `OSError` maps to `operation_interrupted`; input

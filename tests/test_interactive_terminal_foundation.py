@@ -1518,6 +1518,19 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                     )
                     self.assertIsNone(state.escape_sequence)
 
+        from story_writing_agents.interactive_terminal._pointer import PointerEvent, decode_pointer
+        self.assertEqual(decode_pointer("\x1b[<0;12;3M"), PointerEvent(0, 12, 3, True))
+        self.assertEqual(decode_pointer("\x1b[<0;12;3m"), PointerEvent(0, 12, 3, False))
+        self.assertEqual(decode_pointer("\x1b[<65;1;3M"), PointerEvent(65, 1, 3, True))
+        for sequence in ("\x1b[<0;0;3M", "\x1b[<0;12;32768M", "\x1b[<999;1;1M",
+                         "\x1b[<0;1M", "\x1b[<0;" + "1" * 10000 + ";3M"):
+            self.assertIsNone(decode_pointer(sequence))
+            state = _driver._LiveEditorState(escape_sequence="\x1b")
+            for character in sequence[1:]:
+                self.assertEqual(_driver._consume_escape_character(state, character), (None, False))
+            self.assertIsNone(state.escape_sequence)
+            self.assertIsNone(state.pointer_event)
+
     def test_capabilities_observe_streams_independently_and_select_profiles(
         self,
     ) -> None:
@@ -3354,11 +3367,13 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             '_controls.py': {'._model'},
             '_render.py': {'._advisory_progress', '._box', '._markdown', '._model'},
             '_viewer_model.py': set(),
+            '_pointer.py': set(),
+            '_output_history.py': {'._box', '._controls', '._model', '._pointer', '._viewer_render'},
             '_viewer_controls.py': {'._model', '._viewer_model'},
             '_viewer_render.py': {'._box', '._model', '._viewer_model'},
             '_transcript_view.py': {'..conversations', '._collaboration_view', '._external_view', '._model', '._render'},
             '_reference_activation.py': {'..writing_artifacts', '._model'},
-            '_driver.py': {'._external_view', '._input_lifecycle', '._live_composer', '._model', '._reference_activation', '._viewer_model'},
+            '_driver.py': {'._external_view', '._input_lifecycle', '._live_composer', '._model', '._output_history', '._pointer', '._reference_activation', '._viewer_model'},
             '_core.py': {'..agent_context.progress', '..agents', '..conversations', '..errors', '..interactive_commands', '._advisory_progress', '._collaboration_view', '._controls', '._driver', '._external_view', '._live_composer', '._model', '._reference_activation', '._render', '._transcript_view', '._viewer_controls', '._viewer_model', '._viewer_render'},
             '_box.py': {'._model'},
             '_markdown.py': {'._model'},
@@ -3378,7 +3393,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
                 if isinstance(node, ast.ImportFrom) and node.level
             }
             # Keep the frozen subtest count; each new dependency set is still checked exactly.
-            if filename in {"_box.py", "_markdown.py", "_response_usage.py", "_transcript_view.py"}:
+            if filename in {"_box.py", "_markdown.py", "_response_usage.py", "_transcript_view.py", "_pointer.py", "_output_history.py"}:
                 self.assertEqual(dependencies, expected)
                 continue
             with self.subTest(filename=filename):
