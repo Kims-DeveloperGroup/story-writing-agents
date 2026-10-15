@@ -121,6 +121,7 @@ TERMINAL_EXPORTS = (
     "InteractiveError",
     "sanitize_terminal_text",
     "InteractiveTerminal",
+    "InteractiveTranscriptViewer",
 )
 
 PROGRESS_FRAMES = (
@@ -424,6 +425,8 @@ class PublicCompatibilityFoundationTests(unittest.TestCase):
                 "InteractiveMainLineEditor",
             ),
         )
+        self.assertIs(terminal_facade.InteractiveTranscriptViewer, _core.InteractiveTranscriptViewer)
+        self.assertEqual(terminal_facade.InteractiveTranscriptViewer.__module__, "story_writing_agents.interactive_terminal")
         defining_objects = (
             AttachmentKind,
             ComposeMode,

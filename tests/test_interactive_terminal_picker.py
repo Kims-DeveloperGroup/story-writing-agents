@@ -3638,6 +3638,7 @@ class PickerAdapterCompatibilityTests(unittest.TestCase):
                 "InteractiveError",
                 "sanitize_terminal_text",
                 "InteractiveTerminal",
+                "InteractiveTranscriptViewer",
             ),
         )
         self.assertNotIn(PickerControlState, get_args(driver_module._ControlState))

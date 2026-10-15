@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import select as _select
 import signal
 import threading
@@ -127,6 +128,8 @@ _MAX_VIEWER_HEIGHT = 200
 _VIEWER_SCREEN_ENTER = "\x1b[?1049h\x1b[2J\x1b[H"
 _VIEWER_SCREEN_REDRAW = "\x1b[H\x1b[2J"
 _VIEWER_SCREEN_EXIT = "\x1b[?1049l"
+_EXTERNAL_VIEW_SCREEN_ENTER = "\x1b[?1049h"
+_EXTERNAL_VIEW_SGR = re.compile(r"\x1b\[[0-9;]*m")
 _T = TypeVar("_T")
 _NestedScrollRenderer: TypeAlias = Callable[
     [MultiAgentScrollState, TerminalCapabilities], RenderedFrame
@@ -204,6 +207,7 @@ class _RawExternalViewerHost:
         "_closed",
         "_configuration",
         "_driver",
+        "_last_physical_size",
     )
 
     def __init__(
@@ -216,11 +220,28 @@ class _RawExternalViewerHost:
         self._capabilities = capabilities
         self._configuration = configuration
         self._closed = False
+        self._last_physical_size = (capabilities.width, _DEFAULT_VIEWER_HEIGHT)
+
+    def _physical_size(self) -> tuple[int, int]:
+        """Retain physical geometry for cleanup when a later observation fails."""
+        try:
+            observed = self._driver._os_provider().get_terminal_size(
+                _stream_descriptor(self._driver._output_stream)
+            )
+            columns, rows = observed.columns, observed.lines
+        except (AttributeError, OSError, ValueError):
+            return self._last_physical_size
+        previous_columns, previous_rows = self._last_physical_size
+        self._last_physical_size = (
+            columns if type(columns) is int and columns > 0 else previous_columns,
+            rows if type(rows) is int and rows > 0 else previous_rows,
+        )
+        return self._last_physical_size
 
     def terminal_size(self) -> tuple[int, int]:
         if self._closed:
             raise RuntimeError("external viewer host is closed")
-        return self._driver._text_viewer_geometry(self._capabilities.width)
+        return self._physical_size()
 
     def color_enabled(self) -> bool:
         return self._capabilities.decorative_sgr
@@ -232,7 +253,16 @@ class _RawExternalViewerHost:
             frame,
             color_enabled=self._capabilities.decorative_sgr,
         )
-        self._driver._write_live_text(f"{_VIEWER_SCREEN_REDRAW}{validated}")
+        columns, rows = self._physical_size()
+        lines = validated.split("\n")[:rows]
+        painted: list[str] = []
+        for row in range(1, rows + 1):
+            painted.append(f"\x1b[{row};1H\x1b[2K")
+            if row <= len(lines):
+                capacity = columns - (1 if row == rows else 0)
+                painted.append(_clip_external_view_line(lines[row - 1], capacity))
+        painted.append("\x1b[H")
+        self._driver._write_live_text("".join(painted))
 
     def read_event(self) -> str | None:
         if self._closed:
@@ -245,7 +275,38 @@ class _RawExternalViewerHost:
         if self._closed:
             return
         self._closed = True
-        self._driver._write_live_text(_VIEWER_SCREEN_REDRAW)
+        _columns, rows = self._physical_size()
+        self._driver._write_live_text(
+            "".join(f"\x1b[{row};1H\x1b[2K" for row in range(1, rows + 1))
+            + "\x1b[H"
+        )
+
+
+def _clip_external_view_line(line: str, capacity: int) -> str:
+    """Clip validated text by cells while preserving combining marks and SGR."""
+    retained: list[str] = []
+    cells = 0
+    offset = 0
+    styled = False
+    while offset < len(line):
+        if line[offset] == "\x1b":
+            match = _EXTERNAL_VIEW_SGR.match(line, offset)
+            if match is None:
+                raise ValueError("external viewer line contains unauthorized controls")
+            retained.append(match.group())
+            styled = True
+            offset = match.end()
+            continue
+        character = line[offset]
+        character_cells = display_character_width(character)
+        if cells + character_cells > capacity:
+            break
+        retained.append(character)
+        cells += character_cells
+        offset += 1
+    if styled:
+        retained.append(_SGR_RESET)
+    return "".join(retained)
 
 
 class _PromptCancelled(Exception):
@@ -3065,7 +3126,7 @@ class RawTerminalDriver:
                 try:
                     screen_cleanup_required = True
                     try:
-                        self._write_live_text(_VIEWER_SCREEN_ENTER)
+                        self._write_live_text(_EXTERNAL_VIEW_SCREEN_ENTER)
                         host = _RawExternalViewerHost(
                             self,
                             capabilities,

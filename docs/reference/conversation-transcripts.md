@@ -20,12 +20,24 @@ for content-bearing readable context; its default contains no record text.
 ## What users see
 
 `/history [COUNT]` reads the focused active conversation.
-`/transcript [ID [COUNT] [--from SEQUENCE]]` reads a bounded active or archived
-conversation without changing focus. Bare `/transcript` opens a picker in the
-attached session; choices show `Subject (conversation_id)` with full IDs in
-catalog order. Selecting a choice resolves its ID again before reading. An
-explicit ID skips the picker. An empty catalog, cancellation, Ctrl-C, or EOF
-reads no transcript and preserves attachment, focus, and conversation history.
+`/transcript [ID [COUNT] [--from SEQUENCE]]` opens an isolated, transient viewer
+for an active or archived conversation without changing focus. Bare `/transcript`
+opens the attached session's conversation picker; choices show
+`Subject (conversation_id)` with full IDs in catalog order. Selection resolves
+the ID again before reading. An explicit ID skips the picker. An empty catalog,
+picker cancellation, Ctrl-C, or EOF reads no transcript and preserves attachment,
+focus, and conversation history.
+
+Without `COUNT`, the viewer shows the complete conversation from sequence 1,
+or the complete remaining history from `--from`. Supplying `COUNT` retains the
+existing bounded page and its continuation hint. Each invocation reads one
+validated snapshot; browsing never rereads storage or includes later appends.
+
+Use arrows or `j`/`k` to scroll, Page Up/Down to move a screen, and Home/End to
+reach the beginning/end. Close with `q`, Escape, Ctrl-C, or EOF. Like `/exchanges`,
+closing clears the viewer and restores the previous shell screen. Request
+headings, message frames, results, and hints stay inside the viewer. Terminals
+without transient display support receive only a content-free notice.
 
 Each row exposes semantic identity before readable fields:
 

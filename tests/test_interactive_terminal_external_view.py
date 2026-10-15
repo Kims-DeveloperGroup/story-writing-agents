@@ -3,162 +3,24 @@
 from __future__ import annotations
 
 import os
+import re
 import unittest
 from types import SimpleNamespace
 from unittest import mock
 
 from story_writing_agents.interactive_terminal import (
     InteractiveExternalViewer,
-    InteractiveTerminal,
+    InteractiveTerminal, InteractiveTranscriptViewer,
 )
 from story_writing_agents.interactive_terminal import _driver as driver_module
 from story_writing_agents.interactive_terminal import (
     _external_view as external_view_module,
 )
-from story_writing_agents.interactive_terminal._controls import (
-    append_main_input_history,
-    transition_line_input,
-    transition_main_command_input,
-)
-from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
 from story_writing_agents.interactive_terminal._external_view import (
     ExternalViewUnavailableError, ExternalTerminalIO,
     ExternalViewerHost,
 )
-
-
-class _Input:
-    def __init__(self, characters: str, *, tty: bool = True) -> None:
-        self.characters = list(characters.encode("utf-8"))
-        self.tty = tty
-        self.encoding = "utf-8"
-        self.errors = "strict"
-        self.buffer = self
-
-    def isatty(self) -> bool:
-        return self.tty
-
-    def fileno(self) -> int:
-        return 7
-
-    def read(self, size: int) -> str:
-        raise AssertionError(f"text read must not run: {size}")
-    readline = read
-
-    def read1(self, size: int) -> bytes:
-        if size != 1:
-            raise AssertionError(size)
-        return bytes((self.characters.pop(0),)) if self.characters else b""
-
-
-class _Output:
-    def __init__(self, *, tty: bool = True) -> None:
-        self.tty = tty
-        self.records: list[str] = []
-        self.failure: BaseException | None = None
-
-    def isatty(self) -> bool:
-        return self.tty
-
-    def fileno(self) -> int:
-        return 8
-
-    def write(self, text: str) -> int:
-        if self.failure is not None:
-            raise self.failure
-        self.records.append(text)
-        return len(text)
-
-    def flush(self) -> None:
-        return None
-
-
-class _Termios:
-    ICANON = 0x02
-    ECHO = 0x08
-    ECHONL = 0x40
-    VEOF = 0
-    VINTR = 1
-    VMIN = 4
-    VTIME = 5
-    TCSANOW = 10
-    TCSADRAIN = 11
-
-    def __init__(self) -> None:
-        self.original = [0, 0, 0, self.ICANON | self.ECHO, 0, 0, [b'\x04', b'\x03', 0, 0, 9, 9]]
-        self.events: list[str] = []
-        self.restoration_failure: BaseException | None = None
-
-    def tcgetattr(self, _descriptor: int) -> list[object]:
-        self.events.append("get")
-        value = list(self.original)
-        value[6] = list(self.original[6])  # type: ignore[arg-type]
-        return value
-
-    def tcsetattr(
-        self,
-        _descriptor: int,
-        when: int,
-        _attributes: list[object],
-    ) -> None:
-        event = "activate" if when == self.TCSANOW else "restore"
-        self.events.append(event)
-        if event == "restore" and self.restoration_failure is not None:
-            raise self.restoration_failure
-
-
-def _raw_driver(
-    characters: str,
-    *,
-    tty: bool = True,
-    answers: tuple[object, ...] = ("q",),
-    width: int = 91,
-    height: int = 27,
-) -> tuple[RawTerminalDriver, _Input, _Output, mock.Mock, _Termios]:
-    input_stream = _Input(characters, tty=tty)
-    output_stream = _Output(tty=tty)
-    fallback = mock.Mock(side_effect=answers)
-    termios = _Termios()
-    os_double = SimpleNamespace(
-        name="posix",
-        environ={"TERM": "xterm-256color"},
-        get_terminal_size=lambda _descriptor: os.terminal_size((width, height)),
-        fpathconf=lambda _descriptor, _name: 0,
-    )
-    driver = RawTerminalDriver(
-        fallback,
-        input_stream,  # type: ignore[arg-type]
-        output_stream,  # type: ignore[arg-type]
-        transition_line_input,
-        transition_main_command_input,
-        append_main_input_history,
-        termios_provider=lambda: termios,
-        os_provider=lambda: os_double,
-    )
-    return driver, input_stream, output_stream, fallback, termios
-
-
-class _Host:
-    def __init__(self, *, close_failure: BaseException | None = None) -> None:
-        self.closed = 0
-        self.close_failure = close_failure
-
-    def terminal_size(self) -> tuple[int, int]:
-        return 80, 24
-
-    def color_enabled(self) -> bool:
-        return False
-
-    def present(self, _frame: str) -> None:
-        return None
-
-    def read_event(self) -> str | None:
-        return "close"
-
-    def close_view(self) -> None:
-        self.closed += 1
-        if self.close_failure is not None:
-            raise self.close_failure
+from tests._external_view_support import _raw_driver, _Host, PortableTerminalScreen
 
 
 class ExternalViewContractTests(unittest.TestCase):
@@ -234,17 +96,10 @@ class ExternalViewContractTests(unittest.TestCase):
             self.assertIsNone(host.read_event())
 
         viewer.open(operation)
-        self.assertEqual(
-            observed,
-            [
-                (72, 24),
-                False,
-                "line\t/ provider codex",
-                "line\tesc",
-                "line\tn",
-                "line\tq",
-            ],
-        )
+        self.assertEqual(observed, [
+            (72, 24), False, "line\t/ provider codex", "line\tesc",
+            "line\tn", "line\tq",
+        ])
         self.assertEqual(writes, ["plain frame\n"])
         self.assertEqual(prompts, [""] * 4)
 
@@ -326,7 +181,7 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
         fallback.assert_not_called()
         self.assertEqual((termios.events.count("activate"), termios.events.count("restore")), (1, 1))
         rendered = "".join(output.records)
-        self.assertEqual(rendered.count(driver_module._VIEWER_SCREEN_ENTER), 1)
+        self.assertEqual(rendered.count(driver_module._EXTERNAL_VIEW_SCREEN_ENTER), 1)
         self.assertEqual(rendered.count(driver_module._VIEWER_SCREEN_EXIT), 1)
         self.assertIn("\x1b[36mframe\x1b[0m", rendered)
 
@@ -340,6 +195,83 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
         self.assertAlmostEqual(poll.call_args_list[0].args[3], 0.4)
         self.assertAlmostEqual(poll.call_args_list[1].args[3], 0.1)
 
+        from story_writing_agents.interactive_terminal._model import Notice, Record
+        from tests.collaboration_contract_fixture import CONVERSATION_ID, contract_batches, measured_batch, store_batch
+        history = ()
+        batches = contract_batches(CONVERSATION_ID)
+        for name in ("proposal", "confirmation", "running", "calls", "result", "completion"):
+            history = store_batch(history, measured_batch(batches[name]))
+        # Portable terminals may archive ED2 even in an alternate buffer. The
+        # model also wraps eagerly at the right margin, exposing bottom-row leaks.
+        leaky = PortableTerminalScreen(); before_leak = leaky.snapshot()
+        leaky.write("\x1b[?1049hPRIVATE\x1b[2J\x1b[?1049l")
+        self.assertNotEqual(leaky.snapshot(), before_leak)
+        leaky = PortableTerminalScreen()
+        leaky.write("\x1b[?1049h\x1b[27;1H" + "x" * 91 + "\x1b[?1049l")
+        self.assertNotEqual(leaky.snapshot(), before_leak)
+        for characters, resize, failure in (("q", False, None), ("\x1b", False, None),
+                ("\x03", False, None), ("", False, None), ("qq", False, None),
+                ("jk\x1b[B\x1b[A\x1b[6~\x1b[5~\x1b[F\x1b[Hq", True, None),
+                ("\x1b[6~" * 80 + "q", False, None),
+                ("j", False, "input"), ("q", False, "render")):
+            driver, input_stream, output, fallback, termios = _raw_driver(characters)
+            screen = PortableTerminalScreen(); baseline = screen.clone()
+            original_write, original_read = output.write, input_stream.read1
+            def write(value):
+                screen.write(value)
+                return original_write(value)
+            frames = []; original_present = driver_module._RawExternalViewerHost.present
+            def present(host, frame):
+                frames.append((host.terminal_size(), frame))
+                return original_present(host, frame)
+            reads = 0
+            def read(size):
+                nonlocal reads
+                reads += 1
+                if failure == "input":
+                    raise RuntimeError("viewer input failed")
+                if resize and reads == 1:
+                    screen.resize(47, 10); baseline.resize(47, 10)
+                    driver._os_provider().get_terminal_size = lambda _fd: os.terminal_size((47, 10))
+                return original_read(size)
+            writes = []
+            terminal = InteractiveTerminal(lambda _prompt: self.fail("fallback input"), writes.append)
+            terminal._external_view_open = driver.open_external_view
+            viewer = InteractiveTranscriptViewer(terminal)
+            def open_view():
+                viewer.open(history, request=Record("context", title="Transcript request", content="개요 e\u0301🙂"),
+                    result=Notice("Transcript returned all records."), continuation=Notice("Continuation hint"))
+            from story_writing_agents.interactive_terminal import _transcript_view
+            render = _transcript_view.render_component
+            with mock.patch.object(output, "write", side_effect=write), mock.patch.object(input_stream, "read1", side_effect=read), mock.patch.object(driver_module._RawExternalViewerHost, "present", autospec=True, side_effect=present):
+                if failure:
+                    with mock.patch.object(_transcript_view, "render_component", side_effect=RuntimeError("viewer render failed") if failure == "render" else render):
+                        with self.assertRaisesRegex(RuntimeError, "viewer " + failure + " failed"):
+                            open_view()
+                else:
+                    open_view()
+                    if characters == "qq":
+                        self.assertEqual(screen.snapshot(), baseline.snapshot())
+                        open_view()
+            self.assertEqual(screen.snapshot(), baseline.snapshot(), (characters, resize, failure))
+            self.assertFalse(screen.alternate); self.assertEqual(screen.pending, "")
+            self.assertEqual(writes, []); fallback.assert_not_called()
+            self.assertEqual(termios.events.count("activate"), termios.events.count("restore"))
+            self.assertTrue(all(len(frame.split("\n")) <= size[1] for size, frame in frames))
+            if resize:
+                self.assertEqual(frames[-1][0], (47, 10)); self.assertIn("Transcript 1-", frames[-1][1])
+            transcript = "".join(output.records)
+            self.assertEqual(transcript.count("\x1b[?1049h"), transcript.count("\x1b[?1049l"))
+            if characters.startswith("\x1b[6~"):
+                self.assertTrue(all(event.event_id in transcript for event in history))
+                self.assertIn("Input tokens: 0 | Output tokens: 2", re.sub(r"\x1b\[[0-9;]*m", "", transcript))
+                self.assertIn("Continuation hint", transcript)
+        plain_writes = []
+        with self.assertRaises(ExternalViewUnavailableError):
+            InteractiveTranscriptViewer(InteractiveTerminal(lambda _p: "q", plain_writes.append)).open(
+                history, request=Record("context"), result=Notice("PRIVATE transcript"))
+        self.assertEqual(plain_writes, [])
+
     def test_physical_input_has_no_viewer_bindings_prompts_or_history(self) -> None:
         text = "/gqjkb nNmh?cJK개요😀e\u0301"
         controls = "\r\n\x08\x7f\x01\x05\x15\x0b\x17\x03\x04\t"
@@ -348,7 +280,8 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
         events = []
         driver.open_external_view(lambda host: events.extend(host.read_event() for _ in range(len(text + controls))))
         self.assertEqual(events, ["text\t" + c for c in text] + ["key\t" + n for n in names])
-        self.assertEqual(output.records, [driver_module._VIEWER_SCREEN_ENTER, driver_module._VIEWER_SCREEN_REDRAW, driver_module._VIEWER_SCREEN_EXIT])
+        self.assertEqual((output.records[0], output.records[-1]), ("\x1b[?1049h", "\x1b[?1049l"))
+        self.assertNotIn("\x1b[2J", "".join(output.records))
         self.assertEqual((termios.events.count("activate"), termios.events.count("restore")), (1, 1))
         fallback.assert_not_called()
         self.assertEqual(driver._history_state, driver_module.MainInputHistoryState())

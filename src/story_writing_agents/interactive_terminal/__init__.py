@@ -31,6 +31,7 @@ from ._core import (  # noqa: F401
     InteractiveStartupPresentation,
     InteractiveTerminal,
     InteractiveTextViewer,
+    InteractiveTranscriptViewer,
     ListView,
     MainInputControlState,
     MainInputHistoryState,
@@ -93,6 +94,7 @@ _PUBLIC_TYPES = (
     InteractiveErrorSpec,
     InteractiveError,
     InteractiveTerminal,
+    InteractiveTranscriptViewer,
 )
 for _public_type in _PUBLIC_TYPES:
     _public_type.__module__ = __name__
@@ -113,4 +115,5 @@ __all__ = [
     "InteractiveError",
     "sanitize_terminal_text",
     "InteractiveTerminal",
+    "InteractiveTranscriptViewer",
 ]

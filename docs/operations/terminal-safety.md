@@ -121,7 +121,14 @@ state. Its owned-terminal route borrows streams and a persistent character
 reader while preserving the lobby echo guard; nested input/view and progress
 overlap are rejected. The library owns raw mode, alternate screen, cursor,
 mouse reporting, decoding and restoration. The generic borrowed-host route
-continues to validate complete frames and support ordinary-line callbacks.
+retains its frame/event protocol and ordinary-line callbacks when transient
+display is not required. Its live host paints and
+clears physical rows individually, clips Unicode/SGR output to current geometry,
+and avoids the bottom-right cell. Cleanup clears rows before alternate-screen
+exit so full-screen clears do not archive viewer content. `/transcript` uses this
+transient-only host for all headings, messages, results, and hints, drops its
+frozen snapshot/viewport after close, and refuses printed fallback. Scrolling
+never reads storage or changes conversation focus.
 
 For startup storage activation, authenticated runtime preparation, native
 authentication probes, persisted omitted-resume preparation, advisory and

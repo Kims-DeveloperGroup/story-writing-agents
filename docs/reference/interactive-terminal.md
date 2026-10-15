@@ -200,9 +200,10 @@ Snippet: consult specialists before recommending the next action.
 ```
 
 The subject is orientation only. `/search` matches event fields, and its exact
-result notice is `Search returned N of M matching readable fields.` A
-transcript reports `Transcript page returned N records.` and, when more are
-available, `Continue with /transcript HANDLE COUNT --from SEQUENCE.`
+result notice is `Search returned N of M matching readable fields.` An explicitly
+bounded transcript reports `Transcript page returned N records.` and, when more
+are available, `Continue with /transcript HANDLE COUNT --from SEQUENCE.` These
+transcript components appear only inside its transient viewer.
 
 History/status state fields are `Last sequence`, `Current state`, `User
 meaning`, `Next safe action`, and `Next action meaning`. See
@@ -226,6 +227,22 @@ opens the same picker followed by the independent text viewer; Shift+Up/Down
 selects a range, and closing the viewer restores the composer. The controls
 insert `${path}` or `${path}#Lstart-Lend`; file bytes are read later through
 runtime authorization rather than embedded by the control.
+
+`/transcript` opens an isolated, scrollable view of one validated conversation
+snapshot. Without `COUNT`, it includes the complete history from sequence 1 or
+`--from`; an explicit count keeps the existing bounded page. Message frames,
+request/result notices, and continuation hints all remain inside the viewer.
+Arrows or `j`/`k` scroll, Page Up/Down move a screen, and Home/End reach its bounds.
+`q`, Escape, Ctrl-C, and EOF close the view. Closing restores the preceding shell
+screen and clears transcript content, matching `/exchanges`. Unsupported
+terminals receive a content-free notice rather than printed transcript rows.
+The terminal owns the viewport and drops it after the call; navigation never
+reads storage or changes conversation focus.
+
+The borrowed external host paints and clears individual physical rows, bounds
+output to the live terminal size, and avoids bottom-right wrapping. Cleanup
+clears viewer rows before leaving the alternate screen, so repainting does not
+archive those rows into ordinary shell history.
 
 `/exchanges` uses the installed isolated JSONL viewer after Story chooses an
 immutable scope/agent snapshot. Story validates the pinned 0.6.3 four-name API,

@@ -112,10 +112,12 @@ Pending controls and unresolved operations still govern which task decisions are
   the controller may open a dynamic picker. Explicit identities remain direct.
 - `/conversation list --all` must place `--all` first and at most once.
 - `/search QUERY` requires a nonblank remainder.
-- Bare `/transcript` returns an argument-free action for the controller to open
-  an attached-session conversation picker. With arguments, the ID comes first;
-  optional count precedes one final `--from`; numeric values are positive ASCII
-  digits. Count and start sequence cannot be supplied without an ID.
+- Bare `/transcript` returns an argument-free action for the attached-session
+  conversation picker. With arguments, ID comes first; an optional count precedes
+  one final `--from`; numeric values are positive ASCII digits. Count and start
+  sequence require an ID. An omitted count remains `None`, which selects the
+  complete history suffix in the transient viewer; an explicit count retains
+  bounded-page behavior.
 - `/history [COUNT]` accepts one positive bounded ASCII count.
 - `/inspect` accepts no argument or one control-free debate ID/`last`.
 - `/auth`, `/settings`, `/agents`, `/exchanges`, `/status`, `/quit`, and

@@ -35,10 +35,10 @@ from ..cli_context import (
     save_default_session,
 )
 from ..conversation_search import (
-    CONVERSATION_MEMORY_POLICY,
     CollaborationHistorySearchQuery,
     CollaborationHistorySearchScope,
     CollaborationHistoryService,
+    page_collaboration_history,
 )
 from ..conversation_storage.contracts import ConversationStorageServices
 from ..conversation_storage.selection import (
@@ -133,6 +133,7 @@ from ..interactive_terminal import (
     InteractivePromptInput,
     InteractiveSemanticOutput,
     InteractiveTerminal,
+    InteractiveTranscriptViewer,
     ListView,
     Message,
     MessagePresentation,
@@ -643,6 +644,7 @@ class InteractiveController:
         "_focused_conversation",
         "_started",
         "_terminal",
+        "_transcript_viewer",
         "_workspace",
     )
 
@@ -712,6 +714,7 @@ class InteractiveController:
         self._picker_input = InteractivePickerInput(terminal)
         self._prompt_input = InteractivePromptInput(terminal)
         self._external_viewer = InteractiveExternalViewer(terminal)
+        self._transcript_viewer = InteractiveTranscriptViewer(terminal)
         self._advisory_progress = InteractiveAdvisoryProgress(terminal)
         self._main_input = InteractiveMainInput(terminal)
         if (
@@ -6034,17 +6037,10 @@ class InteractiveController:
         self,
         action: InteractiveAction,
     ) -> None:
-        """Resolve and render one fresh bounded transcript page.
-
-        The reference may name an active or archived conversation. The method
-        retains no cursor and mutates no attachment, focus, routing, or
-        persistence state; Ctrl-C returns to the same prompt after a status.
-        """
-
+        """Browse one immutable transcript snapshot without changing attached state."""
         assert action.kind is ActionKind.TRANSCRIPT
         session_id = self._attached_session_id
         assert session_id is not None
-
         try:
             reference = action.argument
             if reference is None:
@@ -6066,10 +6062,7 @@ class InteractiveController:
                     )
                     return
                 outcome = self._picker_input.read_picker(
-                    Prompt(
-                        "View transcript",
-                        instruction="Choose a conversation.",
-                    ),
+                    Prompt("View transcript", instruction="Choose a conversation."),
                     tuple(
                         Choice(
                             entry.conversation_id,
@@ -6084,9 +6077,6 @@ class InteractiveController:
                     ControlOutcomeKind.INTERRUPT,
                     ControlOutcomeKind.EOF,
                 }:
-                    self._write_conversation_cancelled_status(
-                        "Transcript read cancelled; attached state is unchanged."
-                    )
                     return
                 if (
                     outcome.kind is not ControlOutcomeKind.COMMIT
@@ -6107,81 +6097,95 @@ class InteractiveController:
             except Exception as exc:
                 self._present_memory_catalog_or_reference_failure(exc)
                 return
-
-            history_service = CollaborationHistoryService(
-                CollaborationHistorySearchScope(
-                    session_id,
-                    include_archived=True,
-                ),
-                conversation_storage_services=self._conversation_storage_services,
-            )
-            start_sequence = action.start_sequence or 1
-            page_limit = action.count or CONVERSATION_MEMORY_POLICY.default_page_events
+            start_sequence = action.start_sequence if action.start_sequence is not None else 1
             handle = visible_conversation_handle(metadata, entries)
-            self._semantic_output.write_component(
-                Record(
-                    "context",
-                    title="Transcript request",
-                    fields=(
-                        Field("Conversation", handle),
-                        Field("Start", str(start_sequence)),
-                        Field("Count", str(page_limit)),
-                    ),
-                    state=ViewState.COMPLETED,
-                )
-            )
             try:
-                page = history_service.read_history(
+                snapshot = self._conversation_storage_services.event_store.read(
+                    session_id,
                     metadata.conversation_id,
-                    start_sequence=start_sequence,
-                    max_records=page_limit,
                 )
-                page = validate_transcript_page(
-                    page,
+                validate_history_snapshot(
+                    snapshot,
                     session_id=session_id,
                     conversation_id=metadata.conversation_id,
-                    start_sequence=start_sequence,
-                    page_limit=page_limit,
                 )
-            except Exception as exc:
-                self._present_transcript_service_failure(exc)
-                return
-
-            try:
-                selected_events = tuple(self._canonical_readable_event(record) for record in page.records)
-                history_events = self._conversation_storage_services.event_store.read(session_id, metadata.conversation_id)
-                current = {event.event_id: event for event in history_events}
-                if any(current.get(event.event_id) != event for event in selected_events):
-                    raise ValueError("selected transcript snapshot changed")
-                if selected_events:
-                    history_events = tuple(event for event in history_events if event.sequence <= selected_events[-1].sequence)
-            except Exception as exc:
-                self._present_transcript_service_failure(exc)
-                return
-            self._terminal.write_collaboration_events(
-                selected_events, show_details=self._show_message_details, history_events=history_events,
-            )
-            self._write_notice(
-                f"Transcript page returned {len(page.records)} records.",
-                label="result",
-                role=(SemanticRole.MUTED if not page.records else SemanticRole.SUCCESS),
-                state=(ViewState.EMPTY if not page.records else ViewState.COMPLETED),
-            )
-            if page.next_cursor is not None:
-                self._write_notice(
-                    (
-                        f"Continue with /transcript {handle} "
-                        f"{page.next_cursor.max_records} --from "
-                        f"{page.next_cursor.next_sequence}."
+                continuation = None
+                if action.count is None:
+                    snapshot_last_sequence = snapshot[-1].sequence if snapshot else 0
+                    if start_sequence > snapshot_last_sequence + 1:
+                        raise ValueError("conversation transcript start sequence is stale")
+                    selected_events = snapshot[start_sequence - 1 :]
+                    count_label = "All remaining"
+                    result_text = f"Transcript returned {len(selected_events)} records."
+                else:
+                    page = validate_transcript_page(
+                        page_collaboration_history(
+                            snapshot,
+                            start_sequence=start_sequence,
+                            max_records=action.count,
+                        ),
+                        session_id=session_id,
+                        conversation_id=metadata.conversation_id,
+                        start_sequence=start_sequence,
+                        page_limit=action.count,
+                    )
+                    selected_events = tuple(
+                        self._canonical_readable_event(record) for record in page.records
+                    )
+                    count_label = str(action.count)
+                    result_text = f"Transcript page returned {len(page.records)} records."
+                    if page.next_cursor is not None:
+                        continuation = Notice(
+                            f"Continue with /transcript {handle} "
+                            f"{page.next_cursor.max_records} --from "
+                            f"{page.next_cursor.next_sequence}.",
+                            label="hint",
+                            role=SemanticRole.INFO,
+                            state=ViewState.COMPLETED,
+                        )
+                context_end = (
+                    selected_events[-1].sequence
+                    if selected_events
+                    else start_sequence - 1
+                )
+                history_events = snapshot[:context_end]
+                self._transcript_viewer.open(
+                    selected_events,
+                    request=Record(
+                        "context",
+                        title="Transcript request",
+                        fields=(
+                            Field("Conversation", handle),
+                            Field("Start", str(start_sequence)),
+                            Field("Count", count_label),
+                        ),
+                        state=ViewState.COMPLETED,
                     ),
-                    label="hint",
-                    role=SemanticRole.INFO,
-                    state=ViewState.COMPLETED,
+                    result=Notice(
+                        result_text,
+                        label="result",
+                        role=(
+                            SemanticRole.SUCCESS if selected_events else SemanticRole.MUTED
+                        ),
+                        state=(
+                            ViewState.COMPLETED if selected_events else ViewState.EMPTY
+                        ),
+                    ),
+                    continuation=continuation,
+                    show_details=self._show_message_details,
+                    history_events=history_events,
                 )
+            except ExternalViewUnavailableError:
+                self._write_notice(
+                    "Transcripts require terminal transient display support.",
+                    label="transcript",
+                    role=SemanticRole.WARNING,
+                    state=ViewState.CANCELLED,
+                )
+            except Exception as exc:
+                self._present_transcript_service_failure(exc)
         except KeyboardInterrupt:
-            self._write_conversation_cancelled_status(
-                "Transcript read cancelled; attached state is unchanged.",
-            )
+            return
 
     def _present_memory_catalog_or_reference_failure(
         self,
