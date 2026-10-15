@@ -93,6 +93,18 @@ usage totals without estimating from a partial window. History and transcript
 presentation retains event/turn/sequence identity independently of Message
 details. The terminal opens no history storage itself.
 
+The controller restores the latest 20 canonical records after a conversation
+focus change, following scope orientation and before the next input prompt.
+Startup restoration, session switches, and archive-successor selection use the
+same path. Selection uses the full session/conversation identity, so a subject
+rename or selecting the current focus does not repeat history. The controller
+reads and validates one complete snapshot, passes its selected suffix and full
+historical context to the renderer, and reports `Restored N of M records.`
+Truncated windows include `/history` and `/transcript` guidance; empty histories
+produce no restoration output. A handled read failure or interruption is not
+retried at every prompt. Restoration neither calls providers nor executes any
+historical confirmation controls.
+
 ## Message frames, Markdown, and response metadata
 
 Live conversation, saved history, transcripts, and search excerpts use distinct
