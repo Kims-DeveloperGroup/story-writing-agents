@@ -139,6 +139,16 @@ New creates and focuses an active conversation. Resume accepts an exact ID or
 an eligible unique prefix; omitting it opens a picker. Subject changes the
 focused display subject. Archive removes a conversation from the active list
 without deleting its stored identity/history. `--all` includes archives.
+
+When focus changes, including restoring a saved conversation at startup or
+switching sessions, the shell shows the latest 20 saved collaboration records
+in order before the next input prompt. A shorter history is shown in full;
+an empty conversation adds no restored-message output. Returning to a conversation
+after focusing another restores its recent window again. Resuming the current
+focus, renaming its subject, and ordinary input do not repeat that window.
+The restored count reports how much was displayed; use `/history` for all records
+or `/transcript` to browse older history when the window is truncated.
+
 Archived history remains part of required Lead session memory and can be sent
 to the configured provider. Archive is not a privacy opt-out or deletion.
 

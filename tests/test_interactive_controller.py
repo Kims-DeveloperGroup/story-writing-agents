@@ -1239,6 +1239,71 @@ class ControllerContractTests(ControllerTestCase):
                 self.assertIn(f"To: {event.recipient.kind.value}" + (f":{event.recipient.agent_id}" if event.recipient.agent_id else ""), block)
         self.assertIn("Input tokens: 0 | Output tokens: 2", rendered)
         self.assertLess(rendered.index(history[0].event_id), rendered.index(history[-1].event_id))
+        restore = InteractiveAction(kind=ActionKind.HISTORY, count=20)
+        plain = ()
+        for index in range(25):
+            plain = store_batch(plain, make_batch(plain, f"restored_{index}", replace(make_draft(
+                f"restored_{index}", collaboration.CollaborationEventKind.MESSAGE, RUNTIME, USER,
+                collaboration.CollaborationMessagePayload(f"Saved message {index}")), conversation_id=metadata.conversation_id)))
+        with mock.patch.object(controller._runtime, "lead_turn", side_effect=AssertionError("provider call")), \
+                mock.patch.object(services.event_store, "append_batch") as append:
+            for size in (0, 7, 20, 25):
+                callbacks.records.clear()
+                with mock.patch.object(services.event_store, "read", return_value=plain[:size]) as read, \
+                        mock.patch.object(type(controller._terminal), "write_collaboration_events",
+                                          wraps=controller._terminal.write_collaboration_events) as write:
+                    controller._write_focused_conversation_history(restore, restoring=True)
+                read.assert_called_once_with("session_a", metadata.conversation_id)
+                if size:
+                    self.assertEqual(tuple(event.event_id for event in write.call_args.args[0]),
+                                     tuple(event.event_id for event in plain[:size][-20:]))
+                    self.assertEqual(len(write.call_args.kwargs["history_events"]), size)
+                    text = "".join(callbacks.records)
+                    self.assertIn(f"Restored {min(size, 20)} of {size} records.", text)
+                    self.assertEqual("/transcript" in "".join(text.split()), size > 20)
+                else:
+                    write.assert_not_called()
+                    self.assertEqual(callbacks.records, [])
+            with mock.patch.object(services.event_store, "read", return_value=history), \
+                    mock.patch.object(type(controller._terminal), "write_collaboration_events") as write:
+                controller._write_focused_conversation_history(replace(restore, count=1), restoring=True)
+            self.assertEqual(len(write.call_args.args[0]), 1)
+            self.assertEqual(len(write.call_args.kwargs["history_events"]), len(history))
+            for snapshot in (tuple(reversed(plain)), (replace(plain[0], session_id="foreign"),)):
+                callbacks.records.clear()
+                with mock.patch.object(services.event_store, "read", return_value=snapshot), \
+                        mock.patch.object(type(controller._terminal), "write_collaboration_events") as write:
+                    controller._write_focused_conversation_history(restore, restoring=True)
+                write.assert_not_called()
+                self.assertTrue(callbacks.records)
+                self.assertNotIn("Restored", "".join(callbacks.records))
+            callbacks.records.clear()
+            with mock.patch.object(services.event_store, "read", side_effect=KeyboardInterrupt):
+                controller._write_focused_conversation_history(restore, restoring=True)
+            self.assertIn("History cancelled", "".join(callbacks.records))
+            append.assert_not_called()
+        transitions = iter((("session_a", metadata), ("session_b", metadata),
+                            (None, None), ("session_a", metadata)))
+        restored = []
+        def advance_focus(action, line):
+            next_focus = next(transitions, None)
+            if next_focus is None:
+                return True
+            controller._attached_session_id, controller._focused_conversation = next_focus
+            return False
+        def interrupted_restore(action, *, restoring=False):
+            self.assertTrue(restoring)
+            restored.append((controller._attached_session_id, controller._focused_conversation.conversation_id))
+            raise KeyboardInterrupt
+        line = SimpleNamespace(kind=controller_core_module.TerminalActionKind.LINE, text="/status")
+        with mock.patch.object(type(controller), "_write_attached_conversation_scope", return_value=None), \
+                mock.patch.object(type(controller._main_input), "read_main_with_references", return_value=line), \
+                mock.patch.object(type(controller._main_input), "read_main", return_value=line), \
+                mock.patch.object(type(controller), "_dispatch_session_lobby_action", side_effect=advance_focus), \
+                mock.patch.object(type(controller), "_write_focused_conversation_history_rows", side_effect=interrupted_restore):
+            self.assertEqual(controller._read_session_lobby_commands(), 0)
+        self.assertEqual(restored, [("session_a", metadata.conversation_id),
+                                    ("session_b", metadata.conversation_id), ("session_a", metadata.conversation_id)])
         start = next(event.sequence for event in history if type(event.payload) is collaboration.CollaborationLeadJudgmentPayload)
         future = store_batch(history, make_batch(history, "concurrent_history", replace(make_draft(
             "future_notice", collaboration.CollaborationEventKind.MESSAGE, RUNTIME, USER,
@@ -1774,10 +1839,7 @@ class ControllerAuthTests(ControllerTestCase):
                 ("probe_all", None),
             ],
         )
-        self.assertEqual(
-            coordinator.presentations,
-            [terminal_module.InputPresentation.STANDARD],
-        )
+        self.assertEqual(coordinator.presentations, [terminal_module.InputPresentation.STANDARD])
         defaults = ConfigManager(workspace).load_system_defaults()
         self.assertEqual(defaults.default_backend, "antigravity")
         self.assertTrue(backend._closed)
@@ -1803,18 +1865,9 @@ class ControllerAuthTests(ControllerTestCase):
             terminal_width=120,
         )
         self.assertEqual(controller.run_session_lobby(), 0)
-        self.assertEqual(
-            ConfigManager(workspace).load_system_defaults().default_backend,
-            "codex",
-        )
-        self.assertEqual(
-            coordinator.events,
-            [("probe_all", None), ("run", None)],
-        )
-        self.assertIn(
-            "Any authenticated workspace default already established was kept.",
-            "".join(callbacks.records),
-        )
+        self.assertEqual(ConfigManager(workspace).load_system_defaults().default_backend, 'codex')
+        self.assertEqual(coordinator.events, [('probe_all', None), ('run', None)])
+        self.assertIn('Any authenticated workspace default already established was kept.', ''.join(callbacks.records))
 
     def test_auth_without_coordinator_is_safe_nonmutating_and_compatible(self) -> None:
         workspace = self.make_workspace()
@@ -1827,10 +1880,7 @@ class ControllerAuthTests(ControllerTestCase):
         )
         self.assertEqual(controller.run_session_lobby(), 0)
         self.assertEqual(_tree_snapshot(workspace.root), before)
-        self.assertIn(
-            "Provider authentication is unavailable in this shell.",
-            "".join(callbacks.records),
-        )
+        self.assertIn('Provider authentication is unavailable in this shell.', ''.join(callbacks.records))
 
 
 def _cancel_control_outcome():
@@ -2067,17 +2117,11 @@ class ControllerSettingsTests(ControllerTestCase):
         returned, whole_cancel = returned_states[0]
         self.assertFalse(whole_cancel)
         self.assertIsNone(returned.pending.system_defaults.default_backend)
-        self.assertEqual(
-            returned.pending.agent_configs[PLOT_ARCHITECT].backend,
-            "antigravity",
-        )
+        self.assertEqual(returned.pending.agent_configs[PLOT_ARCHITECT].backend, 'antigravity')
         establish_default.assert_not_called()
         prepare.assert_not_called()
         select_storage.assert_not_called()
-        self.assertEqual(
-            (defaults_path.read_bytes(), agents_path.read_bytes()),
-            durable_before,
-        )
+        self.assertEqual((defaults_path.read_bytes(), agents_path.read_bytes()), durable_before)
         durable = settings_module.load_settings_state(workspace).pending
         self.assertIsNone(durable.system_defaults.default_backend)
         self.assertIsNone(durable.agent_configs[PLOT_ARCHITECT].backend)
@@ -2094,10 +2138,7 @@ class ControllerSettingsTests(ControllerTestCase):
             ],
         )
         rendered = "".join(callbacks.records)
-        self.assertEqual(
-            rendered.count("[cancelled] Pending changes discarded.\n"),
-            1,
-        )
+        self.assertEqual(rendered.count('[cancelled] Pending changes discarded.\n'), 1)
         self.assertNotIn("Settings saved", rendered)
 
     def test_failed_provider_auth_never_assigns_route_but_keeps_default(self) -> None:
@@ -2117,23 +2158,11 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertIsNone(configuration.system_defaults.default_backend)
         self.assertIsNone(configuration.agent_configs[PLOT_ARCHITECT].backend)
         rendered = "".join(callbacks.records)
-        self.assertIn(
-            "was not assigned because fresh authentication was not confirmed",
-            rendered,
-        )
-        self.assertEqual(
-            rendered.count("[cancelled] Pending changes discarded.\n"),
-            1,
-        )
+        self.assertIn('was not assigned because fresh authentication was not confirmed', rendered)
+        self.assertEqual(rendered.count('[cancelled] Pending changes discarded.\n'), 1)
         self.assertNotIn("Settings saved", rendered)
-        self.assertEqual(
-            coordinator.events.count(("run", "antigravity")),
-            1,
-        )
-        self.assertEqual(
-            coordinator.events.count(("probe_all", None)),
-            9,
-        )
+        self.assertEqual(coordinator.events.count(('run', 'antigravity')), 1)
+        self.assertEqual(coordinator.events.count(('probe_all', None)), 9)
 
     def test_provider_auth_cancel_returns_to_picker_before_parent_cancel(self) -> None:
         workspace = self.make_workspace()
@@ -2153,14 +2182,8 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, _backend, callbacks = _auth_cancellation_controller_fixture(self, workspace, coordinator)
         self.assertEqual(controller.run_session_lobby(), 0)
 
-        self.assertEqual(
-            coordinator.events.count(("run", "antigravity")),
-            1,
-        )
-        self.assertEqual(
-            coordinator.events.count(("probe_all", None)),
-            8,
-        )
+        self.assertEqual(coordinator.events.count(('run', 'antigravity')), 1)
+        self.assertEqual(coordinator.events.count(('probe_all', None)), 8)
         provider_prompts = [
             prompt
             for prompt in callbacks.prompts
@@ -2169,12 +2192,7 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertEqual(len(provider_prompts), 4)
         configuration = settings_module.load_settings_state(workspace).pending
         self.assertIsNone(configuration.agent_configs[PLOT_ARCHITECT].backend)
-        self.assertEqual(
-            "".join(callbacks.records).count(
-                "[cancelled] Pending changes discarded.\n"
-            ),
-            1,
-        )
+        self.assertEqual(''.join(callbacks.records).count('[cancelled] Pending changes discarded.\n'), 1)
 
     def test_provider_auth_interrupt_and_eof_cancel_whole_settings(self) -> None:
         codex_only = _auth_snapshot(
@@ -2250,10 +2268,7 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertEqual(panel, self.expected_panel(changed))
         rendered = render_plain(panel, width=120).text
         self.assertIn("Plot & Structure Architect Codex model", rendered)
-        self.assertIn(
-            "Plot & Structure Architect Antigravity model",
-            rendered,
-        )
+        self.assertIn('Plot & Structure Architect Antigravity model', rendered)
 
     def test_top_level_pending_notice_tracks_actual_diff_and_full_revert(
         self,
@@ -2491,13 +2506,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 (None, None, None, None, None, None, None),
             ),
         )
-        self.assertEqual(
-            sum(
-                call.kwargs.get("notice") == pending_notice
-                for call in picker.call_args_list
-            ),
-            1,
-        )
+        self.assertEqual(sum((call.kwargs.get('notice') == pending_notice for call in picker.call_args_list)), 1)
         self.assertTrue(
             all(
                 call.kwargs.get("notice") != pending_notice
@@ -2580,10 +2589,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 choice.description,
             )
 
-        self.assertEqual(
-            agents_summary(baseline),
-            (None, terminal_module.SemanticRole.DEFAULT, None),
-        )
+        self.assertEqual(agents_summary(baseline), (None, terminal_module.SemanticRole.DEFAULT, None))
         for label, edit in edits:
             with self.subTest(label=label):
                 self.assertEqual(
@@ -2598,21 +2604,11 @@ class ControllerSettingsTests(ControllerTestCase):
         plural = baseline
         for _label, edit in edits:
             plural = edit(plural)
-        self.assertEqual(
-            agents_summary(plural),
-            (
-                "5 pending changes",
-                terminal_module.SemanticRole.WARNING,
-                None,
-            ),
-        )
+        self.assertEqual(agents_summary(plural), ('5 pending changes', terminal_module.SemanticRole.WARNING, None))
 
         panel = InteractiveController._settings_panel(edits[0][1](baseline))
         current, pending, _activation = panel.items
-        self.assertEqual(
-            current.items[0].value,
-            "codex (default) (Changed)",
-        )
+        self.assertEqual(current.items[0].value, 'codex (default) (Changed)')
         self.assertEqual(pending.items[0].value, "codex (Changed)")
 
     def test_settings_panel_qualifies_current_and_pending_provider_routes(
@@ -2691,10 +2687,7 @@ class ControllerSettingsTests(ControllerTestCase):
             storage_before="filesystem",
             storage_after="filesystem",
         )
-        self.assertIn(
-            "[saved and applied] Settings saved and applied to this running shell now.",
-            runtime_only,
-        )
+        self.assertIn('[saved and applied] Settings saved and applied to this running shell now.', runtime_only)
         self.assertNotIn("Restart is required", runtime_only)
         self.assertIn(
             "[profiles changed] 1 agent profile changed. The provider switch "
@@ -2714,10 +2707,7 @@ class ControllerSettingsTests(ControllerTestCase):
             storage_before="filesystem",
             storage_after="sqlite",
         )
-        self.assertIn(
-            "[saved] Restart is required for sqlite.",
-            storage_only,
-        )
+        self.assertIn('[saved] Restart is required for sqlite.', storage_only)
         self.assertNotIn("[saved and applied]", storage_only)
         self.assertNotIn("[profiles changed]", storage_only)
 
@@ -2820,10 +2810,7 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertEqual(catalog.events, [])
 
         initial_agents = picker.call_args_list[0].args[2]
-        self.assertEqual(
-            tuple(choice.identity for choice in initial_agents),
-            ROSTER,
-        )
+        self.assertEqual(tuple((choice.identity for choice in initial_agents)), ROSTER)
         self.assertEqual(
             tuple(choice.label for choice in initial_agents),
             tuple(AGENT_SPECS[agent_id].display_name for agent_id in ROSTER),
@@ -2885,14 +2872,8 @@ class ControllerSettingsTests(ControllerTestCase):
         plot_choice = next(
             choice for choice in redrawn_agents if choice.identity == PLOT_ARCHITECT
         )
-        self.assertEqual(
-            plot_choice.form_summary,
-            "Pending: (Antigravity/provider default/provider default)",
-        )
-        self.assertIs(
-            plot_choice.form_summary_role,
-            terminal_module.SemanticRole.WARNING,
-        )
+        self.assertEqual(plot_choice.form_summary, 'Pending: (Antigravity/provider default/provider default)')
+        self.assertIs(plot_choice.form_summary_role, terminal_module.SemanticRole.WARNING)
         self.assertIsNone(plot_choice.description)
 
         model_effort_pending = settings_module.update_agent_codex_model(
@@ -6130,6 +6111,25 @@ class ControllerConversationCommandTests(ControllerTestCase):
             [".gitkeep"],
         )
 
+        first = _conversation_metadata(_UNIQUE_C, "Resume first")
+        second = replace(first, conversation_id="c_" + "d" * 32, subject="Resume second")
+        workspace, _, _, resumed, output = self.prepared_controller(
+            "/conversation resume " + first.conversation_id,
+            "/conversation subject Renamed", "/status", "/conversation resume missing", "/conversation resume",
+            "/conversation resume " + second.conversation_id,
+            "/conversation archive", "yes", "/quit", entries=(first, second),
+            selected_id=first.conversation_id)
+        observed = []
+        def restore_focus(action, *, restoring=False):
+            self.assertTrue(restoring)
+            self.assertEqual(action.count, 20)
+            observed.append((resumed._attached_session_id, resumed._focused_conversation.conversation_id))
+            self.assertTrue(any("Subject:" in record for record in output.records))
+        with mock.patch.object(type(resumed), "_write_focused_conversation_history", side_effect=restore_focus), \
+                mock.patch.object(terminal_module.InteractivePickerInput, "read_picker", return_value=ControlOutcome(ControlOutcomeKind.CANCEL)):
+            self.assertEqual(resumed.run_session_lobby(), 0)
+        self.assertEqual(observed, [("session", first.conversation_id),
+                                   ("session", second.conversation_id), ("session", first.conversation_id)])
         from tests.test_lead_orchestration import _task_fixture, _exploration_outcome, _submitted_calls
         from tests.test_specialist_routing_runtime import scoped_proposal
         case = _task_fixture(self)

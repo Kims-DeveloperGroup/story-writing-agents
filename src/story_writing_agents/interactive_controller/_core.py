@@ -1835,6 +1835,7 @@ class InteractiveController:
         last_presented_scope: object | tuple[str, str | None, str | None] = (
             unpresented_scope
         )
+        last_restored_focus: tuple[str, str] | None = None
         while True:
             if self._attached_session_id is None:
                 last_presented_scope = unpresented_scope
@@ -1842,6 +1843,20 @@ class InteractiveController:
                 last_presented_scope = self._write_attached_conversation_scope(
                     last_presented_scope
                 )
+            current_focus = (
+                (self._attached_session_id, self._focused_conversation.conversation_id)
+                if self._attached_session_id is not None
+                and self._focused_conversation is not None
+                else None
+            )
+            if current_focus != last_restored_focus:
+                # A handled failure or interruption must not retry at every prompt.
+                last_restored_focus = current_focus
+                if current_focus is not None:
+                    self._write_focused_conversation_history(
+                        InteractiveAction(kind=ActionKind.HISTORY, count=20),
+                        restoring=True,
+                    )
             if (
                 self._attached_session_id is not None
                 and self._focused_conversation is not None
@@ -5317,6 +5332,8 @@ class InteractiveController:
     def _write_focused_conversation_history(
         self,
         action: InteractiveAction,
+        *,
+        restoring: bool = False,
     ) -> None:
         """Render structured collaboration history and current durable state.
 
@@ -5327,7 +5344,7 @@ class InteractiveController:
         """
 
         try:
-            self._write_focused_conversation_history_rows(action)
+            self._write_focused_conversation_history_rows(action, restoring=restoring)
         except KeyboardInterrupt:
             self._write_conversation_cancelled_status(
                 "History cancelled; attached state is unchanged.",
@@ -5336,6 +5353,8 @@ class InteractiveController:
     def _write_focused_conversation_history_rows(
         self,
         action: InteractiveAction,
+        *,
+        restoring: bool = False,
     ) -> None:
         """Read once and render history rows until completion or interruption."""
 
@@ -5358,12 +5377,27 @@ class InteractiveController:
             self._present_transcript_service_failure(exc)
             return
 
+        if restoring and not records:
+            return
         displayed = records if action.count is None else records[-action.count :]
         self._terminal.write_collaboration_events(
             tuple(self._canonical_readable_event(record) for record in displayed),
             show_details=self._show_message_details,
             history_events=tuple(self._canonical_readable_event(record) for record in records),
         )
+        if restoring:
+            guidance = (
+                " Use /history for all records or /transcript to browse older history."
+                if len(displayed) < len(records)
+                else ""
+            )
+            self._write_notice(
+                f"Restored {len(displayed)} of {len(records)} records.{guidance}",
+                label="conversation",
+                role=SemanticRole.MUTED,
+                state=ViewState.COMPLETED,
+            )
+            return
         self._semantic_output.write_component(
             Record(
                 "context",
