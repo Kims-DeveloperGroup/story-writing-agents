@@ -120,9 +120,8 @@ class RecommendationActionContractTests(RecommendationCase):
         self.assertEqual(tuple(s.content_digest for s in second.recommendation_request.draft_sources),
                          (digest("Second whole reply"), digest(message)))
         for sources, objective_id, bad_route in ((("foreign_event",), None, False),
-                (("current_response", "current_response"), None, False),
-                (("current_response",), "foreign_objective", False),
-                (("current_response",), None, True)):
+            (("current_response", "current_response"), None, False), (("current_response",),
+            "foreign_objective", False), (("current_response",), None, True)):
             cid = self.conversation("Rejected source aliases")
             bad = recommendation(recommended_action=action(source_ids=sources, objective_id=objective_id),
                 authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=('bounded review judgments', 'separate proposal preparation')))

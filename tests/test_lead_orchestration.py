@@ -101,8 +101,7 @@ async def _confirmed_premise(case, conversation, *, reference=False, recommendat
                         "input_ids": list(facts["available_assignment_input_source_ids"]), "mode": "premise_analysis"} for agent in agents]
         from tests.provider_wire_fixture import lead_fixture_response, lead_fixture_assignments
         native = wire_result({
-                "kind": "proposal",
-                "message": "Assess the unresolved knowledge choice.",
+                "kind": "proposal", "message": "Assess the unresolved knowledge choice.",
                 "authoring_scope": None,
                 "proposal": {"assignments": assignments, "premise_decision": spec},}, None,
                              native_types={"proposal": "specialist_consultation_proposal"})
@@ -283,8 +282,7 @@ class _LeadContextProvider:
         self._reference_terminal = False
         self.used_handles: tuple[str, ...] = ()
         self._threads = (backend.context_threads
-            if backend.context_threads is not None else self._threads
-        )
+            if backend.context_threads is not None else self._threads)
 
     @asynccontextmanager
     async def invocation(self, scope: object, policy_fingerprint: str, *,
@@ -393,8 +391,7 @@ class _LeadContextProvider:
         if self.reference_read is None or self._reference_terminal: return
         code = (ReferenceAuthorizationErrorCode.CANCELLED
             if cancelled else ReferenceAuthorizationErrorCode.PROVIDER_FAILURE
-            if provider_failure else ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
-        )
+            if provider_failure else ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE)
         self.reference_read.terminate(code)
         self._reference_terminal = True
 
@@ -418,8 +415,7 @@ class _LeadBoundAgent:
         elif self.backend.scripts: script = self.backend.scripts.pop(0)
         else: raise AssertionError(f"no scripted invocation for {agent_id}")
         provider = _LeadContextProvider(self.backend,
-            agent_id, f"sha256:{self.definition.fingerprint}",
-            script,
+            agent_id, f"sha256:{self.definition.fingerprint}", script,
             reference_read,)
         self.backend.providers.append(provider)
         return provider
@@ -967,8 +963,7 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
         boundary_patch.start()
         self.addCleanup(boundary_patch.stop)
         self.runtime = StoryRuntime(  # type: ignore[arg-type]
-            self.control_workspace,
-            self.backend,)
+            self.control_workspace, self.backend,)
 
 
     async def _lead_turn(self, conversation_id, message, **kwargs):
@@ -2112,6 +2107,45 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             finally:
                 changed.__defaults__, changed.__kwdefaults__ = defaults
             current.require_owner_provenance()
+
+        # Repeated public hook identities share one guard operation, not a cross-call cache.
+        import marshal
+        from story_writing_agents.lead_provider_contracts import TypedDecoder
+        for memo_kind in ('flat', 'tuple', 'nested_code', 'immutable'):
+            memo_leaf = []
+            def memo_decode(value, unused=None):
+                return value
+            memo_code, memo_defaults = memo_decode.__code__, memo_decode.__defaults__
+            class MemoDefault(dict):
+                armed = False
+                def items(self):
+                    if self.armed:
+                        memo_leaf.append(1)
+                        self.armed = False
+                    return ()
+            memo_trigger = MemoDefault()
+            memo_nested = memo_code.replace(co_consts=memo_code.co_consts + (memo_leaf,))
+            memo_constant = {'flat': memo_leaf, 'tuple': (memo_leaf,),
+                             'nested_code': memo_nested, 'immutable': (1, (2,))}[memo_kind]
+            try:
+                memo_decode.__code__ = memo_code.replace(co_consts=memo_code.co_consts + (memo_constant,))
+                memo_decode.__defaults__ = (memo_trigger,)
+                memo_decoder = TypedDecoder('memo-' + memo_kind, 'memo-v1', memo_decode,
+                                            dependencies=(memo_decode,))
+                memo_decoder.require_provenance()
+                memo_before = hashlib.sha256(marshal.dumps(memo_decode.__code__, 2)).digest()
+                memo_trigger.armed = True
+                if memo_kind == 'immutable':
+                    memo_decoder.require_provenance()
+                else:
+                    with self.assertRaises(ValueError):
+                        memo_decoder.require_provenance()
+                memo_after = hashlib.sha256(marshal.dumps(memo_decode.__code__, 2)).digest()
+                self.assertEqual(memo_before != memo_after, memo_kind != 'immutable')
+            finally:
+                memo_decode.__code__, memo_decode.__defaults__ = memo_code, memo_defaults
+                memo_trigger.armed = False
+
         repaired_offers = replace(bound.offers, call_id='fixture_repair_physical',
             action_index=bound.offers.action_index + 1, action_limits=tuple((name, min(limit, 1))
                                 for name, limit in bound.offers.action_limits))
@@ -5190,10 +5224,8 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
             purpose='Check the story evidence before recommending a change.',
             activity='draft' if infeasible else 'review', authoring_assessment=assessment, paths=(
             'manuscript/part-01/opening.md',) if infeasible else ()))
-        proposed = await self.runtime.lead_turn(
-            self.session_id,
-            conversation_id,
-            (
+        proposed = await self.runtime.lead_turn( self.session_id,
+            conversation_id, (
                 ("Draft from this story. " if infeasible else "Review complete supplied candidate: ")
                 + _STORY_USER_INPUT + "\n"
                 + "${core_documents/global_outline.md} ${core_documents/character_sheets.md} "

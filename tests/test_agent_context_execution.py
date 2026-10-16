@@ -399,15 +399,12 @@ class ContextExecutionTestCase(unittest.IsolatedAsyncioTestCase):
             provider.reference_read = self.repository.begin_reference_invocation(provider.reference_authorization,
                 ReferenceInvocationCorrelation(actual_request.reference_operation_id, actual_request.operation_id, 1,
                     actual_request.agent_id, phase or workflow, round_number, 1))
-        return await actual_service.invoke(
-            actual_request,
+        return await actual_service.invoke( actual_request,
             provider,
             answer_validator=answer_validator,  # type: ignore[arg-type]
             answer_diagnostic=answer_diagnostic,  # type: ignore[arg-type]
-            event_sink=event_sink,
-            progress_sink=progress_sink,
-            phase=phase,
-            round_number=round_number,
+            event_sink=event_sink, progress_sink=progress_sink,
+            phase=phase, round_number=round_number,
             **collaborators,  # type: ignore[arg-type]
         )
 
@@ -783,10 +780,8 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         writing = authorities["writing_artifacts"]
         self.assertIsInstance(writing, WritingArtifactSourceAdapter)
         assert isinstance(writing, WritingArtifactSourceAdapter)
-        descriptor = next( item
-            for item in writing.inventory(CONTEXT_SOURCE_POLICY)
-            if item.provenance.locator == "manuscript/part-01/chapter-01.md"
-        )
+        descriptor = next( item for item in writing.inventory(CONTEXT_SOURCE_POLICY)
+            if item.provenance.locator == "manuscript/part-01/chapter-01.md")
         classification = ContextSourceClassification(descriptor.source_id,
             ContextSemanticChannel.HARD_CONSTRAINT, ContextPriority.P2_WORKING, 0)
         provider = _ScriptedProvider((_answer,) * 4)
@@ -824,8 +819,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             'operation_id': 'debate_draft_scope-2'}, {'subject_id': 'other-subject'}, {'agent_id': 'plot_architect'})
         for index, overrides in enumerate(cases, 1):
             values = { "operation_id": f"scope-{index}",
-                "result_correlation_id": f"scope-result-{index}",
-                **overrides,
+                "result_correlation_id": f"scope-result-{index}", **overrides,
             }
             request = self.request(**values)
             result = await self.invoke(provider, request)
@@ -909,8 +903,7 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
             with self.subTest(label=label):
                 request = self.request( session_id=f"session-{label}",
                     operation_id=f"operation-{label}",
-                    result_correlation_id=f"result-{label}",
-                )
+                    result_correlation_id=f"result-{label}",)
                 provider = _ScriptedProvider((response,))
                 with self.assertRaises(BaseException): await self.invoke(provider, request)
                 inspection = self.inspect(provider, request)
@@ -959,8 +952,7 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
         self.assertIs(failure.code, ContextExecutionErrorCode.MALFORMED_ACTION)
         self.assertEqual( str(failure),
             "contextual provider read action is invalid: `handles` must contain "
-            "source handles returned by the preceding context search",
-        )
+            "source handles returned by the preceding context search",)
         rendered = '\n'.join((str(failure), repr(failure), repr(failure.__cause__), repr(failure.__context__)))
         for private in private_values: self.assertNotIn(private, rendered)
         self.assertEqual(tuple((finalizer.calls for finalizer in provider.finalizers)), ([(
@@ -1200,8 +1192,7 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
                 request = self.request( session_id=f"session-{label}",
                     operation_id=f"operation-{label}",
                     result_correlation_id=f"result-{label}",
-                    reference_operation_id=f"reference-{label}",
-                    mandatory_references=(reference,),
+                    reference_operation_id=f"reference-{label}", mandatory_references=(reference,),
                 )
                 provider = _ScriptedProvider( (_answer,),
                     reference_operation_id=f"reference-{label}", usage=answer_usage, )
@@ -1257,13 +1248,10 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
             with self.subTest(label=label):
                 provider = _ScriptedProvider((_answer,))
                 with self.assertRaises(ContextExecutionError):
-                    await self.invoke(
-                        provider,
-                        self.request(
-                            session_id=f"session-{label}",
+                    await self.invoke( provider,
+                        self.request( session_id=f"session-{label}",
                             operation_id=f"operation-{label}",
-                            result_correlation_id=f"result-{label}",
-                        ),
+                            result_correlation_id=f"result-{label}",),
                         event_sink=sink,  # type: ignore[arg-type]
                     )
                 self.assertEqual(provider.calls, [])

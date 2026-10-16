@@ -999,11 +999,22 @@ class SpecialistAccountingAcceptanceTests(LeadOrchestrationTestCase):
                 'message': 'The bounded evidence supports the direction.'}, used_handles=provider.used_handles)
 
         def search_current_proposal(call, _provider):
-            return json.dumps({'action': {'kind': 'search', 'queries': [{
-                'text': 'own plot state needle', 'source_kinds': ['own_agent_state']}, {
-                'text': 'sibling reply secret', 'source_kinds': ['own_agent_state']}]}}, separators=(',', ':'))
+            return json.dumps({'agent_action': {'action_type': 'search_context', 'queries': [
+                {'search_text': 'own plot state needle', 'source_types': ['agent_work_history']},
+                {'search_text': 'sibling reply secret', 'source_types': ['agent_work_history']},
+            ]}}, separators=(',', ':'))
 
-        self.backend.enqueue_for(PLOT_ARCHITECT, search_current_proposal, _read_history_hit, answer_after_read)
+        def read_current_proposal(call, provider):
+            observation = call.payload["context_observation"]
+            assert (isinstance(observation, dict) and
+                    observation["observation_type"] == "context_search_results")
+            handle = observation["search_results"][0]["read_handle"]
+            provider.used_handles = (handle,)
+            return json.dumps({'agent_action': {'action_type': 'read_context',
+                'read_handles': [handle]}}, separators=(',', ':'))
+
+        self.backend.enqueue_for(PLOT_ARCHITECT, search_current_proposal,
+                                 read_current_proposal, answer_after_read)
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
         decision = await self.runtime.decide_lead_step(
             _decision(proposed, CollaborationConfirmationDecision.CONFIRM)

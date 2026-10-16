@@ -12,28 +12,17 @@ from unittest import mock
 import story_writing_agents
 from story_writing_agents import agent_context as agent_context_package
 from story_writing_agents.agent_context import service as service_module
-from story_writing_agents.agent_context.accounting import (
-    ProviderCallAccounting,
-    ProviderCallKind,
-    ProviderCallState,
-    account_provider_payload,
-    canonical_provider_json, )
-from story_writing_agents.agent_context.actions import (
-    CONTEXT_ACTION_POLICY,
-    ContextActionCorrelation,
-    ContextActionError,
-    ContextActionErrorCode,
-    ContextActionPolicy,
-    ContextAnswerAction,
-    ContextReadAction,
-    ContextSearchAction,
-    ContextSearchQuery,
-    ContextSourceBoundary,
-    ContextSourceHandle, )
-from story_writing_agents.agent_context.manifest import (
-    ContextAuthorityKind,
-    ContextManifest,
-    ContextManifestEntry,
+from story_writing_agents.agent_context.accounting import (ProviderCallAccounting,
+    ProviderCallKind, ProviderCallState,
+    account_provider_payload, canonical_provider_json, )
+from story_writing_agents.agent_context.actions import (CONTEXT_ACTION_POLICY,
+    ContextActionCorrelation, ContextActionError,
+    ContextActionErrorCode, ContextActionPolicy,
+    ContextAnswerAction, ContextReadAction,
+    ContextSearchAction, ContextSearchQuery,
+    ContextSourceBoundary, ContextSourceHandle, )
+from story_writing_agents.agent_context.manifest import (ContextAuthorityKind,
+    ContextManifest, ContextManifestEntry,
     ContextPriority,
     ContextProvenance,
     ContextScope,

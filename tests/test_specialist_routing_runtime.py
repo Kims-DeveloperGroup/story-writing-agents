@@ -160,7 +160,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             details = frame['agent_action']['task_result']['response_details']
             for premise in details['specialist_consultation_proposal']['shared_premises']:
                 premise['basis_input_ids'] = finite_fixture_selection(
-                    premise['basis_input_ids'], choices['input_ids'])
+                    choices['input_ids'], premise['basis_input_ids'])
             return json.dumps(frame, ensure_ascii=False)
         return respond
 
@@ -168,7 +168,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         writer = self._native_scoped if text == _ADMISSION_BRIEF else scoped_proposal
         self.backend.enqueue(response or writer(
             PLOT_ARCHITECT, authoring_assessment=_fixture_assessment() if text == _ADMISSION_BRIEF else None,
-        ))
+            domains=("plot_structure",),))
         return await self.runtime.lead_turn(self.session_id, conversation, text, adoption=adoption)
 
     async def finish_draft(self, conversation, *, synthesis=None, **kwargs):
@@ -244,7 +244,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             self.assertEqual(material["available_proposal_drafting_source_ids"], [])
         blocked = await self.proposal_for(conversation, self._native_scoped(
             PLOT_ARCHITECT, selected=proposed.proposal.authoring_scope.task_id,
-            revision=2, activity="review", mutate=successor,
+            domains=("plot_structure",), revision=2, activity="review", mutate=successor,
             authoring_assessment=_fixture_assessment(),
         ))
         self.assertIsNone(blocked.proposal, blocked)
@@ -284,8 +284,9 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         def mixed_with_snapshot(call, provider):
             services = self.runtime.conversation_storage_services
             expected_snapshots.append((SessionHistorySourceAdapter(services.catalog, services.event_store, self.session_id).capture(), call))
-            return self._native_scoped(*ROSTER, paths=(
-                "manuscript/part-01/opening.md", ), domains=("plot_structure", "character_world"), authoring_assessment=_fixture_assessment(), )(call, provider)
+            return self._native_scoped(*ROSTER, paths=("manuscript/part-01/opening.md",),
+                domains=("plot_structure", "character_world", "tone_execution"),
+                authoring_assessment=_fixture_assessment(),)(call, provider)
         mixed = await self.proposal_for(self.conversation(), response=mixed_with_snapshot)
         snapshot, observed_call = expected_snapshots[0]
         prepared_call = next(event for event in snapshot.events()
@@ -556,7 +557,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         start = len("Unused prefix.\n")
         selection = replace(_adoption_selection(source, event, (OUTLINE,)), start_character=start, end_character=start + len(original), intent=AuthoringIntent.REVIEW_ONLY)
         selected = await self.proposal_for(owner, self._native_scoped(
-            PLOT_ARCHITECT, activity="review",
+            PLOT_ARCHITECT, domains=("plot_structure",), activity="review",
             intent="review_only", candidate_ids=("adopted_idea",),
             mutate=lambda value, _material: value["proposal"]["assignments"][0].update(
                 input_ids=["adopted_idea"])), adoption=selection)
@@ -606,7 +607,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         ))
         self._assert_continuation(bad, 'proposal')
         continued = await self.proposal_for(self.conversation(), self._native_scoped(
-            PLOT_ARCHITECT, selected=selected,
+            PLOT_ARCHITECT, domains=("plot_structure",), selected=selected,
             authoring_assessment=_fixture_assessment(),
         ))
         self.assertIsNotNone(continued.proposal, continued)
@@ -630,7 +631,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertEqual((self.history(source), self.history(foreign_focus), len(self.backend.calls)), before)
 
         adopted = await self.proposal_for(foreign_focus, self._native_scoped(PLOT_ARCHITECT,
-            candidate_ids=("adopted_idea",),
+            domains=("plot_structure",), candidate_ids=("adopted_idea",),
             authoring_assessment=_fixture_assessment(),
         ), adoption=selection)
         self.assertIsNotNone(adopted.proposal, adopted)
@@ -819,7 +820,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             response=self._native_scoped(
                 *ROSTER,
                 paths=(path,),
-                domains=("plot_structure", "character_world"),
+                domains=("plot_structure", "character_world", "tone_execution"),
                 mutate=mixed,
                 authoring_assessment=_fixture_assessment(foundation_ids=(
                     "adopted_idea",
@@ -1058,8 +1059,8 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             next(item for item in value["authoring_scope"]["contributions"] if item["domain"] == "tone_execution")["role"] = "constraint_assessor"
             next(item for item in value["proposal"]["assignments"] if item["agent_id"] == EXECUTION_SPECIALIST)["mode"] = "constraint_assessment"
         original, _ = await self.finish_draft(conversation, response=self._native_scoped(
-            *ROSTER, domains=("character_world", "tone_execution"), mutate=two_owners,
-            authoring_assessment=_fixture_assessment(),
+            *ROSTER, domains=("plot_structure", "character_world", "tone_execution"),
+            mutate=two_owners, authoring_assessment=_fixture_assessment(),
         ))
         self.assertIsNone(original.proposal.basis.core_document_readiness)
         old_source = c.project_collaboration_history(self.history(conversation)).offered_draft_sources[-1].event_id
@@ -1119,7 +1120,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             self.assertEqual(material["available_proposal_drafting_source_ids"], [])
         (pending, revised,) = await self.finish_draft(conversation, response=self._native_scoped(
             PLOT_ARCHITECT,
-            selected=task_id,
+            domains=("plot_structure",), selected=task_id,
             revision=2,
             mutate=successor,
             authoring_assessment=_fixture_assessment(),
@@ -1142,16 +1143,16 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         before_multiple = self.artifact_bytes()
         multi_path = "manuscript/part-01/nonfirst-successor.md"
         first_draft, _ = await self.finish_draft(multiple, response=self._native_scoped(
-            *ROSTER, domains=("character_world", "tone_execution"), mutate=two_owners,
-            authoring_assessment=_fixture_assessment(),
+            *ROSTER, domains=("plot_structure", "character_world", "tone_execution"),
+            mutate=two_owners, authoring_assessment=_fixture_assessment(),
         ))
         first_source = c.project_collaboration_history(self.history(multiple)).offered_draft_sources[-1].event_id
         def second_task(call, provider):
             fresh = next(t for t in _workflow_material(call.payload)["authoring_tasks"] if t.get("current_scope") is None)
-            return self._native_scoped(*ROSTER, domains=("character_world", "tone_execution"),
+            return self._native_scoped(*ROSTER,
+                domains=("plot_structure", "character_world", "tone_execution"),
                 selected=fresh["task_id"], mutate=two_owners,
-                authoring_assessment=_fixture_assessment(),
-            )(call, provider)
+                authoring_assessment=_fixture_assessment(),)(call, provider)
         second_draft, _ = await self.finish_draft(multiple, response=second_task)
         first_ready = await self.proposal_for(multiple, recommendation(recommended_action=action(
             source_ids=(first_source,), target_paths=(multi_path,), specialist_ids=ROSTER),
@@ -1193,7 +1194,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             self.assertCountEqual(offers, expected)
             chosen.append(offers[1])
             return self._native_scoped(*ROSTER, selected=offers[1][0], revision=offers[1][1],
-                domains=("character_world", "tone_execution"), mutate=two_owners,
+                domains=("plot_structure", "character_world", "tone_execution"), mutate=two_owners,
                 authoring_assessment=_fixture_assessment(),
             )(call, provider)
         admitted = await self.proposal_for(multiple, nonfirst)

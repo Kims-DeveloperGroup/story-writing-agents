@@ -497,9 +497,53 @@ def _compile_closed_choices(
             fingerprints[key] = schema_rule_fingerprints(original, selected=node)[0]
         return fingerprints[key]
 
+    try:
+        final_costs: dict[str, int] | None = {}
+    except MemoryError:
+        final_costs = None
+
     def final_cost(graph: Mapping[str, object]) -> int:
+        key: str | None = None
+        if final_costs is not None:
+            try:
+                pending = [graph]
+                containers: set[int] = set()
+                while pending:
+                    value = pending.pop()
+                    if type(value) is dict:
+                        if any(type(name) is not str for name in value):
+                            break
+                        identity = id(value)
+                        if identity in containers:
+                            break
+                        containers.add(identity)
+                        pending.extend(value.values())
+                    elif type(value) is list:
+                        identity = id(value)
+                        if identity in containers:
+                            break
+                        containers.add(identity)
+                        pending.extend(value)
+                    elif value is not None and type(value) not in (str, int, float, bool):
+                        break
+                else:
+                    key = json.dumps(
+                        graph, sort_keys=False, ensure_ascii=False, allow_nan=False,
+                        separators=(",", ":"),
+                    )
+                    cached_cost = final_costs.get(key)
+                    if cached_cost is not None:
+                        return cached_cost
+            except (TypeError, ValueError, OverflowError, RecursionError, MemoryError):
+                key = None
         compact = factor_rule_schema(project_lead_scope_schema(factor_rule_schema(graph)))
-        return len(encoded(compact).encode("utf-8", "strict"))
+        cost = len(encoded(compact).encode("utf-8", "strict"))
+        if final_costs is not None and key is not None:
+            try:
+                final_costs[key] = cost
+            except MemoryError:
+                pass
+        return cost
 
     def at(graph: dict[str, object], path: tuple[object, ...]) -> dict[str, object]:
         node = graph

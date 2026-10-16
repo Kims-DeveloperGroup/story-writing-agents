@@ -106,10 +106,10 @@ def recommendation(*, message=DRAFT, recommended_action=None, mutate=None,
                           'tone_execution': 'execution_specialist'}
                 required = tuple(agent for domain, agent in roster.items()
                                  if domain in value['authoring_scope']['domains'])
-                selected = tuple(drafting['specialist_ids'])
-                drafting['specialist_ids'] = finite_fixture_selection(tuple(roster.values()), selected)
+                pick = tuple(drafting['specialist_ids'])
+                drafting['specialist_ids'] = finite_fixture_selection(tuple(roster.values()), pick)
                 if required == tuple(roster.values()):
-                    drafting['specialist_ids'] = {agent: agent in selected for agent in roster.values()}
+                    drafting['specialist_ids'] = {agent: agent in pick for agent in roster.values()}
             if choices['preparation_targets'] and 'target_artifact_paths' in drafting:
                 drafting['target_artifact_paths'] = finite_fixture_selection(
                     choices['preparation_targets'], tuple(drafting['target_artifact_paths']))

@@ -18,32 +18,19 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
-from story_writing_agents import (
-    AgentBackend,
-    AgentReply,
-    AgentRequest,
-    BackendProtocolError,
-    CHARACTER_CUSTODIAN,
-    ConversationContextWindow,
-    ConversationReply,
-    ConversationRequest,
-    ConversationRetrievalAction,
-    ConversationRetrievalAnswerAction,
-    ConversationRetrievalObservation,
-    ConversationRetrievalReply,
-    ConversationRetrievalRequest,
-    ConversationRetrievalSearchAction,
-    ConversationRetrievalSearchObservation,
-    EXECUTION_SPECIALIST,
-    LEAD_ORCHESTRATOR,
-    PLOT_ARCHITECT,
-    Phase,
-    ReplyTrace,
-    ReplyTraceOrigin,
-    SessionAccessState,
-    SessionDurableState,
-    SessionPausedError,
-    Verdict,
+from story_writing_agents import ( AgentBackend,
+    AgentReply, AgentRequest,
+    BackendProtocolError, CHARACTER_CUSTODIAN,
+    ConversationContextWindow, ConversationReply,
+    ConversationRequest, ConversationRetrievalAction,
+    ConversationRetrievalAnswerAction, ConversationRetrievalObservation,
+    ConversationRetrievalReply, ConversationRetrievalRequest,
+    ConversationRetrievalSearchAction, ConversationRetrievalSearchObservation,
+    EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR,
+    PLOT_ARCHITECT, Phase,
+    ReplyTrace, ReplyTraceOrigin,
+    SessionAccessState, SessionDurableState,
+    SessionPausedError, Verdict,
 )
 from story_writing_agents.config import ConfigManager
 from story_writing_agents.workspace.initialization import provision_session_resources
@@ -144,8 +131,7 @@ def emit(value):
     print(json.dumps(value, ensure_ascii=False, separators=(",", ":")), flush=True)
 
 """
-    + SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE
-    + inspect.getsource(direct_response)
+    + SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE + inspect.getsource(direct_response)
     + r"""
 def matches_schema(value, specification):
     if isinstance(specification, bool):
