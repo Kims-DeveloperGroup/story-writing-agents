@@ -878,32 +878,20 @@ def _is_unproposed_lead_history(history: CollaborationHistoryProjection) -> bool
         CollaborationNextAction.FINALIZE_RECOMMENDATION,
     } and history.current_recommendation_request is None:
         return False
-    return history == CollaborationHistoryProjection(
-        session_id=history.session_id,
-        conversation_id=history.conversation_id,
-        last_sequence=history.last_sequence,
-        current_turn_id=history.current_turn_id,
-        current_step_id=history.current_step_id,
-        current_proposal=None,
-        current_state=history.current_state,
-        confirmation_request_id=None,
-        confirmation_decision=None,
-        execution_attempt_id=None,
-        execution_result_event_id=None,
-        execution_result=None,
-        next_safe_action=history.next_safe_action,
-        physical_calls_spent=history.physical_calls_spent,
-        current_artifact_application_request=history.current_artifact_application_request,
-        current_artifact_application_result=history.current_artifact_application_result,
-        current_story_commit_request=history.current_story_commit_request,
-        current_story_commit_result=history.current_story_commit_result,
-        artifact_objectives=history.artifact_objectives,
-        offered_draft_sources=history.offered_draft_sources,
-        current_recommendation_request=history.current_recommendation_request,
-        current_recommendation_decision=history.current_recommendation_decision,
-        current_recommendation_start=history.current_recommendation_start,
-        current_recommendation_result=history.current_recommendation_result,
-        current_recommendation_state=history.current_recommendation_state,
+    # Provider outcomes and response/task views do not establish workflow authority.
+    return history.rounds_spent == 0 and all(
+        value is None
+        for value in (
+            history.current_proposal,
+            history.confirmation_request_id,
+            history.confirmation_decision,
+            history.execution_attempt_id,
+            history.execution_result_event_id,
+            history.execution_result,
+            history.current_artifact_candidate,
+            history.current_artifact_state,
+            history.current_reviewed_artifact_proposal,
+        )
     )
 
 
