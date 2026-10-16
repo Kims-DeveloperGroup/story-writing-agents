@@ -382,8 +382,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 proposed = (
                     await self.proposal(conversation_id, assignments=_assignments(*specialist_ids),
                     text=_REVIEW_BRIEF + '\n\nPlease check the story direction.',
-                    authoring_assessment=asdict(_review_assessment()), domains=declared_domains)
-                )
+                    authoring_assessment=asdict(_review_assessment()), domains=declared_domains))
                 entered = 0
                 release = asyncio.Event()
                 ready = asyncio.Event()
@@ -455,8 +454,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             'input_ids': ['reference_2']}, {'agent_id': EXECUTION_SPECIALIST,
             'instruction': 'Assess the supplied prose.', 'input_ids': ['reference_3']}],
             authoring_assessment=asdict(_review_assessment()), domains=('plot_structure',
-            'character_world', 'tone_execution'))
-        )
+            'character_world', 'tone_execution')))
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
         self.backend.enqueue_for(EXECUTION_SPECIALIST, _specialist_outcome())
         self.backend.enqueue_for(CHARACTER_CUSTODIAN, _specialist_outcome("concern"))

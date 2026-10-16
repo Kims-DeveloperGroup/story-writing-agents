@@ -2818,6 +2818,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         stem = free_seed.contract_id
         domain_order = ('plot_structure', 'character_world', 'tone_execution')
         role_order = ('draft_owner', 'constraint_assessor')
+        profile_roster = {'plot_structure': 'plot_architect',
+                          'character_world': 'character_custodian',
+                          'tone_execution': 'execution_specialist'}
         accepted_profiles = set()
         for intent, activity in product(('authoring', 'review_only'),
                                         ('workflow', 'draft', 'revise', 'review')):
@@ -2857,6 +2860,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                          {'message': base['response_text'],
                                           'authoring_scope': expected_scope})
                         self._require_fixture_field_neighbors(profile_binding, complete)
+                        required_agents = tuple(agent for domain, agent in profile_roster.items() if domain in domains)
+                        selected_agents = tuple(agent for agent in profile_roster.values()
+                                                if agent == 'execution_specialist' or agent in required_agents)
                         profile_cases = [(1, 'clarification_question', 'question', {}, {}),
                                          (1, 'critique', 'critique', {}, {})]
                         profile_cases.extend((2, 'clarification_question', 'question',
@@ -2876,12 +2882,13 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                 'task_instructions': 'Use supplied concern.',
                                 'source_ids': finite_fixture_selection(
                                     ('user_input',), ('user_input',)),
-                                'specialist_ids': finite_fixture_selection(
-                                    tuple(SPECIALIST_IDS), (EXECUTION_SPECIALIST,))}},
+                                'specialist_ids': (dict.fromkeys(required_agents, True)
+                                    if required_agents == tuple(profile_roster.values()) else
+                                    finite_fixture_selection(tuple(profile_roster.values()), selected_agents))}},
                             {'recommended_action': {'kind': 'prepare_consultation',
                                 'instruction': 'Use supplied concern.',
                                 'source_ids': ['user_input'],
-                                'specialist_ids': [EXECUTION_SPECIALIST]}}))
+                                'specialist_ids': list(selected_agents)}}))
                         for (family, response_kind, semantic_kind, extra,
                              semantic_extra) in profile_cases:
                             if semantic_kind == 'recommendation' and intent == 'authoring':

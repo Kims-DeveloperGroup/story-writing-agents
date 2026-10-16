@@ -906,8 +906,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertNotIn(task_id,{item["task_id"] for item in offered})
         (
             self.backend.enqueue(_current_exploration_outcome(
-            'Changed condition: retain the revised tide boundary.'))
-        )
+            'Changed condition: retain the revised tide boundary.')))
         await self.runtime.lead_turn(self.session_id, source_conversation, "Explore the changed condition.",
                                      interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
         restarted = StoryRuntime(self.control_workspace, backend=self.backend)

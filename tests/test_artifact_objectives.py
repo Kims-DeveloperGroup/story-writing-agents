@@ -165,8 +165,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
     async def clarify(self, conversation_id=None, *, message="Which consequence should close the outline?"):
         conversation_id = conversation_id or self.conversation()
         self.backend.enqueue(self.question(
-                intent={
-                    'action': 'start',
+                intent={'action': 'start',
                     'request': 'Prepare the approved synthetic outline.',
                     'target_paths': [OUTLINE],
                     'next_step': 'clarify',
@@ -203,8 +202,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         prompt = f"Prepare the next revision using ${{{OUTLINE}}}." if attached else "네, 그 초안 그대로 문서로 준비해 줘."
         offered = await self.runtime.lead_turn(self.session_id, conversation_id, ("Finished candidate:\n" + text + "\nYou may prepare this candidate and a separate proposal; preserve supplied facts.\n" + prompt))
         self.assertIs(offered.kind, c.LeadOutcomeKind.RECOMMENDATION, offered)
-        prepare_current_task = artifact._artifact_outcome(
-            operations=lambda call, material: [{"kind": "replace",
+        prepare_current_task = artifact._artifact_outcome(operations=lambda call, material: [{"kind": "replace",
                 "evidence_id": evidence(call, material)[0], "new_text": text}],
             evidence_status='verified' if attached else 'empty',
             evidence_ids=evidence,
@@ -324,8 +322,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         await self.prepare(conversation_id, select=False)
         self.assertEqual(self.objective(conversation_id).draft_sources, selected)
         objective_id = self.objective(conversation_id).facts.objective_id
-        self.backend.enqueue(lambda call, _provider: _native_objective_response(
-            call, response_type='answer',
+        self.backend.enqueue(lambda call, _provider: _native_objective_response(call, response_type='answer',
             message='Objective cancelled.', scope=lead._live_scope(call),
             update={'update_type': 'cancel_request', 'document_change_request_id': objective_id},
             branch='lead-response-v8:family:5'))
