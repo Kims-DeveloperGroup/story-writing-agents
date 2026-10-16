@@ -7,11 +7,20 @@ import base64
 import hashlib
 import hmac
 import inspect
+from ..agents import LEAD_ORCHESTRATOR
+from abc import ABC, abstractmethod
+from copy import deepcopy
+from typing import TypeVar
 import json
 import math
 import secrets
 import threading
 from ..structured_output_validation import (
+    ContractOwner,
+    ContractRejection, BoundContract, NamedHostCheck, TypedDecoder, HostCheckContext,
+    SelectedHostContext, SelectedContract, ValidatedValue, closed_rule, strict_json_member_text, failure_findings,
+    SchemaRules, finite_subset_rule, finite_selection_rule, decode_finite_selection,
+    canonical_schema_rules, diagnose_value, schema_accepts_only_objects, strict_json_object,
     validation_failure,
     validation_call,
     carry_validation,
@@ -50,6 +59,7 @@ from .accounting import (
 )
 
 from .actions import (
+    ContextCallReadFact, search_text_rule, artifact_directory_prefix_rule,
     CONTEXT_ACTION_POLICY,
     ContextActionCorrelation,
     ContextActionError,
@@ -123,9 +133,14 @@ from .ledger import (
     context_checkpoint_proposal_digest,
 )
 from .request_compaction import compact_context_payload
+from ..lead_provider_contracts import (LeadStagePolicy, LeadContractIndex, LeadResultContractOwner,
+    LeadDecodedResult, LeadContractRejection, factor_rule_schema)
+from .actions import normalized_search_text, SEARCH_NORMALIZATION_REVISION
 from ..provider_wire import (
-    BUILTIN_RESULT_CONTRACT_IDS, WIRE_VERSION, WireShapeError, add_contract_guidance, diagnostic_to_wire, normalize_context_action,
+    require_schema_projection,
+    BUILTIN_RESULT_CONTRACT_IDS, WIRE_VERSION, WireShapeError, add_contract_guidance, diagnostic_to_wire, project_lead_scope_diagnostic, normalize_context_action,
     normalize_result, project_action_schema, project_context_payload,
+    hoist_schema_definitions, rebase_schema_definitions,
 )
 from .sources import (
     CONTEXT_SOURCE_POLICY,
@@ -232,6 +247,13 @@ _STRUCTURED_WIRE_SOURCE_KINDS = {
 }
 
 
+_CONTEXT_ACTION_ROOT_DESCRIPTION = (
+    'Gather needed evidence, then return the task result. Choose one currently '
+    'permitted agent_action; search finds sources, read obtains contents, and '
+    'submit_result completes the task. The runtime owns correlation and action '
+    'bookkeeping.'
+)
+
 class ContextInvocationState(StrEnum):
     """Observable lifecycle of one call-local context action session."""
 
@@ -257,9 +279,12 @@ class ContextJsonObjectResultContract:
 
     contract_id: str
     schema: Mapping[str, object] = field(repr=False, compare=False)
+    wire_format: bool = field(default=False, kw_only=True)
     _schema_bytes: bytes = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if type(self.wire_format) is not bool:
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         _safe_identity(self.contract_id)
         encoded = _validated_result_schema_bytes(self.schema)
         decoded = json.loads(encoded)
@@ -273,6 +298,645 @@ class ContextJsonObjectResultContract:
         decoded = json.loads(self._schema_bytes)
         assert type(decoded) is dict
         return decoded
+
+
+@dataclass(frozen=True, slots=True)
+class ContextCallOffers:
+    """One owner-locked physical-call snapshot, without source content."""
+    call_id: str
+    scope: ContextScope
+    action_index: int
+    allowed_actions: tuple[str, ...]
+    action_limits: tuple[tuple[str, int], ...]
+    search_source_kinds: tuple[ContextSourceKind, ...]
+    issued_handle_aliases: tuple[str, ...]
+    completed_read_facts: tuple[ContextCallReadFact, ...]
+    delivery_read_facts: tuple[ContextCallReadFact, ...]
+    core_status_facts: tuple[ContextSourceStatusReceipt, ...]
+    offer_digest: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        _safe_identity(self.call_id)
+        if (type(self.scope) is not ContextScope or type(self.action_index) is not int or self.action_index < 1
+                or type(self.allowed_actions) is not tuple or not self.allowed_actions
+                or len(set(self.allowed_actions)) != len(self.allowed_actions)
+                or any(item not in {"search", "read", "answer"} for item in self.allowed_actions)
+                or type(self.action_limits) is not tuple or any(
+                    type(item) is not tuple or len(item) != 2 or type(item[0]) is not str
+                    or type(item[1]) is not int or item[1] < 0 for item in self.action_limits)
+                or len({item[0] for item in self.action_limits}) != len(self.action_limits)
+                or type(self.search_source_kinds) is not tuple
+                or any(type(item) is not ContextSourceKind for item in self.search_source_kinds)
+                or type(self.issued_handle_aliases) is not tuple
+                or any(type(item) is not str for item in self.issued_handle_aliases)
+                or len(set(self.issued_handle_aliases)) != len(self.issued_handle_aliases)
+                or any(type(values) is not tuple or any(type(item) is not ContextCallReadFact for item in values)
+                       for values in (self.completed_read_facts, self.delivery_read_facts))):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        if (type(self.core_status_facts) is not tuple
+                or any(type(item) is not ContextSourceStatusReceipt
+                       for item in self.core_status_facts)
+                or len({item.evidence_id for item in self.core_status_facts})
+                != len(self.core_status_facts)):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        value = {"call_id": self.call_id, "scope": repr(self.scope), "action_index": self.action_index,
+            "actions": self.allowed_actions, "limits": self.action_limits,
+            "search_kinds": [kind.value for kind in self.search_source_kinds],
+            "handles": self.issued_handle_aliases,
+            "completed": [item.snapshot_value() for item in self.completed_read_facts],
+            "delivery": [item.snapshot_value() for item in self.delivery_read_facts],
+            "core_statuses": [_status_value(item) for item in self.core_status_facts],
+        }
+        encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8", "strict")
+        object.__setattr__(self, "offer_digest", hashlib.sha256(encoded).hexdigest())
+
+
+_CallValue = TypeVar("_CallValue")
+_CALL_PROOF_SEAL = object()
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorizedAnswerHostContext(HostCheckContext):
+    """The actual service authorization, supplied only at its existing owner point."""
+    authorization: ContextAnswerAuthorization
+
+    def __post_init__(self) -> None:
+        if type(self.authorization) is not ContextAnswerAuthorization:
+            raise TypeError("authorized checks require actual service authorization")
+
+
+@dataclass(frozen=True, slots=True)
+class ContextActionValue:
+    """Explicit pure action-codec output; resources remain service-owned."""
+    _value: dict[str, object] = field(repr=False, compare=False)
+
+    def as_object(self) -> dict[str, object]:
+        return deepcopy(self._value)
+
+
+@dataclass(frozen=True, slots=True)
+class ContextActionContractOwner(ContractOwner[ContextActionValue]):
+    owner_id: str
+    rules: SchemaRules
+    eligibility_offers: ContextCallOffers
+    semantic_member: BoundContract[LeadDecodedResult] | None = field(repr=False, compare=False)
+    owner_revision: str = field(init=False, default="848-v3:typed-action-owner")
+    _checks: tuple[NamedHostCheck[ContextActionValue], ...] = field(init=False, repr=False, compare=False)
+
+    def __init_subclass__(cls, **kwargs):
+        raise TypeError("context action owner cannot be overridden")
+
+    def __post_init__(self) -> None:
+        if type(self.rules) is not SchemaRules or type(self.eligibility_offers) is not ContextCallOffers:
+            raise TypeError("action owner requires exact current canonical declarations")
+        action_type = self.rules.literal_at(("action_type",))
+        if action_type == "submit_result":
+            if (type(self.semantic_member) is not BoundContract
+                    or self.rules.literal_at(("task_result", "schema_id")) != self.semantic_member.schema_id
+                    or self.rules.node_fingerprint(("task_result",)) != self.semantic_member.rule_graph.node_fingerprint()):
+                raise ValueError("ANSWER requires its exact authoritative semantic member")
+        elif action_type in {"search_context", "read_context"}:
+            if self.semantic_member is not None:
+                raise ValueError("SEARCH/READ cannot bind a semantic result member")
+        else:
+            raise ValueError("unknown current action family")
+        checks = ()
+        if action_type == "search_context":
+            limit = dict(self.eligibility_offers.action_limits)["query_characters"]
+            facts = json.dumps({"requirements": [{"path": "$.queries[*].search_text",
+                "rule": "NORMALIZED_SEARCH_TEXT_LENGTH", "expected": {
+                    "normalization": SEARCH_NORMALIZATION_REVISION, "minimum": 1, "maximum": limit}}]},
+                sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+            checks = (NamedHostCheck("owner.normalized_search_length", SEARCH_NORMALIZATION_REVISION,
+                "selected", SelectedHostContext, facts, self._require_normalized_queries,
+                dependencies=(normalized_search_text,)),)
+        object.__setattr__(self, "_checks", checks)
+
+    def declare_rules(self) -> SchemaRules:
+        return self.rules
+
+    def decode_typed(self, value: ValidatedValue) -> ContextActionValue:
+        if type(value) is not ValidatedValue:
+            raise TypeError("action codec requires complete selected graph validation")
+        domain = normalize_context_action({"agent_action": value.as_object()}, finite_source_kinds=True)
+        action = domain["action"]
+        if action["kind"] == "read":
+            maximum = min(dict(self.eligibility_offers.action_limits)["handles_per_read"],
+                          dict(self.eligibility_offers.action_limits)["cumulative_handles"],
+                          CONTEXT_ACTION_POLICY.max_handles_per_read,
+                          len(self.eligibility_offers.issued_handle_aliases))
+            action["handles"] = list(decode_finite_selection(action["handles"],
+                self.eligibility_offers.issued_handle_aliases, minimum=1, maximum=maximum))
+        return ContextActionValue(deepcopy(domain))
+
+    def named_host_checks(self) -> tuple[NamedHostCheck[ContextActionValue], ...]:
+        return self._checks
+
+    def typed_decoder(self) -> TypedDecoder[ContextActionValue]:
+        return TypedDecoder("context.current_action_codec", "848-v3:typed-action-owner", self.decode_typed,
+                            (normalize_context_action, decode_finite_selection))
+
+    def _require_normalized_queries(self, value: ContextActionValue, context: HostCheckContext) -> None:
+        maximum = dict(self.eligibility_offers.action_limits)["query_characters"]
+        for query in value.as_object()["action"]["queries"]:
+            text = normalized_search_text(query["text"])
+            if not 1 <= len(text) <= maximum:
+                raise validation_failure(ValueError(), "$.queries[*].search_text",
+                                          "normalized SEARCH text length within owner limit")
+
+
+class BoundCallFactory(ABC):
+    """A logical owner declares typed families; concrete call relationships are sealed."""
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if any(name in cls.__dict__ for name in ("for_offer", "repair_lineage", "corrective_input", "diagnostic")):
+            raise TypeError("a call factory may only declare its typed result owners")
+
+    @property
+    @abstractmethod
+    def contract_id(self) -> str:
+        raise NotImplementedError
+
+    @abstractmethod
+    def declare_result_owners(self, offers: ContextCallOffers) -> LeadStagePolicy:
+        raise NotImplementedError
+
+    def for_offer(self, offers: ContextCallOffers, lineage: BoundCallLineage | None = None) -> BoundCallContract:
+        return BoundCallContract.bind(self, offers, lineage)
+
+    def repair_lineage(self, failure: BaseException) -> BoundCallLineage:
+        contract, _ = _bound_call_failure(failure)
+        if contract.factory is not self:
+            raise ValueError("repair belongs to another frozen logical owner")
+        return contract.repair_lineage()
+
+    def corrective_input(self, failure: BaseException) -> str:
+        contract, rejection = _bound_call_failure(failure)
+        if contract.factory is not self:
+            raise ValueError("repair belongs to another frozen logical owner")
+        return contract.corrective_input(rejection)
+
+    def diagnostic(self, failure: BaseException) -> tuple[str, ...]:
+        contract, rejection = _bound_call_failure(failure)
+        if contract.factory is not self:
+            raise ValueError("diagnostic belongs to another frozen logical owner")
+        return rejection.requirements
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class BoundCallLineage:
+    origin: BoundCallContract = field(repr=False, compare=False)
+    kind: str
+
+    def __init__(self, origin: BoundCallContract, kind: str, *, seal=None):
+        if seal is not _CALL_PROOF_SEAL or type(origin) is not BoundCallContract or kind not in {"repair", "replay"}:
+            raise TypeError("lineage is issued only by the frozen current call")
+        object.__setattr__(self, "origin", origin)
+        object.__setattr__(self, "kind", kind)
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class BoundCallDecodedAction:
+    selected_action: SelectedContract[ContextActionValue]
+    selected_result: SelectedContract[LeadDecodedResult] | None
+    _contract: BoundCallContract = field(repr=False, compare=False)
+
+    def __init__(self):
+        raise TypeError("call results are issued by the selected bound call")
+
+    def belongs_to(self, contract: BoundCallContract) -> bool:
+        return self._contract is contract and self.selected_action.belongs_to(contract.action_index.select(self.selected_action.schema_id))
+
+    def domain_value(self) -> dict[str, object]:
+        return self.selected_action.value.as_object()
+
+    @property
+    def answer_json(self) -> str | None:
+        return None if self.selected_result is None else self.selected_result.value.domain_json
+
+
+@dataclass(frozen=True, slots=True)
+class BoundCallContract:
+    """Actual physical offer plus sealed complete outer/inner and repair relationships."""
+    factory: BoundCallFactory = field(repr=False, compare=False)
+    offers: ContextCallOffers
+    lineage: BoundCallLineage | None = field(default=None, repr=False, compare=False)
+    eligibility_offers: ContextCallOffers = field(init=False)
+    semantic_index: LeadContractIndex[LeadDecodedResult] = field(init=False, repr=False, compare=False)
+    action_index: LeadContractIndex[ContextActionValue] = field(init=False, repr=False, compare=False)
+    rule_graph: SchemaRules = field(init=False, repr=False)
+    outer_inner_schema_ids: tuple[tuple[str, str | None], ...] = field(init=False)
+    logical_origin_call_id: str = field(init=False)
+    phase: str = field(init=False)
+    _factory_method: object = field(init=False, repr=False, compare=False)
+    _semantic_anchor: LeadContractIndex[LeadDecodedResult] = field(init=False, repr=False, compare=False)
+    _action_anchor: LeadContractIndex[ContextActionValue] = field(init=False, repr=False, compare=False)
+
+    def __init_subclass__(cls, **kwargs):
+        raise TypeError("bound call relationships cannot be overridden")
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.factory, BoundCallFactory) or type(self.offers) is not ContextCallOffers:
+            raise TypeError("bound call requires typed logical factory and actual physical offers")
+        if self.offers.scope.agent_id != LEAD_ORCHESTRATOR:
+            raise TypeError("typed Lead call requires actual Lead offers")
+        method = type(self.factory).declare_result_owners
+        if self.lineage is None:
+            policy = self.factory.declare_result_owners(self.offers)
+            owners = () if type(policy) is not LeadStagePolicy else policy.owner_declarations
+            if (type(policy) is not LeadStagePolicy or policy.physical_call_id != self.offers.call_id
+                    or policy.offer_digest != self.offers.offer_digest
+                    or policy.eligibility_offer_digest != self.offers.offer_digest
+                    or policy.logical_origin_call_id != self.offers.call_id
+                    or policy.maximum_schema_bytes != 65_536
+                    or policy.wire_root_path != "$.agent_action.task_result"
+                    or type(owners) is not tuple or any(type(owner) is not LeadResultContractOwner for owner in owners)
+                    or any(owner.checks[0].context_type is not AuthorizedAnswerHostContext for owner in owners)):
+                raise ValueError("logical owner declaration differs from actual physical offer")
+            semantic = LeadContractIndex.bind(policy)
+            eligible, phase = self.offers, "ordinary"
+            outer = _bound_action_index(eligible, semantic, self.offers)
+        else:
+            if type(self.lineage) is not BoundCallLineage or self.lineage.origin.factory is not self.factory:
+                raise ValueError("cross-owner logical/corrective lineage")
+            origin = self.lineage.origin
+            origin.require_current_offer(origin.offers)
+            if self.offers.scope != origin.offers.scope or self.offers.call_id == origin.offers.call_id:
+                raise ValueError("retained lineage requires same scope and a new physical call")
+            eligible = origin.eligibility_offers
+            if self.lineage.kind == "repair":
+                semantic, outer, phase = origin.semantic_index, origin.action_index, "repair"
+            else:
+                policy = replace(origin.semantic_index.policy, physical_call_id=self.offers.call_id,
+                                 offer_digest=self.offers.offer_digest)
+                semantic = LeadContractIndex.bind(policy)
+                outer = _bound_action_index(eligible, semantic, self.offers)
+                phase = "replay_repair" if origin.phase in {"repair", "replay_repair"} else "replay"
+        pairs = tuple((member.schema_id, owner.semantic_member.schema_id
+                       if owner.semantic_member is not None else None)
+                      for member, owner in zip(outer.contracts, outer.owners, strict=True))
+        graph = SchemaRules.declare(
+            hoist_schema_definitions(closed_rule(
+                {"agent_action": outer.schema_value()},
+                description=_CONTEXT_ACTION_ROOT_DESCRIPTION,
+            )),
+            maximum_bytes=262144,
+        )
+        object.__setattr__(self, "eligibility_offers", eligible)
+        object.__setattr__(self, "semantic_index", semantic)
+        object.__setattr__(self, "action_index", outer)
+        object.__setattr__(self, "rule_graph", graph)
+        object.__setattr__(self, "outer_inner_schema_ids", pairs)
+        object.__setattr__(self, "logical_origin_call_id", semantic.policy.logical_origin_call_id)
+        object.__setattr__(self, "phase", phase)
+        object.__setattr__(self, "_factory_method", method)
+        object.__setattr__(self, "_semantic_anchor", semantic)
+        object.__setattr__(self, "_action_anchor", outer)
+        self.require_current_offer(self.offers)
+
+    @classmethod
+    def bind(cls, factory: BoundCallFactory, offers: ContextCallOffers,
+             lineage: BoundCallLineage | None = None) -> BoundCallContract:
+        return cls(factory, offers, lineage)
+
+    def require_current_offer(self, offers: ContextCallOffers) -> None:
+        methods = (type(self)._validate_response_structure, type(self).structural_findings)
+        if any(method is not declared or method.__code__ is not code
+               for method, (declared, code) in zip(
+                   methods, _BOUND_CALL_STRUCTURE_DECLARATIONS, strict=True,
+               )):
+            raise ValueError("frozen bound structural query implementation changed")
+        if (type(offers) is not ContextCallOffers or offers != self.offers
+                or offers.offer_digest != self.offers.offer_digest
+                or type(self.factory).declare_result_owners is not self._factory_method
+                or self.semantic_index is not self._semantic_anchor or self.action_index is not self._action_anchor
+                or type(self.rule_graph) is not SchemaRules
+                or self.rule_graph.node_fingerprint(("agent_action",)) != self.action_index.rule_graph.node_fingerprint()):
+            raise ValueError("actual call/graph/frozen owner provenance changed")
+        semantic_index = self.semantic_index
+        semantic_contracts = semantic_index.contracts
+        if type(semantic_contracts) is not tuple:
+            raise ValueError('frozen bound structural query implementation changed')
+        semantic_index.require_provenance()
+        self.action_index.require_provenance()
+        if (self.semantic_index is not semantic_index
+                or semantic_index.contracts is not semantic_contracts):
+            raise ValueError('frozen bound structural query implementation changed')
+        if (self.semantic_index.policy.eligibility_offer_digest != self.eligibility_offers.offer_digest
+                or self.semantic_index.policy.logical_origin_call_id != self.logical_origin_call_id):
+            raise ValueError("frozen logical eligibility snapshot changed")
+        if self.lineage is None or self.lineage.kind == "replay":
+            if (self.semantic_index.policy.physical_call_id != self.offers.call_id
+                    or self.semantic_index.policy.offer_digest != self.offers.offer_digest
+                    or self.action_index.policy.physical_call_id != self.offers.call_id
+                    or self.action_index.policy.offer_digest != self.offers.offer_digest):
+                raise ValueError("current physical policy/index differs from actual offer")
+        else:
+            origin = self.lineage.origin
+            if (origin.factory is not self.factory or self.eligibility_offers is not origin.eligibility_offers
+                    or self.semantic_index is not origin.semantic_index or self.action_index is not origin.action_index):
+                raise ValueError("corrective request changed the frozen rejected index")
+        pairs = []
+        for member, owner in zip(self.action_index.contracts, self.action_index.owners, strict=True):
+            if type(owner) is not ContextActionContractOwner or owner.eligibility_offers is not self.eligibility_offers:
+                raise ValueError("outer owner differs from frozen eligible call")
+            kind = member.rule_graph.literal_at(("action_type",))
+            if kind == "submit_result":
+                inner_id = member.rule_graph.literal_at(("task_result", "schema_id"))
+                inner = next((item for item in semantic_contracts
+                              if type(inner_id) is str and item.schema_id == inner_id), None)
+                if inner is None:
+                    inner = semantic_index.select(inner_id)
+                if (owner.semantic_member is not inner
+                        or member.rule_graph.node_fingerprint(("task_result",)) != inner.rule_graph.node_fingerprint()):
+                    raise ValueError("outer offered ID differs from exact paired semantic member")
+                pairs.append((member.schema_id, inner_id))
+            elif kind in {"search_context", "read_context"} and owner.semantic_member is None:
+                pairs.append((member.schema_id, None))
+            else:
+                raise ValueError("invalid outer/semantic family relationship")
+        if (tuple(pairs) != self.outer_inner_schema_ids or
+                tuple(inner for _, inner in pairs if inner is not None) != self.semantic_index.expected_schema_ids):
+            raise ValueError("incomplete/duplicate/current outer-inner pairing")
+        if (self.semantic_index is not semantic_index
+                or semantic_index.contracts is not semantic_contracts):
+            raise ValueError('frozen bound structural query implementation changed')
+        semantic_index.require_provenance()
+        if (self.semantic_index is not semantic_index
+                or semantic_index.contracts is not semantic_contracts):
+            raise ValueError('frozen bound structural query implementation changed')
+
+    def schema_value(self) -> dict[str, object]:
+        self.require_current_offer(self.offers)
+        return self.rule_graph.schema_value()
+
+    def _validate_response_structure(
+        self, response_text: str,
+    ) -> tuple[dict[str, object], str | None]:
+        self.require_current_offer(self.offers)
+        try:
+            value = strict_json_object(response_text, exact_numbers=True)
+        except (TypeError, ValueError):
+            raise LeadContractRejection("LEAD_JSON_REJECTED", None, ("$: expected strict JSON object",)) from None
+        if set(value) != {"agent_action"} or type(value["agent_action"]) is not dict:
+            raise LeadContractRejection("LEAD_ACTION_ENVELOPE_REJECTED", None,
+                                        ("$: required closed agent_action object envelope",))
+        action = value["agent_action"]
+        action_root = self.action_index.policy.wire_root_path
+        semantic_root = action_root + ".task_result"
+        try:
+            member = self.action_index.select(action.get("schema_id"))
+        except ContractRejection as failure:
+            raise remap_validation(failure, {"$": action_root}) from None
+        try:
+            encoded_response = response_text.encode("utf-8", errors="strict")
+        except UnicodeError:
+            raise LeadContractRejection("LEAD_ACTION_UTF8_REJECTED", member.schema_id,
+                                        ("$: required strict UTF8 action encoding",)) from None
+        if len(encoded_response) > 262_144:
+            raise LeadContractRejection("LEAD_ACTION_UTF8_LIMIT", member.schema_id,
+                                        ("$: full action UTF8 limit 262144",))
+        expected_inner = dict(self.outer_inner_schema_ids)[member.schema_id]
+        if expected_inner is not None:
+            if type(action.get("task_result")) is not dict or action["task_result"].get("schema_id") != expected_inner:
+                raise remap_validation(
+                    LeadContractRejection(
+                        "LEAD_PAIRED_SCHEMA_ID_REJECTED", member.schema_id,
+                        ("$.task_result.schema_id: required exact paired semantic ID",)),
+                    {"$": action_root})
+            literal = strict_json_member_text(response_text, ("agent_action", "task_result"))
+            if len(literal.encode("utf-8", errors="strict")) > 65_536:
+                raise remap_validation(
+                    LeadContractRejection(
+                        "LEAD_RESULT_UTF8_LIMIT", member.schema_id,
+                        ("$.task_result: semantic result UTF8 limit 65536",)),
+                    {"$": action_root})
+        requirements = member.rule_graph.findings(action)
+        if requirements:
+            raise remap_validation(
+                LeadContractRejection("LEAD_SCHEMA_RULE_REJECTED", member.schema_id, requirements),
+                {"$": action_root},
+            ) from None
+        if expected_inner is not None:
+            inner = self.semantic_index.select(expected_inner)
+            requirements = inner.rule_graph.findings(action["task_result"])
+            if requirements:
+                raise remap_validation(
+                    LeadContractRejection(
+                        "LEAD_SCHEMA_RULE_REJECTED", inner.schema_id, requirements,
+                    ),
+                    {"$": semantic_root},
+                ) from None
+        return action, expected_inner
+
+    def structural_findings(self, response_text: str) -> tuple[str, ...]:
+        """Return selected pure rule findings without decoding or host checks."""
+        try:
+            self._validate_response_structure(response_text)
+        except ContractRejection as failure:
+            return failure_issues(failure)
+        return ()
+
+    def decode_response(self, response_text: str) -> BoundCallDecodedAction:
+        action, expected_inner = self._validate_response_structure(response_text)
+        action_root = self.action_index.policy.wire_root_path
+        semantic_root = action_root + ".task_result"
+        try:
+            selected = self.action_index.decode_and_validate(action)
+        except ContractRejection as failure:
+            raise remap_validation(failure, {"$": action_root}) from None
+        result = None
+        if expected_inner is not None:
+            try:
+                result = self.semantic_index.decode_and_validate(action["task_result"])
+            except ContractRejection as failure:
+                raise remap_validation(failure, {"$": semantic_root}) from None
+        decoded = object.__new__(BoundCallDecodedAction)
+        object.__setattr__(decoded, "selected_action", selected)
+        object.__setattr__(decoded, "selected_result", result)
+        object.__setattr__(decoded, "_contract", self)
+        return decoded
+
+    def require_authorized_answer(self, decoded: BoundCallDecodedAction,
+                                  authorization: ContextAnswerAuthorization) -> None:
+        if type(decoded) is not BoundCallDecodedAction or not decoded.belongs_to(self) or decoded.selected_result is None:
+            raise TypeError("authorized answer requires exact selected current call/result")
+        self.semantic_index.require_host_checks(decoded.selected_result, phase="authorized",
+                                                context=AuthorizedAnswerHostContext(authorization))
+
+    def bind_failure(self, failure: BaseException, decoded: BoundCallDecodedAction | None = None) -> LeadContractRejection:
+        """Attach the actual frozen call; never recover authority from exception text."""
+        selected_id = None
+        if decoded is not None:
+            if type(decoded) is not BoundCallDecodedAction or not decoded.belongs_to(self):
+                raise TypeError("failure provenance requires exact selected current call")
+            selected_id = (decoded.selected_result.schema_id if decoded.selected_result is not None
+                           else decoded.selected_action.schema_id)
+        bound_call = getattr(failure, "bound_call_contract", None)
+        nested = getattr(failure, "bound_contract_failure", None)
+        nested_call = getattr(nested, "bound_call_contract", None)
+        if (bound_call is not None and bound_call is not self) or (
+            nested_call is not None and nested_call is not self
+        ):
+            raise ValueError('failure changed its exact frozen physical contract')
+        if isinstance(failure, LeadContractRejection):
+            rejection = failure
+        elif type(nested) is LeadContractRejection and nested_call is self:
+            rejection = nested
+        else:
+            facts = tuple(item.path + ": " + item.requirement for item in failure_findings(failure))
+            rejection = LeadContractRejection("LEAD_OWNER_RULE_REJECTED", selected_id,
+                                              facts or ("$: current named owner requirements",))
+        failure.bound_call_contract = self
+        if failure is not rejection:
+            failure.bound_contract_failure = rejection
+        rejection.bound_call_contract = self
+        return rejection
+
+    def require_projection(
+        self,
+        native_schema: Mapping[str, object],
+        *,
+        declared_lowering: str = "identity",
+    ) -> None:
+        self.require_current_offer(self.offers)
+        require_schema_projection(
+            self.schema_value(), native_schema, declared_lowering=declared_lowering
+        )
+
+    def require_submission(
+        self,
+        payload: Mapping[str, object],
+        native_schema: Mapping[str, object],
+        *,
+        declared_lowering: str = "identity",
+    ) -> None:
+        current_offer = type(self).require_current_offer
+        declared, code = _BOUND_CALL_CURRENT_OFFER_DECLARATION
+        if current_offer is not declared or current_offer.__code__ is not code:
+            raise ValueError("frozen bound current-offer implementation changed")
+        self.require_projection(native_schema, declared_lowering=declared_lowering)
+        input_json, _ = account_provider_payload(native_schema, payload)
+        if len(input_json) > 262_144:
+            raise SessionContextCapacityError("Lead final projected request exceeds existing capacity")
+
+    def repair_lineage(self) -> BoundCallLineage:
+        if self.phase in {"repair", "replay_repair"}:
+            raise ValueError("one corrective request cannot grant another corrective request")
+        return BoundCallLineage(self, "repair", seal=_CALL_PROOF_SEAL)
+
+    def replay_lineage(self) -> BoundCallLineage:
+        return BoundCallLineage(self, "replay", seal=_CALL_PROOF_SEAL)
+
+    def corrective_input(self, failure: LeadContractRejection) -> str:
+        self.require_current_offer(self.offers)
+        if type(failure) is not LeadContractRejection:
+            raise TypeError("corrective input requires trusted bound rejection")
+        semantic_id = failure.schema_id if failure.schema_id in self.semantic_index.expected_schema_ids else None
+        if semantic_id is not None:
+            outer_id = next(outer for outer, inner in self.outer_inner_schema_ids if inner == semantic_id)
+            outer_failure = LeadContractRejection(failure.code, outer_id, tuple(
+                "$.task_result" + item[1:] for item in failure.requirements if item.startswith("$")))
+        elif failure.schema_id in self.action_index.expected_schema_ids:
+            outer_failure = failure
+        else:
+            outer_failure = LeadContractRejection(failure.code, None, ())
+        payload = json.loads(self.action_index.repair_input(outer_failure))
+        paired = dict(self.outer_inner_schema_ids).get(outer_failure.schema_id)
+        if paired is not None:
+            paths = failure.requirements if semantic_id is not None else ("$: selected semantic rules",)
+            payload["paired_semantic_requirements"] = self.semantic_index.select(paired).corrective_requirements(paths)
+        payload["current_physical_call_id"] = self.offers.call_id
+        payload["current_offer_digest"] = self.offers.offer_digest
+        payload["logical_origin_call_id"] = self.logical_origin_call_id
+        payload["phase"] = self.phase
+        return json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+
+
+_BOUND_CALL_CURRENT_OFFER_DECLARATION = (
+    BoundCallContract.require_current_offer,
+    BoundCallContract.require_current_offer.__code__,
+)
+
+_BOUND_CALL_STRUCTURE_DECLARATIONS = tuple(
+    (getattr(BoundCallContract, name), getattr(BoundCallContract, name).__code__)
+    for name in ("_validate_response_structure", "structural_findings")
+)
+
+
+def _bound_call_failure(failure: BaseException) -> tuple[BoundCallContract, LeadContractRejection]:
+    current = failure
+    seen = set()
+    contract = None
+    rejection = None
+    while isinstance(current, BaseException) and id(current) not in seen:
+        seen.add(id(current))
+        found = getattr(current, "bound_call_contract", None)
+        if type(found) is BoundCallContract:
+            if contract is not None and found is not contract:
+                raise ValueError("failure changed its exact frozen physical contract")
+            contract = found
+        if isinstance(current, LeadContractRejection):
+            rejection = current
+        nested = getattr(current, "bound_contract_failure", None)
+        current = nested if isinstance(nested, BaseException) else current.__cause__
+    if contract is None:
+        raise ValueError("failure has no frozen current physical contract")
+    if rejection is None:
+        rejection = LeadContractRejection("LEAD_OWNER_RULE_REJECTED", None,
+                                          ("$: current named owner requirements",))
+    return contract, rejection
+
+
+def _bound_action_index(
+    eligible: ContextCallOffers,
+    semantic: LeadContractIndex[LeadDecodedResult],
+    actual: ContextCallOffers,
+) -> LeadContractIndex[ContextActionValue]:
+    templates = []
+    for member in semantic.contracts:
+        native = _context_action_schema(
+            allowed_actions=eligible.allowed_actions,
+            result_contract=member.rule_graph,
+            allowed_search_source_kinds=eligible.search_source_kinds,
+            action_limits=[value for _, value in eligible.action_limits],
+            issued_handle_aliases=eligible.issued_handle_aliases,
+        )
+        action_rule = native["properties"]["agent_action"]
+        roots = action_rule.get("anyOf", [action_rule])
+        templates.append((member, native, roots))
+    owners = []
+    for number, branch in enumerate(templates[0][2]):
+        terminal = branch["properties"]["action_type"]["enum"] == ["submit_result"]
+        for captured_member, native, roots in templates if terminal else templates[:1]:
+            member = captured_member if terminal else None
+            current = deepcopy(roots[number])
+            if "$defs" in native:
+                current["$defs"] = deepcopy(native["$defs"])
+            current = rebase_schema_definitions(current, "a")
+            rules = SchemaRules.declare(
+                factor_rule_schema(hoist_schema_definitions(current)),
+                maximum_bytes=262144,
+            )
+            name = "lead.action." + str(number) + (
+                "." + member.schema_id if member is not None else ""
+            )
+            owners.append(ContextActionContractOwner(name, rules, eligible, member))
+    policy = LeadStagePolicy(
+        semantic.policy.stage + ".context_action",
+        actual.call_id,
+        semantic.policy.task_revisions,
+        semantic.policy.language,
+        actual.offer_digest,
+        semantic.policy.choices,
+        eligible.offer_digest,
+        semantic.policy.logical_origin_call_id,
+        maximum_schema_bytes=262144,
+        maximum_index_schema_bytes=262144,
+        wire_root_path="$.agent_action",
+        owner_declarations=tuple(owners),
+    )
+    return LeadContractIndex.bind(policy)
 
 
 class ContextExecutionEventKind(StrEnum):
@@ -928,152 +1592,50 @@ def _schema_types(schema: dict[str, object]) -> tuple[str, ...]:
 
 
 def _validate_provider_schema_node(schema: object) -> None:
-    """Validate the closed OpenAI/Gemini schema subset used by this wire."""
+    if not isinstance(schema, Mapping):
+        raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+    try:
+        canonical_schema_rules(schema, maximum_bytes=MAX_SESSION_CONTEXT_UTF8_BYTES)
+    except (TypeError, ValueError, UnicodeError) as failure:
+        raise carry_validation(_execution_error(ContextExecutionErrorCode.INVALID_VALUE), failure) from None
 
-    if type(schema) is not dict or not schema or not set(schema).issubset(
-        _PROVIDER_SCHEMA_KEYS
-    ):
-        raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
-    description = schema.get("description")
-    if description is not None and (type(description) is not str or not description):
-        raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
-    if "anyOf" in schema:
-        if not set(schema).issubset({"anyOf", "description"}):
-            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
-        variants = schema["anyOf"]
-        if type(variants) is not list or len(variants) < 2:
-            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
-        for variant in variants:
-            if (
-                type(variant) is not dict
-                or type(variant.get("description")) is not str
-                or not variant["description"].strip()
-            ):
-                raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
-            _validate_provider_schema_node(variant)
-        return
-    schema_types = _schema_types(schema)
-    concrete_types = tuple(item for item in schema_types if item != "null")
-    if len(concrete_types) > 1:
-        raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
-    concrete_type = concrete_types[0] if concrete_types else "null"
-    raw_enum = schema.get("enum")
-    if raw_enum is not None:
-        if type(raw_enum) is not list or not raw_enum:
-            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
-        for value in raw_enum:
-            if not any(_schema_type_matches(value, item) for item in schema_types):
-                raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
-    structural_keys = set(schema) - {"description", "enum", "type"}
-    if concrete_type == "object":
-        if structural_keys != {"additionalProperties", "properties", "required"}:
-            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
-        properties = schema["properties"]
-        required = schema["required"]
-        if (
-            type(properties) is not dict
-            or not properties
-            or any(type(key) is not str or not key for key in properties)
-            or type(required) is not list
-            or any(type(key) is not str for key in required)
-            or len(required) != len(properties)
-            or set(required) != set(properties)
-            or schema["additionalProperties"] is not False
-        ):
-            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
-        for child in properties.values():
-            _validate_provider_schema_node(child)
-        return
-    if concrete_type == "array":
-        if not structural_keys.issubset({"items", "maxItems", "minItems"}) or (
-            "items" not in schema
-        ):
-            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
-        minimum = schema.get("minItems", 0)
-        maximum = schema.get("maxItems")
-        if (
-            type(minimum) is not int
-            or minimum < 0
-            or (maximum is not None and (type(maximum) is not int or maximum < minimum))
-        ):
-            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
-        _validate_provider_schema_node(schema["items"])
-        return
-    if structural_keys:
-        raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
 
 
 def _schema_accepts_only_objects(schema: dict[str, object]) -> bool:
-    variants = schema.get("anyOf")
-    if type(variants) is list:
-        return bool(variants) and all(
-            type(variant) is dict and _schema_accepts_only_objects(variant)
-            for variant in variants
-        )
-    return schema.get("type") == "object"
+    return schema_accepts_only_objects(schema)
 
 
-def _validated_result_schema_bytes(schema: object) -> bytes:
-    if type(schema) is not dict:
-        raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+
+def _validated_result_schema_bytes(schema: Mapping[str, object]) -> bytes:
     try:
-        encoded = json.dumps(
-            schema,
-            allow_nan=False,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8", errors="strict")
-        decoded = json.loads(encoded)
-    except (TypeError, ValueError, UnicodeError, json.JSONDecodeError):
-        raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE) from None
-    _validate_provider_schema_node(decoded)
-    if type(decoded) is not dict or not _schema_accepts_only_objects(decoded):
-        raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
-    return encoded
+        encoded = canonical_schema_rules(schema)
+        value = strict_json_object(encoded.decode("utf-8"))
+        def require_choice_descriptions(node: dict[str, object]) -> None:
+            for branch in node.get("anyOf", ()):
+                description = branch.get("description")
+                if type(description) is not str or not description.strip():
+                    raise validation_failure(
+                        ValueError(), "$", "expected nonempty owner-authored choice description",
+                    )
+                require_choice_descriptions(branch)
+            for keyword in ("properties", "$defs"):
+                for child in node.get(keyword, {}).values():
+                    require_choice_descriptions(child)
+            if "items" in node:
+                require_choice_descriptions(node["items"])
+
+        require_choice_descriptions(value)
+        if not schema_accepts_only_objects(value):
+            raise ValueError("result object required")
+        return encoded
+    except (TypeError, ValueError, UnicodeError) as failure:
+        raise carry_validation(_execution_error(ContextExecutionErrorCode.INVALID_VALUE), failure) from None
+
 
 
 def _value_matches_provider_schema(value: object, schema: dict[str, object]) -> bool:
-    variants = schema.get("anyOf")
-    if type(variants) is list:
-        return any(
-            type(variant) is dict and _value_matches_provider_schema(value, variant)
-            for variant in variants
-        )
-    try:
-        schema_types = _schema_types(schema)
-    except ContextExecutionError:
-        return False
-    if not any(_schema_type_matches(value, item) for item in schema_types):
-        return False
-    raw_enum = schema.get("enum")
-    if type(raw_enum) is list and not any(
-        type(value) is type(candidate) and value == candidate for candidate in raw_enum
-    ):
-        return False
-    if value is None:
-        return True
-    if type(value) is dict:
-        properties = schema.get("properties")
-        if type(properties) is not dict or set(value) != set(properties):
-            return False
-        return all(
-            type(child) is dict and _value_matches_provider_schema(value[key], child)
-            for key, child in properties.items()
-        )
-    if type(value) is list:
-        items = schema.get("items")
-        minimum = schema.get("minItems", 0)
-        maximum = schema.get("maxItems")
-        if (
-            type(items) is not dict
-            or type(minimum) is not int
-            or len(value) < minimum
-            or (type(maximum) is int and len(value) > maximum)
-        ):
-            return False
-        return all(_value_matches_provider_schema(item, items) for item in value)
-    return True
+    return not diagnose_value(value, schema)
+
 
 
 def _validate_sync_callback(value: object, *, optional: bool = True) -> None:
@@ -1271,7 +1833,7 @@ class ContextInvocationRequest:
     operation_id: str
     result_correlation_id: str
     materials: tuple[ContextMaterial, ...]
-    result_contract: ContextJsonObjectResultContract
+    result_contract: ContextJsonObjectResultContract | BoundCallFactory
     source_classifications: tuple[ContextSourceClassification, ...] = ()
     reference_operation_id: str | None = None
     mandatory_references: tuple[MandatoryReferenceReservation, ...] = ()
@@ -1357,7 +1919,7 @@ class ContextInvocationRequest:
             self.invocation_kind
         ) is not ContextInvocationKind:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
-        if type(self.result_contract) is not ContextJsonObjectResultContract:
+        if type(self.result_contract) is not ContextJsonObjectResultContract and not isinstance(self.result_contract, BoundCallFactory):
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         if self.physical_call_limit is not None and (
             type(self.physical_call_limit) is not int
@@ -1604,6 +2166,48 @@ class ContextProviderCallRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class BoundContextProviderCallRequest:
+    """A physical Lead request carries one concrete contract, never a schema bundle."""
+    contract: BoundCallContract = field(repr=False, compare=False)
+    policy_fingerprint: str
+    call_kind: ProviderCallKind
+    payload: Mapping[str, object] = field(repr=False, compare=False)
+    component_paths: Mapping[JsonPath, ContextComponentKind] = field(default_factory=dict, repr=False, compare=False)
+    mandatory_reference_paths: tuple[JsonPath, ...] = ()
+    expected_thread_id: str | None = None
+    continuation_identity: ContextContinuationIdentity | None = None
+    execution_workspace: ProviderExecutionWorkspace | None = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if type(self.contract) is not BoundCallContract:
+            raise TypeError("physical Lead request requires its concrete bound contract")
+        self.contract.require_current_offer(self.contract.offers)
+        # Reuse existing metadata/payload/resource checks inside their owner; schema
+        # is derived here and is never a constructor input on this typed request.
+        metadata = ContextProviderCallRequest(scope=self.scope, policy_fingerprint=self.policy_fingerprint,
+            call_id=self.call_id, call_kind=self.call_kind, schema=self.contract.schema_value(), payload=self.payload,
+            component_paths=self.component_paths, mandatory_reference_paths=self.mandatory_reference_paths,
+            expected_thread_id=self.expected_thread_id, continuation_identity=self.continuation_identity,
+            execution_workspace=self.execution_workspace)
+        object.__setattr__(self, "payload", metadata.payload)
+        object.__setattr__(self, "component_paths", metadata.component_paths)
+        object.__setattr__(self, "mandatory_reference_paths", metadata.mandatory_reference_paths)
+
+    @property
+    def scope(self) -> ContextScope:
+        return self.contract.offers.scope
+
+    @property
+    def call_id(self) -> str:
+        return self.contract.offers.call_id
+
+    @property
+    def schema(self) -> Mapping[str, object]:
+        return self.contract.schema_value()
+
+
+
+@dataclass(frozen=True, slots=True)
 class ContextProviderCallResult:
     """Raw provider response plus exact submitted physical-call accounting."""
 
@@ -1715,7 +2319,7 @@ class ContextProvider(Protocol):
 
     async def invoke_context(
         self,
-        request: ContextProviderCallRequest,
+        request: ContextProviderCallRequest | BoundContextProviderCallRequest,
     ) -> ContextProviderCallResult:
         """Execute one raw structured call without decoding context actions."""
 
@@ -1992,6 +2596,31 @@ class ContextInvocationSession:
 
         with self._lock:
             return self._next_action_index
+
+    def contract_offers(self, call_id: str, *, allowed_actions: tuple[str, ...],
+                        delivery_read: ContextReadReceipt | None = None) -> ContextCallOffers:
+        with self._lock:
+            if delivery_read is not None and delivery_read is not self._pending_receipt:
+                raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+            names = ("nonterminal_actions", "provider_calls", "search_actions", "queries_per_search",
+                     "cumulative_queries", "handles_per_read", "cumulative_handles", "query_characters")
+            limits = tuple(zip(names, self.action_limits()))
+            completed = tuple(ContextCallReadFact.from_evidence(evidence)
+                              for receipt in self._completed_receipts for evidence in receipt.evidence)
+            delivery = (() if delivery_read is None else
+                        tuple(ContextCallReadFact.from_evidence(evidence) for evidence in delivery_read.evidence))
+            return ContextCallOffers(
+                call_id,
+                self.binding.scope,
+                self._next_action_index,
+                allowed_actions,
+                limits,
+                self._allowed_search_source_kinds,
+                tuple(self._full_handle_by_wire),
+                completed,
+                delivery,
+                self._core_statuses,
+            )
 
     @property
     def completed_handles(self) -> tuple[ContextSourceHandle, ...]:
@@ -3009,11 +3638,12 @@ def _exact_object(
 def _answer_text_for_contract(
     value: object,
     contract: ContextJsonObjectResultContract,
+    decode_result: Callable[[object], dict[str, object]] | None = None,
 ) -> str:
     """Validate one owner-supplied result schema and canonicalize its object."""
 
-    if type(contract) is not ContextJsonObjectResultContract or not (
-        _value_matches_provider_schema(value, contract.schema_value())
+    if type(contract) is not ContextJsonObjectResultContract or (
+        not contract.wire_format and not _value_matches_provider_schema(value, contract.schema_value())
     ):
         raise validation_failure(
             ValueError(),
@@ -3021,7 +3651,13 @@ def _answer_text_for_contract(
             'expected a JSON object matching the current result contract',
         )
     try:
-        return _canonical_bytes(normalize_result(value, contract.contract_id)).decode("utf-8", errors="strict")
+        if contract.wire_format:
+            if decode_result is None:
+                raise ValueError("current wire result requires a complete binding")
+            domain_value = decode_result(value)
+        else:
+            domain_value = normalize_result(value, contract.contract_id)
+        return _canonical_bytes(domain_value).decode("utf-8", errors="strict")
     except ContextActionError as failure:
         raise encoding_failure(failure, value, contract.schema_value())
 
@@ -3035,14 +3671,15 @@ def _decode_context_action(
     allowed_search_source_kinds: tuple[ContextSourceKind, ...] = _SEARCH_SOURCE_KIND_ORDER,
     resolve_handle: Callable[[object], ContextSourceHandle] = ContextSourceHandle,
     completed_handles: tuple[ContextSourceHandle, ...] = (),
+    issued_handle_aliases: tuple[str, ...] = (),
+    read_limit: int = 8,
+    decoded_action: BoundCallDecodedAction | None = None,
 ) -> ContextSearchAction | ContextReadAction | ContextAnswerAction:
     """Strictly decode typed wire v7 and retain the actual rejected property."""
     try:
-        value = json.loads(
-            response_text, object_pairs_hook=_unique_json_object,
-            parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
-        )
-        raw = _exact_object(normalize_context_action(value), frozenset({"action"}))
+        raw = _exact_object(decoded_action.domain_value() if decoded_action is not None
+                            else normalize_context_action(strict_json_object(response_text)),
+                            frozenset({"action"}))
         action = raw["action"]
         if type(action) is not dict or type(action.get("kind")) is not str:
             raise validation_failure(ValueError(), "$.kind", "expected one of search, read, answer")
@@ -3135,7 +3772,10 @@ def _decode_context_action(
             read = _exact_object(action, frozenset({"handles", "kind"}))
             handles_value = read["handles"]
             if type(handles_value) is not list or not handles_value:
-                raise _execution_error(ContextExecutionErrorCode.MALFORMED_ACTION, detail=_ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED)
+                raise _execution_error(
+                    ContextExecutionErrorCode.MALFORMED_ACTION,
+                    detail=_ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED,
+                )
             if action_kind not in allowed_actions:
                 raise validation_failure(
                     ValueError(),
@@ -3147,13 +3787,21 @@ def _decode_context_action(
                 try:
                     handles.append(resolve_handle(item))
                 except ContextActionError as failure:
-                    if failure.code in {ContextActionErrorCode.HANDLE_INVALID, ContextActionErrorCode.INVALID_VALUE}:
+                    if failure.code in {
+                        ContextActionErrorCode.HANDLE_INVALID,
+                        ContextActionErrorCode.INVALID_VALUE,
+                    }:
                         raise validation_failure(
-                            _execution_error(ContextExecutionErrorCode.MALFORMED_ACTION, detail=_ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED),
-                            f"$.handles[{index}]", "expected a source handle returned by a preceding search",
+                            _execution_error(
+                                ContextExecutionErrorCode.MALFORMED_ACTION,
+                                detail=_ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED,
+                            ),
+                            f"$.handles[{index}]",
+                            "expected a source handle returned by a preceding search",
                         ) from None
                     raise
             return ContextReadAction(correlation, tuple(handles))
+
         answer = _exact_object(action, frozenset({"kind", "result"}))
         if action_kind not in allowed_actions:
             raise validation_failure(
@@ -3163,7 +3811,8 @@ def _decode_context_action(
             )
         return ContextAnswerAction(
             correlation,
-            validation_call("$.result", _answer_text_for_contract, answer["result"], result_contract),
+            (decoded_action.answer_json if decoded_action is not None else
+             validation_call("$.result", _answer_text_for_contract, answer["result"], result_contract)),
             completed_handles,
         )
     except WireShapeError as failure:
@@ -3171,7 +3820,11 @@ def _decode_context_action(
     except ContextExecutionError:
         raise
     except (ContextActionError, ContextManifestError, _DuplicateJsonKey, json.JSONDecodeError, TypeError, ValueError) as failure:
-        raise carry_validation(_execution_error(ContextExecutionErrorCode.MALFORMED_ACTION), failure) from None
+        rejected = carry_validation(_execution_error(ContextExecutionErrorCode.MALFORMED_ACTION), failure)
+        if decoded_action is not None:
+            rejected.bound_contract_failure = failure
+        raise rejected from None
+
 
 
 def _context_validation_details(
@@ -3211,22 +3864,43 @@ def _closed_provider_object_schema(
 def _context_action_schema(
     *,
     allowed_actions: tuple[str, ...],
-    result_contract: ContextJsonObjectResultContract,
+    result_contract: ContextJsonObjectResultContract | SchemaRules,
     allowed_search_source_kinds: tuple[ContextSourceKind, ...],
     action_limits: list[int],
+    issued_handle_aliases: tuple[str, ...] = (),
 ) -> dict[str, object]:
     """Build one closed typed action envelope for the exact physical call."""
 
+    if type(result_contract) is SchemaRules:
+        wire_format = True
+    elif isinstance(result_contract, ContextJsonObjectResultContract):
+        wire_format = result_contract.wire_format
+    else:
+        raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+
     variants: list[dict[str, object]] = []
     if "search" in allowed_actions:
-        query_limit = min(action_limits[3], action_limits[4])
+        query_limit = min(action_limits[3], action_limits[4], CONTEXT_ACTION_POLICY.max_queries_per_search)
+        source_kind_description = (
+            "Choose distinct allowed source kinds; provider order is "
+            "not significant and the runtime canonicalizes it."
+        )
+
+        def source_kinds_rule(choices: tuple[str, ...]) -> dict[str, object]:
+            selection = finite_subset_rule(choices)
+            selection["description"] = source_kind_description
+            for alternative in selection.get("anyOf", ()):
+                alternative["description"] = source_kind_description
+            return selection
+
         query_schema = _closed_provider_object_schema(
             {
-                "text": {"type": "string"},
-                "source_kinds": {
+                "text": search_text_rule(min(action_limits[7], CONTEXT_ACTION_POLICY.max_query_characters)),
+                "source_kinds": (
+                    source_kinds_rule(tuple(kind.value for kind in allowed_search_source_kinds))
+                    if wire_format else {
                     "description": (
-                        "Choose distinct allowed source kinds; provider order is "
-                        "not significant and the runtime canonicalizes it."
+                        source_kind_description
                     ),
                     "items": {
                         "enum": [kind.value for kind in allowed_search_source_kinds],
@@ -3235,7 +3909,7 @@ def _context_action_schema(
                     "maxItems": len(allowed_search_source_kinds),
                     "minItems": 1,
                     "type": "array",
-                },
+                }),
             }
         )
         search_properties = {
@@ -3255,18 +3929,17 @@ def _context_action_schema(
         ))
         if ContextSourceKind.WRITING_ARTIFACT in allowed_search_source_kinds:
             artifact_query = _closed_provider_object_schema({
-                "text": {"type": "string", "description": "Nonempty literal search text."},
-                "source_kinds": {
+                "text": search_text_rule(min(action_limits[7], CONTEXT_ACTION_POLICY.max_query_characters)),
+                "source_kinds": (source_kinds_rule(("writing_artifact",)) if wire_format else {
                     "type": "array", "items": {"type": "string", "enum": ["writing_artifact"]},
                     "minItems": 1, "maxItems": 1,
-                },
+                }),
             })
             variants.append(_closed_provider_object_schema({
                 **search_properties,
                 "queries": {"type": "array", "items": artifact_query,
                             "minItems": 1, "maxItems": query_limit},
-                "path_prefix": {"type": "string",
-                                "description": "Normalized workspace-relative artifact directory; story_document queries only."},
+                "path_prefix": artifact_directory_prefix_rule(),
             },
                 description=(
                     "Search story documents when evidence gathering is restricted to one artifact"
@@ -3274,17 +3947,20 @@ def _context_action_schema(
                 ),
             ))
     if "read" in allowed_actions:
-        handle_limit = min(action_limits[5], action_limits[6])
+        handle_limit = min(action_limits[5], action_limits[6], CONTEXT_ACTION_POLICY.max_handles_per_read)
         variants.append(
             _closed_provider_object_schema(
                 {
                     "kind": {"enum": ["read"], "type": "string"},
-                    "handles": {
+                    "handles": (
+                        finite_selection_rule(issued_handle_aliases, minimum=1,
+                                              maximum=min(handle_limit, len(issued_handle_aliases)))
+                        if wire_format else {
                         "items": {"type": "string"},
                         "maxItems": handle_limit,
                         "minItems": 1,
                         "type": "array",
-                    },
+                    }),
                 },
                 description=(
                     "Read invocation-issued search handles when source contents are needed to "
@@ -3313,12 +3989,10 @@ def _context_action_schema(
     schema = _closed_provider_object_schema(
         {"action": action_schema},
         description=(
-            "Gather needed evidence, then return the task result. Choose one currently permitted "
-            "agent_action; search finds sources, read obtains contents, and submit_result "
-            "completes the task. The runtime owns correlation and action bookkeeping."
+            _CONTEXT_ACTION_ROOT_DESCRIPTION
         ),
     )
-    schema = project_action_schema(schema)
+    schema = hoist_schema_definitions(project_action_schema(schema))
     _validate_provider_schema_node(schema)
     return schema
 
@@ -4484,6 +5158,7 @@ class AgentContextService:
         answer_validator: Callable[[str, ContextAnswerAuthorization], object]
         | None = None,
         answer_diagnostic: Callable[[str], tuple[DomainValidationRule, ...]] | None = None,
+        contract_lineage: BoundCallLineage | None = None,
         validation_sink: Callable[[str, tuple[str, ...]], object] | None = None,
         event_sink: ContextExecutionEventSink | None = None,
         progress_sink: ContextActionProgressSink | None = None,
@@ -4523,6 +5198,17 @@ class AgentContextService:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         _validate_sync_callback(answer_validator)
         _validate_sync_callback(answer_diagnostic)
+        if contract_lineage is not None and type(contract_lineage) is not BoundCallLineage:
+            raise TypeError("corrective request requires a bound lineage capability")
+        if request.agent_id == LEAD_ORCHESTRATOR and not isinstance(request.result_contract, BoundCallFactory):
+            raise TypeError("Lead invocation requires its typed logical-owner capability")
+        if isinstance(request.result_contract, BoundCallFactory):
+            if request.agent_id != LEAD_ORCHESTRATOR:
+                raise TypeError("Lead logical-owner capability requires the actual Lead route")
+            if answer_validator is not None or answer_diagnostic is not None:
+                raise TypeError("Lead relationship hooks belong to the typed contract owner")
+        elif contract_lineage is not None:
+            raise TypeError("nonbound contracts cannot accept Lead lineage")
         _validate_sync_callback(validation_sink)
         _validate_sync_callback(event_sink)
         _validate_sync_callback(progress_sink)
@@ -4640,6 +5326,7 @@ class AgentContextService:
                         physical_call_limit=physical_call_limit,
                         answer_validator=answer_validator,
                         answer_diagnostic=answer_diagnostic,
+                        contract_lineage=contract_lineage,
                         validation_sink=validation_sink,
                         event_sink=event_sink,
                         progress_sink=progress_sink,
@@ -4700,6 +5387,7 @@ class AgentContextService:
         physical_call_limit: int,
         answer_validator: Callable[[str, ContextAnswerAuthorization], object] | None,
         answer_diagnostic: Callable[[str], tuple[DomainValidationRule, ...]] | None,
+        contract_lineage: BoundCallLineage | None,
         validation_sink: Callable[[str, tuple[str, ...]], object] | None,
         event_sink: ContextExecutionEventSink | None,
         progress_sink: ContextActionProgressSink | None,
@@ -4710,6 +5398,8 @@ class AgentContextService:
         publication_validator: Callable[[], bool] | None,
         successful_finalizers: list[ContextProviderCallFinalizer],
     ) -> ContextInvocationResult:
+        call_contract = None
+        call_decoded = None
         policy_fingerprint = self._execution_policy_fingerprint
         operation_id = request.operation_id
 
@@ -5115,6 +5805,8 @@ class AgentContextService:
             previous_search_had_hits = False
             phase_contract = _invocation_phase_contract(request)
             substantive_call_limit = physical_call_limit - len(calls)
+            call_contract = None
+            call_decoded = None
             for _round in range(substantive_call_limit):
                 if len(calls) >= physical_call_limit:
                     break
@@ -5125,83 +5817,79 @@ class AgentContextService:
                 )
                 call_id = f"{attempt_id}_call_{len(calls) + 1}"
                 correlation = _action_correlation(binding, action_index)
-                schema = _context_action_schema(
-                    allowed_actions=allowed_actions,
-                    result_contract=phase_contract[1],
-                    allowed_search_source_kinds=(
-                        request.allowed_search_source_kinds
-                    ),
-                    action_limits=action_session.action_limits(),
-                )
-                if observation is None:
-                    payload, component_paths, reference_paths = _initial_payload(
-                        binding,
-                        projection,
-                        planning_checkpoint,
-                        action_session,
-                        materials,
-                        phase_contract=phase_contract,
-                        action_index=action_index,
-                        allowed_actions=allowed_actions,
-                        reference_context=reference_context,
-                        session_history_records=history_records,
-                    )
-                    if history_delivery is not None:
-                        payload["h"] = history_delivery
-                        component_paths[("h",)] = ContextComponentKind.CONVERSATION_CONTEXT
-                    call_kind = (
-                        ProviderCallKind.DEBATE
-                        if scope.subject_kind is ContextSubjectKind.DEBATE
-                        else (
-                            ProviderCallKind.COLLABORATION_INITIAL
-                            if request.invocation_kind is not None
-                            else ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL
+                physical_reference_context = reference_context
+                def build_call_request(call_id: str, lineage: BoundCallLineage | None):
+                    nonlocal call_contract
+                    if isinstance(request.result_contract, BoundCallFactory):
+                        offers = action_session.contract_offers(call_id, allowed_actions=allowed_actions, delivery_read=pending_read)
+                        call_contract = request.result_contract.for_offer(offers, lineage)
+                        schema = call_contract.schema_value()
+                    else:
+                        call_contract = None
+                        schema = _context_action_schema(allowed_actions=allowed_actions, result_contract=phase_contract[1],
+                            allowed_search_source_kinds=request.allowed_search_source_kinds, action_limits=action_session.action_limits())
+                    if observation is None:
+                        payload, component_paths, reference_paths = _initial_payload(
+                            binding,
+                            projection,
+                            planning_checkpoint,
+                            action_session,
+                            materials,
+                            phase_contract=phase_contract,
+                            action_index=action_index,
+                            allowed_actions=allowed_actions,
+                            reference_context=physical_reference_context,
+                            session_history_records=history_records,
                         )
-                    )
-                    reference_context = ()
-                else:
-                    payload, component_paths = _continuation_payload(
-                        binding,
-                        action_session,
-                        phase_contract=phase_contract,
-                        action_index=action_index,
-                        allowed_actions=allowed_actions,
-                        observation=observation,
-                    )
-                    reference_paths = ()
-                    call_kind = (
-                        ProviderCallKind.DEBATE
-                        if scope.subject_kind is ContextSubjectKind.DEBATE
-                        else (
-                            ProviderCallKind.COLLABORATION_CONTINUATION
-                            if request.invocation_kind is not None
-                            else ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION
+                        if history_delivery is not None:
+                            payload["h"] = history_delivery
+                            component_paths[("h",)] = ContextComponentKind.CONVERSATION_CONTEXT
+                        call_kind = (
+                            ProviderCallKind.DEBATE
+                            if scope.subject_kind is ContextSubjectKind.DEBATE
+                            else (
+                                ProviderCallKind.COLLABORATION_INITIAL
+                                if request.invocation_kind is not None
+                                else ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL
+                            )
                         )
+                        reference_context = ()
+                    else:
+                        payload, component_paths = _continuation_payload(
+                            binding,
+                            action_session,
+                            phase_contract=phase_contract,
+                            action_index=action_index,
+                            allowed_actions=allowed_actions,
+                            observation=observation,
+                        )
+                        reference_paths = ()
+                        call_kind = (
+                            ProviderCallKind.DEBATE
+                            if scope.subject_kind is ContextSubjectKind.DEBATE
+                            else (
+                                ProviderCallKind.COLLABORATION_CONTINUATION
+                                if request.invocation_kind is not None
+                                else ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION
+                            )
+                        )
+                    payload, component_paths, reference_paths = _render_context_payload(
+                        payload, component_paths, reference_paths,
+                        schema=schema, projection=projection,
                     )
-                payload, component_paths, reference_paths = _render_context_payload(
-                    payload, component_paths, reference_paths,
-                    schema=schema, projection=projection,
-                )
-                call_request = ContextProviderCallRequest(
-                    scope=scope,
-                    policy_fingerprint=policy_fingerprint,
-                    call_id=call_id,
-                    call_kind=call_kind,
-                    schema=schema,
-                    payload=payload,
-                    component_paths=component_paths,
-                    mandatory_reference_paths=reference_paths,
-                    expected_thread_id=current_thread_id,
-                    continuation_identity=(
-                        None if continuation is None else continuation.identity
-                    ),
-                    execution_workspace=request.execution_workspace,
-                )
-                if history_delivery is not None or continuation is not None:
-                    _require_context_capacity(
-                        call_request.schema, call_request.payload,
-                        stage="provider_payload",
-                    )
+                    call_request = (BoundContextProviderCallRequest(contract=call_contract, policy_fingerprint=policy_fingerprint, call_kind=call_kind, payload=payload, component_paths=component_paths, mandatory_reference_paths=reference_paths, expected_thread_id=current_thread_id, continuation_identity=None if continuation is None else continuation.identity, execution_workspace=request.execution_workspace)
+                                    if call_contract is not None else ContextProviderCallRequest(scope=scope, policy_fingerprint=policy_fingerprint, call_id=call_id, call_kind=call_kind, schema=schema, payload=payload, component_paths=component_paths, mandatory_reference_paths=reference_paths, expected_thread_id=current_thread_id, continuation_identity=None if continuation is None else continuation.identity, execution_workspace=request.execution_workspace))
+                    if call_contract is not None or history_delivery is not None or continuation is not None:
+                        _require_context_capacity(
+                            schema=call_request.schema,
+                            payload=call_request.payload,
+                            stage="provider_payload",
+                        )
+                    return call_request
+                call_request = build_call_request(call_id, contract_lineage)
+                reference_context = set()
+                schema, call_kind = call_request.schema, call_request.call_kind
+                call_decoded = None
                 stage = "provider"
                 provider_failure = True
                 for auth_attempt in range(2):
@@ -5209,8 +5897,16 @@ class AgentContextService:
                     try:
                         if auth_attempt:
                             with authentication_replay(auth_failure, replay_sources_unchanged):
+                                if call_contract is not None:
+                                    call_contract.require_current_offer(
+                                        action_session.contract_offers(call_request.call_id, allowed_actions=allowed_actions,
+                                            delivery_read=pending_read))
                                 result = await provider.invoke_context(call_request)
                         else:
+                            if call_contract is not None:
+                                call_contract.require_current_offer(
+                                    action_session.contract_offers(call_request.call_id, allowed_actions=allowed_actions,
+                                        delivery_read=pending_read))
                             result = await provider.invoke_context(call_request)
                         break
                     except BaseException as failure:
@@ -5249,10 +5945,9 @@ class AgentContextService:
                         if not failure.validate_replay() or not replay_sources_unchanged():
                             raise
                         auth_failure = failure
-                        call_request = replace(
-                            call_request,
-                            call_id=f"{attempt_id}_call_{len(calls) + 1}",
-                        )
+                        call_request = build_call_request(f'{attempt_id}_call_{len(calls) + 1}',
+                            None if call_contract is None else call_contract.replay_lineage())
+                        schema, call_kind = call_request.schema, call_request.call_kind
                 terminal_provider_succeeded = True
                 if type(result) is not ContextProviderCallResult:
                     failure = _execution_error(
@@ -5364,25 +6059,44 @@ class AgentContextService:
                     action_session.complete_read(pending_read)
                     pending_read = None
                 stage = "decode"
+                schema_issues: tuple[str, ...] = ()
                 try:
-                    schema_issues = diagnose_json_text(result.response_text, schema)
-                    if schema_issues:
-                        raise _execution_error(ContextExecutionErrorCode.MALFORMED_ACTION)
-                    action = _decode_context_action(
-                        result.response_text,
-                        correlation=correlation,
-                        allowed_actions=allowed_actions,
-                        result_contract=phase_contract[1],
-                        allowed_search_source_kinds=(
-                            request.allowed_search_source_kinds
-                        ),
-                        resolve_handle=action_session.resolve_wire_handle,
-                        completed_handles=action_session.completed_handles,
-                    )
+                    if call_contract is not None:
+                        try:
+                            call_decoded = call_contract.decode_response(result.response_text)
+                            action = _decode_context_action(result.response_text, correlation=correlation, allowed_actions=allowed_actions, result_contract=phase_contract[1], allowed_search_source_kinds=request.allowed_search_source_kinds, resolve_handle=action_session.resolve_wire_handle, completed_handles=action_session.completed_handles, decoded_action=call_decoded)
+                        except ContractRejection as bound_failure:
+                            rejected = carry_validation(_execution_error(ContextExecutionErrorCode.MALFORMED_ACTION), bound_failure)
+                            rejected.bound_contract_failure = bound_failure
+                            raise rejected from None
+                        if type(action) not in {ContextSearchAction, ContextReadAction, ContextAnswerAction}:
+                            raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+                    else:
+                        schema_issues = diagnose_json_text(result.response_text, schema)
+                        if schema_issues:
+                            raise _execution_error(ContextExecutionErrorCode.MALFORMED_ACTION)
+                        action = _decode_context_action(
+                            result.response_text,
+                            correlation=correlation,
+                            allowed_actions=allowed_actions,
+                            result_contract=phase_contract[1],
+                            allowed_search_source_kinds=(
+                                request.allowed_search_source_kinds
+                            ),
+                            resolve_handle=action_session.resolve_wire_handle,
+                            completed_handles=action_session.completed_handles,
+                            read_limit=min(*action_session.action_limits()[5:7], CONTEXT_ACTION_POLICY.max_handles_per_read),
+                        )
                 except ContextExecutionError as decode_failure:
                     call_validation_details = _context_validation_details(
                         result.response_text, schema_issues, decode_failure,
                     )
+                    if call_contract is not None:
+                        bound_failure = getattr(decode_failure, "bound_contract_failure", decode_failure)
+                        bound_details = failure_issues(
+                            call_contract.bind_failure(bound_failure, call_decoded))
+                        if bound_details:
+                            call_validation_details = bound_details
                     if validation_sink is not None:
                         _require_sync_none(validation_sink(call_id, call_validation_details))
                     if (
@@ -5391,7 +6105,11 @@ class AgentContextService:
                         and action_index == substantive_call_limit
                     ):
                         try:
-                            exhausted_action = _decode_context_action(
+                            if call_contract is not None:
+                                call_decoded = call_contract.decode_response(result.response_text)
+                                exhausted_action = _decode_context_action(result.response_text, correlation=correlation, allowed_actions=('search', 'read', 'answer'), result_contract=phase_contract[1], allowed_search_source_kinds=request.allowed_search_source_kinds, resolve_handle=action_session.resolve_wire_handle, completed_handles=action_session.completed_handles, decoded_action=call_decoded)
+                            else:
+                                exhausted_action = _decode_context_action(
                                 result.response_text,
                                 correlation=correlation,
                                 allowed_actions=("search", "read", "answer"),
@@ -5401,8 +6119,9 @@ class AgentContextService:
                                 ),
                                 resolve_handle=(action_session.resolve_wire_handle),
                                 completed_handles=action_session.completed_handles,
+                        read_limit=min(*action_session.action_limits()[5:7], CONTEXT_ACTION_POLICY.max_handles_per_read),
                             )
-                        except ContextExecutionError:
+                        except (ContextExecutionError, ContractRejection):
                             finalizer = call_finalizer
                             call_finalizer = None
                             if finalizer is not None:
@@ -5593,13 +6312,18 @@ class AgentContextService:
                 if revalidated_manifest != manifest:
                     raise ContextSourceError(ContextSourceErrorCode.SOURCE_DRIFT)
                 stage = "answer_validation"
-                if answer_validator is not None:
+                if answer_validator is not None or call_contract is not None:
                     try:
-                        _require_sync_none(answer_validator(action.answer, authorization))
+                        if call_contract is not None:
+                            call_contract.require_authorized_answer(call_decoded, authorization)
+                        else:
+                            _require_sync_none(answer_validator(action.answer, authorization))
                     except Exception as answer_failure:
                         issues = failure_issues(answer_failure, path="$.agent_action.task_result")
                         if phase_contract[1].contract_id in BUILTIN_RESULT_CONTRACT_IDS:
                             issues = tuple(diagnostic_to_wire(item) for item in issues)
+                            if call_contract is not None:
+                                issues = tuple(project_lead_scope_diagnostic(item) for item in issues)
                         if issues:
                             details = bounded_chunks(issues)
                         else:
@@ -5610,6 +6334,8 @@ class AgentContextService:
                             details = domain_rule_chunks(rules)
                             if phase_contract[1].contract_id in BUILTIN_RESULT_CONTRACT_IDS:
                                 details = tuple(diagnostic_to_wire(item) for item in details)
+                                if call_contract is not None:
+                                    details = tuple(project_lead_scope_diagnostic(item) for item in details)
                         call_validation_details = details
                         if call_finalizer is not None:
                             try:
@@ -5786,6 +6512,8 @@ class AgentContextService:
             stage = "exhausted"
             raise _execution_error(ContextExecutionErrorCode.ACTION_EXHAUSTED)
         except BaseException as failure:
+            if call_contract is not None:
+                call_contract.bind_failure(failure, call_decoded)
             if checkpoint_committed:
                 raise
             if call_finalizer is not None:

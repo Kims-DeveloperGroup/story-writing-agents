@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .structured_output_validation import SchemaRules, nonblank_text_rule, closed_rule
+
 import hashlib
 import json
 from dataclasses import asdict, dataclass, fields
@@ -268,6 +270,7 @@ def _decode(cls: type, value: object):
 
 
 def assessment_from_dict(value: object) -> CoreDocumentAssessment:
+    SchemaRules.declare(assessment_schema(None, None, None)).require(value)
     result = _decode(CoreDocumentAssessment, value)
     docs = tuple(item.document_path for item in result.document_judgments)
     if len(docs) != 4 or set(docs) != set(CORE_DOCUMENTS):
@@ -451,9 +454,9 @@ def validate_authoring_target_basis(target: AuthoringTarget | None,
         raise ValueError(needed.message)
 
 
-def assessment_schema(source_ids: tuple[str, ...] | None, read_ids: tuple[str, ...] | None, basis_ref: str) -> dict:
+def assessment_schema(source_ids: tuple[str, ...] | None, read_ids: tuple[str, ...] | None, basis_ref: str | None) -> dict:
     """Supported closed native schema; no artificial story-size/count limit."""
-    text = {"type": "string"}
+    text = nonblank_text_rule()
     def strings(ids=None, minimum=0):
         item = text if ids is None else {"type": "string", "enum": list(ids)}
         return {"type": "array", "minItems": minimum, "items": item} if ids is None or ids else {"type": "array", "minItems": 0, "maxItems": 0, "items": text}
@@ -476,7 +479,7 @@ def assessment_schema(source_ids: tuple[str, ...] | None, read_ids: tuple[str, .
                 prop = dict(text)
             props[f.name] = prop
         if cls is CoreDocumentAssessment:
-            props["source_basis_ref"] = {"type": "string", "enum": [basis_ref]}
+            props["source_basis_ref"] = {**text, **({"enum": [basis_ref]} if basis_ref is not None else {})}
             props["document_judgments"].update(minItems=4, maxItems=4)
         if cls is DocumentJudgment:
             props["criteria_findings"].update(minItems=1, maxItems=17)
@@ -485,3 +488,43 @@ def assessment_schema(source_ids: tuple[str, ...] | None, read_ids: tuple[str, .
         return {"type": "object", "description": "Current whole-book findings; exact physical sources and required coverage are host qualified. No write authority.",
                 "additionalProperties": False, "properties": props, "required": list(props)}
     return obj(CoreDocumentAssessment)
+
+
+def current_assessment_schema(source_ids: tuple[str, ...], read_ids: tuple[str, ...],
+                              basis_ref: str | None, *,
+                              document_reads: tuple[tuple[str, str], ...] = ()) -> dict:
+    """Closed finite coverage for the current Lead wire; Python arrays stay public."""
+    from copy import deepcopy
+    result = assessment_schema(source_ids, read_ids, basis_ref)
+    item = result["properties"]["document_judgments"]["items"]
+    documents = {}
+    for path in CORE_DOCUMENTS:
+        row = deepcopy(item)
+        row["properties"]["document_path"] = {"type": "string", "enum": [path]}
+        choices = tuple(identity for identity, locator in document_reads if locator == path)
+        row["properties"]["document_read_source_id"] = (
+            {"anyOf": [{"type": "string", "enum": list(choices)}, {"type": "null"}]}
+            if choices else {"type": "null"})
+        criterion = row["properties"]["criteria_findings"]["items"]
+        criteria = {}
+        for name in CRITERIA[path]:
+            finding = deepcopy(criterion)
+            finding["properties"]["criterion_id"] = {"type": "string", "enum": [name]}
+            criteria[name] = finding
+        row["properties"]["criteria_findings"] = closed_rule(criteria)
+        documents[path] = row
+    result["properties"]["document_judgments"] = closed_rule(documents)
+    return result
+
+
+def decode_current_assessment(value: dict) -> dict:
+    """Map validated complete coverage to the intrinsic owner's canonical order."""
+    from copy import deepcopy
+    result = deepcopy(value)
+    rows = result["document_judgments"]
+    result["document_judgments"] = []
+    for path in CORE_DOCUMENTS:
+        row = rows[path]
+        row["criteria_findings"] = [row["criteria_findings"][name] for name in CRITERIA[path]]
+        result["document_judgments"].append(row)
+    return result

@@ -11,8 +11,7 @@ from story_writing_agents import authoring_admission as admission, conversations
 from tests.recommendation_fixture import (
     DRAFT, OUTLINE, RecommendationCase, action, decision, digest,
     preparation, recommendation, rewrite_history,
-    task_assessment,
-)
+    task_assessment, )
 from tests import test_lead_orchestration as lead
 
 

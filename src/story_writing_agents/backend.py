@@ -1,6 +1,8 @@
 """Provider-neutral backend coordination and public bound-agent facade."""
 
 from __future__ import annotations
+from .agents import LEAD_ORCHESTRATOR
+from .provider_wire import require_schema_projection
 from .provider_wire import (
     WIRE_VERSION, RETRIEVAL_ACTIONS, WireShapeError, add_contract_guidance, diagnostic_to_wire, project_direct_payload,
     project_direct_schema, project_retrieval_schema, normalize_direct_result,
@@ -63,21 +65,7 @@ from .agent_context import (
     ProviderCallKind,
     ProviderCallState,
 )
-from .agent_context.service import (
-    ContextExecutionError,
-    ContextExecutionErrorCode,
-    ContextProvider,
-    ContextProviderCallFinalizer,
-    ContextProviderCallRequest,
-    ContextProviderCallResult,
-    ContextProviderFailureFacts,
-    ContextProviderTerminalCode,
-    ContextReferencePreludeRequest,
-    ContextReferencePreludeResult,
-    ContextScope,
-    ContextContinuationRejection,
-    record_context_provider_failure,
-)
+from .agent_context.service import ContextExecutionError, ContextExecutionErrorCode, ContextProvider, ContextProviderCallFinalizer, ContextProviderCallRequest, ContextProviderCallResult, ContextProviderFailureFacts, ContextProviderTerminalCode, ContextReferencePreludeRequest, ContextReferencePreludeResult, ContextScope, ContextContinuationRejection, record_context_provider_failure, BoundContextProviderCallRequest
 from .agent_exchanges import AgentExchangeProvider, AgentExchangeScopeKind
 from .agent_context.manifest import ContextContinuationIdentity
 from .agent_exchanges.capture import (
@@ -692,25 +680,15 @@ class _BoundContextProvider:
 
     async def invoke_context(
         self,
-        request: ContextProviderCallRequest,
+        request: ContextProviderCallRequest | BoundContextProviderCallRequest,
     ) -> ContextProviderCallResult:
+        if type(request) not in {ContextProviderCallRequest, BoundContextProviderCallRequest}:
+            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         self._require_active(request.scope, request.policy_fingerprint)
         if request.continuation_identity != self._continuation_identity:
             raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         execution_workspace = self._active_workspace(request.execution_workspace)
-        result = await self._bound_agent.backend._invoke_context_physical(
-            self._bound_agent,
-            scope=request.scope,
-            policy_fingerprint=request.policy_fingerprint,
-            expected_thread_id=request.expected_thread_id,
-            schema=request.schema,
-            payload=request.payload,
-            call_kind=request.call_kind,
-            component_paths=request.component_paths,
-            mandatory_reference_paths=request.mandatory_reference_paths,
-            continuation_identity=request.continuation_identity,
-            execution_workspace=execution_workspace,
-        )
+        result = await self._bound_agent.backend._invoke_context_physical(self._bound_agent, request=request, execution_workspace=execution_workspace)
         self._active_workspace(execution_workspace)
         return result
 
@@ -4919,12 +4897,19 @@ class AgentBackend:
             payload,
             call_kind=call_kind,
         )
+        bound_native_schema = (AntigravityAdapter.native_output_schema(schema)
+                               if bound_agent.vendor == "antigravity" else schema)
+        if (bound_agent.definition.agent_id == LEAD_ORCHESTRATOR
+                and "agent_action" in schema.get("properties", {})):
+            require_schema_projection(
+                schema, bound_native_schema, declared_lowering=(
+                    "integer_singleton_bounds" if bound_agent.vendor == "antigravity" else "identity"
+                ),
+            )
         invocation = ProviderInvocation(
             session_id=session,
             schema=(
-                AntigravityAdapter.native_output_schema(schema)
-                if bound_agent.vendor == "antigravity"
-                else schema
+                bound_native_schema
             ),
             payload=payload,
             thread_id=thread_id,
@@ -4934,6 +4919,12 @@ class AgentBackend:
             binding_components=(bound_agent._provider_binding.binding_components),
             execution_workspace=execution_workspace,
         )
+        if (bound_agent.definition.agent_id == LEAD_ORCHESTRATOR
+                and "agent_action" in schema.get("properties", {})):
+            if invocation.payload_accounting is None:
+                raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+            if invocation.payload_accounting.serialized_input_utf8_bytes > MAX_SESSION_CONTEXT_UTF8_BYTES:
+                raise SessionContextCapacityError()
         provider_diagnostic: str | None = None
         provider_cause: BaseException | None = None
         exchange = self._begin_legacy_agent_exchange(
@@ -5296,22 +5287,25 @@ class AgentBackend:
         )
 
     async def _invoke_context_physical(
-        self,
-        bound_agent: BoundAgent,
-        *,
-        scope: ContextScope,
-        policy_fingerprint: str,
-        expected_thread_id: str | None,
-        schema: Mapping[str, object],
-        payload: Mapping[str, object],
-        call_kind: ProviderCallKind,
-        component_paths: Mapping[JsonPath, ContextComponentKind],
-        mandatory_reference_paths: tuple[JsonPath, ...],
-        continuation_identity: ContextContinuationIdentity | None = None,
+        self, bound_agent: BoundAgent, *,
+        request: ContextProviderCallRequest | BoundContextProviderCallRequest,
         execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> ContextProviderCallResult:
         """Build and submit one exact contextual ProviderInvocation."""
 
+        if type(request) not in {ContextProviderCallRequest, BoundContextProviderCallRequest}:
+            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+        scope, policy_fingerprint = request.scope, request.policy_fingerprint
+        expected_thread_id, call_kind = request.expected_thread_id, request.call_kind
+        payload, component_paths = request.payload, request.component_paths
+        mandatory_reference_paths, continuation_identity = request.mandatory_reference_paths, request.continuation_identity
+        if type(request) is BoundContextProviderCallRequest:
+            request.contract.require_current_offer(request.contract.offers)
+            schema = request.contract.schema_value()
+        else:
+            if scope.agent_id == LEAD_ORCHESTRATOR:
+                raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+            schema = request.schema
         self._ensure_open()
         if (
             type(scope) is not ContextScope
@@ -5353,12 +5347,28 @@ class AgentBackend:
             if generation is None
             else generation.adapters[bound_agent.vendor]
         )
+        bound_native_schema = (AntigravityAdapter.native_output_schema(schema)
+                               if bound_agent.vendor == "antigravity" else schema)
+        if (bound_agent.definition.agent_id == LEAD_ORCHESTRATOR
+                and "agent_action" in schema.get("properties", {})):
+            require_schema_projection(
+                schema, bound_native_schema, declared_lowering=(
+                    "integer_singleton_bounds" if bound_agent.vendor == "antigravity" else "identity"
+                ),
+            )
+        if type(request) is BoundContextProviderCallRequest:
+            request.contract.require_projection(
+                bound_native_schema,
+                declared_lowering=(
+                    "integer_singleton_bounds"
+                    if bound_agent.vendor == "antigravity"
+                    else "identity"
+                ),
+            )
         invocation = ProviderInvocation(
             session_id=session,
             schema=(
-                AntigravityAdapter.native_output_schema(schema)
-                if bound_agent.vendor == "antigravity"
-                else schema
+                bound_native_schema
             ),
             payload=payload,
             thread_id=expected_thread_id,
@@ -5370,10 +5380,11 @@ class AgentBackend:
         )
         if invocation.call_accounting is None or invocation.payload_json is None:
             raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
-        if continuation_identity is not None and (
-            len(invocation.payload_json)
-            > MAX_SESSION_CONTEXT_UTF8_BYTES
-        ):
+        if bound_agent.definition.agent_id == LEAD_ORCHESTRATOR and "agent_action" in schema.get("properties", {}):
+            if (invocation.payload_accounting is None
+                    or invocation.payload_accounting.serialized_input_utf8_bytes > MAX_SESSION_CONTEXT_UTF8_BYTES):
+                raise SessionContextCapacityError()
+        elif continuation_identity is not None and len(invocation.payload_json) > MAX_SESSION_CONTEXT_UTF8_BYTES:
             raise SessionContextCapacityError()
 
         replay_validator = self._context_replay_validator(
@@ -5390,6 +5401,16 @@ class AgentBackend:
                 exchange = self._begin_context_agent_exchange(
                     bound_agent, scope=scope, invocation=invocation,
                 )
+                if type(request) is BoundContextProviderCallRequest:
+                    request.contract.require_submission(
+                        invocation.payload,
+                        invocation.schema,
+                        declared_lowering=(
+                            "integer_singleton_bounds"
+                            if bound_agent.vendor == "antigravity"
+                            else "identity"
+                        ),
+                    )
                 result = await adapter.invoke(bound_agent._provider_binding, invocation)
                 self._require_postsubmission_workspace(invocation)
             self._capture_provider_return_without_replacing(exchange, result)

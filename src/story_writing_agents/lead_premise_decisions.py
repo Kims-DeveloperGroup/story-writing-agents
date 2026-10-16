@@ -6,6 +6,8 @@ references against the existing chronological conversation history.
 
 from __future__ import annotations
 
+from .structured_output_validation import SchemaRules, closed_rule, array_rule, nonblank_text_rule
+
 import hashlib
 import json
 import re
@@ -653,6 +655,8 @@ def _array(converter):
 
 
 def premise_question_intent_from_dict(value: object) -> PremiseQuestionIntent:
+    if type(value) is dict and type(value.get("question_id")) is str:
+        SchemaRules.declare(premise_question_schema(value["question_id"])).require(value)
     return _decode(PremiseQuestionIntent, value, {"dependent_domains": _array(ArtifactReviewDomain)})
 
 
@@ -664,6 +668,7 @@ def premise_spec_from_dict(value: object) -> PremiseDecisionSpec:
 
 
 def premise_analysis_from_dict(value: object) -> PremiseAnalysis:
+    SchemaRules.declare(premise_analysis_schema(None)).require(value)
     def alternative(item):
         return _decode(PremiseAlternative, item, {
             "tradeoffs": _array(lambda text: text), "basis_input_ids": _array(lambda text: text)})
@@ -671,6 +676,7 @@ def premise_analysis_from_dict(value: object) -> PremiseAnalysis:
 
 
 def premise_summary_from_dict(value: object) -> PremiseDecisionSummary:
+    SchemaRules.declare(premise_summary_schema()).require(value)
     def disposition(item):
         return _decode(PremiseReplyDisposition, item, {"alternative_keys": _array(lambda key: key)})
     def option(item):
@@ -735,3 +741,109 @@ _VALUE_TYPES = (
     PremiseDecisionReport, PremiseAllowedChoice, PremiseDecisionSelection,
     PremiseCostLink, PremiseSelectionCapture, PremiseConflict,
 )
+
+
+def _result_text_rule() -> dict[str, object]:
+    return nonblank_text_rule(maximum_characters=VISIBLE_BYTES)
+
+
+def _result_strings(values: tuple[str, ...] | None = None, *, minimum: int = 0, maximum: int | None = None) -> dict[str, object]:
+    if values == ():
+        return array_rule(_result_text_rule(), minimum=0, maximum=0)
+    item = _result_text_rule() if values is None else {"type": "string", "enum": list(values)}
+    return array_rule(item, minimum=minimum, maximum=maximum)
+
+
+def _result_alternatives(variants: list[dict[str, object]]) -> dict[str, object]:
+    return variants[0] if len(variants) == 1 else {"anyOf": variants}
+
+
+def premise_question_schema(question_id: str) -> dict[str, object]:
+    return closed_rule({
+        "question_id": {"type": "string", "enum": [question_id]},
+        "slot_id": _result_text_rule(),
+        "question": _result_text_rule(),
+        "dependent_domains": _result_strings(tuple(item.value for item in ArtifactReviewDomain), minimum=1, maximum=3),
+    })
+
+
+def premise_analysis_schema(input_ids: tuple[str, ...]) -> dict[str, object]:
+    alternative = closed_rule({
+        "alternative_key": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$(?![\s\S])"}, "premise_text": _result_text_rule(),
+        "rationale": _result_text_rule(), "tradeoffs": _result_strings(maximum=4),
+        "basis_input_ids": (array_rule({"type": "string"}, minimum=1, maximum=64) if input_ids is None else _result_strings(input_ids, minimum=1, maximum=64)),
+    })
+    result = closed_rule({
+        "assessment": {"type": "string", "enum": ["alternatives_assessed", "conflict", "insufficient_evidence"]},
+        "message": _result_text_rule(),
+        "alternatives": {"type": "array", "items": alternative, "minItems": 0, "maxItems": 4},
+    })
+    result["description"] = "Return provisional alternatives grounded in the selected actual inputs; separate tradeoffs and unknowns without drafting a candidate."
+    assessed = {**result, "properties": {**result["properties"], "assessment": {"type": "string", "enum": ["alternatives_assessed"]},
+                 "alternatives": {**result["properties"]["alternatives"], "minItems": 1}}}
+    other = {**result, "properties": {**result["properties"], "assessment": {"type": "string", "enum": ["conflict", "insufficient_evidence"]}}}
+    return {"anyOf": [assessed, other], "description": result["description"]}
+
+
+def premise_summary_schema(reply_alternatives: tuple[tuple[str, tuple[str, ...]], ...] | None = None,
+                           unavailable_reply_ids: tuple[str, ...] = ()) -> dict[str, object]:
+    identifier = {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$(?![\s\S])"}
+    rows = []
+    for reply_id, keys in ((None, None),) if reply_alternatives is None else reply_alternatives:
+        for status in ("used", "modified", "deferred", "rejected", "unavailable"):
+            if status == "unavailable" and reply_alternatives is not None and reply_id not in unavailable_reply_ids:
+                continue
+            if status in {"used", "modified"} and keys == ():
+                continue
+            rows.append(closed_rule({"reply_event_id": identifier if reply_id is None else {"type": "string", "enum": [reply_id]},
+                "alternative_keys": _result_strings(keys, minimum=1 if status in {"used", "modified"} else 0, maximum=4),
+                "disposition": {"type": "string", "enum": [status]},
+                "reason": _result_text_rule(), "residual_cost": _result_text_rule()},
+                description=(
+                    f"Record an analyst reply as {status}; cite selected alternatives "
+                    "and retain its reason and residual cost."
+                ),
+            ))
+    dispositions = array_rule(_result_alternatives(rows) if rows else closed_rule({}),
+                              minimum=1 if reply_alternatives is None else len(reply_alternatives),
+                              maximum=3 if reply_alternatives is None else len(reply_alternatives))
+    option = closed_rule({"option_key": identifier, "premise_text": _result_text_rule(),
+                          "rationale": _result_text_rule(), "reply_dispositions": dispositions})
+    possible = reply_alternatives is None or any(keys for _, keys in reply_alternatives)
+    branches = [closed_rule({"status": {"type": "string", "enum": ["clarification"]},
+        "message": _result_text_rule(), "options": array_rule(option, maximum=0),
+        "recommended_option_key": {
+                "type": "null",
+                "description": 'No recommendation available; retain USER choice authority.',
+            }},
+        description=(
+            "Request clarification without premise options or a recommendation; "
+            "retain USER choice authority."
+        ),
+    )]
+    if possible:
+        branches.append(closed_rule({"status": {"type": "string", "enum": ["options"]}, "message": _result_text_rule(),
+            "options": array_rule(option, minimum=1, maximum=6),
+            "recommended_option_key": {
+                    "anyOf": [
+                        {
+                            **identifier,
+                            "description": (
+                                "Recommend one declared premise option key; "
+                                "retain USER choice authority."
+                            ),
+                        },
+                        {
+                            "type": "null",
+                            "description": 'Retain USER choice authority.',
+                        },
+                    ]
+                }},
+            description=(
+                "Offer grounded premise options and an optional recommendation; "
+                "retain USER choice authority."
+            ),
+        ))
+    result = _result_alternatives(branches)
+    result["description"] = "Integrate actual ordered analyst replies into provisional options. Disclose every reply disposition, reason and residual cost; preserve USER selection authority."
+    return result

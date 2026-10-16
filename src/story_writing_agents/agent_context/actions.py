@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..provider_wire import project_zero_hit_receipt
+from ..structured_output_validation import nonblank_text_rule
 from ..provider_wire import SOURCE_TYPES
 
 import hashlib
@@ -10,6 +11,7 @@ import json
 import re
 import unicodedata
 from ..structured_output_validation import (
+    unicode_category_exclusion,
     validation_failure,
     validation_call,
 )
@@ -30,6 +32,7 @@ from .manifest import (
 from .planning import MandatoryReferenceReservation
 
 __all__ = [
+    "ContextCallReadFact",
     "CONTEXT_ACTION_POLICY",
     "ContextAction",
     "ContextActionCorrelation",
@@ -56,6 +59,43 @@ __all__ = [
     "ContextZeroHitSearchReceipt",
     "serialize_context_action_observation",
 ]
+
+@dataclass(frozen=True, slots=True)
+class ContextCallReadFact:
+    """Content-free identity of one actual bounded READ, without authority."""
+    evidence_id: str
+    source_id: str
+    source_kind: ContextSourceKind
+    revision: str
+    source_digest: str
+    boundary_digest: str
+    whole_source: bool
+    artifact_locator: str | None
+
+    def __post_init__(self) -> None:
+        if (any(type(value) is not str or not value for value in (
+                self.evidence_id, self.source_id, self.revision, self.source_digest, self.boundary_digest))
+                or type(self.source_kind) is not ContextSourceKind or type(self.whole_source) is not bool
+                or (self.artifact_locator is not None and type(self.artifact_locator) is not str)
+                or (self.source_kind is not ContextSourceKind.WRITING_ARTIFACT and self.artifact_locator is not None)):
+            raise ValueError("invalid content-free READ fact")
+
+    @classmethod
+    def from_evidence(cls, evidence: ContextEvidenceReceipt) -> ContextCallReadFact:
+        if type(evidence) is not ContextEvidenceReceipt:
+            raise TypeError("READ fact requires a service-owned evidence receipt")
+        return cls(evidence.evidence_id, evidence.source_id, evidence.source_kind,
+            evidence.revision, evidence.source_digest, evidence.boundary_digest,
+            evidence.source_digest == evidence.boundary_digest
+            and evidence.source_utf8_bytes == evidence.boundary_utf8_bytes,
+            evidence.provenance.locator if evidence.source_kind is ContextSourceKind.WRITING_ARTIFACT else None)
+
+    def snapshot_value(self) -> dict[str, object]:
+        return {"evidence_id": self.evidence_id, "source_id": self.source_id,
+            "source_kind": self.source_kind.value, "revision": self.revision,
+            "source_digest": self.source_digest, "boundary_digest": self.boundary_digest,
+            "whole_source": self.whole_source, "artifact_locator": self.artifact_locator}
+
 
 _BEGIN_UNTRUSTED_STORY_DATA = "<<<BEGIN_UNTRUSTED_STORY_DATA>>>"
 _END_UNTRUSTED_STORY_DATA = "<<<END_UNTRUSTED_STORY_DATA>>>"
@@ -244,6 +284,28 @@ def _strict_text(value: object, *, allow_empty: bool = False) -> str:
     if not valid or "\x00" in value:
         raise validation_failure(_invalid(), '$', 'expected strict UTF-8 text without NUL')
     return value
+
+
+_SEARCH_TEXT_EXCLUDED = unicode_category_exclusion(("Cc", "Cf", "Cs", "Co", "Cn"))
+_ARTIFACT_PREFIX_EXCLUDED = unicode_category_exclusion(("Cc", "Cf", "Cs")) + r"\\}\u2028\u2029"
+
+
+SEARCH_NORMALIZATION_REVISION = "NFKC+casefold+Unicode-whitespace:" + unicodedata.unidata_version
+
+def search_text_rule(maximum_characters: int) -> dict[str, object]:
+    # The limit is on normalization, not on raw code points.
+    if type(maximum_characters) is not int or maximum_characters < 1:
+        raise ValueError("invalid normalized SEARCH bound")
+    return {"type": "string", "minLength": 1,
+            "pattern": r"^(?=[\s\S]*" + nonblank_text_rule()["pattern"] + ")[^" + _SEARCH_TEXT_EXCLUDED + r"]+$(?![\s\S])",
+            "description": "Literal nonblank query; NFKC+casefold+Unicode whitespace folding and resulting character bound remain owner-qualified."}
+
+
+def artifact_directory_prefix_rule() -> dict[str, object]:
+    segment = "(?!\\.{1,2}/)[^/" + _ARTIFACT_PREFIX_EXCLUDED + "]+"
+    return {"type": "string",
+            "pattern": "^(?:core_documents/|manuscript/(?:" + segment + r"/)*)$(?![\s\S])",
+            "description": "Canonical core_documents/ or manuscript directory prefix; current physical-root and UTF-8 byte qualification remain required."}
 
 
 def _artifact_directory_prefix(value: object) -> str:

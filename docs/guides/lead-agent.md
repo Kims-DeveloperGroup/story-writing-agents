@@ -106,6 +106,14 @@ A detailed literal USER brief can supply those foundations and creative latitude
 
 The assessment names required foundations and supporting source IDs, the USER direction, permitted creative actions, protected constraints, supplied or explicitly delegated decisions, and any missing information. Source availability and semantic adequacy are separate: nonempty text, summaries, confidence or an asserted receipt do not replace the host's exact source qualification. Rejected public responses can remain attributable selected input, with their original rejected status, and undergo fresh qualification.
 
+Each offered Lead response has a required schema ID bound to its final field
+and value rules, validation and corrective guidance. Review-only intent permits
+review work; workflow activity has no story-domain or target selections. Writing
+keeps its actual domains, roles and assessment obligations. A rejected reply and
+its bounded correction remain separate answers. A necessary clarification keeps
+the current task and document request pending; it does not claim that drafting,
+review, Apply or Commit completed. See [provider validation and repair](../reference/provider-wire.md#validation-and-accounting).
+
 Ordinary Lead and adoption obtain the assessment through their existing Lead front. Direct specialist and consensus AUTHORING API intakes accept an explicit `authoring_assessment`; absent or insufficient input returns `AuthoringAdmissionNeeded` with actionable guidance and available source IDs. Callers use those offered IDs and the retained actual input instead of inventing receipts. Assessment input grants no confirmation or write authority. Review-only work keeps its existing exact-input contract, and drafting still proceeds through specialist confirmation, all required final-candidate reviews, Apply and Commit.
 
 
@@ -455,7 +463,7 @@ property paths, expected and actual JSON types, or a fixed rule. Reports that
 exceed the diagnostic cap list up to 2,048 findings, then say additional issues
 were omitted.
 For example, a missing
-`$.agent_action.task_result.writing_task_scope` is described as a missing required property;
+`$.agent_action.task_result.response_details.task_scope` is described as a missing required property;
 unexpected property names and provider values are never printed. Python
 callers can read the same ordered chunks from `LeadTurnResult.validation_details`;
 direct `AgentReply` and `ConversationReply` values also expose
@@ -1277,7 +1285,7 @@ Every built-in result has an explicit `response_type`. The Lead contract,
 `lead-response-v7`, distinguishes answers, clarification questions, critiques,
 proposal-drafting recommendations, specialist-consultation proposals, and artifact
 change proposals. Every Lead result includes `response_text` and
-`writing_task_scope`; the scope selects an exact offered `{task_id, task_revision}`
+`response_details.task_scope`; the scope selects an exact offered `task: {id, revision}`
 pair. Missing scope receives the bounded structured-result repair and then the
 runtime's visible no-action fallback if repair fails.
 

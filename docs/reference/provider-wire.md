@@ -107,9 +107,10 @@ generating guidance for guidance fields.
 
 An authoring collaboration carries its shared editorial brief in the existing
 scope interpretation, derived from the Lead's disclosed response text. The same
-immutable scope reaches specialist assignments and Lead synthesis; its wire
-projection is `writing_task_scope`. Selected source inputs remain specific to
-each disclosed assignment. Briefs and recommendation treatments use existing
+immutable scope reaches specialist assignments and Lead synthesis. Its input/member
+representation is `writing_task_scope`; current bound Lead native output carries
+the complete scope at `response_details.task_scope`. Selected source inputs remain
+specific to each disclosed assignment. Briefs and recommendation treatments use existing
 prose fields rather than adding fields to closed result schemas.
 
 Editorial guidance asks for the intended reader effect, editing goal, protected
@@ -284,10 +285,10 @@ excerpt omits the existing type, enum, required, and closed-object constraints:
 }
 ```
 
-The agent can select scoped SEARCH and return:
+For a specialist context call, the agent can select scoped SEARCH and return:
 
 ```json
-{"agent_action":{"action_type":"search_context","artifact_directory_prefix":"manuscript/part_1","queries":[{"search_text":"timeline","source_types":["story_document"]}]}}
+{"agent_action":{"action_type":"search_context","artifact_directory_prefix":"manuscript/part_1/","queries":[{"search_text":"timeline","source_types":["story_document"]}]}}
 ```
 
 The complete schema still determines which actions, fields, sources, and bounds
@@ -300,14 +301,26 @@ for their own offered choices; no branch index is a durable identity.
 A contextual response is a closed object whose root property is `agent_action`.
 Select exactly one schema-permitted `action_type`:
 
-| Action | Required semantic content | Result |
+For Lead calls, the action also requires the exact offered ID at
+`agent_action.schema_id`. The runtime checks this ID before selecting the
+action's fields, decoder, validation and repair rules. A `submit_result` action
+also binds the exact semantic ID at `agent_action.task_result.schema_id`.
+
+SEARCH measures its query limit after NFKC normalization, case folding and
+Unicode-whitespace folding. The selected contract binds that existing owner
+check and its current limit. A raw string-length cap would reject some queries
+whose normalized text fits; the contract declares this normalization-dependent
+check explicitly and retains the applicable native field restrictions.
+
+| Action | Decoded semantic content | Result |
 | --- | --- | --- |
 | `search_context` | `queries`, each containing `search_text` and `source_types`; an artifact-only branch can include `artifact_directory_prefix` | Finds sources and issues READ handles. |
 | `read_context` | `read_handles` selected from returned SEARCH results | Retrieves exact authorized content and evidence. |
 | `submit_result` | `task_result` matching the invocation's result schema | Completes the current agent task. |
 
-These are illustrative responses. The handle below is a placeholder, not an
-issued capability:
+These examples show specialist context responses. Lead responses use the
+offered IDs and finite choice encodings described below. The handle is a
+placeholder, not an issued capability:
 
 ```json
 {"agent_action":{"action_type":"search_context","queries":[{"search_text":"opening reveal","source_types":["story_document"]}]}}
@@ -330,14 +343,79 @@ from an earlier call or an example in this guide.
 
 ## Result contracts
 
+The code boundary uses a `ContractOwner[T]` for authoritative rule declarations,
+typed decoding, and named genuine host checks. A sealed immutable `BoundContract[T]`
+derives the schema, complete structural validation sequence, and trusted repair
+requirements from that owner's single frozen rule graph. Schema generation,
+validation sequencing, and repair generation cannot be overridden separately.
+
+A complete `LeadContractIndex[T]` binds the eligible semantic contracts.
+`BoundCallContract` binds those contracts to the actual current offer snapshot
+and exact outer/inner pairing. The context service and backend receive the typed
+bound call/request; they do not accept an independently assembled schema,
+validator, and repair callback bundle on this path. Current-call policy, source
+drift, and unsupported native projection still fail before provider invocation.
+Only typed decoding and explicitly named, justified host checks may extend this
+boundary; representable field/value restrictions remain in the frozen graph.
+
+Identical rule bodies may share a local `$defs` target while each occurrence keeps
+its description beside `$ref`. Central fingerprints retain both node-local and
+referenced descriptions, including repeated annotations, and distinguish changed
+values, bounds, and branch order. Current bound contract IDs use `lead_v11_` and
+include `swa-annotation-rules-v2` provenance. Copy only the IDs offered by the
+current call.
+
+Budget declarations are frozen with the call policy. Each offered Lead semantic
+member is bounded at 65,536 bytes. Combined semantic/action indexes and complete
+contextual/native schemas use a separate 262,144-byte aggregate bound. That
+allowance does not widen a member contract. The service separately enforces its
+262,144-byte serialized request/context-frame limit. The transport also counts
+the rendered schema and payload together against the invocation input limit.
+Affected action templates compose directly from the frozen semantic rules;
+generic result contracts keep their existing defaults.
+
 Every built-in semantic result includes `response_type`. Objects and their nested
 variants are closed: return every required field and no extra properties.
 Put the result directly in `agent_action.task_result`; do not JSON-encode it
 as a string.
 
-| Contract | Response types and content |
+For Lead calls, return the exact offered `schema_id` at the position shown in
+the current schema. It selects one complete contract from the immutable set
+bound to that physical call: field/value rules, decoder, validation and repair
+requirements. The runtime checks the ID before decoding the branch; a missing,
+unknown or unoffered ID cannot select a permissive replacement. Successful READ
+can add qualified choices to the next call's set. An earlier ID is usable only
+when the current schema still offers it.
+The table below names semantic families; it does not supply a selection ID.
+Use the complete literal ID in the current schema, not a family name.
+
+Lead semantic results keep `schema_id`, `response_text` and their declared
+response discriminators at the `task_result` root. The family's remaining
+fields are inside the required closed `response_details` object. Its complete
+nested choices preserve the coupled scope, assignment, source, target and
+assessment rules. The runtime validates the selected graph before extracting
+these declared fields for the typed result; the Python API keeps its existing
+domain values.
+
+Some finite-choice collections use closed keyed objects to preserve uniqueness
+and coverage through the supported schema dialect. Return every declared key
+with its permitted value or explicit null; follow the exact current shape and
+relationship rules. The runtime decodes these selections into the existing
+domain collections. Do not substitute an array or invent a choice key.
+Selected input sources decode in the current owner-offered order; these wire
+selections do not express a separate source-priority policy.
+
+For a bound specialist assignment, `input_anchor_id` selects one offered input
+and `optional_inputs` selects any additional offered inputs. The enclosing
+`required_input_recipients` assigns each required source to an active specialist.
+These are actual input selections: their union determines each specialist's
+inputs, including mandatory reviewer selections. Repeated selection of the same
+edge denotes one input; unknown source or inactive specialist identities reject.
+Follow the current branch's mode, role and coverage restrictions.
+
+| Semantic family | Response types and content |
 | --- | --- |
-| `lead-response-v7` (bound scope3; legacy scope1/2 uses v6) | `answer`, `clarification_question`, `critique`, `proposal_drafting_recommendation`, `specialist_consultation_proposal`, or `artifact_change_proposal`; always includes `response_text` and `writing_task_scope`. |
+| `lead-response-v7` (bound scope3) | `answer`, `clarification_question`, `critique`, `proposal_drafting_recommendation`, `specialist_consultation_proposal`, or `artifact_change_proposal`; always includes `response_text` and `response_details.task_scope`. |
 | `lead-response-v8` | Eligible ordinary new-step fronts offer normal branches plus a separate candidate-free premise-analysis consultation for the host-offered question. |
 | `premise-analysis-response-v1` | Provisional analyst alternatives, rationale, tradeoffs, and actual offered input aliases; never a draft or candidate-review receipt. |
 | `premise-decision-summary-v1` | Terminal whole options or clarification, preserving a disposition/reason/residual cost for every actual current analyst reply. No automatic next intent. |
@@ -378,25 +456,54 @@ Artifact review uses `ready_for_apply_confirmation`, `revision_required`, or
 `rejected`. The first supports presenting the reviewed candidate for a separate
 Apply decision. It grants no write or commit authority.
 
-Fresh scope-v3 Lead contracts require `contributions` and `dependency_slots`
-arrays. Each contribution declares a domain and `draft_owner` or
-`constraint_assessor` role. Each dependency slot names its `slot_id` and
-`dependent_domains`. A proposal's `shared_premises` selects each declared slot's
-exact `selected_premise` and offered `basis_input_ids`. The host captures source
-revisions and owners before Confirm; dependent authors receive that same capture.
-Every affected specialist still reviews the same final candidate. Explicit legacy
-scope1/2 bindings retain their older closed shapes and cannot acquire these duties.
+Scope-v3 domain records carry contribution and dependency-slot bindings.
+A contribution declares a domain's `draft_owner` or `constraint_assessor` role;
+a dependency slot binds a premise to its dependent domains. The proposal's
+`shared_premises` selects the declared slot's exact `selected_premise` and offered
+`basis_input_ids`. The host captures source revisions and owners before Confirm;
+all dependent authors receive that capture. Every affected specialist still
+reviews the same final candidate.
 
-`writing_task_scope` names `activity_type`, `specialist_domains`,
-`target_artifact_paths`, and `task_reference: {task_id, task_revision}`. Activities are `workflow_guidance`,
-`draft_writing`, `revise_writing`, and `review_writing`. The `writing_intent` field selects `authoring` or `review_only`.
-Review-only intent requires `review_writing`; that activity can also belong to an
-AUTHORING task. Intent is separate from activity: historical review activity
-remains AUTHORING. A captured
-REVIEW_ONLY task permits findings and suggestions against its exact supplied
-candidate, but cannot acquire drafting, replacement, artifact-objective or Apply
-authority. Requested revision needs fresh authoring work and confirmation.
-Select an exact offered task/revision pair. Specialist assignments have
+The current bound native `response_details.task_scope` uses the complete field set
+below. The single immutable contextual declaration maps this qualified marker from
+member/domain `writing_task_scope`, together with its required term and the nested
+keys. Whole selected validation precedes inverse restoration; trusted repair paths
+use the same declaration.
+After the selected compact schema validates the entire response, the inverse
+scope codec restores the member contract's intermediate field names before
+its existing typed decoder runs.
+
+| Explicit scope value | Current native scope field |
+| --- | --- |
+| Activity | `activity` |
+| Writing intent | `intent` |
+| Specialist domains | `domains` |
+| Target artifact paths | `paths` |
+| Specialist contribution bindings | `roles` |
+| Premise dependency slots | `slots` |
+| Current task reference | `task` |
+| Task identity | `task.id` |
+| Task revision | `task.revision` |
+| Each slot's identity | `id` within the slot |
+| Each slot's dependent domains | `domains` within the slot |
+
+For example, an offered task reference is written as `task: {id, revision}` in
+the native scope. Select the exact pair offered by the current call. Every field
+remains explicit; allowed maps or arrays, nulls, empty values, counts, domain and
+role keys, source relationships, target paths, and task values come from that
+bound contract. This vocabulary applies only within the current native scope.
+Provider input, public Python/domain records, and persistence keep their own
+field names. Verbose or mixed native scope keys reject under the compact contract.
+
+`activity` selects `workflow_guidance`, `draft_writing`, `revise_writing`, or
+`review_writing`; `intent` selects the exact offered writing intent. Review-only
+intent requires `review_writing`; that activity can also belong to an AUTHORING
+task. Intent remains separate from activity. A captured REVIEW_ONLY task permits
+findings and suggestions about its exact supplied candidate and grants no
+artifact replacement, objective, Apply, or drafting authority. Requested revision
+requires fresh authoring work and confirmation.
+
+Specialist assignments have
 `agent_id`, `task_instructions`, `input_source_ids`, and `assignment_type`
 (`draft_content`, `assess_constraints`, or `review_content`).
 
@@ -622,13 +729,23 @@ workflow corrections can include `original_task_input`, preserving the original
 task and its exact source identities. Follow the current response schema and
 action limits; a correction request grants no additional execution authority.
 
-The schema enforces structure and allowed values. Runtime validation also
-checks current source authority, offered identities, uniqueness, exact
-task/revision pairing, evidence, and workflow state. A structurally valid
-response is not authorization for a side effect.
+For each affected Lead branch, the final schema, selected validation and repair
+requirements derive from the same authoritative rules. These include closed
+objects, required fields, exact types/nullability, literal IDs, current choices,
+bounds and representable collection/relationship rules. The final native schema
+is checked against that binding before submission. Runtime-only checks retain
+current source authority, evidence provenance, workflow state, semantic
+sufficiency and exact UTF-8 byte budgets. A structurally valid response is not
+authorization for a side effect.
 
-Structured repair uses the same vocabulary and current allowed result shape.
-Diagnostics name provider-visible paths without disclosing rejected private
-values. Accounting includes the final bound guide, per-call guidance, annotated
-schema, payload, and native rendering. Larger descriptive fields do not raise
-runtime resource limits.
+Structured repair uses the rejected physical call's frozen eligible contracts.
+Known IDs select trusted rule paths, expected values and required-field
+guidance; invalid IDs receive only predefined current-selection guidance.
+Diagnostics do not disclose rejected private values or turn arbitrary provider
+text into instructions. Original and corrective answers retain their separate
+acceptance state and remain input references without execution authority. A
+terminal fallback uses a language-neutral schema diagnostic and retains the
+captured effective response language; it does not substitute English prose.
+Accounting includes the final bound guide, per-call guidance, annotated schema,
+payload, and native rendering. Larger descriptive fields do not raise runtime
+resource limits.

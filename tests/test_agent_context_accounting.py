@@ -17,12 +17,10 @@ from story_writing_agents.agent_context import (
     ContextComponentBytes, ContextComponentKind,
     ProviderCallAccounting, ProviderCallKind, ProviderCallState,
     ProviderJsonEncodingError, ProviderPayloadAccounting, ProviderUsage,
-    account_provider_payload, canonical_provider_json,
-)
+    account_provider_payload, canonical_provider_json, )
 from story_writing_agents.provider_adapter import (
     ProviderBinding, ProviderFailureAccounting, ProviderInvocation, ProviderInvocationError,
-    ProviderResult, provider_failure_accounting, record_provider_failure_accounting,
-)
+    ProviderResult, provider_failure_accounting, record_provider_failure_accounting, )
 from story_writing_agents.agent_context.request_compaction import compact_context_payload
 
 
@@ -99,8 +97,7 @@ class CanonicalProviderJsonTests(unittest.TestCase):
         value = {"second": [1, True, None], "first": "text"}
         self.assertEqual(
             canonical_provider_json(value),
-            b'{"second":[1,true,null],"first":"text"}',
-        )
+            b'{"second":[1,true,null],"first":"text"}', )
 
     def test_multibyte_unicode_and_escaping_are_exact_utf8(self) -> None:
         value = {"한글": 'é🙂\n"\\'}
@@ -114,8 +111,7 @@ class CanonicalProviderJsonTests(unittest.TestCase):
         shared = ["same"]
         self.assertEqual(
             canonical_provider_json({"tuple": (0, -2, 1.5), "left": shared, "right": shared}),
-            b'{"tuple":[0,-2,1.5],"left":["same"],"right":["same"]}',
-        )
+            b'{"tuple":[0,-2,1.5],"left":["same"],"right":["same"]}', )
         payload = _shared_context_payload()
         payload["unrelated"] = {"shared_context_object_id": "o1"}
         before = copy.deepcopy(payload)
@@ -173,8 +169,7 @@ class CanonicalProviderJsonTests(unittest.TestCase):
                     canonical_provider_json(value)
                 self.assertEqual(
                     str(caught.exception),
-                    diagnostic,
-                )
+                    diagnostic, )
                 self.assertNotIn("PRIVATE", str(caught.exception))
                 self.assertNotIn("PRIVATE", repr(caught.exception))
 
@@ -280,46 +275,38 @@ class ProviderPayloadAccountingTests(unittest.TestCase):
             payload_accounting,
             binding,
             ProviderCallState.SUBMITTED,
-            actual_transport_utf8_bytes=payload_accounting.payload_utf8_bytes,
-        )
+            actual_transport_utf8_bytes=payload_accounting.payload_utf8_bytes, )
         self.assertEqual(call.binding_instruction_utf8_bytes, 18)
         self.assertEqual(
             call.gross_model_input_utf8_bytes,
-            18 + payload_accounting.serialized_input_utf8_bytes,
-        )
+            18 + payload_accounting.serialized_input_utf8_bytes, )
         self.assertEqual(
             call.non_reference_model_input_utf8_bytes,
             call.gross_model_input_utf8_bytes
-            - len(payload["references"][0]["content"].encode("utf-8")),
-        )
+            - len(payload["references"][0]["content"].encode("utf-8")), )
         self.assertEqual(
             call.submitted_model_input_utf8_bytes,
-            call.gross_model_input_utf8_bytes,
-        )
+            call.gross_model_input_utf8_bytes, )
         self.assertIsNone(
-            ProviderCallAccounting(payload_accounting).submitted_model_input_utf8_bytes
-        )
+            ProviderCallAccounting(payload_accounting).submitted_model_input_utf8_bytes )
 
     def test_invalid_paths_partitions_and_components_are_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "identify payload values"):
             account_provider_payload(
                 {},
                 {"present": "value"},
-                component_paths={("missing",): ContextComponentKind.CURRENT_INPUT},
-            )
+                component_paths={("missing",): ContextComponentKind.CURRENT_INPUT}, )
         with self.assertRaisesRegex(ValueError, "mandatory-reference paths"):
             account_provider_payload(
                 {},
                 {"content": "value"},
                 component_paths={("content",): ContextComponentKind.CURRENT_INPUT},
-                mandatory_reference_paths=(("content",),),
-            )
+                mandatory_reference_paths=(("content",),), )
         with self.assertRaisesRegex(ValueError, "raw mandatory-reference"):
             ContextComponentBytes(
                 ContextComponentKind.CURRENT_INPUT,
                 1,
-                raw_mandatory_reference_utf8_bytes=1,
-            )
+                raw_mandatory_reference_utf8_bytes=1, )
         with self.assertRaisesRegex(ValueError, "source identity"):
             ContextComponentBytes(ContextComponentKind.CORE_DOCUMENT, 1)
         with self.assertRaisesRegex(ValueError, "canonical order"):
@@ -347,8 +334,7 @@ class ProviderNeutralCompatibilityTests(unittest.TestCase):
         self.assertNotIn("changed", invocation.payload)
         self.assertEqual(
             invocation.payload_json,
-            b'{"content":"PRIVATE_PAYLOAD \xed\x95\x9c\xf0\x9f\x99\x82"}',
-        )
+            b'{"content":"PRIVATE_PAYLOAD \xed\x95\x9c\xf0\x9f\x99\x82"}', )
         representation = repr(invocation)
         self.assertNotIn("PRIVATE_SCHEMA", representation)
         self.assertNotIn("PRIVATE_PAYLOAD", representation)
@@ -379,15 +365,13 @@ class ProviderNeutralCompatibilityTests(unittest.TestCase):
         prepared = ProviderInvocationError("fixed", taint_existing_thread=False)
         self.assertEqual(
             provider_failure_accounting(prepared),
-            ProviderFailureAccounting(),
-        )
+            ProviderFailureAccounting(), )
         cancellation = asyncio.CancelledError("PRIVATE_CANCELLATION")
         record_provider_failure_accounting(
             cancellation,
             state=ProviderCallState.SUBMITTED,
             actual_transport_utf8_bytes=17,
-            usage=ProviderUsage(input_tokens=4),
-        )
+            usage=ProviderUsage(input_tokens=4), )
         self.assertEqual(
             provider_failure_accounting(cancellation),
             ProviderFailureAccounting(ProviderCallState.SUBMITTED, 17, ProviderUsage(input_tokens=4)),
@@ -408,8 +392,7 @@ class ProviderNeutralCompatibilityTests(unittest.TestCase):
         binding_fields = tuple(ProviderBinding.__dataclass_fields__)
         self.assertEqual(
             binding_fields,
-            ("vendor", "definition", "staging_directory", "binding_components"),
-        )
+            ("vendor", "definition", "staging_directory", "binding_components"), )
 
 
 class AgentContextBoundaryTests(unittest.TestCase):
@@ -454,8 +437,7 @@ class AgentContextBoundaryTests(unittest.TestCase):
         self.assertEqual(len(story_writing_agents.__all__), 106)
         self.assertEqual(len(writing_artifacts.__all__), 78)
         self.assertTrue(
-            set(agent_context.__all__).isdisjoint(story_writing_agents.__all__)
-        )
+            set(agent_context.__all__).isdisjoint(story_writing_agents.__all__) )
         self.assertFalse(hasattr(story_writing_agents, "ProviderCallAccounting"))
 
     def test_accounting_is_a_standard_library_leaf_and_facade_imports_only_it(
@@ -465,31 +447,25 @@ class AgentContextBoundaryTests(unittest.TestCase):
             Path(__file__).resolve().parents[1]
             / "src"
             / "story_writing_agents"
-            / "agent_context"
-        )
+            / "agent_context" )
         accounting_tree = ast.parse(
-            (source_root / "accounting.py").read_text(encoding="utf-8")
-        )
+            (source_root / "accounting.py").read_text(encoding="utf-8") )
         self.assertFalse(
             [
                 node
                 for node in ast.walk(accounting_tree)
                 if isinstance(node, ast.ImportFrom) and node.level
-            ]
-        )
+            ] )
         facade_tree = ast.parse(
-            (source_root / "__init__.py").read_text(encoding="utf-8")
-        )
+            (source_root / "__init__.py").read_text(encoding="utf-8") )
         relative_imports = [
             node
             for node in ast.walk(facade_tree)
-            if isinstance(node, ast.ImportFrom) and node.level
-        ]
+            if isinstance(node, ast.ImportFrom) and node.level ]
         self.assertEqual(len(relative_imports), 2)
         self.assertEqual(
             {node.module for node in relative_imports},
-            {"accounting", "progress"},
-        )
+            {"accounting", "progress"}, )
 
 
 if __name__ == "__main__":

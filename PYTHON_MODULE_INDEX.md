@@ -72,7 +72,7 @@ depend on terminal presentation or concrete persistence.
 - `agents`, `models`, `errors`, `config`, `prompts`, `directives`, `artifact_proposals`
 - `specialist_routing`, `authoring_admission`, `core_document_readiness`, `reply_trace`, `run_inputs`
 
-Primary access is the root facade. `specialist_routing` owns pure shared `AuthoringIntent`, independent of activity; conversation codecs preserve its immutable task lineage. `config` owns configuration loading. Scope-v3 contribution/dependency declarations and consistent per-specialist roles remain pure routing contracts; historical scope constructors retain default version 2. Historical drafting-input eligibility is pure routing policy; current execution proof remains host-owned. `core_document_readiness` owns pure whole-book criteria, document dependencies and current-source projection; adapters qualify actual USER/READ origins and retain causal captures in existing event stores. Completion grants no execution or write authority.
+Primary access is the root facade. `specialist_routing` owns pure shared `AuthoringIntent`, independent of activity; conversation codecs preserve its immutable task lineage. `config` owns configuration loading. Scope-v3 contribution/dependency declarations and consistent per-specialist roles remain pure routing contracts; historical scope constructors retain default version 2. Historical drafting-input eligibility is pure routing policy; current execution proof remains host-owned. `core_document_readiness` owns pure whole-book criteria, document dependencies and current-source projection; adapters qualify actual USER/READ origins and retain causal captures in existing event stores. Completion grants no execution or write authority. Scope duties and exact legal rosters share immutable pure declarations; admission, readiness, exploration and premise owners declare their intrinsic result rules and current finite coverage codecs.
 `prompts` owns captured policy bytes, stable fingerprints and runtime authority invariants; stages remain invocation data without provider execution.
 `models` carries optional diagnostics and keyword-only `AgentRequest.expected_reviewed_proposal` and `review_only` hints, without next-action authority.
 
@@ -91,17 +91,14 @@ Adapters own native command settings and resource validation; `provider_auth` ow
 Concrete adapters depend on `provider_adapter`. `provider_execution_workspace` owns the internal exact-worktree capability
 borrowed from the workspace binding for both providers; launch uses its duplicated root descriptor. No Git lease spans provider work.
 Continuation, structured repair, authentication replay, and deferred acceptance retain the same generation authority.
-`structured_output_validation` owns pure, bounded diagnostics from trusted schemas and
-source-authored domain findings. Domain validators identify the rejected property and rule;
-orchestration and adapters retain findings through exception translation and map domain
-fields to provider wire paths. This package-internal boundary owns no provider state,
-persistence, or authority and is not a public facade.
-`provider_wire` is a stateless stdlib leaf for vocabulary, projections, schemas, diagnostics, and invocation
-guidance derived from current schema choices; semantic owners retain domain APIs, storage, and state.
+`structured_output_validation` owns sealed bound contracts derived from one canonical rule graph, exact JSON numbers, typed-decoder provenance, named host-check declarations and trusted repair facts. Pure owners declare rules and permitted hooks; concrete contracts fix schema identity, validation sequencing and repair. Domain validators supply source-authored property findings; orchestration preserves them through provider path translation and retains language-neutral terminal facts and literal answers. Alias-neutral acyclic fingerprints support pure Lead graph factoring. This package-internal boundary owns no provider state, persistence, authority or public facade.
+
+`provider_wire` owns stateless vocabulary, projections, schemas, diagnostics and guidance. It consumes public core fingerprints for component rebasing, contextual Lead scope projection/inverse decoding and lossless final-document annotation sharing. Lead and service compose graphs; domain owners retain APIs, storage and state.
+
 `lead_exploration`, `editorial_state`/`editorial_scope`, `lead_premise_decisions`, and `lead_task_transitions` own immutable whole/ranged provisional material with explicit intent, USER editorial records with canonical coverage/causal relations and exact application observations, and whole premise choice/cost contracts and USER task/discussion/source receipts. Exploration shares pure specialist intent without an upward dependency. Consumers own workflow authority; conversation events/replay retain these facts in the existing store without a new registry or resource owner.
-`lead_provider_contracts` owns immutable Lead choice snapshots shared by schema projections,
-prompt facts, and closed validation rules. It depends on domain contracts; orchestration
-retains confirmation, current-source membership, READ receipt, and lifecycle authority.
+
+`lead_provider_contracts` owns pure Lead rule owners and complete frozen semantic indices. Physical policy, exact finite choices, typed codecs and named checks derive schema IDs together; current duties, source edges and family details depend on domain and wire owners. Orchestration captures pure Lead planning seeds, stage, language and logical eligibility and constructs the typed factory before request composition. Current scope and prospective targets retain distinct owner constraints; substantive assignment and artifact eligibility remain in the shared rule graph. Complete indices use Wire-owned lossless annotation sharing after graph factoring. Orchestration and service retain confirmation, current-source membership, READ receipt and lifecycle authority.
+Empty-core evidence shares a pure eligibility rule with final runtime checks.
 
 ### Agent context and source budgeting
 
@@ -118,6 +115,9 @@ contracts. Filesystem source access is delegated to writing-artifact and workspa
 validation diagnostics preserve rejection, repair, checkpoint, and authority decisions.
 
 `service` owns provider delivery, exact payload UTF-8 capacity diagnostics and verified native continuity; host retains integrity receipts and complete-history coverage. `request_compaction` shares only when properties and bytes decrease before accounting; it owns no durable state or resources.
+Actual status snapshots stay separate from READ and are pinned in offer and repair digests.
+`BoundCallContract` shares pure structural findings with accounting; typed and host checks run only
+during actual decoding.
 
 ### Agent exchange capture
 

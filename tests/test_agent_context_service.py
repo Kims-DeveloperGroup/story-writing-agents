@@ -17,8 +17,7 @@ from story_writing_agents.agent_context.accounting import (
     ProviderCallKind,
     ProviderCallState,
     account_provider_payload,
-    canonical_provider_json,
-)
+    canonical_provider_json, )
 from story_writing_agents.agent_context.actions import (
     CONTEXT_ACTION_POLICY,
     ContextActionCorrelation,
@@ -30,8 +29,7 @@ from story_writing_agents.agent_context.actions import (
     ContextSearchAction,
     ContextSearchQuery,
     ContextSourceBoundary,
-    ContextSourceHandle,
-)
+    ContextSourceHandle, )
 from story_writing_agents.agent_context.manifest import (
     ContextAuthorityKind,
     ContextManifest,
@@ -41,18 +39,15 @@ from story_writing_agents.agent_context.manifest import (
     ContextScope,
     ContextSemanticChannel,
     ContextSourceKind,
-    ContextSubjectKind,
-)
+    ContextSubjectKind, )
 from story_writing_agents.agent_context.planning import (
-    MandatoryReferenceReservation,
-)
+    MandatoryReferenceReservation, )
 from story_writing_agents.agent_context.service import (
     ContextInvocationBinding,
     ContextInvocationKind,
     ContextInvocationSession,
     ContextInvocationState,
-    ContextJsonObjectResultContract,
-)
+    ContextJsonObjectResultContract, )
 from story_writing_agents.agent_context.sources import (
     CONTEXT_SOURCE_POLICY,
     ContextSourceDescriptor,
@@ -62,8 +57,7 @@ from story_writing_agents.agent_context.sources import (
     ContextSourceRecord,
     ContextSourceRegistry,
     ContextSourceSearchMatch,
-    ContextSourceSnapshot,
-)
+    ContextSourceSnapshot, )
 from story_writing_agents.structured_output_validation import (
     bounded_chunks,
     diagnose_json_text,
@@ -79,8 +73,7 @@ _SCOPE = ContextScope(
     "session",
     ContextSubjectKind.CONVERSATION,
     "conversation",
-    "lead_orchestrator",
-)
+    "lead_orchestrator", )
 
 
 from tests.provider_wire_fixture import assert_schema_descriptions
@@ -99,13 +92,10 @@ class StructuredOutputValidationTests(unittest.TestCase):
                 "many": {"type": "array", "maxItems": 1},
                 "mode": {"type": "string", "enum": ["draft", "review"]},
                 "items": {
-                    "type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 0,
-                },
-                "required_note": {"type": "string"},
-            },
+                    "type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 0, },
+                "required_note": {"type": "string"}, },
             "required": ["message", "count", "items", "required_note"],
-            "additionalProperties": False,
-        }
+            "additionalProperties": False, }
         secret = "PRIVATE_PROVIDER_VALUE_한🙂"
         body = json.dumps({
             "message": "", "count": 0, "maximum": 3, "short": secret,
@@ -124,8 +114,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
             "$.many: expected at most 1 items, got 2",
             '$.mode: expected one of ["draft", "review"] (string), got string',
             "$.items[0]: expected at least 1 characters, got 0",
-            "$.items[1]: expected string, got integer",
-        ))
+            "$.items[1]: expected string, got integer", ))
         self.assertNotIn(secret, repr(issues))
 
     def test_union_selects_matching_branch_without_other_branch_noise(self) -> None:
@@ -139,16 +128,13 @@ class StructuredOutputValidationTests(unittest.TestCase):
                 "message": {"type": "string", "minLength": 1},
                 "citation_ids": {"type": "array", "minItems": 0},
             }, "required": ["kind", "message", "citation_ids"],
-                "additionalProperties": False},
-        ]}
+                "additionalProperties": False}, ]}
         issues = diagnose_json_text(
-            '{"kind":"answer","message":0,"PRIVATE_UNKNOWN":"secret"}', schema,
-        )
+            '{"kind":"answer","message":0,"PRIVATE_UNKNOWN":"secret"}', schema, )
         self.assertEqual(issues, (
             "$.citation_ids: required property is missing",
             "$: contains 1 unexpected properties (names withheld)",
-            "$.message: expected string, got integer",
-        ))
+            "$.message: expected string, got integer", ))
         self.assertNotIn("query", repr(issues))
         self.assertNotIn("PRIVATE_UNKNOWN", repr(issues))
 
@@ -183,20 +169,16 @@ class StructuredOutputValidationTests(unittest.TestCase):
             "type": "object",
             "properties": {
                 "message": {"type": "string"},
-                "optional_count": {"type": "integer"},
-            },
+                "optional_count": {"type": "integer"}, },
             "required": ["message"],
-            "additionalProperties": False,
-        }
+            "additionalProperties": False, }
         self.assertEqual(diagnose_json_text('{"message":"ok"}', schema), ())
         self.assertEqual(
             diagnose_json_text('{"message":"ok","optional_count":"bad"}', schema),
-            ("$.optional_count: expected integer, got string",),
-        )
+            ("$.optional_count: expected integer, got string",), )
         self.assertEqual(
             diagnose_json_text("{}", schema),
-            ("$.message: required property is missing",),
-        )
+            ("$.message: required property is missing",), )
 
     def test_bounded_chunks_preserve_order_and_over_32k_content(self) -> None:
         properties = {f"field_{index:04d}": {"type": "string"} for index in range(1500)}
@@ -237,8 +219,7 @@ def _closed_result_schema(properties: dict[str, object]) -> dict[str, object]:
         "additionalProperties": False,
         "properties": properties,
         "required": list(properties),
-        "type": "object",
-    }
+        "type": "object", }
 
 
 def _answer_wire(
@@ -251,9 +232,7 @@ def _answer_wire(
     return {
         'agent_action': {
             'action_type': 'submit_result',
-            'task_result': result,
-        },
-    }
+            'task_result': result, }, }
 
 
 def _search_wire(
@@ -268,8 +247,7 @@ def _search_wire(
         "queries": [{"search_text": text, "source_types": [
             {"writing_artifact": "story_document", "conversation": "conversation_history",
              "active_debate": "current_consensus_run", "own_agent_state": "agent_work_history"}.get(kind, kind)
-            for kind in kinds]} for text, kinds in queries],
-    }
+            for kind in kinds]} for text, kinds in queries], }
     if path_prefix is not None:
         action["artifact_directory_prefix"] = path_prefix
     return {'agent_action': action}
@@ -294,8 +272,7 @@ def _snapshot(
         body,
         body,
         _digest(encoded),
-        len(encoded),
-    )
+        len(encoded), )
     descriptor = ContextSourceDescriptor(
         scope,
         _artifact_id(path),
@@ -303,12 +280,10 @@ def _snapshot(
         _digest(revision_seed or (path + "-revision").encode()),
         ContextProvenance(
             ContextAuthorityKind.WRITING_ARTIFACT_REPOSITORY,
-            path,
-        ),
+            path, ),
         _digest(encoded),
         len(encoded),
-        1,
-    )
+        1, )
     return ContextSourceSnapshot(descriptor, (record,), encoded)
 
 
@@ -324,8 +299,7 @@ def _entry(snapshot: ContextSourceSnapshot, ordinal: int) -> ContextManifestEntr
         descriptor.content_digest,
         descriptor.provenance,
         descriptor.utf8_bytes,
-        searchable=True,
-    )
+        searchable=True, )
 
 
 def _manifest_fixture(
@@ -333,12 +307,10 @@ def _manifest_fixture(
 ) -> tuple[ContextManifest, dict[str, ContextSourceSnapshot]]:
     snapshots = (
         _snapshot(scope, "core_documents/global_outline.md", _PRIVATE_BODY_A),
-        _snapshot(scope, "core_documents/character_sheets.md", _PRIVATE_BODY_B),
-    )
+        _snapshot(scope, "core_documents/character_sheets.md", _PRIVATE_BODY_B), )
     manifest = ContextManifest(
         scope,
-        tuple(_entry(snapshot, index) for index, snapshot in enumerate(snapshots)),
-    )
+        tuple(_entry(snapshot, index) for index, snapshot in enumerate(snapshots)), )
     return manifest, {snapshot.descriptor.source_id: snapshot for snapshot in snapshots}
 
 
@@ -349,8 +321,7 @@ def _registry(
     registry = object.__new__(ContextSourceRegistry)
     registry.scope = scope
     registry.capture = mock.Mock(
-        side_effect=lambda _manifest, entry, _policy: snapshots[entry.source_id]
-    )
+        side_effect=lambda _manifest, entry, _policy: snapshots[entry.source_id] )
     registry.search = mock.Mock(return_value=((), False, 0))
     return registry
 
@@ -365,11 +336,9 @@ def _search_matches(
             snapshots[entry.source_id].descriptor,
             snapshots[entry.source_id].records[0],
             "needle",
-            len(b"needle"),
-        )
+            len(b"needle"), )
         for entry in manifest.entries
-        if entry.source_id in snapshots
-    )
+        if entry.source_id in snapshots )
 
 
 def _mint_handles(
@@ -382,20 +351,14 @@ def _mint_handles(
         return_value=(
             matches,
             False,
-            sum(match.descriptor.utf8_bytes for match in matches),
-        )
-    )
+            sum(match.descriptor.utf8_bytes for match in matches), ) )
     observation = session.search(
         ContextSearchAction(
             _correlation(session.binding, session.next_action_index),
             (
                 ContextSearchQuery(
                     "needle",
-                    (ContextSourceKind.WRITING_ARTIFACT,),
-                ),
-            ),
-        )
-    )
+                    (ContextSourceKind.WRITING_ARTIFACT,), ), ), ) )
     by_id = {entry.source_id: entry for entry in session.binding.manifest.entries}
     return tuple((by_id[hit.source_id], hit.handle) for hit in observation.hits)
 
@@ -414,8 +377,7 @@ def _binding(
         result_id,
         manifest,
         reference_operation_id,
-        references,
-    )
+        references, )
 
 
 def _correlation(
@@ -427,8 +389,7 @@ def _correlation(
         "scope": binding.scope,
         "operation_id": binding.operation_id,
         "result_correlation_id": binding.result_correlation_id,
-        "action_index": index,
-    }
+        "action_index": index, }
     values.update(overrides)
     return ContextActionCorrelation(**values)  # type: ignore[arg-type]
 
@@ -448,8 +409,7 @@ def _reference(
         "revision-1",
         ContextProvenance(ContextAuthorityKind.REFERENCE_AUTHORIZATION, locator),
         "sha256:" + digest_character * 64,
-        ordinal * 7,
-    )
+        ordinal * 7, )
 
 
 def _session(
@@ -461,8 +421,7 @@ def _session(
     source_policy: ContextSourcePolicy = CONTEXT_SOURCE_POLICY,
     source_aliases: dict[str, str] | None = None,
     allowed_search_source_kinds: tuple[ContextSourceKind, ...] = (
-        service_module._SEARCH_SOURCE_KIND_ORDER
-    ),
+        service_module._SEARCH_SOURCE_KIND_ORDER ),
 ) -> ContextInvocationSession:
     with mock.patch(
         "story_writing_agents.agent_context.service.secrets.token_bytes",
@@ -474,8 +433,7 @@ def _session(
             action_policy=action_policy,
             source_policy=source_policy,
             source_aliases=source_aliases,
-            allowed_search_source_kinds=allowed_search_source_kinds,
-        )
+            allowed_search_source_kinds=allowed_search_source_kinds, )
 
 
 class ServiceSurfaceAndBindingTests(unittest.TestCase):
@@ -511,9 +469,7 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
                 "ContextScope",
                 "ContextSourceClassification",
                 "context_provider_failure_facts",
-                "record_context_provider_failure",
-            ),
-        )
+                "record_context_provider_failure", ), )
         self.assertEqual(
             tuple(field.name for field in fields(service_module.ContextExecutionEvent)),
             (
@@ -535,9 +491,7 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
                 "provider_input_tokens",
                 "history_record_count",
                 "observation_utf8_bytes",
-                "truncated",
-            ),
-        )
+                "truncated", ), )
         progress = service_module.ContextExecutionEvent(
             service_module.ContextExecutionEventKind.BOOTSTRAP,
             _SCOPE,
@@ -547,8 +501,7 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
             omitted_searchable_source_count=1,
             omitted_searchable_source_utf8_bytes=64,
             mandatory_reference_count=0,
-            mandatory_reference_utf8_bytes=0,
-        )
+            mandatory_reference_utf8_bytes=0, )
         self.assertFalse(hasattr(progress, "__dict__"))
         for private in (_PRIVATE_ANSWER, _PRIVATE_BODY_A, _PRIVATE_BODY_B):
             self.assertNotIn(private, repr(progress))
@@ -556,21 +509,17 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
             progress.operation_id = "changed"  # type: ignore[misc]
         self.assertEqual(
             tuple(item.value for item in ContextInvocationState),
-            ("open", "searching", "reading", "answer_authorized", "failed"),
-        )
+            ("open", "searching", "reading", "answer_authorized", "failed"), )
         self.assertEqual(
             tuple(item.value for item in ContextInvocationKind),
             (
                 "lead",
                 "specialist_assignment",
                 "lead_synthesis",
-                "specialist_advisory",
-            ),
-        )
+                "specialist_advisory", ), )
         result_contract = ContextJsonObjectResultContract(
             "outcome-v1",
-            _closed_result_schema({"message": {"type": "string"}}),
-        )
+            _closed_result_schema({"message": {"type": "string"}}), )
         self.assertEqual(result_contract.contract_id, "outcome-v1")
         self.assertFalse(hasattr(result_contract, "__dict__"))
         with self.assertRaises((FrozenInstanceError, TypeError)):
@@ -584,9 +533,7 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
                 "action_exhausted",
                 "answer_validation_failed",
                 "reference_runtime_failed",
-                "context_runtime_failed",
-            ),
-        )
+                "context_runtime_failed", ), )
         for facade in (story_writing_agents, agent_context_package):
             self.assertFalse(hasattr(facade, "ContextProviderCallFinalizer"))
             self.assertFalse(hasattr(facade, "ContextProviderTerminalCode"))
@@ -594,10 +541,8 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
             self.assertFalse(hasattr(facade, "ContextJsonObjectResultContract"))
         self.assertEqual(
             tuple(
-                field.name for field in fields(service_module.ContextProviderCallResult)
-            ),
-            ("response_text", "thread_id", "accounting", "finalizer"),
-        )
+                field.name for field in fields(service_module.ContextProviderCallResult) ),
+            ("response_text", "thread_id", "accounting", "finalizer"), )
         self.assertEqual(
             tuple(field.name for field in fields(ContextInvocationBinding)),
             (
@@ -606,9 +551,7 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
                 "result_correlation_id",
                 "manifest",
                 "reference_operation_id",
-                "mandatory_references",
-            ),
-        )
+                "mandatory_references", ), )
         manifest, snapshots = _manifest_fixture()
         binding = _binding(manifest)
         self.assertFalse(hasattr(binding, "__dict__"))
@@ -627,23 +570,19 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
         valid = _binding(
             manifest,
             reference_operation_id="reference-operation",
-            references=references,
-        )
+            references=references, )
         self.assertEqual(valid.mandatory_references, references)
         other_scope = replace(_SCOPE, session_id="other")
         cases = (
             lambda: ContextInvocationBinding(
-                other_scope, "operation", "result", manifest
-            ),
+                other_scope, "operation", "result", manifest ),
             lambda: ContextInvocationBinding(_SCOPE, "", "result", manifest),
             lambda: _binding(manifest, reference_operation_id="reference-operation"),
             lambda: _binding(manifest, references=references),
             lambda: _binding(
                 manifest,
                 reference_operation_id="reference-operation",
-                references=references[::-1],
-            ),
-        )
+                references=references[::-1], ), )
         for case in cases:
             with self.assertRaises(ContextActionError):
                 case()
@@ -654,41 +593,34 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
         encoded, payload = account_provider_payload(
             {"type": "object"},
             {"request": "content-free"},
-            call_kind=ProviderCallKind.COLLABORATION_INITIAL,
-        )
+            call_kind=ProviderCallKind.COLLABORATION_INITIAL, )
         submitted = ProviderCallAccounting(
             payload,
             state=ProviderCallState.SUBMITTED,
-            actual_transport_utf8_bytes=len(encoded),
-        )
+            actual_transport_utf8_bytes=len(encoded), )
         prepared = ProviderCallAccounting(payload)
         for rejection in service_module.ContextContinuationRejection:
             facts = service_module.ContextProviderFailureFacts(
-                submitted, continuation_rejection=rejection,
-            )
+                submitted, continuation_rejection=rejection, )
             self.assertIs(facts.continuation_rejection, rejection)
             for incompatible in ({"timed_out": True}, {"submission_uncertain": True}):
                 with self.subTest(rejection=rejection, incompatible=incompatible):
                     with self.assertRaises(service_module.ContextExecutionError):
                         service_module.ContextProviderFailureFacts(
-                            submitted, continuation_rejection=rejection, **incompatible,
-                        )
+                            submitted, continuation_rejection=rejection, **incompatible, )
         with self.assertRaises(service_module.ContextExecutionError):
             service_module.ContextProviderFailureFacts(
-                submitted, continuation_rejection="continuation_unavailable",
-            )
+                submitted, continuation_rejection="continuation_unavailable", )
         rejection_codes = (
             service_module.ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
             service_module.ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH,
             service_module.ContextProviderTerminalCode.RESPONSE_SEMANTIC_REJECTED,
             service_module.ContextProviderTerminalCode.ACTION_EXHAUSTED,
-            service_module.ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED,
-        )
+            service_module.ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED, )
         self.assertEqual(
             tuple(
                 field.name
-                for field in fields(service_module.ContextProviderFailureFacts)
-            ),
+                for field in fields(service_module.ContextProviderFailureFacts) ),
             (
                 "accounting",
                 "timed_out",
@@ -696,61 +628,47 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
                 "submitted_accountings",
                 "submission_uncertain",
                 "response_rejection_code",
-                "continuation_rejection",
-            ),
-        )
+                "continuation_rejection", ), )
         for code in rejection_codes:
             with self.subTest(code=code):
                 facts = service_module.ContextProviderFailureFacts(
                     submitted_accountings=(submitted,),
-                    response_rejection_code=code,
-                )
+                    response_rejection_code=code, )
                 failure = RuntimeError("private provider response")
                 service_module.record_context_provider_failure(failure, facts)
                 self.assertIs(
                     service_module.context_provider_failure_facts(
                         failure
                     ).response_rejection_code,
-                    code,
-                )
+                    code, )
 
         invalid = (
             lambda: service_module.ContextProviderFailureFacts(
                 submitted_accountings=(submitted,),
                 response_rejection_code=(
-                    service_module.ContextProviderTerminalCode.REFERENCE_RUNTIME_FAILED
-                ),
-            ),
+                    service_module.ContextProviderTerminalCode.REFERENCE_RUNTIME_FAILED ), ),
             lambda: service_module.ContextProviderFailureFacts(
                 submitted_accountings=(submitted,),
                 response_rejection_code=(
-                    service_module.ContextProviderTerminalCode.CONTEXT_RUNTIME_FAILED
-                ),
-            ),
+                    service_module.ContextProviderTerminalCode.CONTEXT_RUNTIME_FAILED ), ),
             lambda: service_module.ContextProviderFailureFacts(
                 response_rejection_code=(
-                    service_module.ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE
-                ),
-            ),
+                    service_module.ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE ), ),
             lambda: service_module.ContextProviderFailureFacts(
                 submitted_accountings=(prepared,),
                 response_rejection_code=(
-                    service_module.ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE
-                ),
-            ),
+                    service_module.ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE ), ),
             lambda: service_module.ContextProviderFailureFacts(
                 submitted_accountings=(submitted,),
                 response_rejection_code="malformed_structured_response",  # type: ignore[arg-type]
-            ),
-        )
+            ), )
         for case in invalid:
             with self.subTest(case=case):
                 with self.assertRaises(service_module.ContextExecutionError) as caught:
                     case()
                 self.assertIs(
                     caught.exception.code,
-                    service_module.ContextExecutionErrorCode.INVALID_VALUE,
-                )
+                    service_module.ContextExecutionErrorCode.INVALID_VALUE, )
 
     def test_entropy_failure_and_registry_scope_mismatch_are_content_free(self) -> None:
         manifest, snapshots = _manifest_fixture()
@@ -782,13 +700,10 @@ class CompactWireDecoderTests(unittest.TestCase):
             {
                 "kind": {"enum": ["answer"], "type": "string"},
                 "message": {"type": "string"},
-                "proposal": {"type": "null"},
-            }
-        )
+                "proposal": {"type": "null"}, } )
         self.result_contract = ContextJsonObjectResultContract(
             "outcome-v1",
-            self.result_schema,
-        )
+            self.result_schema, )
 
     @staticmethod
     def _resolve_handle(value: object) -> ContextSourceHandle:
@@ -804,14 +719,12 @@ class CompactWireDecoderTests(unittest.TestCase):
         allowed: tuple[str, ...] = ("search", "read", "answer"),
         contract: ContextJsonObjectResultContract | None = None,
         source_kinds: tuple[ContextSourceKind, ...] = (
-            service_module._SEARCH_SOURCE_KIND_ORDER
-        ),
+            service_module._SEARCH_SOURCE_KIND_ORDER ),
     ) -> ContextSearchAction | ContextReadAction | ContextAnswerAction:
         response = (
             action
             if type(action) is str
-            else json.dumps(action, ensure_ascii=False, separators=(",", ":"))
-        )
+            else json.dumps(action, ensure_ascii=False, separators=(",", ":")) )
         assert isinstance(response, str)
         return service_module._decode_context_action(
             response,
@@ -819,8 +732,7 @@ class CompactWireDecoderTests(unittest.TestCase):
             allowed_actions=allowed,
             result_contract=contract or self.result_contract,
             allowed_search_source_kinds=source_kinds,
-            resolve_handle=self._resolve_handle,
-        )
+            resolve_handle=self._resolve_handle, )
 
     def assert_malformed(
         self,
@@ -829,20 +741,17 @@ class CompactWireDecoderTests(unittest.TestCase):
         allowed: tuple[str, ...] = ("search", "read", "answer"),
         contract: ContextJsonObjectResultContract | None = None,
         source_kinds: tuple[ContextSourceKind, ...] = (
-            service_module._SEARCH_SOURCE_KIND_ORDER
-        ),
+            service_module._SEARCH_SOURCE_KIND_ORDER ),
     ) -> service_module.ContextExecutionError:
         with self.assertRaises(service_module.ContextExecutionError) as caught:
             self.decode(
                 action,
                 allowed=allowed,
                 contract=contract,
-                source_kinds=source_kinds,
-            )
+                source_kinds=source_kinds, )
         self.assertIs(
             caught.exception.code,
-            service_module.ContextExecutionErrorCode.MALFORMED_ACTION,
-        )
+            service_module.ContextExecutionErrorCode.MALFORMED_ACTION, )
         self.assertIsNone(caught.exception.__cause__)
         return caught.exception
 
@@ -852,22 +761,19 @@ class CompactWireDecoderTests(unittest.TestCase):
             allowed_actions=("search", "read", "answer"),
             result_contract=self.result_contract,
             allowed_search_source_kinds=service_module._SEARCH_SOURCE_KIND_ORDER,
-            action_limits=limits,
-        )
+            action_limits=limits, )
         self.assertIs(schema["additionalProperties"], False)
         self.assertEqual(schema["required"], ["agent_action"])
         self.assertEqual(set(schema["properties"]), {"agent_action"})
         action_variants = schema["properties"]["agent_action"]["anyOf"]
         self.assertEqual(
             tuple(variant["properties"]["action_type"]["enum"][0] for variant in action_variants),
-            ("search_context", "search_context", "read_context", "submit_result"),
-        )
+            ("search_context", "search_context", "read_context", "submit_result"), )
         for variant in action_variants:
             self.assertIs(variant["additionalProperties"], False)
             self.assertEqual(
                 set(variant["required"]),
-                set(variant["properties"]),
-            )
+                set(variant["properties"]), )
         search, prefixed_search, read, answer = action_variants
         assert_schema_descriptions(self, schema)
         self.assertNotEqual(search["description"], prefixed_search["description"])
@@ -886,8 +792,7 @@ class CompactWireDecoderTests(unittest.TestCase):
         self.assertIn("Choose distinct allowed source kinds", source_kinds_schema["description"])
         self.assertEqual(
             set(source_kinds_schema),
-            {"description", "items", "maxItems", "minItems", "type"},
-        )
+            {"description", "items", "maxItems", "minItems", "type"}, )
         self.assertNotIn("uniqueItems", source_kinds_schema)
         self.assertNotIn("prefixItems", source_kinds_schema)
         self.assertIsInstance(source_kinds_schema["items"], dict)
@@ -903,26 +808,20 @@ class CompactWireDecoderTests(unittest.TestCase):
         variants = (
             replace(
                 self.correlation,
-                scope=replace(self.correlation.scope, session_id="other"),
-            ),
+                scope=replace(self.correlation.scope, session_id="other"), ),
             replace(self.correlation, operation_id="other"),
             replace(self.correlation, result_correlation_id="other"),
-            replace(self.correlation, action_index=2),
-        )
+            replace(self.correlation, action_index=2), )
         tokens = (self.token,) + tuple(
-            service_module._correlation_token(value) for value in variants
-        )
+            service_module._correlation_token(value) for value in variants )
         self.assertEqual(len(set(tokens)), len(tokens))
         self.assertIsInstance(
             self.decode(
                 _answer_wire(
                     self.token,
-                    {"kind": "answer", "message": "answer", "proposal": None},
-                ),
-                allowed=("answer",),
-            ),
-            ContextAnswerAction,
-        )
+                    {"kind": "answer", "message": "answer", "proposal": None}, ),
+                allowed=("answer",), ),
+            ContextAnswerAction, )
 
     def test_valid_search_read_and_natural_result_shapes_decode_exactly(self) -> None:
         search = self.decode(
@@ -935,25 +834,18 @@ class CompactWireDecoderTests(unittest.TestCase):
                             "writing_artifact",
                             "conversation",
                             "active_debate",
-                            "own_agent_state",
-                        ],
-                    )
-                ],
-            ),
-            allowed=("search", "answer"),
-        )
+                            "own_agent_state", ], ) ], ),
+            allowed=("search", "answer"), )
         self.assertIsInstance(search, ContextSearchAction)
         assert isinstance(search, ContextSearchAction)
         self.assertEqual(search.queries[0].normalized_text, "needle")
         self.assertEqual(
             search.queries[0].source_kinds,
-            service_module._SEARCH_SOURCE_KIND_ORDER,
-        )
+            service_module._SEARCH_SOURCE_KIND_ORDER, )
 
         read = self.decode(
             _read_wire(self.token, ["h1", "h2"]),
-            allowed=("read", "answer"),
-        )
+            allowed=("read", "answer"), )
         self.assertIsInstance(read, ContextReadAction)
         assert isinstance(read, ContextReadAction)
         answer_handle = read.handles[0]
@@ -961,21 +853,18 @@ class CompactWireDecoderTests(unittest.TestCase):
         result = {"proposal": None, "message": "Visible.", "kind": "answer"}
         structured = self.decode(
             _answer_wire(self.token, result, used_handles=("h1",)),
-            allowed=("answer",),
-        )
+            allowed=("answer",), )
         self.assertIsInstance(structured, ContextAnswerAction)
         assert isinstance(structured, ContextAnswerAction)
         self.assertEqual(
             structured.answer,
-            '{"kind":"answer","message":"Visible.","proposal":null}',
-        )
+            '{"kind":"answer","message":"Visible.","proposal":null}', )
         self.assertEqual(structured.used_handles, ())
         for invalid in ([], "search_text", 1, None, True):
             with self.subTest(json_object_invalid=invalid):
                 self.assert_malformed(
                     _answer_wire(self.token, invalid),
-                    allowed=("answer",),
-                )
+                    allowed=("answer",), )
 
     def test_search_wire_supports_shared_artifact_prefix_and_kind_matrix(self) -> None:
         def schema(kinds=service_module._SEARCH_SOURCE_KIND_ORDER):
@@ -1027,15 +916,13 @@ class CompactWireDecoderTests(unittest.TestCase):
             "manuscript/space dir/",
             "manuscript/.hidden%25/",
             "manuscript/private-\ue000/",
-            "manuscript/unassigned-\u0378/",
-        )
+            "manuscript/unassigned-\u0378/", )
         for prefix in valid:
             with self.subTest(valid=prefix):
                 query = ContextSearchQuery(
                     "needle",
                     (ContextSourceKind.WRITING_ARTIFACT,),
-                    prefix,
-                )
+                    prefix, )
                 self.assertEqual(query.artifact_path_prefix, prefix)
 
         invalid = (
@@ -1054,8 +941,7 @@ class CompactWireDecoderTests(unittest.TestCase):
             "manuscript/\u2029/",
             "manuscript/new\nline/",
             "manuscript/joiner-\u200d/",
-            "manuscript/surrogate-\ud800/",
-        )
+            "manuscript/surrogate-\ud800/", )
         for prefix in invalid:
             with (
                 self.subTest(invalid=repr(prefix)),
@@ -1064,15 +950,13 @@ class CompactWireDecoderTests(unittest.TestCase):
                 ContextSearchQuery(
                     "needle",
                     (ContextSourceKind.WRITING_ARTIFACT,),
-                    prefix,
-                )
+                    prefix, )
 
         with self.assertRaises(ContextActionError):
             ContextSearchQuery(
                 "needle",
                 (ContextSourceKind.CONVERSATION,),
-                "manuscript/",
-            )
+                "manuscript/", )
         with self.assertRaises(ContextActionError):
             ContextSearchAction(
                 self.correlation,
@@ -1080,15 +964,11 @@ class CompactWireDecoderTests(unittest.TestCase):
                     ContextSearchQuery(
                         "one",
                         (ContextSourceKind.WRITING_ARTIFACT,),
-                        "manuscript/part-01/",
-                    ),
+                        "manuscript/part-01/", ),
                     ContextSearchQuery(
                         "two",
                         (ContextSourceKind.WRITING_ARTIFACT,),
-                        "manuscript/part-02/",
-                    ),
-                ),
-            )
+                        "manuscript/part-02/", ), ), )
 
     def test_malformed_exact_shape_types_routes_duplicates_and_limits_reject(self) -> None:
         base = _answer_wire(self.token, {"kind": "answer", "message": "Visible.", "proposal": None})
@@ -1132,8 +1012,7 @@ class CompactWireDecoderTests(unittest.TestCase):
                     self.assertIn("search_text", issues[0]); self.assertIn("source_types", issues[0])
         self.assert_malformed(
             _search_wire(self.token, [("x", ["writing_artifact"])]),
-            source_kinds=(ContextSourceKind.CONVERSATION,),
-        )
+            source_kinds=(ContextSourceKind.CONVERSATION,), )
         self.assert_malformed(_read_wire(self.token, ["h1", "h1"]))
         read_with_extra = _read_wire(self.token, ["h1"])
         read_with_extra["agent_action"]["extra"] = True
@@ -1150,22 +1029,18 @@ class CompactWireDecoderTests(unittest.TestCase):
         failure = caught.exception
         self.assertIs(
             failure.code,
-            service_module.ContextExecutionErrorCode.MALFORMED_ACTION,
-        )
+            service_module.ContextExecutionErrorCode.MALFORMED_ACTION, )
         self.assertEqual(
             str(failure),
             "contextual provider read action is invalid: `handles` must contain "
-            "source handles returned by the preceding context search",
-        )
+            "source handles returned by the preceding context search", )
         self.assertIsNone(failure.__cause__)
         rendered = "\n".join(
             (
                 str(failure),
                 repr(failure),
                 repr(failure.__cause__),
-                repr(failure.__context__),
-            )
-        )
+                repr(failure.__context__), ) )
         for private in private_values:
             self.assertNotIn(private, rendered)
 
@@ -1181,8 +1056,7 @@ class CompactWireDecoderTests(unittest.TestCase):
         failure = caught.exception
         self.assertIs(
             failure.code,
-            service_module.ContextExecutionErrorCode.MALFORMED_ACTION,
-        )
+            service_module.ContextExecutionErrorCode.MALFORMED_ACTION, )
         self.assertEqual(str(failure), "contextual provider action is malformed")
         self.assertIsNone(failure.__cause__)
         rendered = "\n".join(
@@ -1190,9 +1064,7 @@ class CompactWireDecoderTests(unittest.TestCase):
                 str(failure),
                 repr(failure),
                 repr(failure.__cause__),
-                repr(failure.__context__),
-            )
-        )
+                repr(failure.__context__), ) )
         for private in (
             self.token,
             actual_correlation,
@@ -1207,17 +1079,13 @@ class CompactWireDecoderTests(unittest.TestCase):
             "{",
             {
                 "correlation": self.token,
-                'agent_action': {'action_type': 'submit_result', "used_handles": []},
-            },
+                'agent_action': {'action_type': 'submit_result', "used_handles": []}, },
             {
                 "correlation": self.token,
                 'agent_action': {
                     'action_type': 'read_context',
                     'read_handles': ["h1"],
-                    "used_handles": ["h1"],
-                },
-            },
-        )
+                    "used_handles": ["h1"], }, }, )
         for value in cases:
             with (
                 self.subTest(value=value),
@@ -1226,12 +1094,10 @@ class CompactWireDecoderTests(unittest.TestCase):
                 self.decode(value)
             self.assertIs(
                 caught.exception.code,
-                service_module.ContextExecutionErrorCode.MALFORMED_ACTION,
-            )
+                service_module.ContextExecutionErrorCode.MALFORMED_ACTION, )
             self.assertEqual(
                 str(caught.exception),
-                "contextual provider action is malformed",
-            )
+                "contextual provider action is malformed", )
             self.assertIsNone(caught.exception.__cause__)
 
     def test_double_encoded_or_invalid_structured_results_reject(self) -> None:
@@ -1263,13 +1129,10 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
             session.read(
                 ContextReadAction(
                     _correlation(self.binding, 1),
-                    (ContextSourceHandle("ctxh_v1_" + "0" * 64),),
-                )
-            )
+                    (ContextSourceHandle("ctxh_v1_" + "0" * 64),), ) )
         self.assertEqual(
             initial_read.exception.code,
-            ContextActionErrorCode.HANDLE_INVALID,
-        )
+            ContextActionErrorCode.HANDLE_INVALID, )
         self.assertEqual(session.state, ContextInvocationState.FAILED)
 
         registry = _registry(_SCOPE, self.snapshots)
@@ -1294,13 +1157,11 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
         self.assertNotEqual(first_handle, second_handle)
         with self.assertRaises(ContextActionError) as crossed:
             second.read(
-                ContextReadAction(_correlation(self.binding, 2), (first_handle,))
-            )
+                ContextReadAction(_correlation(self.binding, 2), (first_handle,)) )
         self.assertEqual(crossed.exception.code, ContextActionErrorCode.HANDLE_INVALID)
         self.assertEqual(second.state, ContextInvocationState.FAILED)
         forged = ContextSourceHandle(
-            first_handle.value[:-1] + ("0" if first_handle.value[-1] != "0" else "1")
-        )
+            first_handle.value[:-1] + ("0" if first_handle.value[-1] != "0" else "1") )
         third_registry = _registry(_SCOPE, self.snapshots)
         third = _session(self.binding, third_registry, secret=b"a" * 32)
         _mint_handles(third, third_registry, self.snapshots)
@@ -1310,8 +1171,7 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
         fourth = _session(self.binding, fourth_registry)
         handle = _mint_handles(fourth, fourth_registry, self.snapshots)[0][1]
         _, receipt = fourth.read(
-            ContextReadAction(_correlation(self.binding, 2), (handle,))
-        )
+            ContextReadAction(_correlation(self.binding, 2), (handle,)) )
         fourth.complete_read(receipt)
         with self.assertRaises(ContextActionError) as reused:
             fourth.read(ContextReadAction(_correlation(self.binding, 3), (handle,)))
@@ -1321,8 +1181,7 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
         private_values = (
             _PRIVATE_BODY_A,
             _PRIVATE_BODY_B,
-            "core_documents/global_outline.md",
-        )
+            "core_documents/global_outline.md", )
 
         def assert_failure(
             session: ContextInvocationSession,
@@ -1352,38 +1211,30 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
         _observation, receipt = fresh.read(
             ContextReadAction(
                 _correlation(self.binding, 2),
-                (fresh_handle,),
-            )
-        )
+                (fresh_handle,), ) )
         fresh.complete_read(receipt)
         authorization = fresh.authorize_answer(
             ContextAnswerAction(
                 _correlation(self.binding, 3),
                 _PRIVATE_ANSWER,
-                (fresh_handle,),
-            )
-        )
+                (fresh_handle,), ) )
         self.assertEqual(
             tuple(item.handle for item in authorization.used_evidence),
-            (fresh_handle,),
-        )
+            (fresh_handle,), )
         self.assertEqual(fresh.state, ContextInvocationState.ANSWER_AUTHORIZED)
 
         guessed = ContextSourceHandle("ctxh_v1_" + "0" * 64)
         guessed_session = _session(
             self.binding,
-            _registry(_SCOPE, self.snapshots),
-        )
+            _registry(_SCOPE, self.snapshots), )
         assert_failure(
             guessed_session,
             ContextReadAction(
                 _correlation(self.binding, 1),
-                (guessed,),
-            ),
+                (guessed,), ),
             ContextActionErrorCode.HANDLE_INVALID,
             next_action_index=1,
-            extra_private=(guessed.value,),
-        )
+            extra_private=(guessed.value,), )
 
         foreign_scopes = (
             ("stale_operation", _SCOPE, "stale_operation", "stale_result"),
@@ -1391,32 +1242,26 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
                 "cross_scope",
                 replace(_SCOPE, session_id="other_session"),
                 "operation",
-                "result",
-            ),
+                "result", ),
             (
                 "cross_agent",
                 replace(_SCOPE, agent_id="plot_architect"),
                 "operation",
-                "result",
-            ),
-        )
+                "result", ), )
         for label, foreign_scope, operation_id, result_id in foreign_scopes:
             with self.subTest(handle_origin=label):
                 foreign_manifest, foreign_snapshots = _manifest_fixture(foreign_scope)
                 foreign_binding = _binding(
                     foreign_manifest,
                     operation_id=operation_id,
-                    result_id=result_id,
-                )
+                    result_id=result_id, )
                 foreign_registry = _registry(
                     foreign_scope,
-                    foreign_snapshots,
-                )
+                    foreign_snapshots, )
                 foreign = _session(
                     foreign_binding,
                     foreign_registry,
-                    secret=b"z" * 32,
-                )
+                    secret=b"z" * 32, )
                 foreign_handle = _mint_handles(
                     foreign,
                     foreign_registry,
@@ -1425,33 +1270,27 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
                 current = _session(
                     self.binding,
                     _registry(_SCOPE, self.snapshots),
-                    secret=b"z" * 32,
-                )
+                    secret=b"z" * 32, )
                 assert_failure(
                     current,
                     ContextReadAction(
                         _correlation(self.binding, 1),
-                        (foreign_handle,),
-                    ),
+                        (foreign_handle,), ),
                     ContextActionErrorCode.HANDLE_INVALID,
                     next_action_index=1,
-                    extra_private=(foreign_handle.value,),
-                )
+                    extra_private=(foreign_handle.value,), )
 
         for label, correlation in (
             (
                 "cross_scope_correlation",
                 replace(
                     _correlation(self.binding, 2),
-                    scope=replace(_SCOPE, session_id="other_session"),
-                ),
-            ),
+                    scope=replace(_SCOPE, session_id="other_session"), ), ),
             (
                 "cross_agent_correlation",
                 replace(
                     _correlation(self.binding, 2),
-                    scope=replace(_SCOPE, agent_id="plot_architect"),
-                ),
+                    scope=replace(_SCOPE, agent_id="plot_architect"), ),
             ),
         ):
             with self.subTest(failure_order=label):
@@ -1467,8 +1306,7 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
                     ContextReadAction(correlation, (valid_handle, guessed)),
                     ContextActionErrorCode.CORRELATION_MISMATCH,
                     next_action_index=2,
-                    extra_private=(valid_handle.value, guessed.value),
-                )
+                    extra_private=(valid_handle.value, guessed.value), )
                 registry.capture.assert_not_called()
 
         consumed_registry = _registry(_SCOPE, self.snapshots)
@@ -1482,8 +1320,7 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
             ContextReadAction(
                 _correlation(self.binding, 2),
                 (consumed_handle,),
-            )
-        )
+            ) )
         consumed.complete_read(receipt)
         assert_failure(
             consumed,
@@ -1502,8 +1339,7 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
             _SCOPE,
             drift_entry.provenance.locator,
             "changed private body needle\n",
-            revision_seed=b"changed-release-revision",
-        )
+            revision_seed=b"changed-release-revision", )
         drift_registry = _registry(_SCOPE, self.snapshots)
         drift = _session(self.binding, drift_registry)
         drift_handle = _mint_handles(
@@ -1525,14 +1361,12 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
 
         terminal = _session(
             self.binding,
-            _registry(_SCOPE, self.snapshots),
-        )
+            _registry(_SCOPE, self.snapshots), )
         terminal.authorize_answer(
             ContextAnswerAction(
                 _correlation(self.binding, 1),
                 _PRIVATE_ANSWER,
-            )
-        )
+            ) )
         assert_failure(
             terminal,
             ContextReadAction(
@@ -1562,17 +1396,14 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
         session = _session(self.binding, registry)
         handles = {
             entry.source_id: handle
-            for entry, handle in _mint_handles(session, registry, self.snapshots)
-        }
+            for entry, handle in _mint_handles(session, registry, self.snapshots) }
         requested_ids = tuple(
-            entry.source_id for entry in reversed(self.manifest.entries)
-        )
+            entry.source_id for entry in reversed(self.manifest.entries) )
         observation, receipt = session.read(
             ContextReadAction(
                 _correlation(self.binding, 2),
                 tuple(handles[source_id] for source_id in requested_ids),
-            )
-        )
+            ) )
         canonical = [entry.source_id for entry in self.manifest.entries]
         self.assertEqual(seen, canonical + canonical)
         self.assertEqual(
@@ -1580,8 +1411,7 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
             requested_ids,
         )
         self.assertEqual(
-            tuple(item.source_id for item in receipt.evidence), requested_ids
-        )
+            tuple(item.source_id for item in receipt.evidence), requested_ids )
         self.assertEqual(session.state, ContextInvocationState.READING)
         self.assertNotIn(_PRIVATE_BODY_A, repr(receipt))
         session.complete_read(receipt)
@@ -1596,13 +1426,11 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
             side_effect=(
                 self.snapshots[canonical[0].source_id],
                 ContextSourceError(ContextSourceErrorCode.SOURCE_MISSING),
-            )
-        )
+            ) )
         session = _session(self.binding, registry)
         handles = tuple(
             handle
-            for _, handle in reversed(_mint_handles(session, registry, self.snapshots))
-        )
+            for _, handle in reversed(_mint_handles(session, registry, self.snapshots)) )
         with self.assertRaises(ContextSourceError) as caught:
             session.read(ContextReadAction(_correlation(self.binding, 2), handles))
         self.assertEqual(caught.exception.code, ContextSourceErrorCode.SOURCE_MISSING)
@@ -1614,8 +1442,7 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
     ) -> None:
         preflight_policy = replace(
             CONTEXT_ACTION_POLICY,
-            max_handles_per_read=1,
-        )
+            max_handles_per_read=1, )
         registry = _registry(_SCOPE, self.snapshots)
         session = _session(self.binding, registry, action_policy=preflight_policy)
         handles = tuple(
@@ -1629,8 +1456,7 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
                 )
             )
         self.assertEqual(
-            caught.exception.code, ContextActionErrorCode.READ_LIMIT_EXCEEDED
-        )
+            caught.exception.code, ContextActionErrorCode.READ_LIMIT_EXCEEDED )
         self.assertEqual(session.next_action_index, 2)
         registry.capture.assert_not_called()
         byte_policy = replace(
@@ -1638,8 +1464,7 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
             max_snippet_utf8_bytes=10,
             max_excerpt_utf8_bytes=40,
             max_source_read_utf8_bytes=40,
-            max_read_utf8_bytes=40,
-        )
+            max_read_utf8_bytes=40, )
         registry = _registry(_SCOPE, self.snapshots)
         session = _session(self.binding, registry, action_policy=byte_policy)
         handles = tuple(
@@ -1653,8 +1478,7 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
                 )
             )
         self.assertEqual(
-            executed.exception.code, ContextActionErrorCode.READ_LIMIT_EXCEEDED
-        )
+            executed.exception.code, ContextActionErrorCode.READ_LIMIT_EXCEEDED )
         self.assertEqual(session.next_action_index, 3)
         self.assertGreater(registry.capture.call_count, 0)
 
@@ -1667,8 +1491,7 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
             _SCOPE,
             entry.provenance.locator,
             "changed needle\n",
-            revision_seed=b"changed",
-        )
+            revision_seed=b"changed", )
         registry = _registry(_SCOPE, self.snapshots)
         registry.capture = mock.Mock(side_effect=(stable, drifted))
         session = _session(self.binding, registry)
@@ -1689,8 +1512,7 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
         with self.assertRaises(ContextActionError) as reentered:
             session.read(ContextReadAction(_correlation(self.binding, 2), (handle,)))
         self.assertEqual(
-            reentered.exception.code, ContextActionErrorCode.INVALID_TRANSITION
-        )
+            reentered.exception.code, ContextActionErrorCode.INVALID_TRANSITION )
         self.assertEqual(session.state, ContextInvocationState.FAILED)
 
     def test_outstanding_read_requires_exact_receipt_and_blocks_answer(self) -> None:
@@ -1704,11 +1526,9 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
             session.authorize_answer(
                 ContextAnswerAction(
                     _correlation(self.binding, 3), _PRIVATE_ANSWER, (handle,)
-                )
-            )
+                ) )
         self.assertEqual(
-            blocked.exception.code, ContextActionErrorCode.OUTSTANDING_READ
-        )
+            blocked.exception.code, ContextActionErrorCode.OUTSTANDING_READ )
         self.assertEqual(session.state, ContextInvocationState.FAILED)
         registry = _registry(_SCOPE, self.snapshots)
         session = _session(self.binding, registry)
@@ -1720,8 +1540,7 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
         with self.assertRaises(ContextActionError) as mismatch:
             session.complete_read(wrong)
         self.assertEqual(
-            mismatch.exception.code, ContextActionErrorCode.OUTSTANDING_READ
-        )
+            mismatch.exception.code, ContextActionErrorCode.OUTSTANDING_READ )
         self.assertEqual(session.state, ContextInvocationState.FAILED)
 
 
@@ -1752,27 +1571,22 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                 matches,
                 False,
                 sum(item.descriptor.utf8_bytes for item in matches),
-            )
-        )
+            ) )
         session = _session(self.binding, registry)
         queries = (
             ContextSearchQuery("needle", (ContextSourceKind.WRITING_ARTIFACT,)),
-            ContextSearchQuery("private", (ContextSourceKind.WRITING_ARTIFACT,)),
-        )
+            ContextSearchQuery("private", (ContextSourceKind.WRITING_ARTIFACT,)), )
         observation = session.search(
-            ContextSearchAction(_correlation(self.binding, 1), queries)
-        )
+            ContextSearchAction(_correlation(self.binding, 1), queries) )
         self.assertEqual(tuple(hit.query_index for hit in observation.hits), (1, 2))
         self.assertEqual(
             tuple(hit.source_id for hit in observation.hits),
-            tuple(item.descriptor.source_id for item in matches),
-        )
+            tuple(item.descriptor.source_id for item in matches), )
         self.assertTrue(
             all(
                 re.fullmatch(r"ctxh_v1_[0-9a-f]{64}", hit.handle.value)
                 for hit in observation.hits
-            )
-        )
+            ) )
         self.assertEqual(session.next_action_index, 2)
         registry.search.assert_called_once()
 
@@ -1812,8 +1626,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         query = ContextSearchQuery(
             "needle",
             (ContextSourceKind.WRITING_ARTIFACT,),
-            "manuscript/part_01/",
-        )
+            "manuscript/part_01/", )
 
         observation = session.search(
             ContextSearchAction(
@@ -1826,25 +1639,21 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         self.assertEqual(observation.hits[0].query_index, 1)
         self.assertEqual(
             observation.hits[0].source_id,
-            snapshots_tuple[0].descriptor.source_id,
-        )
+            snapshots_tuple[0].descriptor.source_id, )
         self.assertEqual(registry.capture.call_count, 2)
         captured_manifests = tuple(
-            call.args[0] for call in registry.capture.call_args_list
-        )
+            call.args[0] for call in registry.capture.call_args_list )
         self.assertTrue(
             all(
                 current.entries == (manifest.entries[0],)
                 for current in captured_manifests
-            )
-        )
+            ) )
         self.assertEqual(
             sum(
                 snapshots[entry.source_id].descriptor.utf8_bytes
                 for entry in captured_manifests[0].entries
             ),
-            986,
-        )
+            986, )
         self.assertEqual(session._scan_utf8_bytes, 986)
 
     def test_part_prefix_matrix_scans_nested_before_hit_limits_and_excludes_decoys(
@@ -1854,13 +1663,11 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         eligible_paths = (
             "manuscript/part_01/chapter_01.md",
             "manuscript/part_01/scenes/chapter_02.md",
-            "manuscript/part_01/scenes/memories/chapter_03.md",
-        )
+            "manuscript/part_01/scenes/memories/chapter_03.md", )
         decoy_paths = (
             "manuscript/part_02/chapter_07.md",
             "manuscript/part_010/chapter_99.md",
-            "core_documents/narrative_rules.md",
-        )
+            "core_documents/narrative_rules.md", )
         internal_path = "discussion_logs/private_context.md"
         snapshots_tuple = tuple(
             _snapshot(
@@ -1890,18 +1697,15 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
             CONTEXT_ACTION_POLICY,
             max_hits_per_search=1,
             max_hits_per_query=1,
-            max_hits_per_source_query=1,
-        )
+            max_hits_per_source_query=1, )
         session = _session(
             _binding(manifest),
             registry,
-            action_policy=policy,
-        )
+            action_policy=policy, )
         query = ContextSearchQuery(
             "part one release needle",
             (ContextSourceKind.WRITING_ARTIFACT,),
-            prefix,
-        )
+            prefix, )
 
         observation = session.search(
             ContextSearchAction(
@@ -1913,17 +1717,14 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         self.assertEqual(len(observation.hits), 1)
         self.assertTrue(observation.truncated)
         captured_entries = tuple(
-            call.args[1] for call in registry.capture.call_args_list
-        )
+            call.args[1] for call in registry.capture.call_args_list )
         captured_paths = tuple(entry.provenance.locator for entry in captured_entries)
         self.assertEqual(
             set(captured_paths),
-            set(eligible_paths),
-        )
+            set(eligible_paths), )
         self.assertEqual(
             {path: captured_paths.count(path) for path in eligible_paths},
-            {path: 2 for path in eligible_paths},
-        )
+            {path: 2 for path in eligible_paths}, )
         self.assertTrue(
             all(
                 call.args[0].entries
@@ -1940,18 +1741,15 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
             sum(
                 snapshots[_artifact_id(path)].descriptor.utf8_bytes
                 for path in eligible_paths
-            ),
-        )
+            ), )
         self.assertTrue(all(path not in captured_paths for path in decoy_paths))
         self.assertNotIn(
             internal_path,
-            tuple(entry.provenance.locator for entry in manifest.entries),
-        )
+            tuple(entry.provenance.locator for entry in manifest.entries), )
         self.assertNotIn(internal_path, captured_paths)
         self.assertIn(
             observation.hits[0].source_id,
-            {_artifact_id(path) for path in eligible_paths},
-        )
+            {_artifact_id(path) for path in eligible_paths}, )
 
         invalid_matrix = (
             (
@@ -2005,8 +1803,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         scope = replace(
             _SCOPE,
             subject_kind=ContextSubjectKind.DEBATE,
-            subject_id="debate-one",
-        )
+            subject_id="debate-one", )
         cases = (
             (
                 ContextSourceKind.WRITING_ARTIFACT,
@@ -2049,8 +1846,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                 content,
                 content,
                 _digest(encoded),
-                len(encoded),
-            )
+                len(encoded), )
             source_id = {
                 ContextSourceKind.WRITING_ARTIFACT: _artifact_id(locator),
                 ContextSourceKind.CONVERSATION: "conversation:conversation-one",
@@ -2083,22 +1879,18 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
             scope,
             tuple(
                 _entry(snapshot, index) for index, snapshot in enumerate(snapshots_list)
-            ),
-        )
+            ), )
         snapshots = {
-            snapshot.descriptor.source_id: snapshot for snapshot in snapshots_list
-        }
+            snapshot.descriptor.source_id: snapshot for snapshot in snapshots_list }
         registry = _registry(scope, snapshots)
         registry.search = ContextSourceRegistry.search.__get__(registry)
         aliases = {
             entry.source_id: f"s{index}"
-            for index, entry in enumerate(manifest.entries, start=1)
-        }
+            for index, entry in enumerate(manifest.entries, start=1) }
         session = _session(
             _binding(manifest),
             registry,
-            source_aliases=aliases,
-        )
+            source_aliases=aliases, )
         search = session.search(
             ContextSearchAction(
                 _correlation(session.binding, 1),
@@ -2138,8 +1930,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
             self.assertEqual(hit["snippet_utf8_bytes"], len(hit["snippet_text"].encode("utf-8")))
         handles = tuple(hit.handle for hit in search.hits)
         read, receipt = session.read(
-            ContextReadAction(_correlation(session.binding, 2), handles)
-        )
+            ContextReadAction(_correlation(session.binding, 2), handles) )
         read_serialized = session.serialize_observation(read)
         read_wire = json.loads(read_serialized)
         self.assertEqual(read_wire["observation_type"], "context_read_results")
@@ -2158,24 +1949,20 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                 _correlation(session.binding, 3),
                 _PRIVATE_ANSWER,
                 handles,
-            )
-        )
+            ) )
         self.assertEqual(
             tuple(item.handle for item in authorization.used_evidence),
-            handles,
-        )
+            handles, )
         framed = json.dumps(
             [search_wire, read_wire],
             ensure_ascii=False,
-            separators=(",", ":"),
-        )
+            separators=(",", ":"), )
         self.assertNotIn("/Users/", framed)
         self.assertNotIn("character_custodian", framed)
         self.assertLessEqual(
             len(search_serialized.encode("utf-8"))
             + len(read_serialized.encode("utf-8")),
-            CONTEXT_ACTION_POLICY.max_observation_utf8_bytes,
-        )
+            CONTEXT_ACTION_POLICY.max_observation_utf8_bytes, )
 
     def test_search_preflight_and_executed_failures_charge_differently(self) -> None:
         registry = _registry(_SCOPE, self.snapshots)
@@ -2193,14 +1980,12 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                 )
             )
         self.assertEqual(
-            preflight.exception.code, ContextActionErrorCode.CORRELATION_MISMATCH
-        )
+            preflight.exception.code, ContextActionErrorCode.CORRELATION_MISMATCH )
         self.assertEqual(session.next_action_index, 1)
         registry.search.assert_not_called()
         registry = _registry(_SCOPE, self.snapshots)
         registry.search = mock.Mock(
-            side_effect=ContextSourceError(ContextSourceErrorCode.SOURCE_DRIFT)
-        )
+            side_effect=ContextSourceError(ContextSourceErrorCode.SOURCE_DRIFT) )
         session = _session(self.binding, registry)
         with self.assertRaises(ContextSourceError):
             session.search(
@@ -2224,12 +2009,10 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
             replace(_correlation(self.binding, 1), scope=other_scope),
             replace(_correlation(self.binding, 1), operation_id="other"),
             replace(_correlation(self.binding, 1), result_correlation_id="other"),
-            replace(_correlation(self.binding, 1), action_index=2),
-        )
+            replace(_correlation(self.binding, 1), action_index=2), )
         query = ContextSearchQuery(
             "needle",
-            (ContextSourceKind.WRITING_ARTIFACT,),
-        )
+            (ContextSourceKind.WRITING_ARTIFACT,), )
         for correlation in invalid:
             with self.subTest(correlation=correlation):
                 registry = _registry(_SCOPE, self.snapshots)
@@ -2238,8 +2021,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                     session.search(ContextSearchAction(correlation, (query,)))
                 self.assertEqual(
                     caught.exception.code,
-                    ContextActionErrorCode.CORRELATION_MISMATCH,
-                )
+                    ContextActionErrorCode.CORRELATION_MISMATCH, )
                 self.assertEqual(session.next_action_index, 1)
                 registry.search.assert_not_called()
 
@@ -2250,26 +2032,21 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
             CONTEXT_ACTION_POLICY,
             max_nonterminal_actions=2,
             max_provider_calls=3,
-            max_search_actions=2,
-        )
+            max_search_actions=2, )
         registry = _registry(_SCOPE, self.snapshots)
         session = _session(self.binding, registry, action_policy=policy)
         query = ContextSearchQuery(
             "absent",
-            (ContextSourceKind.WRITING_ARTIFACT,),
-        )
+            (ContextSourceKind.WRITING_ARTIFACT,), )
         for index in (1, 2):
             session.search(
-                ContextSearchAction(_correlation(self.binding, index), (query,))
-            )
+                ContextSearchAction(_correlation(self.binding, index), (query,)) )
         self.assertEqual(session.next_action_index, 3)
         authorization = session.authorize_answer(
-            ContextAnswerAction(_correlation(self.binding, 3), _PRIVATE_ANSWER)
-        )
+            ContextAnswerAction(_correlation(self.binding, 3), _PRIVATE_ANSWER) )
         self.assertEqual(
             authorization.correlation.action_index,
-            policy.max_provider_calls,
-        )
+            policy.max_provider_calls, )
 
     def test_search_trims_tail_to_frame_budget_and_empty_frame_failure_is_terminal(
         self,
@@ -2280,8 +2057,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
             ContextSourceSearchMatch(
                 1, snapshot.descriptor, snapshot.records[0], "needle", 6
             )
-            for _ in range(3)
-        )
+            for _ in range(3) )
         # Give each logical hit a distinct record identity accepted by the observation.
         matches = tuple(
             replace(
@@ -2296,23 +2072,20 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         )
         registry = _registry(_SCOPE, self.snapshots)
         registry.search = mock.Mock(
-            return_value=(matches, False, snapshot.descriptor.utf8_bytes)
-        )
+            return_value=(matches, False, snapshot.descriptor.utf8_bytes) )
         policy = replace(
             CONTEXT_ACTION_POLICY,
             max_snippet_utf8_bytes=100,
             max_excerpt_utf8_bytes=200,
             max_source_read_utf8_bytes=300,
             max_read_utf8_bytes=400,
-            max_observation_utf8_bytes=900,
-        )
+            max_observation_utf8_bytes=900, )
         session = _session(self.binding, registry, action_policy=policy)
         observation = session.search(
             ContextSearchAction(
                 _correlation(self.binding, 1),
                 (ContextSearchQuery("needle", (ContextSourceKind.WRITING_ARTIFACT,)),),
-            )
-        )
+            ) )
         self.assertTrue(observation.truncated)
         self.assertLess(len(observation.hits), len(matches))
         tiny = replace(
@@ -2331,11 +2104,9 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                 ContextSearchAction(
                     _correlation(self.binding, 1),
                     (ContextSearchQuery("x", (ContextSourceKind.WRITING_ARTIFACT,)),),
-                )
-            )
+                ) )
         self.assertEqual(
-            caught.exception.code, ContextActionErrorCode.OBSERVATION_LIMIT_EXCEEDED
-        )
+            caught.exception.code, ContextActionErrorCode.OBSERVATION_LIMIT_EXCEEDED )
         self.assertEqual(session.next_action_index, 2)
 
     def test_immediate_answer_has_fresh_bound_content_free_authorization_and_cleans_session(
@@ -2344,33 +2115,27 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         references = (
             _reference(1, reference_id="whole", digest_character="4"),
             _reference(2, reference_id="range-2-4", digest_character="5"),
-            _reference(3, reference_id="range-8-9", digest_character="6"),
-        )
+            _reference(3, reference_id="range-8-9", digest_character="6"), )
         binding = _binding(
             self.manifest,
             reference_operation_id="reference-operation",
-            references=references,
-        )
+            references=references, )
         registry = _registry(_SCOPE, self.snapshots)
         session = _session(binding, registry)
         authorization = session.authorize_answer(
-            ContextAnswerAction(_correlation(binding, 1), _PRIVATE_ANSWER)
-        )
+            ContextAnswerAction(_correlation(binding, 1), _PRIVATE_ANSWER) )
         self.assertRegex(authorization.authorization_id, r"\Actxa_v1_[0-9a-f]{64}\Z")
         self.assertEqual(
-            authorization.answer_digest, _digest(_PRIVATE_ANSWER.encode("utf-8"))
-        )
+            authorization.answer_digest, _digest(_PRIVATE_ANSWER.encode("utf-8")) )
         self.assertRegex(authorization.manifest_digest, r"\Asha256:[0-9a-f]{64}\Z")
         self.assertRegex(
-            authorization.completed_read_digest, r"\Asha256:[0-9a-f]{64}\Z"
-        )
+            authorization.completed_read_digest, r"\Asha256:[0-9a-f]{64}\Z" )
         self.assertEqual(authorization.completed_evidence, ())
         self.assertEqual(authorization.used_evidence, ())
         self.assertIs(authorization.mandatory_references, references)
         self.assertEqual(
             tuple(item.ordinal for item in authorization.mandatory_references),
-            (1, 2, 3),
-        )
+            (1, 2, 3), )
         self.assertEqual(session.state, ContextInvocationState.ANSWER_AUTHORIZED)
         registry.capture.assert_not_called()
         rendered = repr(authorization)
@@ -2378,8 +2143,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
             self.assertNotIn(canary, rendered)
         alternate = _session(binding, _registry(_SCOPE, self.snapshots))
         different = alternate.authorize_answer(
-            ContextAnswerAction(_correlation(binding, 1), _PRIVATE_ANSWER + " changed")
-        )
+            ContextAnswerAction(_correlation(binding, 1), _PRIVATE_ANSWER + " changed") )
         self.assertNotEqual(different.authorization_id, authorization.authorization_id)
 
     def test_read_backed_answer_binds_all_completed_used_subset_and_final_canonical_revalidation(
@@ -2402,21 +2166,17 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         observation, receipt = session.read(
             ContextReadAction(
                 _correlation(self.binding, 2), tuple(handle for _, handle in pairs)
-            )
-        )
+            ) )
         session.complete_read(receipt)
         used = (pairs[0][1],)
         authorization = session.authorize_answer(
-            ContextAnswerAction(_correlation(self.binding, 3), _PRIVATE_ANSWER, used)
-        )
+            ContextAnswerAction(_correlation(self.binding, 3), _PRIVATE_ANSWER, used) )
         requested_ids = tuple(entry.source_id for entry, _ in pairs)
         self.assertEqual(
             tuple(item.source_id for item in authorization.completed_evidence),
-            requested_ids,
-        )
+            requested_ids, )
         self.assertEqual(
-            tuple(item.handle for item in authorization.used_evidence), used
-        )
+            tuple(item.handle for item in authorization.used_evidence), used )
         canonical_ids = [entry.source_id for entry in self.manifest.entries]
         self.assertEqual(seen, canonical_ids + canonical_ids + canonical_ids)
         self.assertEqual(
@@ -2434,11 +2194,9 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
             session.authorize_answer(
                 ContextAnswerAction(
                     _correlation(self.binding, 2), _PRIVATE_ANSWER, (unused,)
-                )
-            )
+                ) )
         self.assertEqual(
-            unauthorized.exception.code, ContextActionErrorCode.ANSWER_NOT_AUTHORIZED
-        )
+            unauthorized.exception.code, ContextActionErrorCode.ANSWER_NOT_AUTHORIZED )
         self.assertEqual(session.state, ContextInvocationState.FAILED)
         for failure in (
             KeyboardInterrupt("PRIVATE_INTERRUPT"),

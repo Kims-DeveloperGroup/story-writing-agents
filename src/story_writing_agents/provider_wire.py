@@ -8,8 +8,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
+import hashlib
 import json
 import re
+
+from .structured_output_validation import schema_rule_fingerprints
 
 WIRE_VERSION = "agent-provider-wire-v10"
 BUILTIN_RESULT_CONTRACT_IDS = frozenset({
@@ -83,6 +86,390 @@ TOP_LEVEL_FIELDS = {"c": "request_correlation_token", "q": "response_contract", 
 ACTION_LIMIT_NAMES = ("remaining_context_actions", "remaining_search_actions", "remaining_read_actions",
                       "max_queries_per_search", "remaining_search_queries", "max_handles_per_read",
                       "remaining_read_handles", "max_query_characters")
+
+
+def hoist_schema_definitions(schema: Mapping) -> dict:
+    """Keep local references rooted in the final physical schema envelope."""
+    result = deepcopy(dict(schema))
+    definitions: dict[str, object] = {}
+
+    def visit(node: object) -> None:
+        if type(node) is not dict:
+            return
+        local = node.pop("$defs", None)
+        if local is not None:
+            if type(local) is not dict:
+                raise WireShapeError("$.$defs", "invalid local definitions")
+            for name, child in local.items():
+                if name in definitions and definitions[name] != child:
+                    raise WireShapeError("$.$defs", "conflicting local definition")
+                definitions[name] = child
+                visit(child)
+        properties = node.get("properties")
+        if type(properties) is dict:
+            for child in properties.values():
+                visit(child)
+        variants = node.get("anyOf")
+        if type(variants) is list:
+            for child in variants:
+                visit(child)
+        visit(node.get("items"))
+
+    visit(result)
+    if definitions:
+        result["$defs"] = definitions
+    return result
+
+
+def rebase_schema_definitions(
+    schema: Mapping[str, object], namespace: str,
+) -> dict[str, object]:
+    """Rebase one complete captured graph before composing independent components."""
+    if type(namespace) is not str or re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", namespace) is None:
+        raise WireShapeError("$.$defs", "expected host definition namespace")
+    result = deepcopy(dict(schema))
+    definitions = result.get("$defs", {})
+    if type(definitions) is not dict:
+        raise WireShapeError("$.$defs", "expected root-owned definitions")
+    before, definition_fingerprints = schema_rule_fingerprints(result)
+    aliases = {name: f"{namespace}_{name}" for name in definition_fingerprints}
+    had_definitions = "$defs" in result
+    result.pop("$defs", None)
+    visited: set[int] = set()
+
+    def visit(node: object) -> None:
+        if type(node) is not dict:
+            return
+        identity = id(node)
+        if identity in visited:
+            return
+        visited.add(identity)
+        if "$defs" in node:
+            raise WireShapeError("$.$defs", "expected root-owned definitions")
+        if "$ref" in node:
+            name = node["$ref"][len("#/$defs/"):]
+            node["$ref"] = "#/$defs/" + aliases[name]
+        properties = node.get("properties")
+        if type(properties) is dict:
+            for child in properties.values():
+                visit(child)
+        variants = node.get("anyOf")
+        if type(variants) is list:
+            for child in variants:
+                visit(child)
+        visit(node.get("items"))
+
+    visit(result)
+    for child in definitions.values():
+        visit(child)
+    if had_definitions:
+        result["$defs"] = {aliases[name]: child for name, child in definitions.items()}
+    after, rebased_fingerprints = schema_rule_fingerprints(result)
+    if after != before or any(
+        rebased_fingerprints.get(aliases[name]) != fingerprint
+        for name, fingerprint in definition_fingerprints.items()
+    ):
+        raise WireShapeError("$.$defs", "definition rebasing changed rules")
+    return result
+
+
+LEAD_SCOPE_NATIVE_FIELDS = (
+    ("scope", (
+        ("activity_type", "activity"), ("writing_intent", "intent"),
+        ("specialist_domains", "domains"), ("target_artifact_paths", "paths"),
+        ("contributions", "roles"), ("dependency_slots", "slots"),
+        ("task_reference", "task"),
+    )),
+    ("task", (("task_id", "id"), ("task_revision", "revision"))),
+    ("slot", (("slot_id", "id"), ("dependent_domains", "domains"))),
+    ("marker", (("writing_task_scope", "task_scope"),)),
+)
+
+
+def _lead_scope_names(context: str, inverse: bool, fields: tuple) -> dict[str, str]:
+    pairs = dict(fields).get(context, ())
+    return {new: old for old, new in pairs} if inverse else dict(pairs)
+
+
+def _lead_scope_choices(nodes: tuple, definitions: Mapping) -> tuple:
+    result = []
+    visited: set[int] = set()
+
+    def visit(node: Mapping) -> None:
+        if id(node) in visited:
+            return
+        visited.add(id(node))
+        if "$ref" in node:
+            visit(definitions[node["$ref"][len("#/$defs/"):]])
+        elif "anyOf" in node:
+            for child in node["anyOf"]:
+                visit(child)
+        else:
+            result.append(node)
+
+    for node in nodes:
+        visit(node)
+    return tuple(result)
+
+
+def _lead_scope_child_context(
+    context: str, name: str, children: tuple, definitions: Mapping,
+    inverse: bool, fields: tuple,
+) -> str:
+    if context == "slots":
+        return "slot"
+    original = _lead_scope_names(context, inverse, fields).get(name, name) if inverse else name
+    if context == "scope":
+        return {"task_reference": "task", "dependency_slots": "slots"}.get(original, "")
+    if context:
+        return ""
+    if name in _lead_scope_names("marker", inverse, fields):
+        required = {"activity_type", "specialist_domains", "target_artifact_paths", "task_reference"}
+        if inverse:
+            mapping = _lead_scope_names("scope", False, fields)
+            required = {mapping[name] for name in required}
+        if any(required.issubset(node.get("properties", {})) for node in _lead_scope_choices(children, definitions)):
+            return "scope"
+    return ""
+
+
+def _lead_scope_schema_graph(schema: Mapping, inverse: bool, fields: tuple) -> dict:
+    root = deepcopy(dict(schema))
+    schema_rule_fingerprints(root)
+    had_definitions = "$defs" in root
+    original = root.pop("$defs", {})
+    contexts: dict[str, set[str]] = {name: set() for name in original}
+    seen: set[tuple[int, str]] = set()
+
+    def collect(node: Mapping, context: str) -> None:
+        token = (id(node), context)
+        if token in seen:
+            return
+        seen.add(token)
+        if "$ref" in node:
+            name = node["$ref"][len("#/$defs/"):]
+            contexts[name].add(context)
+            collect(original[name], context)
+            return
+        for child in node.get("anyOf", ()):
+            collect(child, context)
+        for name, child in node.get("properties", {}).items():
+            collect(child, _lead_scope_child_context(context, name, (child,), original, inverse, fields))
+        if "items" in node:
+            collect(node["items"], "slot" if context == "slots" else context)
+
+    collect(root, "")
+    for name, node in sorted(original.items()):
+        if not contexts[name]:
+            contexts[name].add("")
+            collect(node, "")
+    primary = {name: min(values) for name, values in contexts.items()}
+    aliases: dict[tuple[str, str], str] = {}
+    declarations: dict[str, object] = {}
+    next_alias = 0
+
+    def definition(name: str, context: str) -> str:
+        nonlocal next_alias
+        token = (name, context)
+        if token in aliases:
+            return aliases[token]
+        if context != primary[name]:
+            base = definition(name, primary[name])
+            projected = render(original[name], context)
+            if projected == declarations[base]:
+                aliases[token] = base
+                return base
+            while "s" + str(next_alias) in original or "s" + str(next_alias) in declarations:
+                next_alias += 1
+            alias = "s" + str(next_alias)
+            next_alias += 1
+        else:
+            alias = name
+            projected = render(original[name], context)
+        aliases[token] = alias
+        declarations[alias] = projected
+        return alias
+
+    def render(node: Mapping, context: str) -> dict:
+        if "$defs" in node:
+            raise WireShapeError("$.$defs", "expected root-owned scope definitions")
+        result = dict(node)
+        if "$ref" in node:
+            name = node["$ref"][len("#/$defs/"):]
+            result["$ref"] = "#/$defs/" + definition(name, context)
+            return result
+        if "anyOf" in node:
+            result["anyOf"] = [render(child, context) for child in node["anyOf"]]
+        mapping = _lead_scope_names(context, inverse, fields)
+        if "properties" in node:
+            properties = {}
+            for name, child in sorted(node["properties"].items()):
+                child_context = _lead_scope_child_context(context, name, (child,), original, inverse, fields)
+                if not context and child_context == "scope":
+                    mapping[name] = _lead_scope_names("marker", inverse, fields)[name]
+                current = mapping.get(name, name)
+                if current in properties:
+                    raise WireShapeError("$", "scope projection has ambiguous declared fields")
+                properties[current] = render(child, child_context)
+            result["properties"] = properties
+        if "required" in node:
+            result["required"] = [mapping.get(name, name) for name in node["required"]]
+        if "items" in node:
+            result["items"] = render(node["items"], "slot" if context == "slots" else context)
+        return result
+
+    result = render(root, "")
+    for name in sorted(original):
+        definition(name, primary[name])
+    if had_definitions or declarations:
+        result["$defs"] = declarations
+    return result
+
+
+def project_lead_scope_schema(
+    schema: Mapping[str, object], *, _fields: tuple = LEAD_SCOPE_NATIVE_FIELDS,
+) -> dict[str, object]:
+    """Project the complete current native Lead scope vocabulary without omitting rules."""
+    if _fields != LEAD_SCOPE_NATIVE_FIELDS:
+        raise WireShapeError("$", "scope codec declaration changed")
+    before, definitions = schema_rule_fingerprints(schema)
+    result = _lead_scope_schema_graph(schema, False, _fields)
+    inverse = _lead_scope_schema_graph(result, True, _fields)
+    after, restored = schema_rule_fingerprints(inverse)
+    if after != before or any(restored.get(name) != identity for name, identity in definitions.items()):
+        raise WireShapeError("$", "scope projection changed the declared rule graph")
+    return result
+
+
+def restore_lead_scope_result(
+    value: Mapping[str, object], schema: Mapping[str, object], *,
+    _fields: tuple = LEAD_SCOPE_NATIVE_FIELDS,
+) -> dict[str, object]:
+    """Restore only declared scope fields after the complete selected graph is valid."""
+    if _fields != LEAD_SCOPE_NATIVE_FIELDS:
+        raise WireShapeError("$", "scope codec declaration changed")
+    schema_rule_fingerprints(schema)
+    definitions = schema.get("$defs", {})
+
+    def visit(item: object, nodes: tuple, context: str) -> object:
+        choices = _lead_scope_choices(nodes, definitions)
+        if type(item) is list:
+            children = tuple(node["items"] for node in choices if "items" in node)
+            if not children:
+                raise WireShapeError("$", "scope codec requires selected declared items")
+            return [visit(child, children, "slot" if context == "slots" else context) for child in item]
+        if type(item) is not dict:
+            return deepcopy(item)
+        mapping = _lead_scope_names(context, True, _fields)
+        result = {}
+        for name, child in item.items():
+            children = tuple(node["properties"][name] for node in choices if name in node.get("properties", {}))
+            if not children:
+                raise WireShapeError("$", "scope codec requires selected declared fields")
+            child_context = _lead_scope_child_context(context, name, children, definitions, True, _fields)
+            if not context and child_context == "scope":
+                mapping[name] = _lead_scope_names("marker", True, _fields)[name]
+            current = mapping.get(name, name)
+            if current in result:
+                raise WireShapeError("$", "scope codec has ambiguous declared fields")
+            result[current] = visit(child, children, child_context)
+        return result
+
+    result = visit(value, (schema,), "")
+    if type(result) is not dict:
+        raise WireShapeError("$", "scope codec requires a selected result object")
+    return result
+
+
+def project_lead_scope_diagnostic(
+    text: str, *, _fields: tuple = LEAD_SCOPE_NATIVE_FIELDS,
+) -> str:
+    """Translate trusted member scope paths into the current native result graph."""
+    if _fields != LEAD_SCOPE_NATIVE_FIELDS:
+        raise WireShapeError("$", "scope codec declaration changed")
+
+    def path(match: re.Match) -> str:
+        tokens = re.findall(r"[A-Za-z_][A-Za-z_0-9]*|\[[^]]*\]", match[0][1:])
+        result = "$"
+        context = ""
+        member_roots = ((), ("agent_action", "task_result"))
+        scope_roots = member_roots + tuple(root + ("response_details",) for root in member_roots)
+        markers = _lead_scope_names("marker", False, _fields)
+        for index, token in enumerate(tokens):
+            if token.startswith("["):
+                result += token
+                if context == "slots":
+                    context = "slot"
+                continue
+            prefix = tuple(tokens[:index])
+            scope_marker = (not context and prefix in scope_roots
+                            and (token in markers or token in markers.values()))
+            mapping = markers if scope_marker else _lead_scope_names(context, False, _fields)
+            if scope_marker and prefix in member_roots:
+                result += ".response_details"
+            renamed = mapping.get(token, token)
+            result += "." + renamed
+            if context == "slots":
+                context = "slot"
+            elif context == "scope":
+                context = {"task_reference": "task", "dependency_slots": "slots"}.get(token, "")
+            elif context:
+                context = ""
+            elif scope_marker:
+                context = "scope"
+        return result
+
+    return re.sub(r"\$(?:\.[A-Za-z_][A-Za-z_0-9]*|\[[^]]*\])+", path, text)
+
+
+def require_schema_projection(
+    bound_schema: Mapping, actual_native_schema: Mapping, *,
+    declared_lowering: str = "identity",
+) -> None:
+    """Reject native transport restriction loss before provider submission.
+
+    This pure comparison certifies equivalence to the bound declaration, not
+    opaque native-model keyword support. Only the adapter's proven numeric
+    singleton lowering and an intrinsically-null redundant enum are allowed.
+    """
+    if declared_lowering not in {"identity", "integer_singleton_bounds"}:
+        raise WireShapeError("$", "undeclared schema lowering")
+    expected = deepcopy(dict(bound_schema))
+
+    def lower(node: object) -> None:
+        if type(node) is not dict:
+            return
+        enum = node.get("enum")
+        if enum == [None] and node.get("type") == "null":
+            node.pop("enum")
+        elif (node.get("type") == "integer"
+              and type(enum) is list and len(enum) == 1 and type(enum[0]) is int
+              and abs(enum[0]) <= (1 << 53) - 1
+              and "minimum" not in node and "maximum" not in node):
+            node.pop("enum")
+            node["minimum"] = node["maximum"] = enum[0]
+        for key in ("properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies"):
+            children = node.get(key)
+            if type(children) is dict:
+                for child in children.values():
+                    lower(child)
+        for key in ("anyOf", "allOf", "oneOf", "prefixItems"):
+            children = node.get(key)
+            if type(children) is list:
+                for child in children:
+                    lower(child)
+        for key in ("items", "additionalProperties", "additionalItems", "unevaluatedProperties", "contains", "propertyNames", "not", "if", "then", "else", "contentSchema"):
+            lower(node.get(key))
+
+    if declared_lowering == "integer_singleton_bounds":
+        lower(expected)
+    try:
+        original = json.dumps(expected, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        native = json.dumps(dict(actual_native_schema), sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError, UnicodeError):
+        raise WireShapeError("$", "invalid native schema projection") from None
+    if original != native:
+        raise WireShapeError("$", "native schema projection changed bound restrictions")
 
 
 def _closed(properties: dict) -> dict:
@@ -165,6 +552,178 @@ def project_result_schema(schema: Mapping, contract_id: str) -> dict:
 
     projected = describe_schema(visit(schema, root=True))
     return _compact_lead_schema_guidance(projected) if family == "lead-response-v6" else projected
+
+
+def share_schema_descriptions(schema: Mapping) -> dict:
+    """Share literal annotations in one final document, with an exact inverse."""
+    def encoded(value: object) -> bytes:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True,
+                          allow_nan=False, separators=(",", ":")).encode("utf-8", "strict")
+
+    def annotated(node: dict):
+        if "description" in node:
+            yield node
+        for child in node.get("properties", {}).values():
+            yield from annotated(child)
+        for child in node.get("anyOf", ()):
+            yield from annotated(child)
+        if isinstance(node.get("items"), dict):
+            yield from annotated(node["items"])
+        for child in node.get("$defs", {}).values():
+            yield from annotated(child)
+
+    original = deepcopy(dict(schema))
+    original_bytes = encoded(original)
+    original_fingerprints = schema_rule_fingerprints(original)
+    counts: dict[str, int] = {}
+    for node in annotated(original):
+        value = node["description"]
+        counts[value] = counts.get(value, 0) + 1
+    values = sorted(counts)
+    suffixes = set()
+    for index, value in enumerate(values):
+        for other in values[:index]:
+            size = 0
+            while size < min(len(value), len(other)) and value[-size - 1] == other[-size - 1]:
+                size += 1
+            size = min(size, len(value) - 1, len(other) - 1)
+            if size > 0:
+                suffixes.add(value[-size:])
+    candidates = sorted(
+        suffixes,
+        key=lambda value: (
+            -sum(count for text, count in counts.items() if text.endswith(value))
+            * (len(encoded(value)) - 2),
+            value,
+        ),
+    )
+    alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+    def short_name(number: int) -> str:
+        result = ""
+        while True:
+            number, digit = divmod(number, len(alphabet))
+            result = alphabet[digit] + result
+            if not number:
+                return result
+            number -= 1
+
+    prefix = "~"
+    source_text = original_bytes.decode("utf-8")
+    while any(prefix + short_name(i) + prefix in source_text
+              for i in range(len(candidates) + len(values) * (len(values) + 1) // 2)):
+        prefix += "~"
+    segments = {value: [(False, value)] for value in values}
+    literals: dict[str, str] = {}
+    chunks: list[str] = []
+
+    def intern(value: str, count: int) -> str | None:
+        code = prefix + short_name(len(literals)) + prefix
+        chunk = f"{code} {len(value)}:{value}\n"
+        if count * (len(encoded(value)) - len(encoded(code))) <= len(encoded(chunk)) - 2:
+            return None
+        literals[code] = value
+        chunks.append(chunk)
+        return code
+
+    for value in candidates:
+        matched = [text for text, pieces in segments.items()
+                   if len(pieces) == 1 and not pieces[0][0] and text.endswith(value)]
+        code = intern(value, sum(counts[text] for text in matched))
+        if code is not None:
+            for text in matched:
+                segments[text] = [(False, text[:-len(value)]), (True, code)]
+    prefix_counts: dict[str, int] = {}
+    for text, pieces in segments.items():
+        for is_code, value in pieces:
+            if not is_code and value:
+                prefix_counts[value] = prefix_counts.get(value, 0) + counts[text]
+    prefixes = sorted(prefix_counts)
+    shared_prefixes = set()
+    for index, value in enumerate(prefixes):
+        for other in prefixes[:index]:
+            size = 0
+            while size < min(len(value), len(other)) and value[size] == other[size]:
+                size += 1
+            size = min(size, len(value) - 1, len(other) - 1)
+            if size > 0:
+                shared_prefixes.add(value[:size])
+    for value in sorted(shared_prefixes, key=lambda part: (
+        -sum(count for text, count in prefix_counts.items() if text.startswith(part))
+        * (len(encoded(part)) - 2), part,
+    )):
+        matched = [text for text, pieces in segments.items()
+                   if not pieces[0][0] and len(pieces[0][1]) > len(value)
+                   and pieces[0][1].startswith(value)]
+        code = intern(value, sum(counts[text] for text in matched))
+        if code is not None:
+            for text in matched:
+                pieces = segments[text]
+                segments[text] = [(True, code), (False, pieces[0][1][len(value):])] + pieces[1:]
+    prefix_counts = {}
+    for text, pieces in segments.items():
+        for is_code, value in pieces:
+            if not is_code and value:
+                prefix_counts[value] = prefix_counts.get(value, 0) + counts[text]
+    for value, count in sorted(prefix_counts.items()):
+        code = intern(value, count)
+        if code is not None:
+            for text, pieces in segments.items():
+                segments[text] = [
+                    (is_code, code if not is_code and piece == value else piece)
+                    for is_code, piece in pieces
+                ]
+    if not literals:
+        return original
+    scope = hashlib.sha256(original_bytes).hexdigest()
+    marker = (
+        f"\n[SWA-DESCRIPTIONS {scope}]\n"
+        "Exact delimited description tokens use only this complete schema's literal dictionary. "
+        "Expand each token once wherever it occurs; all other characters remain literal. "
+        "Lengths count Unicode characters. The first line records original root-description "
+        "presence and entry count.\n"
+    )
+    while marker in source_text:
+        marker = "\n" + marker
+    result = deepcopy(original)
+    for node in annotated(result):
+        node["description"] = "".join(piece for _, piece in segments[node["description"]])
+    had_root = "description" in result
+    result["description"] = (
+        result.get("description", "") + marker + f"{int(had_root)} {len(literals)}\n"
+        + "".join(chunks)
+    )
+
+    restored = deepcopy(result)
+    root_text, separator, payload = restored["description"].rpartition(marker)
+    if not separator:
+        raise WireShapeError("$", "missing scoped description dictionary")
+    header, payload = payload.split("\n", 1)
+    root_flag, size = (int(value) for value in header.split())
+    recovered: dict[str, str] = {}
+    for _ in range(size):
+        header, payload = payload.split(":", 1)
+        code, length = header.rsplit(" ", 1)
+        length = int(length)
+        recovered[code], payload = payload[:length], payload[length:]
+        if not payload.startswith("\n"):
+            raise WireShapeError("$", "invalid description dictionary framing")
+        payload = payload[1:]
+    if payload or recovered != literals:
+        raise WireShapeError("$", "incomplete scoped description dictionary")
+    if root_flag:
+        restored["description"] = root_text
+    else:
+        del restored["description"]
+    token_pattern = re.compile("|".join(re.escape(code) for code in recovered))
+    for node in annotated(restored):
+        node["description"] = token_pattern.sub(
+            lambda match: recovered[match.group()], node["description"]
+        )
+    if (encoded(restored) != original_bytes
+            or schema_rule_fingerprints(restored) != original_fingerprints):
+        raise WireShapeError("$", "description sharing changed complete rule graph")
+    return result if len(encoded(result)) < len(original_bytes) else original
 
 
 def _compact_lead_schema_guidance(schema: dict) -> dict:
@@ -1056,8 +1615,12 @@ ENUM_MEANINGS = {
     "search_conversation_history": "find relevant conversation history and citation IDs",
     "read_conversation_history": "read the cited history record range",
 }
+_SEARCH_MEMBERSHIP_CATALOG_FIELDS = frozenset(
+    name for name in SOURCE_TYPES.values() if name not in FIELD_CATALOG
+)
 for _domain, _wire in SOURCE_TYPES.items():
     ENUM_MEANINGS[_wire] = {"writing_artifact": "canonical story documents in the active authorized workspace", "conversation": "authorized story-conversation records", "active_debate": "the current consensus run's state and messages", "own_agent_state": "this agent's own prior work outcomes", "runtime_input": "the current runtime-issued assignment", "agent_definition": "the bound role and behavior instructions"}[_domain]
+    FIELD_CATALOG.setdefault(_wire, ENUM_MEANINGS[_wire])
 
 
 for _editorial_value, _editorial_meaning in {
@@ -1084,25 +1647,41 @@ for _editorial_value, _editorial_meaning in {
 def describe_schema(schema: Mapping) -> dict:
     """Preserve owner prose and reject undescribed built-in contract choices."""
     result = deepcopy(dict(schema))
+    action = result.get("properties", {}).get("action_type", {})
+    search_action = (action.get("type") == "string"
+                     and action.get("enum") == [ACTION_TYPES["search"]])
+
     def require_description(node: Mapping) -> None:
         description = node.get("description")
         if not isinstance(description, str) or not description.strip():
             raise ValueError("provider schema choice requires an owner-authored description")
 
-    def visit(node: Mapping, name: str | None = None) -> None:
+    def visit(node: Mapping, name: str | None = None, path: tuple[str, ...] = ()) -> None:
+        source_membership = (search_action and len(path) == 4 and path[-1] == name
+                             and path[:3] == ("queries", "*", "source_types"))
+        if source_membership:
+            values = node.get("enum")
+            if (name not in SOURCE_TYPES.values() or node.get("type") != "boolean"
+                    or type(values) is not list or len(values) != 1 or values[0] is not True):
+                raise ValueError(f"provider wire catalog has no enum meaning for {name}")
         for value in node.get("enum", ()):
-            if name not in DYNAMIC_CHOICE_FIELDS and not (
-                isinstance(value, str) and value in ENUM_MEANINGS
-            ):
+            if not source_membership and name not in DYNAMIC_CHOICE_FIELDS and not (
+                    isinstance(value, str) and value in ENUM_MEANINGS):
                 raise ValueError(f"provider wire catalog has no enum meaning for {name}")
         for child_name, child in node.get("properties", {}).items():
+            child_path = path + (child_name,)
+            if child_name in _SEARCH_MEMBERSHIP_CATALOG_FIELDS and not (
+                    search_action and len(child_path) == 4
+                    and child_path[:3] == ("queries", "*", "source_types")):
+                raise ValueError(f"provider wire catalog has no field: {child_name}")
             field_description(child_name)
-            visit(child, child_name)
+            visit(child, child_name, child_path)
         if "items" in node:
-            visit(node["items"], name)
+            visit(node["items"], name, path + ("*",))
         for child in node.get("anyOf", ()):
             require_description(child)
-            visit(child, name)
+            visit(child, name, path)
+
     require_description(result)
     visit(result)
     return result
@@ -1155,8 +1734,15 @@ ENUM_MEANINGS.update({
 
 # Source-owned nested objects are deliberately literal. Only these protocol
 # containers have runtime-owned child fields that the guide may enumerate.
+_catalog("schema_id", "Echo one complete contract identity offered for this exact physical request; the outer action identity pins its corresponding inner result identity.")
+_catalog("response_details", "All remaining fields of the selected response family; copy its closed required shape without legacy aliases or extra fields.")
+_catalog("input_anchor_id", "One offered input actually selected for this specialist; it establishes a nonempty selection without source priority.")
+_catalog("required_input_recipients", "For each required offered source, name an active specialist actually receiving it.")
+_catalog("optional_inputs", "Closed offered-input membership cells. Selected inputs are the union of true cells, the anchor, and required-source recipient edges, in offered order.")
+
 STRUCTURED_INPUT_FIELDS = frozenset("authoring_assessment authoring_admission foundations direction creative_scope decisions interaction_mode exploration_request exploration_adoption response_contract action_limits task_input session_history conversations records provider_constraints writing_task_scope confirmed_scope available_writing_tasks available_input_sources assignment assignments inputs selected_inputs replies document_change_requests requests offered_draft_sources document_change_request_update confirmed_proposal_drafting_context confirmed_proposal_drafting_constraints document_change_workflow_steps mandatory_reviewer_inputs specialist_consultation_proposal artifact_change_proposal proposal_drafting_request follow_up_consultation artifact_changes current_draft context_documents context_record_updates context_removals core_document_statuses context_observation search_results read_results source source_range provenance zero_hit_receipt untrusted_attached_references artifact_reference line_range context_reuse base_candidate_reference target_candidate_reference text_splice task_reference story_session_context owner_outcomes focused_context core_documents prior_agent_outcomes debate_history conversation_history bootstrap conversation_retrieval_control retrieval_limits expected_reviewed_proposal structured_response_repair request decision started basis selected_action constraints rag_context excerpts citation document reference".split())
-OPAQUE_FIELDS = frozenset("details record_content conversation_event metadata core_updates source_data shared_context_objects".split())
+OPAQUE_FIELDS = frozenset("details record_content conversation_event metadata core_updates "
+                          "source_data shared_context_objects response_correction".split())
 
 
 INPUT_ENUM_FIELDS = frozenset({
@@ -1479,7 +2065,13 @@ def project_action_schema(schema: Mapping) -> dict:
                 query = child["items"]
                 query["properties"] = {"search_text": query["properties"]["text"], "source_types": query["properties"]["source_kinds"]}
                 query["required"] = ["search_text", "source_types"]
-                query["properties"]["source_types"]["items"]["enum"] = [SOURCE_TYPES[item] for item in query["properties"]["source_types"]["items"]["enum"]]
+                selection = query["properties"]["source_types"]
+                if selection.get("type") == "array":
+                    selection["items"]["enum"] = [SOURCE_TYPES[item] for item in selection["items"]["enum"]]
+                else:
+                    for candidate in selection.get("anyOf", [selection]):
+                        candidate["properties"] = {SOURCE_TYPES[key]: value for key, value in candidate["properties"].items()}
+                        candidate["required"] = list(candidate["properties"])
             properties[wire] = child
         branch = {**_closed(properties), "description": node["description"]}
         # Result contracts have their own owner validation; caller-owned result
@@ -1506,7 +2098,7 @@ class WireShapeError(ValueError):
         super().__init__("current provider wire shape rejected")
 
 
-def normalize_context_action(value: object) -> dict:
+def normalize_context_action(value: object, *, finite_source_kinds: bool = False) -> dict:
     if type(value) is not dict or set(value) != {"agent_action"}:
         raise WireShapeError("$", "expected object containing exactly agent_action")
     action = value["agent_action"]
@@ -1529,6 +2121,12 @@ def normalize_context_action(value: object) -> dict:
             path = f"$.queries[{index}]"
             if type(query) is not dict or set(query) != {"search_text", "source_types"}:
                 raise WireShapeError(path, "expected object containing exactly search_text, source_types")
+            if finite_source_kinds and type(query["source_types"]) is dict:
+                selected = query["source_types"]
+                if (not selected or not set(selected).issubset(SOURCE_TYPES.values())
+                        or any(value is not True for value in selected.values())):
+                    raise WireShapeError(path + ".source_types", "expected exact offered source-kind selection")
+                query = {**query, "source_types": [value for value in SOURCE_TYPES.values() if value in selected]}
             if type(query["source_types"]) is not list:
                 raise WireShapeError(path + ".source_types", "expected an array of authorized source types")
             types = {v: k for k, v in SOURCE_TYPES.items()}
@@ -1692,12 +2290,14 @@ def recover_lead_public_response(
     if contract_id not in {
         "lead-response-v6", "lead-response-v7", "lead-response-v8",
         "lead-response-v9", "lead-discussion-response-v1",
+        "lead-exploration-response-v1", "consultation-summary-v4", "artifact-review-summary-v4",
+        "premise-decision-summary-v1", "premise-analysis-response-v1",
     } or type(response_text) is not str:
         return None
     if type(maximum_utf8_bytes) is not int or maximum_utf8_bytes < 1:
         return None
     try:
-        if len(response_text.encode("utf-8")) > maximum_utf8_bytes:
+        if len(response_text.encode("utf-8")) > max(maximum_utf8_bytes, 262144):
             return None
     except UnicodeError:
         return None

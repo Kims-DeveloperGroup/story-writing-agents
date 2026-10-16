@@ -66,8 +66,7 @@ class SpecialistRoutingTests(unittest.TestCase):
             target.CHARACTER_SHEETS: (target.GLOBAL_OUTLINE.value, target.PART_OUTLINES.value),
             target.NARRATIVE_RULES: (target.GLOBAL_OUTLINE.value, target.PART_OUTLINES.value),
             target.MANUSCRIPT: (target.GLOBAL_OUTLINE.value, target.PART_OUTLINES.value,
-                                target.CHARACTER_SHEETS.value, target.NARRATIVE_RULES.value),
-        }
+                                target.CHARACTER_SHEETS.value, target.NARRATIVE_RULES.value), }
         for path, domain, owner in cases:
             with self.subTest(path=path):
                 self.assertIs(artifact_domain(path), domain)
@@ -121,10 +120,8 @@ class SpecialistRoutingTests(unittest.TestCase):
         spec = premise.PremiseDecisionSpec("question-1", "knowledge", literal, (Domain.PLOT_STRUCTURE,), "user-1")
         self.assertEqual(spec.question, literal)
         self.assertNotEqual(spec.question_digest, replace(spec, question=literal + "?").question_digest)
-        with self.assertRaises(FrozenInstanceError):
-            spec.question = "Changed"
-        with self.assertRaises(ValueError):
-            replace(spec, dependent_domains=())
+        with self.assertRaises(FrozenInstanceError): spec.question = "Changed"
+        with self.assertRaises(ValueError): replace(spec, dependent_domains=())
 
     def test_review_requires_disclosed_concrete_basis_while_draft_forbids_it(self):
         basis = ReviewBasis(("candidate",), "Compare motivation and chronology.")
@@ -187,8 +184,7 @@ class SpecialistRoutingTests(unittest.TestCase):
             self.assertEqual(json.loads(raw)["proposal"]["proposal_digest"], case["proposal_digest"])
             historical_scope = c.authoring_scope_from_dict(json.loads(case["scope_utf8"]))
             if case["intent"] == "authoring":
-                with self.assertRaises(ValueError):
-                    c.decode_collaboration_proposal(raw)
+                with self.assertRaises(ValueError): c.decode_collaboration_proposal(raw)
             else:
                 with self.assertRaisesRegex(ValueError, "proposal basis has missing or extra fields"):
                     c.decode_collaboration_proposal(raw)
@@ -255,13 +251,21 @@ class SpecialistRoutingTests(unittest.TestCase):
 
         analysis = premise.PremiseAnalysis("alternatives_assessed", "No candidate was reviewed.", (premise.PremiseAlternative("knows", "The narrator knows.", "Preserve intentional ambiguity.", ("The reader may remain uncertain.",), ("user_input",)),))
         self.assertEqual(premise.premise_analysis_from_dict(premise.premise_value_to_dict(analysis)), analysis)
-        with self.assertRaises(ValueError):
-            replace(analysis, assessment="drafted")
+        with self.assertRaises(ValueError): replace(analysis, assessment="drafted")
         from story_writing_agents.lead_provider_contracts import PremiseDecisionConstraints
         constraints = PremiseDecisionConstraints("grounded-question", input_ids=("user_input",))
         value = premise.premise_value_to_dict(analysis)
         self.assertEqual(constraints.validate_analysis(value), analysis)
-        self.assertEqual(constraints.analysis_schema()["properties"]["alternatives"]["items"]["properties"]["basis_input_ids"]["minItems"], 1)
+        from tests.provider_wire_fixture import fixture_schema_node
+        schema = constraints.analysis_schema()
+        branches = fixture_schema_node(schema, schema)['anyOf']
+        assessed = next(fixture_schema_node(schema, member) for member in branches
+            if fixture_schema_node(schema, fixture_schema_node(schema, member)[
+                'properties']['assessment'])['enum'] == ['alternatives_assessed'])
+        basis = assessed
+        for field in ('alternatives', '*', 'basis_input_ids'):
+            basis = fixture_schema_node(schema, basis)
+            basis = basis['items'] if field == '*' else basis['properties'][field]
+        self.assertEqual(fixture_schema_node(schema, basis)['minItems'], 1)
         value["alternatives"][0]["basis_input_ids"] = []
-        with self.assertRaises(ValueError):
-            constraints.validate_analysis(value)
+        with self.assertRaises(ValueError): constraints.validate_analysis(value)

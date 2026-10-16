@@ -1,6 +1,7 @@
 """Live lead-review workflows for exact artifact proposals."""
 
 from __future__ import annotations
+from tests.provider_wire_fixture import lead_fixture_bound_scope
 
 import json
 import unittest
@@ -14,11 +15,8 @@ from story_writing_agents.conversations import session_context as session_contex
 from story_writing_agents.agents import (
     EXECUTION_SPECIALIST,
     LEAD_ORCHESTRATOR,
-    PLOT_ARCHITECT,
-)
-from story_writing_agents.artifact_proposals import (
-    serialize_artifact_review_candidate,
-)
+    PLOT_ARCHITECT, )
+from story_writing_agents.artifact_proposals import ( serialize_artifact_review_candidate, )
 from story_writing_agents.writing_artifacts import ArtifactReviewReason
 from story_writing_agents.conversations import (
     ArtifactProposalState,
@@ -47,17 +45,14 @@ from story_writing_agents.conversations import (
 from story_writing_agents.conversation_storage import (
     ConversationStorageBackend,
     ConversationStorageCapability,
-    WorkspaceConversationStorageMutationCoordinator,
-)
+    WorkspaceConversationStorageMutationCoordinator, )
 from story_writing_agents.conversation_storage.migration import (
     ConversationStorageTransferOutcome,
     transfer_conversation_storage,
-    verify_conversation_storage,
-)
+    verify_conversation_storage, )
 from story_writing_agents.conversation_storage.sqlite import (
     compose_sqlite_conversation_storage,
-    provision_sqlite_conversation_storage,
-)
+    provision_sqlite_conversation_storage, )
 from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
 from story_writing_agents.writing_artifacts._storage import ArtifactRootSecurityError
 
@@ -115,20 +110,86 @@ def _artifact_outcome(
     objective_intent: object = None,
     authoring_assessment: object = None,
     authoring_scope=None,
+    read_queries: tuple[tuple[str, str], ...] = (),
+    read_prefix: str | None = None,
 ):
+    read_phase = 0
+    selected_handles = ()
     def respond(call, _provider):
+        nonlocal read_phase, selected_handles
+        from tests.provider_wire_fixture import finite_fixture_read_selection, indexed_response
+        from tests.provider_wire_fixture import offered_fixture_bindings
+        if read_queries and read_phase < 2:
+            if read_prefix is None:
+                raise ValueError('The caller must supply the intended artifact search prefix')
+            _provider.responses.insert(0, respond)
+            if read_phase == 0:
+                read_phase = 1
+                outer, inner = offered_fixture_bindings(call, action_type='search_context',
+                    response_type=None, family=1)
+                return indexed_response({'action_type': 'search_context',
+                    'artifact_directory_prefix': read_prefix,
+                    'queries': [{'search_text': query, 'source_types': {'story_document': True}}
+                                for _path, query in read_queries]}, outer_schema_id=outer, inner_schema_id=inner)
+            read_phase = 2
+            hits = call.payload['context_observation']['search_results']
+            selected_handles = tuple(next(row['read_handle'] for row in hits
+                if row['provenance']['source_locator'] == path) for path, _query in read_queries)
+            _provider.used_handles = selected_handles
+            outer, inner = offered_fixture_bindings(call, action_type='read_context', response_type=None, family=0)
+            return indexed_response({'action_type': 'read_context',
+                'read_handles': finite_fixture_read_selection(
+                    call.contract.offers.issued_handle_aliases, selected_handles)},
+                outer_schema_id=outer, inner_schema_id=inner)
         material = _live_material(call)
+        if read_queries:
+            reads = call.payload['context_observation']['read_results']
+            qualified = {row['provenance']['source_locator']: row['evidence_id'] for row in reads}
+            if set(qualified) != {path for path, _query in read_queries}:
+                raise ValueError('The READ must complete the exact caller-supplied artifact set')
+            material = {**material, 'qualified_read_ids': qualified}
         resolved_operations = (
-            operations(call, material) if callable(operations) else operations
-        )
+            operations(call, material) if callable(operations) else operations )
+        if read_queries:
+            by_id = {identity: path for path, identity in qualified.items()}
+            _provider.backend.artifact_read_links = tuple(
+                (by_id[operation['evidence_id']], operation['kind'], operation['evidence_id'])
+                for operation in resolved_operations)
         resolved_evidence = (
             _reference_ids(material)
             if evidence_ids is None
             else (
                 evidence_ids(call, material) if callable(evidence_ids) else evidence_ids
-            )
-        )
+            ) )
         scope = authoring_scope(call) if callable(authoring_scope) else authoring_scope
+        from copy import deepcopy
+        from story_writing_agents.agent_context.service import BoundContextProviderCallRequest
+        if isinstance(call, BoundContextProviderCallRequest):
+            from tests.provider_wire_fixture import (
+                result, lead_fixture_scope, lead_fixture_result, lead_fixture_response,
+                lead_fixture_assessment)
+            from tests.test_lead_orchestration import _compact_scope, _compact_objective
+            value = {'kind': 'proposal', 'message': message,
+                     'artifact_intent': {'operations': resolved_operations}}
+            if scope is not None:
+                value['authoring_scope'] = _compact_scope(scope)
+            if authoring_assessment is not None:
+                value['authoring_assessment'] = deepcopy(authoring_assessment)
+            objective = (objective_intent(call, material) if callable(objective_intent)
+                         else objective_intent)
+            if objective is not None:
+                value['artifact_intent']['objective_intent'] = _compact_objective(objective)
+            native = result(value, 'lead-response-v9')
+            if 'authoring_assessment' in native:
+                choices = dict(call.contract.semantic_index.policy.choices)
+                sources = (choices['input_ids'] if choices['source_binding'] == ('unbound',)
+                           else choices['source_ids'])
+                native['authoring_assessment'] = lead_fixture_assessment(
+                    native['authoring_assessment'], source_choices=choices['input_ids'])
+            if 'writing_task_scope' in native:
+                native['task_scope'] = lead_fixture_bound_scope(
+                    call, native.pop('writing_task_scope'))
+            return lead_fixture_response(call, lead_fixture_result(native), family=0)
         return _provider_envelope(
             call,
             {
@@ -160,12 +221,8 @@ def _artifact_synthesis_outcome(
     message: str = "The exact candidate review is complete.",
 ):
     def respond(call, _provider):
-        value = {
-            "decision": decision,
-            "message": message,
-        }
-        if malformed == "omit_rationale":
-            value.pop("message")
+        value = { "decision": decision, "message": message, }
+        if malformed == "omit_rationale": value.pop("message")
         return _provider_envelope(call, value)
 
     return respond
@@ -177,15 +234,13 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             (item.path, item.content)
             for item in WritingArtifactRepository(
                 self.workspace.root
-            ).capture_complete_state()
-        )
+            ).capture_complete_state() )
 
     def artifact_events(self, conversation_id: str, payload_type: type) -> tuple:
         return tuple(
             event.payload
             for event in self.history(conversation_id)
-            if type(event.payload) is payload_type
-        )
+            if type(event.payload) is payload_type )
 
     async def reviewed_create(
         self,
@@ -202,6 +257,12 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 evidence_status="missing",
                 evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
+
+                authoring_scope=lambda call: _live_scope(
+                    call, activity='review', domains=('tone_execution',),
+                    paths=(_RULES,), contributions=[
+                        {'domain': domain, 'role': 'constraint_assessor'}
+                        for domain in ('tone_execution',)]),
             )
         )
         proposed = await self.runtime.lead_turn(
@@ -210,17 +271,12 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             ("Complete the missing narrative rules." + '\nSupplied requested candidate content:\n' + json.dumps(['Use restrained close-third narration.\n'])
              + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
         )
-        self.backend.enqueue_for(
-            EXECUTION_SPECIALIST,
-            _specialist_outcome(assessment),
-        )
+        self.backend.enqueue_for( EXECUTION_SPECIALIST, _specialist_outcome(assessment), )
         self.backend.enqueue_for(
             LEAD_ORCHESTRATOR,
-            _artifact_synthesis_outcome(decision),
-        )
+            _artifact_synthesis_outcome(decision), )
         decided = await self.runtime.decide_lead_step(
-            _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-        )
+            _decision(proposed, CollaborationConfirmationDecision.CONFIRM) )
         return proposed, decided
 
     async def test_incomplete_core_workflow_is_reviewed_only_after_confirmation(
@@ -238,6 +294,12 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 evidence_status="missing",
                 evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
+
+                authoring_scope=lambda call: _live_scope(
+                    call, activity='review', domains=('tone_execution',),
+                    paths=(_RULES,), contributions=[
+                        {'domain': domain, 'role': 'constraint_assessor'}
+                        for domain in ('tone_execution',)]),
             )
         )
 
@@ -251,12 +313,10 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.assertIs(proposed.kind, LeadOutcomeKind.PROPOSAL)
         self.assertIs(
             proposed.artifact_proposal.state,
-            ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION,
-        )
+            ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION, )
         self.assertEqual(
             tuple(item.specialist_id for item in proposed.proposal.assignments),
-            (EXECUTION_SPECIALIST,),
-        )
+            (EXECUTION_SPECIALIST,), )
         self.assertEqual(len(self.backend.call_records) - before_calls, 1)
         self.assertEqual(self.backend.call_records[before_calls][0], LEAD_ORCHESTRATOR)
         self.assertEqual(self.artifact_snapshot(), before)
@@ -266,18 +326,14 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.backend.enqueue_for(EXECUTION_SPECIALIST, _specialist_outcome("supports"))
         self.backend.enqueue_for(
             LEAD_ORCHESTRATOR,
-            _artifact_synthesis_outcome("propose"),
-        )
+            _artifact_synthesis_outcome("propose"), )
         storage = self.runtime.conversation_storage_services
         context = SessionHistorySourceAdapter(storage.catalog, storage.event_store, self.session_id)
         prior = context.capture().coverage
         decision = await self.runtime.decide_lead_step(
-            _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-        )
+            _decision(proposed, CollaborationConfirmationDecision.CONFIRM) )
 
-        self.assertIs(
-            decision.turn.artifact_proposal.state, ArtifactProposalState.REVIEWED
-        )
+        self.assertIs( decision.turn.artifact_proposal.state, ArtifactProposalState.REVIEWED )
         reviewed = decision.turn.artifact_proposal.reviewed_proposal
         self.assertIsNotNone(reviewed)
         self.assertFalse(reviewed.apply_authority_granted)
@@ -300,8 +356,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.assertEqual(specialist_candidate["candidate_digest"], candidate_value["candidate_digest"])
         self.assertEqual(
             self.artifact_events(conversation_id, ArtifactReviewedProposal),
-            (reviewed,),
-        )
+            (reviewed,), )
         projection = project_collaboration_history(self.history(conversation_id))
         self.assertEqual(projection.current_reviewed_artifact_proposal, reviewed)
         readable = project_collaboration_readable_history(self.history(conversation_id))
@@ -348,18 +403,42 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.backend.enqueue(
             _artifact_outcome(
                 operations=lambda _call,
-                material: [ { "evidence_id": _reference_ids(material)[0], "kind": "replace", "new_text": "Use present tense in dream passages.\n", } ],
+                material: [{
+                    "evidence_id": material['qualified_read_ids'][_RULES],
+                    "kind": "replace", "new_text": "Use present tense in dream passages.\n",
+                }],
                 evidence_status="verified",
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
-                authoring_scope=lambda call: _live_scope(call, activity='review', domains=('tone_execution',), paths=(_RULES,)),
-            )
+                authoring_scope=lambda call: _live_scope(
+                    call, activity='review', domains=('tone_execution',),
+                    paths=(_RULES,), contributions=[
+                        {'domain': domain, 'role': 'constraint_assessor'}
+                        for domain in ('tone_execution',)]),
+
+            read_queries=((_RULES, 'Always'),), read_prefix='core_documents/',)
         )
+        physical_before = len(self.backend.calls)
         proposed = await self.runtime.lead_turn(
             self.session_id,
             conflict_id,
             (f"Edit ${{{_RULES}}} even though the existing rule conflicts." + '\nSupplied requested candidate content:\n' + json.dumps(['Use present tense in dream passages.\n'])
              + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
         )
+        physical = self.backend.calls[physical_before:]
+        self.assertEqual(len(physical), 3)
+        reads = physical[-1].payload['context_observation']['read_results']
+        expected_links = ((_RULES, 'replace'),)
+        self.assertEqual(tuple((path, kind) for path, kind, _identity
+                               in self.backend.artifact_read_links), expected_links)
+        by_path = {row['provenance']['source_locator']: row['evidence_id'] for row in reads}
+        self.assertEqual(tuple(identity for _path, _kind, identity
+                               in self.backend.artifact_read_links),
+                         tuple(by_path[path] for path, _kind in expected_links))
+        hits = physical[1].payload['context_observation']['search_results']
+        self.assertEqual(tuple(row['read_handle'] for row in reads),
+                         tuple(row['read_handle'] for path, _query in read_queries
+                               for row in hits
+                               if row['provenance']['source_locator'] == path))
         self.assertIsNotNone(proposed.proposal, (
             proposed.kind, proposed.next_action, proposed.state, proposed.validation_details,
             proposed.artifact_proposal is not None,
@@ -367,15 +446,12 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.backend.enqueue_for(EXECUTION_SPECIALIST, _specialist_outcome("conflict"))
         self.backend.enqueue_for(
             LEAD_ORCHESTRATOR,
-            _artifact_synthesis_outcome("revise"),
-        )
+            _artifact_synthesis_outcome("revise"), )
         revised = await self.runtime.decide_lead_step(
-            _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-        )
+            _decision(proposed, CollaborationConfirmationDecision.CONFIRM) )
         self.assertIs(
             revised.turn.artifact_proposal.state,
-            ArtifactProposalState.REVISION_REQUIRED,
-        )
+            ArtifactProposalState.REVISION_REQUIRED, )
         self.assertIsNone(revised.turn.artifact_proposal.reviewed_proposal)
         self.assertIn("review is complete", revised.turn.message)
         self.assertEqual(self.artifact_snapshot(), before)
@@ -388,40 +464,57 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.backend.enqueue(
             _artifact_outcome(
                 operations=lambda _call, material: [
-                    { "evidence_id": _reference_ids(material)[0], "kind": "replace", "new_text": "[next](third.md)\n", },
-                    {"evidence_id": _reference_ids(material)[1], "kind": "rename", "suggested_destination": _THIRD},
-                ],
+                    {"evidence_id": material['qualified_read_ids'][_INDEX],
+                     "kind": "replace", "new_text": "[next](third.md)\n"},
+                    {"evidence_id": material['qualified_read_ids'][_SECOND],
+                     "kind": "rename", "suggested_destination": _THIRD}, ],
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
-                authoring_scope=lambda call: _live_scope(call, activity='review', domains=('tone_execution',), paths=(_INDEX, _SECOND, _THIRD)),
-            )
+                authoring_scope=lambda call: _live_scope(
+                    call, activity='review', domains=('tone_execution',),
+                    paths=(_INDEX, _SECOND, _THIRD), contributions=[
+                        {'domain': domain, 'role': 'constraint_assessor'}
+                        for domain in ('tone_execution',)]),
+
+            read_queries=((_INDEX, 'next'), (_SECOND, 'Second')), read_prefix='manuscript/part-02/',
+)
         )
+        physical_before = len(self.backend.calls)
         manuscript = await self.runtime.lead_turn(
             self.session_id,
             rename_id,
             (f"Repair ${{{_INDEX}}} and rename ${{{_SECOND}}} atomically." + '\nSupplied requested candidate content:\n' + json.dumps(['[next](third.md)\n'])
              + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
         )
+        physical = self.backend.calls[physical_before:]
+        self.assertEqual(len(physical), 3)
+        reads = physical[-1].payload['context_observation']['read_results']
+        expected_links = ((_INDEX, 'replace'), (_SECOND, 'rename'))
+        self.assertEqual(tuple((path, kind) for path, kind, _identity
+                               in self.backend.artifact_read_links), expected_links)
+        by_path = {row['provenance']['source_locator']: row['evidence_id'] for row in reads}
+        self.assertEqual(tuple(identity for _path, _kind, identity
+                               in self.backend.artifact_read_links),
+                         tuple(by_path[path] for path, _kind in expected_links))
+        hits = physical[1].payload['context_observation']['search_results']
+        self.assertEqual(tuple(row['read_handle'] for row in reads),
+                         tuple(row['read_handle'] for path, _query in read_queries
+                               for row in hits
+                               if row['provenance']['source_locator'] == path))
         self.assertIs(
             manuscript.artifact_proposal.state,
-            ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION,
-        )
+            ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION, )
         self.assertEqual(
             tuple(
                 item.operation_kind.value
                 for item in manuscript.artifact_proposal.candidate.candidate.change_set.operations
             ),
-            ("replace", "rename"),
-        )
+            ("replace", "rename"), )
         self.assertEqual(
             manuscript.artifact_proposal.candidate.candidate.relationship_validation.projected_dangling_edges,
-            (),
-        )
+            (), )
         rejected = await self.runtime.decide_lead_step(
-            _decision(manuscript, CollaborationConfirmationDecision.REJECT)
-        )
-        self.assertIs(
-            rejected.turn.artifact_proposal.state, ArtifactProposalState.REJECTED
-        )
+            _decision(manuscript, CollaborationConfirmationDecision.REJECT) )
+        self.assertIs( rejected.turn.artifact_proposal.state, ArtifactProposalState.REJECTED )
         self.assertEqual(self.artifact_snapshot(), rename_before)
 
     async def test_ordinary_discussion_captures_current_state_without_specialists(self) -> None:
@@ -444,13 +537,11 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 _visible_outcome(
                     "answer",
                     message,
-                )
-            )
+                ) )
             result = await self.runtime.lead_turn(
                 self.session_id,
                 conversation_id,
-                "What is a scene goal?",
-            )
+                "What is a scene goal?", )
         self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
         self.assertEqual(result.message, message)
         self.assertIs(result.trace.origin, ReplyTraceOrigin.PROVIDER)
@@ -470,8 +561,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.assertNotIn("Outline first line.", json.dumps(dict(payload)))
         self.assertEqual(
             tuple(agent_id for agent_id, _call in self.backend.call_records),
-            (LEAD_ORCHESTRATOR,),
-        )
+            (LEAD_ORCHESTRATOR,), )
 
     async def test_stale_confirmation_and_revision_require_fresh_authority(
         self,
@@ -486,7 +576,12 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 evidence_status="missing",
                 evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
-            )
+
+                authoring_scope=lambda call: _live_scope(
+                    call, activity='review', domains=('tone_execution',),
+                    paths=(_RULES,), contributions=[
+                        {'domain': domain, 'role': 'constraint_assessor'}
+                        for domain in ('tone_execution',)]),)
         )
         stale_proposal = await self.runtime.lead_turn(
             self.session_id,
@@ -495,13 +590,10 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
              + '\nYou may give bounded artifact review judgments and prepare separate proposals; preserve supplied facts. Revision and execution require separate exact confirmation.'),
         )
         call_count = len(self.backend.call_records)
-        self.workspace.path(_RULES).write_text(
-            "External current rule.\n", encoding="utf-8"
-        )
+        self.workspace.path(_RULES).write_text( "External current rule.\n", encoding="utf-8" )
         external = self.artifact_snapshot()
         stale = await self.runtime.decide_lead_step(
-            _decision(stale_proposal, CollaborationConfirmationDecision.CONFIRM)
-        )
+            _decision(stale_proposal, CollaborationConfirmationDecision.CONFIRM) )
         self.assertIs(stale.turn.artifact_proposal.state, ArtifactProposalState.STALE)
         self.assertEqual(len(self.backend.call_records), call_count)
         self.assertIn("No provider was called", stale.turn.message)
@@ -515,6 +607,12 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 evidence_status="missing",
                 evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
+
+                authoring_scope=lambda call: _live_scope(
+                    call, activity='review', domains=('tone_execution',),
+                    paths=(_RULES,), contributions=[
+                        {'domain': domain, 'role': 'constraint_assessor'}
+                        for domain in ('tone_execution',)]),
             )
         )
         first = await self.runtime.lead_turn(
@@ -554,15 +652,13 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
 
         self.backend.enqueue_for(
             LEAD_ORCHESTRATOR,
-            fresh_recommendation,
-        )
+            fresh_recommendation, )
         revised = await self.runtime.decide_lead_step(
             _decision(first, CollaborationConfirmationDecision.REVISE, revision_request=(
                 'Revise proposed review.\nSupplied narrative-rule candidate:\n'
                 + first.artifact_proposal.candidate.candidate.change_set.operations[0].content.decode("utf-8")
                 + '\nYou may give bounded artifact review judgments and prepare a separate proposal; preserve supplied facts. Execution requires separate exact confirmation.'
-            ))
-        )
+            )) )
         history = self.history(revise_id)
         self.assertIsNone(project_collaboration_history(history).current_artifact_state)
         self.assertIsNone(revised.turn.artifact_proposal)
@@ -586,8 +682,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 agent_id
                 for agent_id, _call in self.backend.call_records[before_revision_calls:]
             ),
-            (LEAD_ORCHESTRATOR,),
-        )
+            (LEAD_ORCHESTRATOR,), )
 
         self.backend.enqueue(
             _artifact_outcome(
@@ -595,7 +690,12 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 evidence_status="missing",
                 evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
-            )
+
+                authoring_scope=lambda call: _live_scope(
+                    call, activity='review', domains=('tone_execution',),
+                    paths=(_RULES,), contributions=[
+                        {'domain': domain, 'role': 'constraint_assessor'}
+                        for domain in ('tone_execution',)]),)
         )
         second = await self.runtime.lead_turn(
             self.session_id,
@@ -605,8 +705,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         )
         self.assertNotEqual(
             second.artifact_proposal.candidate.candidate.candidate_digest,
-            first_digest,
-        )
+            first_digest, )
         self.assertNotEqual(
             second.confirmation_request_id, first.confirmation_request_id
         )
@@ -624,6 +723,12 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 evidence_status="missing",
                 evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
+
+                authoring_scope=lambda call: _live_scope(
+                    call, activity='review', domains=('tone_execution',),
+                    paths=(_RULES,), contributions=[
+                        {'domain': domain, 'role': 'constraint_assessor'}
+                        for domain in ('tone_execution',)]),
             )
         )
         first = await self.runtime.lead_turn(
@@ -639,25 +744,26 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 evidence_status="missing",
                 evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
-            ),
+
+                authoring_scope=lambda call: _live_scope(
+                    call, activity='review', domains=('tone_execution',),
+                    paths=(_RULES,), contributions=[
+                        {'domain': domain, 'role': 'constraint_assessor'}
+                        for domain in ('tone_execution',)]),),
         )
         replacement = await self.runtime.decide_lead_step(
-            _decision(first, CollaborationConfirmationDecision.REVISE)
-        )
+            _decision(first, CollaborationConfirmationDecision.REVISE) )
         second = replacement.turn
         self.assertEqual(second.step_id, first.step_id)
         self.assertIs(
             second.artifact_proposal.state,
-            ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION,
-        )
+            ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION, )
         self.assertNotEqual(
             second.artifact_proposal.candidate.candidate.candidate_id,
-            first.artifact_proposal.candidate.candidate.candidate_id,
-        )
+            first.artifact_proposal.candidate.candidate.candidate_id, )
         self.assertNotEqual(
             second.artifact_proposal.candidate.candidate.candidate_digest,
-            first.artifact_proposal.candidate.candidate.candidate_digest,
-        )
+            first.artifact_proposal.candidate.candidate.candidate_digest, )
         self.assertNotEqual(
             second.confirmation_request_id, first.confirmation_request_id
         )
@@ -666,16 +772,14 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             for item in self.artifact_events(
                 conversation_id,
                 ArtifactProposalStatePayload,
-            )
-        )
+            ) )
         self.assertEqual(
             states,
             (
                 ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION,
                 ArtifactProposalState.SUPERSEDED,
                 ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION,
-            ),
-        )
+            ), )
         self.assertEqual(
             len(
                 self.artifact_events(
@@ -695,25 +799,21 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             "supports",
             "concern",
             "conflict",
-            "insufficient_evidence",
-        )
+            "insufficient_evidence", )
         for ordinal, assessment in enumerate(assessments, start=1):
             with self.subTest(assessment=assessment):
                 conversation_id = self.conversation(f"Assessment {ordinal}")
                 proposed, decided = await self.reviewed_create(
                     conversation_id,
-                    assessment=assessment,
-                )
+                    assessment=assessment, )
                 reviewed = decided.turn.artifact_proposal.reviewed_proposal
                 self.assertEqual(
                     reviewed.reviews[0].assessment,
-                    CollaborationSpecialistAssessment(assessment),
-                )
+                    CollaborationSpecialistAssessment(assessment), )
                 expected_unresolved = (
                     ()
                     if assessment == "supports"
-                    else proposed.proposal.assignments[0].input_ids
-                )
+                    else proposed.proposal.assignments[0].input_ids )
                 self.assertEqual(reviewed.unresolved_input_ids, expected_unresolved)
                 self.assertEqual(
                     reviewed.limitations,
@@ -736,7 +836,12 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 evidence_ids=lambda call, _material: [_status_id(call, _OUTLINE)],
                 additional_review_domains=("plot_structure",),
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
-            )
+
+                authoring_scope=lambda call: _live_scope(
+                    call, activity='review', domains=('plot_structure', 'tone_execution'),
+                    paths=('manuscript/part-02/new.md',), contributions=[
+                        {'domain': domain, 'role': 'constraint_assessor'}
+                        for domain in ('plot_structure', 'tone_execution')]),)
         )
         proposed = await self.runtime.lead_turn(
             self.session_id,
@@ -762,26 +867,22 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             self.backend.enqueue_for(assignment.specialist_id, response)
         review_call_start = len(self.backend.call_records)
         failed = await self.runtime.decide_lead_step(
-            _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-        )
+            _decision(proposed, CollaborationConfirmationDecision.CONFIRM) )
         self.assertIs(failed.turn.artifact_proposal.state, ArtifactProposalState.FAILED)
         self.assertIsNone(failed.turn.artifact_proposal.reviewed_proposal)
         self.assertEqual(
             self.artifact_events(failed_id, ArtifactReviewedProposal),
-            (),
-        )
+            (), )
         failures = self.artifact_events(failed_id, ArtifactReviewFailurePayload)
         self.assertEqual(failures[-1].code, ArtifactReviewFailureCode.REVIEW_INCOMPLETE)
         candidate_value = json.loads(
             serialize_artifact_review_candidate(
                 proposed.artifact_proposal.candidate.candidate
-            )
-        )
+            ) )
         specialist_calls = self.backend.call_records[review_call_start:]
         self.assertCountEqual(
             tuple(agent_id for agent_id, _call in specialist_calls),
-            tuple(item.specialist_id for item in proposed.proposal.assignments),
-        )
+            tuple(item.specialist_id for item in proposed.proposal.assignments), )
         from tests.provider_wire_fixture import artifact_candidate as wire_candidate
         from tests.test_agent_context_accounting import _expanded_context_payload
         for agent_id, call in specialist_calls:
@@ -806,7 +907,12 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                     evidence_status="missing",
                     evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
                     authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
-                )
+
+                authoring_scope=lambda call: _live_scope(
+                    call, activity='review', domains=('tone_execution',),
+                    paths=(_RULES,), contributions=[
+                        {'domain': domain, 'role': 'constraint_assessor'}
+                        for domain in ('tone_execution',)]),)
             )
             proposed = await self.runtime.lead_turn(
                 self.session_id,
@@ -816,38 +922,29 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             )
             self.backend.enqueue_for(
                 EXECUTION_SPECIALIST,
-                _specialist_outcome("conflict"),
-            )
-            malformed_response = _artifact_synthesis_outcome(
-                "propose", malformed=malformed
-            )
+                _specialist_outcome("conflict"), )
+            malformed_response = _artifact_synthesis_outcome( "propose", malformed=malformed )
             self.backend.enqueue_for(
                 LEAD_ORCHESTRATOR,
                 malformed_response,
-                malformed_response,
-            )
+                malformed_response, )
             mismatch = await self.runtime.decide_lead_step(
-                _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-            )
+                _decision(proposed, CollaborationConfirmationDecision.CONFIRM) )
             self.assertIs(
                 mismatch.turn.artifact_proposal.state,
-                ArtifactProposalState.FAILED,
-            )
+                ArtifactProposalState.FAILED, )
             self.assertIsNone(mismatch.turn.artifact_proposal.reviewed_proposal)
             failure_events.extend(
                 event
                 for event in self.history(mismatch_id)
-                if type(event.payload) is ArtifactReviewFailurePayload
-            )
+                if type(event.payload) is ArtifactReviewFailurePayload )
 
         restart_id = self.conversation("Restart reviewed proposal")
         _proposed, decided = await self.reviewed_create(restart_id)
         reviewed = decided.turn.artifact_proposal.reviewed_proposal
         encoded = encode_artifact_reviewed_proposal(reviewed)
         self.assertEqual(decode_artifact_reviewed_proposal(encoded), reviewed)
-        self.assertEqual(
-            artifact_reviewed_proposal_digest(reviewed), reviewed.proposal_digest
-        )
+        self.assertEqual( artifact_reviewed_proposal_digest(reviewed), reviewed.proposal_digest )
 
         restart_backend = _LeadBackend()
         restarted = StoryRuntime(self.control_workspace, restart_backend)  # type: ignore[arg-type]
@@ -855,8 +952,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             restarted.conversation_storage_services.event_store.read(
                 self.session_id,
                 restart_id,
-            )
-        )
+            ) )
         restored = projection.current_reviewed_artifact_proposal
         self.assertEqual(restored, reviewed)
         self.assertFalse(restored.apply_authority_granted)
@@ -869,8 +965,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         reviewed_unknown = dict(reviewed_value)
         reviewed_unknown["private_reasoning"] = "must remain private"
         reviewed_reordered = {
-            key: reviewed_value[key] for key in reversed(tuple(reviewed_value))
-        }
+            key: reviewed_value[key] for key in reversed(tuple(reviewed_value)) }
         for malformed in (
             b"{",
             json.dumps(
@@ -893,17 +988,14 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             ArtifactReviewCandidatePayload,
             ArtifactProposalStatePayload,
             ArtifactReviewedProposal,
-            ArtifactReviewFailurePayload,
-        }
+            ArtifactReviewFailurePayload, }
         durable_events = [
             event
             for event in (*self.history(restart_id), *failure_events)
-            if type(event.payload) in durable_types
-        ]
+            if type(event.payload) in durable_types ]
         self.assertEqual(
             {type(event.payload) for event in durable_events},
-            durable_types,
-        )
+            durable_types, )
         for event in durable_events:
             with self.subTest(payload=type(event.payload).__name__):
                 wire = encode_collaboration_event(event)
@@ -943,27 +1035,23 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         with coordinator.borrow(timeout_seconds=2.0) as lease:
             preflight = provision_sqlite_conversation_storage(
                 self.control_workspace,
-                lease=lease,
-            )
+                lease=lease, )
         self.assertIs(preflight.capability, ConversationStorageCapability.READY)
         transferred = transfer_conversation_storage(
             self.control_workspace,
             source_backend=ConversationStorageBackend.FILESYSTEM,
-            destination_backend=ConversationStorageBackend.SQLITE,
-        )
+            destination_backend=ConversationStorageBackend.SQLITE, )
         self.assertIs(transferred.outcome, ConversationStorageTransferOutcome.COMPLETED)
         verified = verify_conversation_storage(
             self.control_workspace,
             source_backend=ConversationStorageBackend.FILESYSTEM,
-            destination_backend=ConversationStorageBackend.SQLITE,
-        )
+            destination_backend=ConversationStorageBackend.SQLITE, )
         self.assertIs(verified.outcome, ConversationStorageTransferOutcome.COMPLETED)
 
         sqlite_services = compose_sqlite_conversation_storage(self.control_workspace)
         sqlite_history = sqlite_services.event_store.read(
             self.session_id,
-            conversation_id,
-        )
+            conversation_id, )
         self.assertEqual(sqlite_history, filesystem_history)
         projection = project_collaboration_history(sqlite_history)
         self.assertEqual(projection.current_reviewed_artifact_proposal, reviewed)
@@ -983,8 +1071,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
-            "Give one workflow answer.",
-        )
+            "Give one workflow answer.", )
 
         def answer_with_artifact(call, provider):
             observation = call.payload["context_observation"]
@@ -1032,8 +1119,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.backend.enqueue(
             search_prior_answer,
             _read_history_hit,
-            answer_with_artifact,
-        )
+            answer_with_artifact, )
         result = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
@@ -1043,8 +1129,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.assertIsNotNone(result.artifact_proposal, result)
         self.assertIs(
             result.artifact_proposal.state,
-            ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION,
-        )
+            ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION, )
         call_kinds = tuple(call.call_kind for call in self.backend.calls[-3:])
         self.assertEqual(
             call_kinds,
@@ -1052,8 +1137,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 ProviderCallKind.COLLABORATION_INITIAL,
                 ProviderCallKind.COLLABORATION_CONTINUATION,
                 ProviderCallKind.COLLABORATION_CONTINUATION,
-            ),
-        )
+            ), )
         self.assertNotIn("context_observation", self.backend.calls[-3].payload)
         self.assertEqual(self.backend.calls[-2].payload["context_observation"]["observation_type"], "context_search_results")
         self.assertEqual(self.backend.calls[-1].payload["context_observation"]["observation_type"], "context_read_results")
@@ -1065,46 +1149,51 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         read_evidence_id = self.backend.calls[-1].payload["context_observation"]["read_results"][0]["evidence_id"]
         self.assertIn(
             read_evidence_id,
-            result.artifact_proposal.candidate.candidate.grounding_evidence_ids,
-        )
+            result.artifact_proposal.candidate.candidate.grounding_evidence_ids, )
         attached = tuple(fact.artifact_path for fact in result.artifact_proposal.candidate.candidate.relationship_validation.review_facts if fact.reason is ArtifactReviewReason.ATTACHED_CORE_EVIDENCE)
         self.assertEqual(tuple(sorted(attached, key=lambda path: path.encode("utf-8"))), core_paths)
 
     async def test_provider_authority_fields_fall_back_without_candidate(
         self,
     ) -> None:
+        from tests.recommendation_fixture import task_assessment
         conversation_id = self.conversation("Reject provider authority")
         invalid = _artifact_outcome(
             operations=[ { "apply_authority_granted" : True , "kind" : "create" , "new_text" : "Must not survive.\n" , "suggested_path" : _RULES , } ],
             evidence_status="missing",
             evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
-        )
+
+                authoring_assessment=asdict(task_assessment(
+                    foundation_ids=('user_input',),
+                    actions=(
+                        'bounded artifact review judgments', 'separate proposal preparation'))),
+
+                authoring_scope=lambda call: _live_scope(
+                    call, activity='review', domains=('tone_execution',),
+                    paths=(_RULES,), contributions=[
+                        {'domain': domain, 'role': 'constraint_assessor'}
+                        for domain in ('tone_execution',)]),)
         self.backend.enqueue(invalid)
         self.backend.enqueue(invalid)
         result = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
-            "Reject provider-supplied Apply authority.",
-        )
+            "Reject provider-supplied Apply authority.", )
         self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
         self.assertIsNone(result.artifact_proposal)
         self.assertEqual(
             self.artifact_events(conversation_id, ArtifactReviewCandidatePayload),
-            (),
-        )
+            (), )
         lead_failure = self.artifact_events(
             conversation_id,
-            CollaborationLeadOutcomeFailurePayload,
-        )
+            CollaborationLeadOutcomeFailurePayload, )
         self.assertEqual(len(lead_failure), 1)
         self.assertIs(
             lead_failure[0].code,
-            CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED,
-        )
+            CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED, )
         artifact_failure = self.artifact_events(
             conversation_id,
-            ArtifactReviewFailurePayload,
-        )
+            ArtifactReviewFailurePayload, )
         self.assertEqual(artifact_failure, ())
 
 
@@ -1117,8 +1206,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         case = objectives.ObjectiveCase()
         case.setUp()
         # Adopt synchronous cleanup from this setup-only async fixture.
-        for cleanup, args, kwargs in case._cleanups:
-            self.addCleanup(cleanup, *args, **kwargs)
+        for cleanup, args, kwargs in case._cleanups: self.addCleanup(cleanup, *args, **kwargs)
         case._cleanups.clear()
         conversation_id, turn = await case.start()
         proposal = next(e.payload for e in case.history(conversation_id)
@@ -1131,7 +1219,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.assertNotEqual(receipt.revision_digest, receipt.content_digest)
         def translated(selected):
             return case.runtime._artifact_intent_evidence(selected, session_id=case.session_id, conversation_id=conversation_id, artifact_binding=case.runtime._session_artifact_binding(case.session_id))
-        valid = translated(evidence)
+        valid = translated(replace(evidence, receipts=(receipt,)))
         self.assertEqual(len(valid), 1)
         self.assertEqual((valid[0].source_digest, valid[0].boundary_digest), (empty_digest, empty_digest))
         self.assertEqual(translated(replace(evidence, receipts=())), ())
@@ -1150,8 +1238,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         replacement.write_bytes(b"")
         replacement.replace(path)
         self.assertEqual(path.read_bytes(), b"")
-        with self.assertRaises(BackendProtocolError):
-            translated(evidence)
+        with self.assertRaises(BackendProtocolError): translated(evidence)
         # Repeating an artifact path or attaching a reference is unnecessary at A1.
         prepared = await case.prepare(conversation_id)
         self.assertEqual(prepared.artifact_proposal.candidate.candidate.change_set.operations[0].operation_kind.value, "replace")
@@ -1167,7 +1254,13 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.workspace.path(_OUTLINE).write_bytes(text.encode("utf-8"))
         conversation_id = self.conversation("Genuine READ evidence")
         def search(call, _provider):
-            return json.dumps({"action": {"kind": "search", "path_prefix": "core_documents/", "queries": [{"text": "needle", "source_kinds": ["writing_artifact"]}]}})
+            from tests.provider_wire_fixture import offered_fixture_bindings, indexed_response
+            outer, inner = offered_fixture_bindings(
+                call, action_type='search_context', response_type=None, family=1)
+            return indexed_response({'action_type': 'search_context',
+                'artifact_directory_prefix': 'core_documents/',
+                'queries': [{'search_text': 'needle', 'source_types': {'story_document': True}}]},
+                outer_schema_id=outer, inner_schema_id=inner)
         def answer(call, provider):
             evidence_id = call.payload["context_observation"]["read_results"][0]["evidence_id"]
             return _provider_envelope(call, {
@@ -1179,8 +1272,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         receipt = next(
             item
             for item in result.evidence.receipts
-            if item.acquisition is c.CollaborationEvidenceAcquisition.READ
-        )
+            if item.acquisition is c.CollaborationEvidenceAcquisition.READ )
         self.assertIs(receipt.acquisition, c.CollaborationEvidenceAcquisition.READ)
         scope = self.runtime._agent_context_service.scope(self.session_id, ContextSubjectKind.CONVERSATION, conversation_id, LEAD_ORCHESTRATOR)
         snapshot = WritingArtifactSourceAdapter(
@@ -1219,5 +1311,4 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             self.runtime._artifact_intent_evidence(result.evidence, session_id=self.session_id, conversation_id=conversation_id, artifact_binding=self.runtime._session_artifact_binding(self.session_id))
 
 
-if __name__ == "__main__":
-    unittest.main()
+if __name__ == "__main__": unittest.main()

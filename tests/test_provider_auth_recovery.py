@@ -20,8 +20,7 @@ from story_writing_agents.agent_context import ProviderCallState, canonical_prov
 from story_writing_agents.agent_context.manifest import ContextScope, ContextSubjectKind
 from story_writing_agents.agent_context.service import (
     ContextProviderCallRequest, ContextProviderFailureFacts,
-    context_provider_failure_facts, record_context_provider_failure,
-)
+    context_provider_failure_facts, record_context_provider_failure, )
 from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT, CHARACTER_CUSTODIAN
 from story_writing_agents.antigravity_adapter import AntigravityAdapter
 from story_writing_agents.codex_adapter import CodexAdapter
@@ -30,28 +29,23 @@ from story_writing_agents.conversations import (
     CollaborationConfirmationDecision, CollaborationEventKind,
     CollaborationExecutionResult, CollaborationSpecialistReplyPayload,
     CollaborationLeadOutcomeFailureCode, CollaborationLeadOutcomeFailurePayload,
-    CollaborationNextAction, CollaborationStepState,
-)
+    CollaborationNextAction, CollaborationStepState, )
 from story_writing_agents.errors import ProviderAuthenticationRequiredError
 from story_writing_agents.interactive_controller._lead_policy import InteractiveLeadAdapter
 from story_writing_agents.orchestrator import RuntimeSession
 from story_writing_agents.prompts import PromptAssembler
 from story_writing_agents.provider_adapter import (
     ProviderInvocation, ProviderInvocationError, ProviderResponseDiagnostic,
-    ProviderResult, provider_failure_accounting, record_provider_failure_accounting,
-)
+    ProviderResult, provider_failure_accounting, record_provider_failure_accounting, )
 from story_writing_agents.provider_auth import (
-    ProviderAuthService, ProviderAuthState, ProviderLoginResult,
-)
+    ProviderAuthService, ProviderAuthState, ProviderLoginResult, )
 from story_writing_agents.provider_auth_recovery import (
     ProviderAuthRecovery, authentication_replay, provider_activity,
-    request_authentication, validate_provider_replay,
-)
+    request_authentication, validate_provider_replay, )
 from story_writing_agents.provider_process import ProcessResult
 from story_writing_agents.workspace.initialization import (
     compose_session_artifact_binding,
-    provision_session_resources,
-)
+    provision_session_resources, )
 from tests import test_agent_context_execution as context
 from tests import test_interactive_controller as interactive_controller_tests
 from tests import test_lead_orchestration as lead
@@ -63,18 +57,16 @@ from tests.test_provider_auth import ScriptedProcess, ScriptedProcessFactory
 
 def incident_bytes(**changes):
     """Preserve native failure shape; never import private incident diagnostics."""
-    terminal = dict(conversation_id="", status="ERROR", response="",
-                    error="authentication failed or timed out", duration_seconds=0,
-                    num_turns=0, usage=dict(input_tokens=0, output_tokens=0,
-                    thinking_tokens=0, cache_read_tokens=0, total_tokens=0))
+    terminal = dict(conversation_id='', status='ERROR', response='',
+        error='authentication failed or timed out', duration_seconds=0, num_turns=0, usage=dict(
+        input_tokens=0, output_tokens=0, thinking_tokens=0, cache_read_tokens=0, total_tokens=0))
     terminal.update(changes)
     return canonical_provider_json(terminal) + b"\n"
 
 
 def auth_failure(provider="antigravity", *, safe=True, validator=lambda: True):
     failure = ProviderAuthenticationRequiredError(provider, replay_safe=safe)
-    if validator is not None:
-        failure.attach_replay_validator(validator)
+    if validator is not None: failure.attach_replay_validator(validator)
     return failure
 
 
@@ -83,8 +75,7 @@ async def drive_recovery(operation, callback=lambda _key: True):
     recovery = ProviderAuthRecovery()
     keys = []
     async def scoped():
-        with recovery.scope():
-            return await operation
+        with recovery.scope(): return await operation
     task = asyncio.create_task(scoped())
     try:
         while not task.done():
@@ -94,17 +85,14 @@ async def drive_recovery(operation, callback=lambda _key: True):
                                          timeout=30)
             ready.cancel()
             await asyncio.gather(ready, return_exceptions=True)
-            if not done:
-                raise AssertionError("recovery failed to make bounded progress")
-            if task.done():
-                break
+            if not done: raise AssertionError("recovery failed to make bounded progress")
+            if task.done(): break
             key = recovery.next_request()
             keys.append(key)
             recovery.resolve(key, callback(key))
         return await task, keys
     finally:
-        if not task.done():
-            task.cancel()
+        if not task.done(): task.cancel()
         recovery.close()
         await asyncio.gather(task, return_exceptions=True)
 
@@ -119,49 +107,26 @@ class AuthClassificationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_antigravity_partial_timeout_auth_preserves_both_native_facts(self):
         workspace = pristine_initialized_workspace(self)
-        adapter = AntigravityAdapter(
-            executable=str(Path(sys.executable).resolve(strict=True)),
-            timeout_seconds=7,
-            state_root=workspace.path("auth-partial-timeout"),
-            explicit_model=None,
-            explicit_effort=None,
-        )
-        definition = replace(
-            PromptAssembler(workspace).build_definition(
-                session_id="auth-partial-timeout",
-                agent_id=PLOT_ARCHITECT,
-            ),
-            backend="antigravity",
-        )
+        adapter = AntigravityAdapter(executable=str(Path(sys.executable).resolve(strict=True)),
+            timeout_seconds=7, state_root=workspace.path('auth-partial-timeout'),
+            explicit_model=None, explicit_effort=None)
+        definition = replace(PromptAssembler(workspace).build_definition(
+            session_id='auth-partial-timeout', agent_id=PLOT_ARCHITECT), backend='antigravity')
         binding = adapter.bind(definition)
         self.addCleanup(adapter.release, binding)
         provision_session_resources(workspace.root, "auth-partial-timeout")
         owner = compose_session_artifact_binding(workspace.root, "auth-partial-timeout")
         with owner.open_ready_resources() as access:
             access.install_provider_role(adapter.session_role_projection(binding))
-        invocation = ProviderInvocation(
-            session_id="auth-partial-timeout",
-            schema={"type": "object"},
-            payload={"synthetic": "unchanged"},
-            thread_id="existing-thread",
-            execution_workspace=self.enterContext(
-                live_provider_execution_workspace(workspace.root, "auth-partial-timeout")
-            ),
-        )
-        marker = (
-            b"[agy] print timeout after 7s with turn in progress; "
-            b"returning partial output\n"
-        )
-        native = ProcessResult(
-            stdout=incident_bytes(),
-            stderr=marker,
-            returncode=1,
-        )
+        invocation = ProviderInvocation(session_id='auth-partial-timeout', schema={
+            'type': 'object'}, payload={'synthetic': 'unchanged'}, thread_id='existing-thread',
+            execution_workspace=self.enterContext(live_provider_execution_workspace(workspace.root,
+            'auth-partial-timeout')))
+        marker = b'[agy] print timeout after 7s with turn in progress; returning partial output\n'
+        native = ProcessResult(stdout=incident_bytes(), stderr=marker, returncode=1)
 
-        with mock.patch(
-            "story_writing_agents.antigravity_adapter.run_process",
-            new=mock.AsyncMock(return_value=native),
-        ):
+        with (mock.patch('story_writing_agents.antigravity_adapter.run_process',
+            new=mock.AsyncMock(return_value=native))):
             with self.assertRaises(ProviderInvocationError) as caught:
                 await adapter.invoke(binding, invocation)
 
@@ -172,16 +137,11 @@ class AuthClassificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(failure.timed_out)
         self.assertFalse(failure.taint_existing_thread)
         self.assertTrue(AgentBackend._context_failure_timed_out(failure))
-        self.assertEqual(
-            failure.response_diagnostic,
-            ProviderResponseDiagnostic(native.stdout, marker, 1),
-        )
+        self.assertEqual(failure.response_diagnostic, ProviderResponseDiagnostic(native.stdout,
+            marker, 1))
         accounting = provider_failure_accounting(failure)
         self.assertIs(accounting.state, ProviderCallState.SUBMITTED)
-        self.assertEqual(
-            accounting.actual_transport_utf8_bytes,
-            len(invocation.payload_json),
-        )
+        self.assertEqual(accounting.actual_transport_utf8_bytes, len(invocation.payload_json))
 
     async def test_antigravity_partial_and_malformed_shapes_never_grant_replay(self):
         original = json.loads(incident_bytes())
@@ -190,10 +150,9 @@ class AuthClassificationTests(unittest.IsolatedAsyncioTestCase):
             value = dict(original)
             value.pop(key)
             variants.append(value)
-        for key, value in (("num_turns", 1), ("num_turns", False),
-                           ("duration_seconds", 0.0), ("conversation_id", "started"),
-                           ("response", "partial generated text"),
-                           ("structured_output", {}), ("unexpected", None)):
+        for (key, value) in ((('num_turns', 1), ('num_turns', False), ('duration_seconds', 0.0),
+            ('conversation_id', 'started'), ('response', 'partial generated text'),
+            ('structured_output', {}), ('unexpected', None))):
             variants.append({**original, key: value})
         for value in (True, -1, 1, "0", None):
             variants.append({**original, "usage": {**original["usage"], "input_tokens": value}})
@@ -316,16 +275,85 @@ class AuthContextProvider(context._ScriptedProvider):
 
 
 class ContextRecoveryTests(context.ContextExecutionTestCase):
+    async def _bound_replay(self, responses, *, seed):
+        from story_writing_agents.agent_context.service import AgentContextService
+        case = lead._task_fixture(self)
+        conversation_id = lead.LeadOrchestrationTestCase.conversation(
+            case, "Bound authority replay")
+        if seed is not None:
+            case.backend.enqueue(lead._visible_outcome("answer", seed))
+            await case.runtime.lead_turn(case.session_id, conversation_id, seed)
+        start = len(case.backend.calls)
+        remaining, captured, failed = list(responses), [], []
+        async def guarded(request, provider):
+            async with provider_activity(provider.backend.vendor) as generation:
+                validate_provider_replay()
+                response = remaining.pop(0)
+                if isinstance(response, ProviderAuthenticationRequiredError):
+                    response.auth_generation = generation
+                    accounting = provider._account(request.schema, request.payload,
+                        call_kind=request.call_kind, component_paths=request.component_paths,
+                        mandatory_reference_paths=request.mandatory_reference_paths)
+                    record_context_provider_failure(response, ContextProviderFailureFacts(
+                        accounting, taint_existing_thread=False, submission_uncertain=False))
+                    failed.append(request.call_id)
+                    raise response
+                return response(request, provider)
+        invoke = AgentContextService.invoke
+        async def capture(service, *args, **kwargs):
+            result = await invoke(service, *args, **kwargs)
+            captured.append(result)
+            return result
+        case.backend.enqueue(*(guarded for _ in responses))
+        with mock.patch.object(AgentContextService, "invoke", capture):
+            outcome, keys = await drive_recovery(case.runtime.lead_turn(
+                case.session_id, conversation_id, "Explain bounded workflow."))
+        self.assertEqual(keys, [("antigravity", 0)])
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(remaining, [])
+        self.assertIsNone(outcome.state)
+        self.assertIs(outcome.kind, lead.LeadOutcomeKind.ANSWER)
+        self.assertIs(outcome.next_action, lead.CollaborationNextAction.CONTINUE_WITH_LEAD)
+        self.assertEqual(outcome.message, json.loads(captured[0].answer)['message'])
+        return case.backend.calls[start:], captured[0], failed
+
+    def _require_bound_replay(self, calls, result, failed, *, count, failure_index):
+        from story_writing_agents.agent_context.service import BoundContextProviderCallRequest
+        self.assertEqual(len(calls), count)
+        self.assertTrue(all(type(call) is BoundContextProviderCallRequest for call in calls))
+        self.assertEqual([call.call_id for call in result.provider_calls],
+                         [call.call_id for call in calls])
+        self.assertEqual([call.accounting.state for call in result.provider_calls],
+                         [ProviderCallState.SUBMITTED] * count)
+        first, replay = calls[failure_index:failure_index + 2]
+        self.assertEqual(failed, [first.call_id])
+        self.assertNotEqual(first.call_id, replay.call_id)
+        self.assertNotEqual(first.contract.offers.offer_digest, replay.contract.offers.offer_digest)
+        self.assertEqual(first.contract.eligibility_offers, replay.contract.eligibility_offers)
+        self.assertIs(first.contract.factory, replay.contract.factory)
+        self.assertEqual(first.contract.semantic_index.expected_schema_ids,
+                         replay.contract.semantic_index.expected_schema_ids)
+        for call in (first, replay):
+            call.contract.require_submission(call.payload, call.schema)
+            call.contract.require_current_offer(call.contract.offers)
+        with self.assertRaises(ValueError):
+            replay.contract.require_current_offer(first.contract.offers)
+
     async def test_safe_replay_preserves_wire_and_counts_distinct_physical_calls(self):
         provider = AuthContextProvider((auth_failure(), context._answer))
         result, keys = await drive_recovery(self.invoke(provider))
-        self.assertEqual(keys, [("antigravity", 0)])
+        self.assertEqual(keys, [('antigravity', 0)])
         self.assertEqual(len(result.provider_calls), 2)
         first, replay = provider.calls
         self.assertNotEqual(first.call_id, replay.call_id)
         self.assertEqual(replace(first, call_id=replay.call_id), replay)
         self.assertEqual(provider.application_bytes[0], provider.application_bytes[1])
         self.assertEqual(len({call.call_id for call in result.provider_calls}), 2)
+        calls, bound_result, failed = await self._bound_replay(
+            (auth_failure(), lead._visible_outcome("answer")), seed=None)
+        self._require_bound_replay(calls, bound_result, failed, count=2, failure_index=0)
+        self.assertEqual(calls[0].contract.eligibility_offers.completed_read_facts, ())
+        self.assertEqual(calls[0].contract.eligibility_offers.delivery_read_facts, ())
 
     def reference_request(self, limit=5):
         reference = context.MandatoryReferenceReservation(1, "reference-1", "artifact-1", "revision-1",
@@ -336,20 +364,16 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
 
     async def test_local_reference_load_does_not_consume_provider_capacity(self):
         request = self.reference_request()
-        provider = AuthContextProvider(
-            (context._answer,),
-            reference_operation_id=request.reference_operation_id,
-        )
+        provider = AuthContextProvider((context._answer,),
+            reference_operation_id=request.reference_operation_id)
         result = await self.invoke(provider, request)
         self.assertEqual(len(result.provider_calls), 1)
         self.assertEqual(len(provider.prelude_calls), 1)
         self.assertEqual(provider.completed_references, 1)
         constrained = self.reference_request(limit=1)
         constrained = replace(constrained, operation_id="limited", result_correlation_id="limited")
-        provider = AuthContextProvider(
-            (context._answer,),
-            reference_operation_id=constrained.reference_operation_id,
-        )
+        provider = AuthContextProvider((context._answer,),
+            reference_operation_id=constrained.reference_operation_id)
         constrained_result = await self.invoke(provider, constrained)
         self.assertEqual(len(provider.prelude_calls), 1)
         self.assertEqual(len(provider.calls), 1)
@@ -362,6 +386,20 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
         self.assertEqual(len(result.provider_calls), 4)
         self.assertEqual(provider.calls[2].payload, provider.calls[3].payload)
         self.assertEqual(provider.calls[2].expected_thread_id, provider.calls[3].expected_thread_id)
+        search = lambda call, provider: lead._search_history(
+            call, provider, "Bound history evidence")
+        calls, bound_result, failed = await self._bound_replay(
+            (search, lead._read_history_hit, auth_failure(), lead._answer_from_history),
+            seed="Bound history evidence")
+        self._require_bound_replay(calls, bound_result, failed, count=4, failure_index=2)
+        self.assertEqual([call.contract.offers.action_index for call in calls], [0, 1, 2, 2])
+        self.assertEqual(calls[2].contract.eligibility_offers.completed_read_facts,
+                         calls[3].contract.eligibility_offers.completed_read_facts)
+        self.assertEqual(calls[2].contract.eligibility_offers.delivery_read_facts,
+                         calls[3].contract.eligibility_offers.delivery_read_facts)
+        self.assertEqual(len(bound_result.authorization.used_evidence), 1)
+        self.assertEqual(bound_result.authorization.used_evidence[0].source_kind.value,
+                         "conversation")
 
     async def test_unsafe_unconfirmed_and_repeated_auth_failure_never_replay(self):
         for index, (safe, approved, twice) in enumerate(((False, True, False), (True, False, False), (True, True, True))):
@@ -487,8 +525,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
     async def test_auth_cancel_cleans_validator_and_retains_prior_call_facts(self):
         failure = auth_failure()
         provider = AuthContextProvider((failure, context._answer))
-        def interrupted(_key):
-            raise asyncio.CancelledError
+        def interrupted(_key): raise asyncio.CancelledError
         with self.assertRaises(asyncio.CancelledError):
             await drive_recovery(self.invoke(provider), interrupted)
         self.assertFalse(failure.validate_replay())
@@ -515,12 +552,9 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
                         await asyncio.wait_for(recovery.wait_ready(), 1)
                         self.assertEqual(recovery.next_request(), key)
                         recovery.resolve(key, key != ("antigravity", 2))
-                    self.assertEqual(
-                        await asyncio.wait_for(asyncio.gather(*tasks), 1),
-                        [key != ("antigravity", 2) for key in order for _ in range(2)],
-                    )
-                    with self.assertRaises(RuntimeError):
-                        recovery.next_request()
+                    self.assertEqual(await asyncio.wait_for(asyncio.gather(*tasks), 1), [key != (
+                        'antigravity', 2) for key in order for _ in range(2)])
+                    with self.assertRaises(RuntimeError): recovery.next_request()
                 finally:
                     recovery.close()
                     await asyncio.gather(*tasks, return_exceptions=True)
@@ -550,8 +584,7 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
             with inner.scope():
                 async with provider_activity("antigravity") as generation:
                     self.assertEqual(generation, 0)
-            async with provider_activity("codex") as generation:
-                self.assertEqual(generation, 0)
+            async with provider_activity("codex") as generation: self.assertEqual(generation, 0)
         self.assertFalse(await request_authentication(auth_failure()))
         outer.close(); inner.close()
 
@@ -559,8 +592,7 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
         recovery = ProviderAuthRecovery()
         entered = []
         async def later():
-            async with provider_activity("codex"):
-                entered.append(True)
+            async with provider_activity("codex"): entered.append(True)
         with recovery.scope():
             a = asyncio.create_task(request_authentication(auth_failure()))
             b = asyncio.create_task(request_authentication(auth_failure("codex", safe=False)))
@@ -586,8 +618,7 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
             recovery.close()
             self.assertFalse(await b)
             with self.assertRaises(asyncio.CancelledError):
-                async with provider_activity("antigravity"):
-                    self.fail("closed activity admitted")
+                async with provider_activity("antigravity"): self.fail("closed activity admitted")
 
     async def test_specialist_auth_failure_preserves_completed_siblings_and_durable_outcome(self):
         from tests.recommendation_fixture import task_assessment
@@ -627,39 +658,21 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
         self.backend = lead._LeadBackend(persist_context_threads=True)
         self.runtime = StoryRuntime(self.workspace, self.backend)
         conversation = self.conversation("Authentication and timeout")
-        with mock.patch.object(
-            lead._LeadContextProvider,
-            "provider_id",
-            "antigravity",
-        ):
+        with (mock.patch.object(lead._LeadContextProvider, 'provider_id', 'antigravity')):
             self.backend.enqueue(lead._visible_outcome("answer"))
-            await self.runtime.lead_turn(
-                self.session_id,
-                conversation,
-                "Seed the existing provider thread.",
-            )
+            await self.runtime.lead_turn(self.session_id, conversation,
+                'Seed the existing provider thread.')
             assert self.backend.context_threads is not None
             retained_thread = next(iter(self.backend.context_threads.values()))
             before_calls = len(self.backend.calls)
 
             failure = auth_failure("antigravity", safe=True)
-            self.backend.enqueue(
-                lead._SubmittedFailure(
-                    failure,
-                    timed_out=True,
-                    submission_uncertain=True,
-                )
-            )
+            self.backend.enqueue(lead._SubmittedFailure(failure, timed_out=True,
+                submission_uncertain=True))
             assisted = []
             with self.assertRaises(ProviderAuthenticationRequiredError) as caught:
-                await drive_recovery(
-                    self.runtime.lead_turn(
-                        self.session_id,
-                        conversation,
-                        "Retain this timed-out request.",
-                    ),
-                    lambda key: assisted.append(key) or True,
-                )
+                await drive_recovery(self.runtime.lead_turn(self.session_id, conversation,
+                    'Retain this timed-out request.'), lambda key: assisted.append(key) or True)
 
         self.assertIs(caught.exception, failure)
         self.assertEqual(assisted, [("antigravity", 0)])
@@ -674,22 +687,13 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
         self.assertNotIn(retained_thread, self.backend.context_threads.values())
 
         events = self.history(conversation)
-        closures = [
-            event.payload
-            for event in events
-            if type(event.payload) is CollaborationLeadOutcomeFailurePayload
-        ]
+        closures = [event.payload for event in events if type(
+            event.payload) is CollaborationLeadOutcomeFailurePayload]
         self.assertEqual(len(closures), 1)
-        self.assertIs(
-            closures[0].code,
-            CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT,
-        )
+        self.assertIs(closures[0].code, CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT)
         projection = project_collaboration_history(events)
         self.assertIsNone(projection.current_state)
-        self.assertIs(
-            projection.next_safe_action,
-            CollaborationNextAction.RETRY_LEAD_TURN,
-        )
+        self.assertIs(projection.next_safe_action, CollaborationNextAction.RETRY_LEAD_TURN)
 
     async def test_parallel_specialists_resume_without_duplicate_dispatch_or_synthesis(self):
         from tests.recommendation_fixture import task_assessment
@@ -708,8 +712,7 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
                 validate_provider_replay()
                 if provider.agent_id in (PLOT_ARCHITECT, CHARACTER_CUSTODIAN) and provider.agent_id not in failed:
                     failed.add(provider.agent_id)
-                    if len(failed) == 2:
-                        both_active.set()
+                    if len(failed) == 2: both_active.set()
                     await asyncio.wait_for(both_active.wait(), timeout=30)
                     failure = auth_failure("codex")
                     failure.auth_generation = generation
@@ -779,8 +782,7 @@ class InteractiveRecoveryTests(unittest.TestCase):
             self.assertEqual(auth.events[0], ("recovery", True))
             self.assertFalse(harness.picker_states)
         auth = RecoverableAuth(); auth.login_results.append(object())
-        with self.assertRaises(TypeError):
-            TerminalHarness().coordinator(auth).recover("codex")
+        with self.assertRaises(TypeError): TerminalHarness().coordinator(auth).recover("codex")
 
     def adapter(self, recover=None):
         runner = asyncio.Runner()
@@ -805,8 +807,7 @@ class InteractiveRecoveryTests(unittest.TestCase):
         def recover(provider):
             self.assertEqual(provider, "antigravity")
             self.assertEqual(threading.get_ident(), main_thread)
-            with self.assertRaises(RuntimeError):
-                asyncio.get_running_loop()
+            with self.assertRaises(RuntimeError): asyncio.get_running_loop()
             events.append("native")
             return True
         adapter, runner, _ = self.adapter(recover)
@@ -817,20 +818,13 @@ class InteractiveRecoveryTests(unittest.TestCase):
     def test_interruption_and_recovery_failure_restore_same_runner_and_notice(self):
         for control in (KeyboardInterrupt, asyncio.CancelledError):
             finalized = []
-            async def turn(
-                _session,
-                _conversation_id,
-                _text,
-                _context_event_sink=None,
-                *,
-                action_progress_sink=None,
-            ):
+            async def turn(_session, _conversation_id, _text, _context_event_sink=None, *,
+                action_progress_sink=None):
                 try:
                     await request_authentication(auth_failure())
                 finally:
                     finalized.append(True)
-            def recover(_provider):
-                raise control()
+            def recover(_provider): raise control()
             adapter, runner, output = self.adapter(recover)
             with mock.patch.object(RuntimeSession, "lead_turn", new=turn):
                 self.assertFalse(adapter.submit("conversation", "literal input"))
@@ -840,14 +834,8 @@ class InteractiveRecoveryTests(unittest.TestCase):
             self.assertEqual(runner.run(asyncio.sleep(0, result="usable")), "usable")
 
     def test_no_recovery_callback_preserves_typed_error_and_fixed_notice(self):
-        async def turn(
-            _session,
-            _conversation_id,
-            _text,
-            _context_event_sink=None,
-            *,
-            action_progress_sink=None,
-        ):
+        async def turn(_session, _conversation_id, _text, _context_event_sink=None, *,
+            action_progress_sink=None):
             raise auth_failure()
         adapter, runner, output = self.adapter()
         with mock.patch.object(RuntimeSession, "lead_turn", new=turn):
