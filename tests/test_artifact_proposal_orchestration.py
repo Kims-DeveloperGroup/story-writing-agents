@@ -402,8 +402,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.backend.enqueue(
             _artifact_outcome(
                 operations=lambda _call,
-                material: [{
-                    "evidence_id": material['qualified_read_ids'][_RULES],
+                material: [{"evidence_id": material['qualified_read_ids'][_RULES],
                     "kind": "replace", "new_text": "Use present tense in dream passages.\n",
                 }],
                 evidence_status="verified",
@@ -470,12 +469,10 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
                 authoring_scope=lambda call: _live_scope(
                     call, activity='review', domains=('tone_execution',),
-                    paths=(_INDEX, _SECOND, _THIRD), contributions=[
-                        {'domain': domain, 'role': 'constraint_assessor'}
+                    paths=(_INDEX, _SECOND, _THIRD), contributions=[{'domain': domain, 'role': 'constraint_assessor'}
                         for domain in ('tone_execution',)]),
 
-            read_queries=((_INDEX, 'next'), (_SECOND, 'Second')), read_prefix='manuscript/part-02/',
-)
+            read_queries=((_INDEX, 'next'), (_SECOND, 'Second')), read_prefix='manuscript/part-02/',)
         )
         physical_before = len(self.backend.calls)
         manuscript = await self.runtime.lead_turn(
@@ -1254,8 +1251,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         conversation_id = self.conversation("Genuine READ evidence")
         def search(call, _provider):
             from tests.provider_wire_fixture import offered_fixture_bindings, indexed_response
-            outer, inner = offered_fixture_bindings(
-                call, action_type='search_context', response_type=None, family=1)
+            outer, inner = offered_fixture_bindings(call, action_type='search_context', response_type=None, family=1)
             return indexed_response({'action_type': 'search_context',
                 'artifact_directory_prefix': 'core_documents/',
                 'queries': [{'search_text': 'needle', 'source_types': {'story_document': True}}]},

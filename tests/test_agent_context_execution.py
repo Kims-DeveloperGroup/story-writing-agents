@@ -100,8 +100,7 @@ def _materials(current_input: object = _PRIVATE_INPUT) -> tuple[ContextMaterial,
         current_input, ensure_ascii=False, sort_keys=True, separators=(',', ':')),
         source_kind=ContextSourceKind.RUNTIME_INPUT, channel=ContextSemanticChannel.CURRENT_INPUT,
         priority=ContextPriority.P0_REQUIRED, authority=ContextAuthorityKind.REQUEST, ordinal=0),
-        _material('stable-definition', _PRIVATE_DEFINITION,
-        source_kind=ContextSourceKind.AGENT_DEFINITION,
+        _material('stable-definition', _PRIVATE_DEFINITION,source_kind=ContextSourceKind.AGENT_DEFINITION,
         channel=ContextSemanticChannel.STABLE_BEHAVIOR, priority=ContextPriority.P1_STABLE,
         authority=ContextAuthorityKind.AGENT_DEFINITION, ordinal=0))
 
@@ -931,8 +930,7 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
             "contextual provider read action is invalid: `handles` must contain "
             "source handles returned by the preceding context search",
         )
-        rendered = '\n'.join((str(failure), repr(failure), repr(failure.__cause__), repr(
-            failure.__context__)))
+        rendered = '\n'.join((str(failure), repr(failure), repr(failure.__cause__), repr(failure.__context__)))
         for private in private_values: self.assertNotIn(private, rendered)
         self.assertEqual(tuple((finalizer.calls for finalizer in provider.finalizers)), ([(
             'accepted', None)], [('rejected', ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)]))
@@ -970,8 +968,7 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
                 self.assertIs(failure.code, ContextExecutionErrorCode.MALFORMED_ACTION)
                 self.assertEqual(str(failure), expected)
                 expected_token = _correlation(provider.calls[-1])
-                rendered = '\n'.join((str(failure), repr(failure), repr(failure.__cause__), repr(
-                    failure.__context__)))
+                rendered = '\n'.join((str(failure), repr(failure), repr(failure.__cause__), repr(failure.__context__)))
                 for private in ((expected_token, private_correlation, 'PRIVATE critique prose', '\x1b', '\x07')):
                     self.assertNotIn(private, rendered)
                 self.assertEqual([finalizer.calls for finalizer in provider.finalizers[:-1]], [[(

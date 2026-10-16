@@ -1284,10 +1284,13 @@ exact source content. A terminal response embeds the semantic object directly in
 Every built-in result has an explicit `response_type`. The Lead contract,
 `lead-response-v7`, distinguishes answers, clarification questions, critiques,
 proposal-drafting recommendations, specialist-consultation proposals, and artifact
-change proposals. Every Lead result includes `response_text` and
+change proposals. Scoped Lead results include `response_text` and
 `response_details.task_scope`; the scope selects an exact offered `task: {id, revision}`
-pair. Missing scope receives the bounded structured-result repair and then the
-runtime's visible no-action fallback if repair fails.
+pair. Other response families retain their exact offered field names and
+nullability. For example, an unconstrained front readiness branch requires
+`response_details.writing_task_scope` to be `null`. Missing a branch-required
+scope receives the bounded structured-result repair and then the runtime's visible
+no-action fallback if repair fails.
 
 A `proposal_drafting_request` asks Lead to draft a concrete document-change or
 specialist-consultation proposal for later confirmation. A `document_change_request`

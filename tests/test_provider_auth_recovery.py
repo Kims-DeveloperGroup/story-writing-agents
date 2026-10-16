@@ -278,8 +278,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
     async def _bound_replay(self, responses, *, seed):
         from story_writing_agents.agent_context.service import AgentContextService
         case = lead._task_fixture(self)
-        conversation_id = lead.LeadOrchestrationTestCase.conversation(
-            case, "Bound authority replay")
+        conversation_id = lead.LeadOrchestrationTestCase.conversation(case, "Bound authority replay")
         if seed is not None:
             case.backend.enqueue(lead._visible_outcome("answer", seed))
             await case.runtime.lead_turn(case.session_id, conversation_id, seed)
@@ -386,11 +385,9 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
         self.assertEqual(len(result.provider_calls), 4)
         self.assertEqual(provider.calls[2].payload, provider.calls[3].payload)
         self.assertEqual(provider.calls[2].expected_thread_id, provider.calls[3].expected_thread_id)
-        search = lambda call, provider: lead._search_history(
-            call, provider, "Bound history evidence")
+        search = lambda call, provider: lead._search_history(call, provider, "Bound history evidence")
         calls, bound_result, failed = await self._bound_replay(
-            (search, lead._read_history_hit, auth_failure(), lead._answer_from_history),
-            seed="Bound history evidence")
+            (search, lead._read_history_hit, auth_failure(), lead._answer_from_history),seed="Bound history evidence")
         self._require_bound_replay(calls, bound_result, failed, count=4, failure_index=2)
         self.assertEqual([call.contract.offers.action_index for call in calls], [0, 1, 2, 2])
         self.assertEqual(calls[2].contract.eligibility_offers.completed_read_facts,

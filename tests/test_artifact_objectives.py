@@ -44,8 +44,7 @@ def _native_objective_response(call, *, response_type, message, scope, update, b
     from tests.provider_wire_fixture import (
         lead_fixture_bound_scope, lead_fixture_result, lead_fixture_response)
     fields = {'task_scope': lead_fixture_bound_scope(call, scope, record=True),
-              'response_type': response_type, 'response_text': message,
-              'document_change_request_update': update}
+              'response_type': response_type, 'response_text': message,'document_change_request_update': update}
     return lead_fixture_response(call, lead_fixture_result(fields), family=0, branch_key=branch)
 
 
@@ -166,13 +165,11 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         conversation_id = conversation_id or self.conversation()
         self.backend.enqueue(self.question(
                 intent={'action': 'start',
-                    'request': 'Prepare the approved synthetic outline.',
-                    'target_paths': [OUTLINE],
+                    'request': 'Prepare the approved synthetic outline.','target_paths': [OUTLINE],
                     'next_step': 'clarify',
                     'draft_source_event_ids': [],}, message=message,
                 native_update={'update_type': 'start_request',
-                    'target_artifact_paths': [OUTLINE],
-                    'requested_workflow_step': 'ask_clarification'}))
+                    'target_artifact_paths': [OUTLINE],'requested_workflow_step': 'ask_clarification'}))
         turn = await self.runtime.lead_turn(self.session_id, conversation_id, f"Help me clarify the ending before drafting {OUTLINE}.")
         self.assertIs(turn.kind, c.LeadOutcomeKind.QUESTION)
         judgment = next(e.payload for e in reversed(self.history(conversation_id))
@@ -206,8 +203,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
                 "evidence_id": evidence(call, material)[0], "new_text": text}],
             evidence_status='verified' if attached else 'empty',
             evidence_ids=evidence,
-            objective_intent=intent,
-            authoring_scope=c.authoring_scope_to_dict(scope),
+            objective_intent=intent,authoring_scope=c.authoring_scope_to_dict(scope),
             authoring_assessment=asdict(
                 offered.recommendation_request.basis.authoring_admission.assessment),)
         self.backend.enqueue(prepare_current_task)

@@ -108,8 +108,8 @@ generating guidance for guidance fields.
 An authoring collaboration carries its shared editorial brief in the existing
 scope interpretation, derived from the Lead's disclosed response text. The same
 immutable scope reaches specialist assignments and Lead synthesis. Its input/member
-representation is `writing_task_scope`; current bound Lead native output carries
-the complete scope at `response_details.task_scope`. Selected source inputs remain
+representation is `writing_task_scope`; scoped current bound Lead native output
+carries the complete scope at `response_details.task_scope`. Selected source inputs remain
 specific to each disclosed assignment. Briefs and recommendation treatments use existing
 prose fields rather than adding fields to closed result schemas.
 
@@ -464,8 +464,11 @@ a dependency slot binds a premise to its dependent domains. The proposal's
 all dependent authors receive that capture. Every affected specialist still
 reviews the same final candidate.
 
-The current bound native `response_details.task_scope` uses the complete field set
-below. The single immutable contextual declaration maps this qualified marker from
+When an offered branch uses a scope object, its bound native
+`response_details.task_scope` uses the complete field set below. For example,
+an unconstrained front readiness branch requires
+`response_details.writing_task_scope` to be `null`; follow each offered branch's
+exact field names and nullability. The single immutable contextual declaration maps this qualified marker from
 member/domain `writing_task_scope`, together with its required term and the nested
 keys. Whole selected validation precedes inverse restoration; trusted repair paths
 use the same declaration.

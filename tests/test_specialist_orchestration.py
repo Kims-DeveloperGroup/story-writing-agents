@@ -138,8 +138,7 @@ class _FailingEventStore:
     def append_batch(self, batch):
         matches_state = self.state is not None and any((getattr(event.payload, 'state',
             None) is self.state for event in batch.events))
-        matches_kind = self.event_kind is not None and any((
-            event.kind is self.event_kind for event in batch.events))
+        matches_kind = self.event_kind is not None and any((event.kind is self.event_kind for event in batch.events))
         if self.enabled and (matches_state or matches_kind):
             self.failures += 1
             raise RuntimeError("injected durable append failure")
@@ -291,8 +290,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             sibling_finishes += 1
             return _specialist_outcome()(call, provider)
 
-        self.backend.enqueue_for(PLOT_ARCHITECT, _SubmittedFailure(RuntimeError(
-            'plot failed after submission')))
+        self.backend.enqueue_for(PLOT_ARCHITECT, _SubmittedFailure(RuntimeError('plot failed after submission')))
         self.backend.enqueue_for(CHARACTER_CUSTODIAN, sibling)
         self.backend.enqueue_for(EXECUTION_SPECIALIST, sibling)
         with _fast_prevalidated_session_binding(self.runtime, self.session_id):
@@ -363,8 +361,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         result = _payloads(history, CollaborationExecutionResult)[0]
         self.assertIs(result.overall_outcome, CollaborationExecutionOutcomeKind.CANCELLED)
         self.assertEqual(tuple((item.outcome for item in result.assignment_outcomes)), (
-            CollaborationAssignmentOutcomeKind.CANCELLED,
-            CollaborationAssignmentOutcomeKind.CANCELLED))
+            CollaborationAssignmentOutcomeKind.CANCELLED,CollaborationAssignmentOutcomeKind.CANCELLED))
         self.assertEqual(len(_payloads(history, CollaborationTerminalOutcomePayload)), 2)
         restarted_backend = _LeadBackend()
         restarted = StoryRuntime(self.control_workspace, restarted_backend)  # type: ignore[arg-type]
@@ -374,8 +371,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertEqual(restarted_backend.calls, [])
 
     async def test_one_and_two_assignments_run_with_exact_parallel_width(self) -> None:
-        for specialist_ids, declared_domains in (
-            ((PLOT_ARCHITECT,), ('plot_structure',)),
+        for specialist_ids, declared_domains in (((PLOT_ARCHITECT,), ('plot_structure',)),
             ((PLOT_ARCHITECT, CHARACTER_CUSTODIAN), ('plot_structure', 'character_world'))):
             with self.subTest(specialist_ids=specialist_ids):
                 conversation_id = self.conversation(f'Parallel width {len(specialist_ids)}')
