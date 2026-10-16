@@ -1,6 +1,5 @@
 """Runtime routing accepts typed task facts and keeps draft/review authority separate."""
-from tests.provider_wire_fixture import (
-    result as wire_result, lead_fixture_bound_scope, lead_fixture_assignments,
+from tests.provider_wire_fixture import ( result as wire_result, lead_fixture_bound_scope, lead_fixture_assignments,
     finite_fixture_selection, lead_fixture_result, lead_fixture_response,)
 from tests.provider_wire_fixture import answer as wire_answer, contract_id as wire_contract_id
 
@@ -10,10 +9,8 @@ import asyncio
 import hashlib
 import json
 import story_writing_agents.lead_task_transitions as task
-from tests.test_lead_orchestration import (
-    _current_exploration_outcome,
-    _discussion_reply,
-)
+from tests.test_lead_orchestration import ( _current_exploration_outcome,
+    _discussion_reply,)
 import subprocess
 from dataclasses import asdict, replace
 from unittest import mock
@@ -57,8 +54,7 @@ _ADOPTION_DIRECTION = (
     "Preserve its stated motive and limits, without magic. "
     "You may invent supporting dialogue and minor places; leave the ending unresolved." )
 
-_PLOT_NATIVE_INPUTS = {
-    'source_choices': ('user_input',), 'input_choices': ('user_input',),
+_PLOT_NATIVE_INPUTS = { 'source_choices': ('user_input',), 'input_choices': ('user_input',),
     'anchors': {PLOT_ARCHITECT: 'user_input'},
     'recipients': {'user_input': PLOT_ARCHITECT}, 'family': 0,}
 
@@ -76,19 +72,14 @@ def scoped_proposal(*agents, authoring_assessment=None, activity='draft', paths=
         scope["intent"] = "authoring" if intent is None else intent
         mode = "review" if activity == "review" else "draft"
         ids = ["user_input"] if candidate_ids is None else list(candidate_ids)
-        value = {
-            'authoring_scope': scope, 'kind': kind,
+        value = { 'authoring_scope': scope, 'kind': kind,
             'message': 'The scoped work requires its disclosed specialists.',
             **({'scope': 'story_specific', 'evidence_status': 'incomplete',
-                'evidence_ids': [], 'artifact_intent': None} if native_inputs is None else {}),
-            'proposal': {
-                **({'relation': 'new_step'} if native_inputs is None else {}),
-                'shared_premises': [],
+                'evidence_ids': [], 'artifact_intent': None} if native_inputs is None else {}), 'proposal': {
+                **({'relation': 'new_step'} if native_inputs is None else {}), 'shared_premises': [],
                 **({'purpose': 'Produce the scoped synthetic material.', 'authoring_scope': scope}
-                   if native_inputs is None else {}),
-                'assignments': [
-                    {'agent_id': agent,
-                     'instruction': 'Produce the bounded material.' if mode == 'draft'
+                   if native_inputs is None else {}), 'assignments': [
+                    {'agent_id': agent, 'instruction': 'Produce the bounded material.' if mode == 'draft'
                      else 'Assess the supplied candidate.',
                      'input_ids': list(dict.fromkeys(['user_input', *ids])), 'mode': mode}
                     for agent in agents]} if kind == 'proposal' else None}
@@ -111,8 +102,7 @@ def scoped_proposal(*agents, authoring_assessment=None, activity='draft', paths=
         if 'schema_id' in body:
             return encoded
         if type(body.get('writing_task_scope')) is dict and 'task_scope' not in body:
-            body['task_scope'] = lead_fixture_bound_scope(
-                call, body.pop('writing_task_scope'), record=True)
+            body['task_scope'] = lead_fixture_bound_scope( call, body.pop('writing_task_scope'), record=True)
         assessment = body.get('authoring_assessment')
         if type(assessment) is dict:
             for key in ('creative_scope', 'direction', 'foundations', 'decisions'):
@@ -122,16 +112,14 @@ def scoped_proposal(*agents, authoring_assessment=None, activity='draft', paths=
                     if type(record) is dict and 'source_ids' in record:
                         cells = record['source_ids']
                         choices = native_inputs['source_choices']
-                        if (type(cells) in (list, tuple)
-                                and all(type(item) is str for item in cells)
+                        if (type(cells) in (list, tuple) and all(type(item) is str for item in cells)
                                 and len(set(cells)) == len(cells)
                                 and set(cells) <= set(choices)):
                             record['source_ids'] = {item: True for item in cells}
         proposal = body.get('specialist_consultation_proposal')
         if type(proposal) is dict and 'assignments' in proposal:
             allocation = lead_fixture_assignments(
-                proposal['assignments'], input_choices=native_inputs['input_choices'],
-                anchors=native_inputs['anchors'],
+                proposal['assignments'], input_choices=native_inputs['input_choices'], anchors=native_inputs['anchors'],
                 recipients=proposal.get('required_input_recipients'))
             proposal['assignments'] = allocation['assignments']
         return lead_fixture_response(call, lead_fixture_result(body),

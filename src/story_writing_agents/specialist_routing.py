@@ -95,8 +95,13 @@ class AuthoringScopeRuleSet:
     required_domains: tuple[ArtifactReviewDomain, ...]
     required_specialists: tuple[str, ...]
     assignment_modes: tuple[tuple[str, SpecialistAssignmentMode], ...]
+    schema_version: int = AUTHORING_SCOPE_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
+        if type(self.schema_version) is not int:
+            raise TypeError("scope rule version must be an exact integer")
+        if self.schema_version not in {1, 2, AUTHORING_SCOPE_SCHEMA_VERSION}:
+            raise ValueError("scope rule version must be 1, 2 or 3")
         if type(self.activity) is not AuthoringActivity or type(self.intent) is not AuthoringIntent:
             raise TypeError("scope rules require exact activity and intent")
         _domain_tuple(self.domains)
@@ -180,11 +185,15 @@ def authoring_scope_rules(
                        if roles[next(domain for domain in required_domains if _SPECIALIST_BY_DOMAIN[domain] == agent)]
                        is AuthoringContributionRole.DRAFT_OWNER else SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT)
                       for agent in specialists)
-    return AuthoringScopeRuleSet(activity, intent, domains, contributions, required_domains, specialists, modes)
+    return AuthoringScopeRuleSet(
+        activity, intent, domains, contributions, required_domains, specialists, modes,
+        schema_version,
+    )
 
 
 def assignment_rule(rules: AuthoringScopeRuleSet, specialist_id: str) -> SpecialistAssignmentMode:
-    if rules.activity is AuthoringActivity.REVIEW and specialist_id in _SPECIALIST_BY_DOMAIN.values():
+    if (rules.activity is AuthoringActivity.REVIEW
+            and any(specialist_id in roster for roster in legal_specialist_rosters(rules))):
         return SpecialistAssignmentMode.REVIEW
     if type(rules) is not AuthoringScopeRuleSet:
         raise TypeError("assignment rules require an immutable scope declaration")
@@ -198,7 +207,8 @@ def legal_specialist_rosters(rules: AuthoringScopeRuleSet) -> tuple[tuple[str, .
     """Existing legal participation, including additional review specialists."""
     if type(rules) is not AuthoringScopeRuleSet:
         raise TypeError("rosters require a scope rule declaration")
-    if rules.activity is not AuthoringActivity.REVIEW:
+    if (rules.schema_version == AUTHORING_SCOPE_SCHEMA_VERSION
+            or rules.activity is not AuthoringActivity.REVIEW):
         return (rules.required_specialists,)
     canonical = tuple(dict.fromkeys(_SPECIALIST_BY_DOMAIN.values()))
     return tuple(
@@ -226,7 +236,11 @@ def finite_authoring_scope_rules(
                     for roles in product(tuple(AuthoringContributionRole), repeat=len(domains)):
                         contributions = tuple(AuthoringContribution(domain, role) for domain, role in zip(domains, roles))
                         try:
-                            results.append(authoring_scope_rules(activity, bound_intent, domains, contributions, target_paths=target_paths))
+                            results.append(authoring_scope_rules(
+                                activity, bound_intent, domains, contributions,
+                                target_paths=target_paths,
+                                schema_version=AUTHORING_SCOPE_SCHEMA_VERSION,
+                            ))
                         except ValueError:
                             continue
     return tuple(results)

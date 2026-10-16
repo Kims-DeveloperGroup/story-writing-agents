@@ -2014,44 +2014,70 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_both_native_backends_preserve_session_continuation_and_legacy_namespaces(self):
+        from story_writing_agents.agent_context.service import (
+            AgentContextService, ContextInvocationKind, ContextInvocationRequest,)
+        from story_writing_agents.agent_context.sources import (
+            ActiveDebateSourceAdapter, FocusedConversationSourceAdapter, OwnAgentStateSourceAdapter,
+            SessionHistorySourceAdapter, WritingArtifactSourceAdapter)
+        from story_writing_agents.conversation_storage import compose_filesystem_conversation_storage
+        from tests.test_agent_context_execution import _LEAD_CALL_FACTORY, _lead_answer_frame, _materials
         for provider_id in ("codex", "antigravity"):
             with self.subTest(provider=provider_id):
                 session = f"continuation_{provider_id}"
                 definition = replace(self.definition(LEAD_ORCHESTRATOR), backend=provider_id)
-
                 def factory():
                     value = AgentBackend(
-                        self.workspace, executable=str(self.executable),
-                        antigravity_executable=str(self.executable),
+                        self.workspace, executable=str(self.executable), antigravity_executable=str(self.executable),
                         backend_overrides={LEAD_ORCHESTRATOR: provider_id},
                     )
                     self.addCleanup(value.close)
                     return value
-
                 backend = factory()
                 self.create_provisioned_session_with_access(backend, session)
-                scope = ContextScope("continuity-workspace", session, ContextSubjectKind.CONVERSATION, "conversation_a", LEAD_ORCHESTRATOR)
-                identity = ContextContinuationIdentity(scope.workspace_id, session, LEAD_ORCHESTRATOR)
-                policy = "sha256:" + "7" * 64
-                calls = []
-
+                service = AgentContextService(self.workspace)
+                storage = compose_filesystem_conversation_storage(self.workspace)
+                repository = WritingArtifactRepository(self.workspace.root)
+                scope = service.scope(session, ContextSubjectKind.CONVERSATION, "conversation_a", LEAD_ORCHESTRATOR)
+                identity = service.session_continuation(session, LEAD_ORCHESTRATOR).identity
+                policy = None
+                calls, requests = [], []
                 async def invoke(_binding, invocation):
                     calls.append(invocation)
-                    return ProviderResult(invocation.thread_id or f"native-thread-{len(calls)}", "{}", actual_transport_utf8_bytes=len(invocation.payload_json))
-
+                    return ProviderResult(invocation.thread_id or f"native-thread-{len(calls)}",
+                        _lead_answer_frame(requests[-1], "synthetic exact session context"),
+                        actual_transport_utf8_bytes=len(invocation.payload_json))
                 async def call(owner, current, continuation):
                     provider = (await owner.bind(definition))._context_provider()
-                    async with provider.invocation(current, policy, continuation_identity=continuation):
-                        expected = provider.inspect_context_thread(current, policy)
-                        result = await provider.invoke_context(ContextProviderCallRequest(
-                            current, policy, f"call-{len(calls) + 1}",
-                            ProviderCallKind.COLLABORATION_INITIAL, {"type": "object"},
-                            {"context": "synthetic exact session context"},
-                            expected_thread_id=expected, continuation_identity=continuation,
-                        ))
-                        result.finalizer.accepted()
-                        return result.thread_id
-
+                    class ObservedProvider:
+                        def __getattr__(self, name):
+                            return getattr(provider, name)
+                        async def invoke_context(self, request):
+                            nonlocal policy
+                            requests.append(request)
+                            policy = request.policy_fingerprint
+                            return await provider.invoke_context(request)
+                    request = ContextInvocationRequest(session_id=session, subject_kind=current.subject_kind,
+                        subject_id=current.subject_id, agent_id=LEAD_ORCHESTRATOR,
+                        operation_id=f"call-{len(calls) + 1}", result_correlation_id=f"result-{len(calls) + 1}",
+                        materials=_materials("synthetic exact session context"),
+                        result_contract=_LEAD_CALL_FACTORY, invocation_kind=ContextInvocationKind.LEAD,
+                        physical_call_limit=1)
+                    sources = dict(writing_artifacts=WritingArtifactSourceAdapter(repository, current),
+                        focused_conversation=FocusedConversationSourceAdapter(
+                            storage.catalog, storage.event_store, current, None),
+                        active_debate=ActiveDebateSourceAdapter(self.workspace, current, None),
+                        own_agent_state=OwnAgentStateSourceAdapter(self.workspace, current))
+                    if continuation is None:
+                        result = await service.invoke(request, ObservedProvider(), **sources)
+                    else:
+                        published = False
+                        async with service.session_continuation(session, LEAD_ORCHESTRATOR) as transaction:
+                            result = await service.invoke(request, ObservedProvider(), continuation=transaction,
+                                session_history=SessionHistorySourceAdapter(
+                                    storage.catalog, storage.event_store, session).capture(),
+                                publication_validator=lambda: published, **sources)
+                            published = True
+                    return result.provider_thread_id
                 adapter = getattr(backend, f"_{provider_id}_adapter")
                 with mock.patch.object(adapter, "invoke", new=invoke):
                     legacy = await call(backend, scope, None)

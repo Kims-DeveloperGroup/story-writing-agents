@@ -3243,7 +3243,7 @@ class AgentBackend:
             bound_agent,
             execution_workspace,
         )
-        context = await self._load_authorized_reference_context(
+        prelude = await self._load_authorized_reference_context(
             bound_agent,
             session_id=session_id,
             debate_id=debate_id,
@@ -3253,6 +3253,7 @@ class AgentBackend:
             execution_workspace=execution_workspace,
             continuation_fingerprint=continuation_fingerprint,
         )
+        context = prelude.context
         framed_payload = dict(payload)
         framed_payload["untrusted_attached_references"] = project_direct_payload({"untrusted_writing_artifact_context": context})["untrusted_attached_references"]
         used_local_fallback = False
@@ -3314,7 +3315,8 @@ class AgentBackend:
         provider_name: str,
         execution_workspace: ProviderExecutionWorkspace | None = None,
         continuation_fingerprint: str,
-    ) -> list[dict[str, object]]:
+        prelude_request: ContextReferencePreludeRequest | None = None,
+    ) -> ContextReferencePreludeResult:
         """Read the already-authorized references and transiently frame their bytes."""
 
         request = reference_read.request
@@ -3345,10 +3347,12 @@ class AgentBackend:
                     "reference read handler returned an invalid result"
                 )
             with result:
-                context = self._reference_read_context(result)
+                prelude = ContextReferencePreludeResult.from_read_result(
+                    result, request=prelude_request,
+                )
             if execution_workspace is not None:
                 execution_workspace.require_current()
-            return context
+            return prelude
         except BaseException as exc:
             self._fail_reference_read_without_replacing(
                 reference_read,
@@ -3488,28 +3492,6 @@ class AgentBackend:
             ),
         }
 
-    @staticmethod
-    def _reference_read_context(
-        result: ReferenceReadResult,
-    ) -> list[dict[str, object]]:
-        """Decode and frame selected bytes once in their request order."""
-
-        contents = result.contents
-        if len(contents) != len(result.request.references):
-            raise BackendProtocolError(
-                "reference read result does not match its request"
-            )
-        return [
-            {
-                "reference": AgentBackend._artifact_reference_payload(reference),
-                "content": content.decode("utf-8", errors="strict"),
-            }
-            for reference, content in zip(
-                result.request.references,
-                contents,
-                strict=True,
-            )
-        ]
 
     async def _invoke_provider(
         self,
@@ -3887,9 +3869,9 @@ class AgentBackend:
             bound_agent,
             execution_workspace,
         )
-        reference_context: list[dict[str, object]] | None = None
+        reference_context: tuple[Mapping[str, object], ...] | None = None
         if reference_read is not None:
-            reference_context = await self._load_authorized_reference_context(
+            prelude = await self._load_authorized_reference_context(
                 bound_agent,
                 session_id=request.session_id,
                 conversation_id=request.conversation_id,
@@ -3898,6 +3880,7 @@ class AgentBackend:
                 execution_workspace=execution_workspace,
                 continuation_fingerprint=continuation_fingerprint,
             )
+            reference_context = prelude.context
         observation_frame: str | None = None
         after_read = False
         pending_observation = False
@@ -5697,9 +5680,10 @@ class AgentBackend:
             raise ReferenceAuthorizationError(
                 ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
             )
-        context = await self._load_authorized_reference_context(
+        prelude = await self._load_authorized_reference_context(
             bound_agent,
             session_id=request.scope.session_id,
+            prelude_request=request,
             reference_read=reference_read,
             execution_workspace=request.execution_workspace,
             continuation_fingerprint=self._legacy_continuation_fingerprint(
@@ -5709,7 +5693,7 @@ class AgentBackend:
                 "Codex" if bound_agent.vendor == "codex" else "Antigravity"
             ),
         )
-        return ContextReferencePreludeResult(tuple(context))
+        return prelude
 
     def _context_thread_lock(
         self,

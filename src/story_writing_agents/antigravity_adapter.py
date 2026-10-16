@@ -1939,6 +1939,7 @@ class AntigravityAdapter:
         if type(structured_output) is not dict or type(schema_echo) is not dict:
             cls._malformed_output()
         try:
+            canonical_provider_json(structured_output)
             expected_schema_bytes = canonical_provider_json(
                 cls.native_output_schema(expected_schema)
             )

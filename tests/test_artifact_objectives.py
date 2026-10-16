@@ -41,8 +41,7 @@ def rewrite_history(events, event_id, **changes):
 
 
 def _native_objective_response(call, *, response_type, message, scope, update, branch):
-    from tests.provider_wire_fixture import (
-        lead_fixture_bound_scope, lead_fixture_result, lead_fixture_response)
+    from tests.provider_wire_fixture import ( lead_fixture_bound_scope, lead_fixture_result, lead_fixture_response)
     fields = {'task_scope': lead_fixture_bound_scope(call, scope, record=True),
               'response_type': response_type, 'response_text': message,'document_change_request_update': update}
     return lead_fixture_response(call, lead_fixture_result(fields), family=0, branch_key=branch)
@@ -79,8 +78,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
             native_update=None):
         def respond(call, _provider):
             if native_update is not None:
-                return _native_objective_response(call,
-                    response_type='clarification_question', message=message,
+                return _native_objective_response(call, response_type='clarification_question', message=message,
                     scope=self.scope(call, intent=intent, activity='draft'),
                     update=native_update, branch='lead-response-v8:family:2')
             return lead._provider_envelope(call, {
@@ -106,8 +104,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         from tests.recommendation_fixture import task_assessment
 
         native_first = (conversation_id is None and specialist_ids == (PLOT_ARCHITECT,)
-                        and objective_id is None and target_path == OUTLINE
-                        and authoring_paths is None)
+                        and objective_id is None and target_path == OUTLINE and authoring_paths is None)
         conversation_id = conversation_id or self.conversation()
         paths = () if target_path is None else (target_path,)
         intent = {
@@ -121,18 +118,15 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         self.backend.enqueue(scoped_proposal (* specialist_ids, native_inputs = {'input_choices': (
             'user_input',), 'anchors': {PLOT_ARCHITECT: 'user_input'}, 'recipients': {'user_input':
             PLOT_ARCHITECT}, 'source_choices': ('current_response', 'user_input'), 'family': 0} if
-            (native_first or native_continuation)
-             else None, paths = authoring_paths if authoring_paths is not None else
+            (native_first or native_continuation) else None, paths = authoring_paths if authoring_paths is not None else
             paths, domains = ('plot_structure',) if (native_first or native_continuation) else
                              () if target_path is not None and specialist_ids == (PLOT_ARCHITECT,)
             else tuple (({'plot_architect': 'plot_structure', 'character_custodian':
             'character_world', 'execution_specialist': 'tone_execution'} [agent] for agent in
-            specialist_ids)), selected = self.objective_tasks.get (objective_id),
-                        mutate = (
+            specialist_ids)), selected = self.objective_tasks.get (objective_id), mutate = (
                             lambda value, _: value["proposal"].update(
                                 objective_intent={"action": "start", "target_paths": list(paths),
-                                                  "next_step": "consult"})) if native_first else
-                        (
+                                                  "next_step": "consult"})) if native_first else (
                 (lambda value, _material: value['proposal'].update(objective_intent=lead._compact_objective(intent)))
                 if native_continuation else lambda
             value, _material: value.update (objective_intent = intent)), authoring_assessment =
@@ -201,8 +195,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         self.assertIs(offered.kind, c.LeadOutcomeKind.RECOMMENDATION, offered)
         prepare_current_task = artifact._artifact_outcome(operations=lambda call, material: [{"kind": "replace",
                 "evidence_id": evidence(call, material)[0], "new_text": text}],
-            evidence_status='verified' if attached else 'empty',
-            evidence_ids=evidence,
+            evidence_status='verified' if attached else 'empty', evidence_ids=evidence,
             objective_intent=intent,authoring_scope=c.authoring_scope_to_dict(scope),
             authoring_assessment=asdict(
                 offered.recommendation_request.basis.authoring_admission.assessment),)

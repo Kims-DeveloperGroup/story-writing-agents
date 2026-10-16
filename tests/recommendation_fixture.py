@@ -102,9 +102,14 @@ def recommendation(*, message=DRAFT, recommended_action=None, mutate=None,
             drafting = native['proposal_drafting_request']
             drafting['source_ids'] = finite_fixture_selection(sources, tuple(drafting['source_ids']))
             if 'specialist_ids' in drafting:
-                drafting['specialist_ids'] = finite_fixture_selection(
-                    ('plot_architect', 'character_custodian', 'execution_specialist'),
-                    tuple(drafting['specialist_ids']))
+                roster = {'plot_structure': 'plot_architect', 'character_world': 'character_custodian',
+                          'tone_execution': 'execution_specialist'}
+                required = tuple(agent for domain, agent in roster.items()
+                                 if domain in value['authoring_scope']['domains'])
+                selected = tuple(drafting['specialist_ids'])
+                drafting['specialist_ids'] = finite_fixture_selection(tuple(roster.values()), selected)
+                if required == tuple(roster.values()):
+                    drafting['specialist_ids'] = {agent: agent in selected for agent in roster.values()}
             if choices['preparation_targets'] and 'target_artifact_paths' in drafting:
                 drafting['target_artifact_paths'] = finite_fixture_selection(
                     choices['preparation_targets'], tuple(drafting['target_artifact_paths']))
@@ -204,8 +209,7 @@ def preparation(turn, *, text=DRAFT, mutate=None, read_evidence=False):
             if request.objective_id is not None:
                 proposal['objective_intent'] = {'action': 'continue',
                     'objective_id': request.objective_id, 'next_step': 'consult'}
-            body = {'kind': 'proposal',
-                'message': 'Specialist review would resolve the open question.',
+            body = {'kind': 'proposal', 'message': 'Specialist review would resolve the open question.',
                 'authoring_scope': json.loads(json.dumps(asdict(request.authoring_scope))), 'proposal': proposal}
             if request.basis.authoring_admission is not None:
                 body['authoring_assessment'] = asdict(request.basis.authoring_admission.assessment)
@@ -247,8 +251,7 @@ def preparation(turn, *, text=DRAFT, mutate=None, read_evidence=False):
             else:
                 operations.append({'kind': 'create', 'suggested_path': path, 'new_text': text})
         provider.used_handles = tuple(row['read_handle'] for row in reads)
-        body = {'kind': 'proposal',
-                'message': 'I prepared an exact candidate for specialist review.',
+        body = {'kind': 'proposal', 'message': 'I prepared an exact candidate for specialist review.',
                 'artifact_intent': {'operations': operations, 'objective_intent': lead._compact_objective(intent)},
                 'authoring_scope': json.loads(json.dumps(asdict(request.authoring_scope)))}
         if request.basis.authoring_admission is not None:
@@ -333,8 +336,7 @@ class RecommendationCase(ObjectiveCase):
         def search(call, _provider):
             retain_binding(call)
             outer, inner = offered_fixture_bindings(call, action_type='search_context', response_type=None, family=1)
-            encoded = indexed_response({'action_type': 'search_context',
-                'artifact_directory_prefix': 'core_documents/',
+            encoded = indexed_response({'action_type': 'search_context', 'artifact_directory_prefix': 'core_documents/',
                 'queries': [{'search_text': 'Outline', 'source_types': {'story_document': True}}]},
                 outer_schema_id=outer, inner_schema_id=inner)
             good, bad = json.loads(encoded), json.loads(encoded)
@@ -353,8 +355,7 @@ class RecommendationCase(ObjectiveCase):
             selected = tuple(next(row['read_handle'] for row in hits
                 if row['provenance']['source_locator'] == path) for path in request.target_paths
                 if path.startswith('core_documents/'))
-            expected_delivery_paths.append(tuple(
-                row['provenance']['source_locator']
+            expected_delivery_paths.append(tuple(row['provenance']['source_locator']
                 for handle in call.contract.offers.issued_handle_aliases if handle in selected
                 for row in hits if row['read_handle'] == handle))
             self.assertEqual(set(expected_delivery_paths[0]),

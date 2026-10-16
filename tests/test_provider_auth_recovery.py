@@ -137,8 +137,7 @@ class AuthClassificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(failure.timed_out)
         self.assertFalse(failure.taint_existing_thread)
         self.assertTrue(AgentBackend._context_failure_timed_out(failure))
-        self.assertEqual(failure.response_diagnostic, ProviderResponseDiagnostic(native.stdout,
-            marker, 1))
+        self.assertEqual(failure.response_diagnostic, ProviderResponseDiagnostic(native.stdout, marker, 1))
         accounting = provider_failure_accounting(failure)
         self.assertIs(accounting.state, ProviderCallState.SUBMITTED)
         self.assertEqual(accounting.actual_transport_utf8_bytes, len(invocation.payload_json))
@@ -320,8 +319,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
         from story_writing_agents.agent_context.service import BoundContextProviderCallRequest
         self.assertEqual(len(calls), count)
         self.assertTrue(all(type(call) is BoundContextProviderCallRequest for call in calls))
-        self.assertEqual([call.call_id for call in result.provider_calls],
-                         [call.call_id for call in calls])
+        self.assertEqual([call.call_id for call in result.provider_calls], [call.call_id for call in calls])
         self.assertEqual([call.accounting.state for call in result.provider_calls],
                          [ProviderCallState.SUBMITTED] * count)
         first, replay = calls[failure_index:failure_index + 2]
@@ -363,16 +361,14 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
 
     async def test_local_reference_load_does_not_consume_provider_capacity(self):
         request = self.reference_request()
-        provider = AuthContextProvider((context._answer,),
-            reference_operation_id=request.reference_operation_id)
+        provider = AuthContextProvider((context._answer,), reference_operation_id=request.reference_operation_id)
         result = await self.invoke(provider, request)
         self.assertEqual(len(result.provider_calls), 1)
         self.assertEqual(len(provider.prelude_calls), 1)
         self.assertEqual(provider.completed_references, 1)
         constrained = self.reference_request(limit=1)
         constrained = replace(constrained, operation_id="limited", result_correlation_id="limited")
-        provider = AuthContextProvider((context._answer,),
-            reference_operation_id=constrained.reference_operation_id)
+        provider = AuthContextProvider((context._answer,), reference_operation_id=constrained.reference_operation_id)
         constrained_result = await self.invoke(provider, constrained)
         self.assertEqual(len(provider.prelude_calls), 1)
         self.assertEqual(len(provider.calls), 1)
@@ -395,8 +391,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
         self.assertEqual(calls[2].contract.eligibility_offers.delivery_read_facts,
                          calls[3].contract.eligibility_offers.delivery_read_facts)
         self.assertEqual(len(bound_result.authorization.used_evidence), 1)
-        self.assertEqual(bound_result.authorization.used_evidence[0].source_kind.value,
-                         "conversation")
+        self.assertEqual(bound_result.authorization.used_evidence[0].source_kind.value, "conversation")
 
     async def test_unsafe_unconfirmed_and_repeated_auth_failure_never_replay(self):
         for index, (safe, approved, twice) in enumerate(((False, True, False), (True, False, False), (True, True, True))):
@@ -624,7 +619,9 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
         for safe in (True, False):
             with self.subTest(proved_preturn_rejection=safe):
                 conversation = self.conversation("Known rejection" if safe else "Uncertain submission")
-                proposed = await self.proposal(conversation, assignments=_assignments(PLOT_ARCHITECT, CHARACTER_CUSTODIAN), text=(
+                proposed = await self.proposal(conversation,
+                    assignments=_assignments(PLOT_ARCHITECT, CHARACTER_CUSTODIAN),
+                domains=('plot_structure', 'character_world'), text=(
                 'Please check the story direction.\nSupplied story facts: Mara wants safety and fears exposure. '
                 'Review the story direction against those facts and the exact requested references. You may give '
                 'bounded story-direction review judgments; preserve supplied facts and do not write files. Execution '
@@ -657,15 +654,13 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
         conversation = self.conversation("Authentication and timeout")
         with (mock.patch.object(lead._LeadContextProvider, 'provider_id', 'antigravity')):
             self.backend.enqueue(lead._visible_outcome("answer"))
-            await self.runtime.lead_turn(self.session_id, conversation,
-                'Seed the existing provider thread.')
+            await self.runtime.lead_turn(self.session_id, conversation, 'Seed the existing provider thread.')
             assert self.backend.context_threads is not None
             retained_thread = next(iter(self.backend.context_threads.values()))
             before_calls = len(self.backend.calls)
 
             failure = auth_failure("antigravity", safe=True)
-            self.backend.enqueue(lead._SubmittedFailure(failure, timed_out=True,
-                submission_uncertain=True))
+            self.backend.enqueue(lead._SubmittedFailure(failure, timed_out=True, submission_uncertain=True))
             assisted = []
             with self.assertRaises(ProviderAuthenticationRequiredError) as caught:
                 await drive_recovery(self.runtime.lead_turn(self.session_id, conversation,
@@ -695,7 +690,8 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
     async def test_parallel_specialists_resume_without_duplicate_dispatch_or_synthesis(self):
         from tests.recommendation_fixture import task_assessment
         conversation = self.conversation()
-        proposed = await self.proposal(conversation, assignments=_assignments(PLOT_ARCHITECT, CHARACTER_CUSTODIAN), text=(
+        proposed = await self.proposal(conversation, assignments=_assignments(PLOT_ARCHITECT, CHARACTER_CUSTODIAN),
+                domains=('plot_structure', 'character_world'), text=(
                 'Please check the story direction.\nSupplied story facts: Mara wants safety and fears exposure. '
                 'Review the story direction against those facts and the exact requested references. You may give '
                 'bounded story-direction review judgments; preserve supplied facts and do not write files. Execution '

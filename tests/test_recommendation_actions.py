@@ -118,7 +118,7 @@ class RecommendationActionContractTests(RecommendationCase):
         second = await self.runtime.lead_turn(self.session_id, conversation_id, ("Finished candidate:\n" + message + "\nYou may make bounded review judgments and prepare a separate proposal; preserve supplied facts.\n" + "Offer another plan."))
         self.assertEqual(second.recommendation_request.authoring_scope, request.authoring_scope)
         self.assertEqual(tuple(s.content_digest for s in second.recommendation_request.draft_sources),
-                         (digest(message), digest("Second whole reply")))
+                         (digest("Second whole reply"), digest(message)))
         for sources, objective_id, bad_route in ((("foreign_event",), None, False),
                 (("current_response", "current_response"), None, False),
                 (("current_response",), "foreign_objective", False),

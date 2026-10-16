@@ -1031,7 +1031,7 @@ def _diagnose(
                     if (child := _discriminator_schema(variant, discriminator, root_schema)) is not None
                     and type(child.get("enum")) is list
                 ]
-                if len(candidates) != len(variants) or type(supplied) is not str:
+                if len(candidates) != len(variants):
                     continue
                 matches = (
                     [

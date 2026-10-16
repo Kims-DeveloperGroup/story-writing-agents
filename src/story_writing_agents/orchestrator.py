@@ -2425,7 +2425,7 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
         inputs = tuple(dict.fromkeys(self.constraints.input_ids + read_ids))
         sources = None if self.constraints.source_ids is None else tuple(dict.fromkeys(self.constraints.source_ids + read_ids))
         reviewers = tuple(dict.fromkeys(self.constraints.reviewer_inputs + tuple(
-            (item.evidence_id, self.reviewer_for_locator("${" + item.artifact_locator + "}"))
+            (self.reviewer_for_locator("${" + item.artifact_locator + "}"), item.evidence_id)
             for item in facts if item.source_kind is ContextSourceKind.WRITING_ARTIFACT)))
         current = replace(self.constraints, input_ids=inputs, source_ids=sources, reviewer_inputs=reviewers,
                           allow_read_sources=False, required_input_ids=self.constraints.required_assignment_input_ids())

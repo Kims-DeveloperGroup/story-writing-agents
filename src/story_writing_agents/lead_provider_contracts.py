@@ -16,14 +16,16 @@ from typing import Generic, TypeVar
 from dataclasses import dataclass, field, replace
 
 from .agent_context.actions import ContextSourceStatusKind, ContextSourceStatusReceipt
-from .writing_artifacts.catalog import CORE_ARTIFACT_PATHS
+from .writing_artifacts.catalog import CORE_ARTIFACT_PATHS, ArtifactKind, artifact_kind_path_rule
+from .writing_artifacts.change_sets import ArtifactChangeOperationKind
+from .writing_artifacts.relationship_policy import artifact_source_operation_rule
 from .provider_wire import (
     project_result_schema, normalize_result, hoist_schema_definitions, rebase_schema_definitions,
     project_lead_scope_schema, restore_lead_scope_result, project_lead_scope_diagnostic,
     ACTIVITIES as AUTHORING_ACTIVITIES, ASSIGNMENT_TYPES,
 )
 from .provider_wire import share_schema_descriptions
-from .provider_wire import ENUM_MEANINGS, field_description
+from .provider_wire import CHANGE_TYPES, ENUM_MEANINGS, field_description
 from .structured_output_validation import closed_rule, finite_subset_rule, schema_rule_fingerprints
 from .lead_exploration import exploration_result_schema
 from .authoring_admission import assessment_from_dict
@@ -37,7 +39,8 @@ from .specialist_routing import (
     required_authoring_specialists, required_authoring_domains, assignment_mode_for_specialist,
     AuthoringContributionRole,
     AuthoringScopeRuleSet, authoring_scope_rules, finite_authoring_scope_rules,
-    legal_specialist_rosters, assignment_rule, artifact_path_rule,
+    AUTHORING_SCOPE_SCHEMA_VERSION,
+    legal_specialist_rosters, assignment_rule, artifact_path_rule, artifact_domain,
 )
 from .lead_premise_decisions import (
     premise_question_schema, premise_analysis_schema, premise_summary_schema,
@@ -366,6 +369,9 @@ class LeadResultContractOwner(ContractOwner[LeadDecodedResult]):
     def typed_decoder(self) -> TypedDecoder[LeadDecodedResult]:
         return TypedDecoder("lead.current_codec", "848-v3:typed-family-owner", self.decode_typed,
                             (self.variant.decode, schema_fragment_findings,
+             artifact_source_operation_rule, artifact_kind_path_rule, artifact_domain,
+             authoring_scope_rules, finite_authoring_scope_rules, legal_specialist_rosters,
+             assignment_rule, AuthoringScopeRuleSet.__post_init__,
              map_current_task_literals,
             _require_intrinsic_lead_result,
                              project_lead_scope_schema, restore_lead_scope_result, project_lead_scope_diagnostic))
@@ -452,6 +458,38 @@ def _compile_closed_choices(
     def encoded(value: object) -> str:
         return json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False,
                           separators=(",", ":"))
+
+    probe_definitions = dict(original.get("$defs", {}))
+    probe_names: dict[str, str] = {}
+
+    def collect_original_rules(node: object) -> None:
+        if type(node) is not dict:
+            return
+        key = encoded(node)
+        if key in probe_names:
+            return
+        name = f"p{len(probe_names)}"
+        while name in probe_definitions:
+            name += "_"
+        probe_names[key] = name
+        probe_definitions[name] = node
+        for field in sorted(node.get("properties", {})):
+            collect_original_rules(node["properties"][field])
+        for child in node.get("anyOf", ()):
+            collect_original_rules(child)
+        if "items" in node:
+            collect_original_rules(node["items"])
+
+    collect_original_rules(original)
+    for name in sorted(original.get("$defs", {})):
+        collect_original_rules(original["$defs"][name])
+    batch_root, batch_fingerprints = schema_rule_fingerprints(
+        {**original, "$defs": probe_definitions})
+    if batch_root != original_fingerprints[0] or any(
+            batch_fingerprints[name] != value
+            for name, value in original_fingerprints[1].items()):
+        raise ValueError("closed-choice fingerprint batch changes its original context")
+    fingerprints.update({key: batch_fingerprints[name] for key, name in probe_names.items()})
 
     def fingerprint(node: Mapping[str, object]) -> str:
         key = encoded(node)
@@ -699,10 +737,14 @@ def factor_rule_schema(schema: Mapping[str, object]) -> dict[str, object]:
     for node in definitions.values():
         count(node, outer=True)
     existing = {source_key(node): name for name, node in definitions.items()}
+    source_order: dict[str, tuple[int, str]] = {}
+    for source_identity, source_node in nodes.items():
+        source_literal = key(source_node)
+        source_order[source_identity] = (len(source_literal.encode("utf-8")), source_literal)
     shared: dict[str, str] = {}
     # Preserve the current large-node seed; additional bindings must reduce its actual bytes.
-    for identity, times in sorted(counts.items(), key=lambda item: key(nodes[item[0]])):
-        if len(key(nodes[identity]).encode("utf-8")) < 80:
+    for identity, times in sorted(counts.items(), key=lambda item: source_order[item[0]][1]):
+        if source_order[identity][0] < 80:
             continue
         if identity in existing:
             shared[identity] = existing[identity]
@@ -851,8 +893,7 @@ def factor_rule_schema(schema: Mapping[str, object]) -> dict[str, object]:
         shared.clear()
         result, final_aliases = baseline, baseline_aliases
         current_bytes = baseline_bytes
-    for identity, times in sorted(counts.items(), key=lambda item: (
-        len(key(nodes[item[0]]).encode("utf-8")), key(nodes[item[0]]))):
+    for identity, times in sorted(counts.items(), key=lambda item: source_order[item[0]]):
         if identity in shared or (times <= 1 and identity not in existing):
             continue
         shared[identity] = existing.get(identity, f"n{len(shared)}")
@@ -1313,6 +1354,12 @@ class LeadProviderConstraints:
     ) -> tuple[LeadWireVariant, ...]:
         if type(contract) is not LeadResultRuleSeed or self.allow_read_sources:
             raise ValueError("current Lead wire compilation requires a qualified snapshot")
+        if (self.scope is not None
+                and self.scope.schema_version != AUTHORING_SCOPE_SCHEMA_VERSION):
+            raise ValueError("current Lead wire requires current scope version")
+        if (self.scope_rule is not None
+                and self.scope_rule.schema_version != AUTHORING_SCOPE_SCHEMA_VERSION):
+            raise ValueError("current Lead wire requires current scope rule version")
         source_schema = contract.schema_value()
         # Existing callers already project the provider vocabulary. Preserve their complete graph.
         projected = source_schema
@@ -1369,6 +1416,8 @@ class LeadProviderConstraints:
                                   rule.activity is not AuthoringActivity.WORKFLOW
                                   and rule.intent is AuthoringIntent.AUTHORING)))
             for scope_number, rule in enumerate(rules):
+                if rule is not None and rule.schema_version != AUTHORING_SCOPE_SCHEMA_VERSION:
+                    raise ValueError("current Lead graph has a noncurrent rule")
                 root_schema = deepcopy(root)
                 if scoped:
                     root_schema["properties"]["writing_task_scope"] = _scope_wire_rule(rule, scope_template, self.scope, targets, tasks)
@@ -1427,35 +1476,87 @@ class LeadProviderConstraints:
                         if name == "artifact_changes" and child.get("type") == "array":
                             offered_operations = child["items"].get("anyOf", [child["items"]])
                             eligible = []
+                            native_kinds = {native: kind for kind, native in CHANGE_TYPES.items()}
+                            target_domains = rule.domains if rule else tuple(ArtifactReviewDomain)
                             for operation in offered_operations:
                                 fields = operation["properties"]
                                 kinds = fields["change_type"].get("enum", ())
+                                rename_kind = None
                                 if "evidence_id" in fields:
-                                    identities = tuple(dict.fromkeys(
-                                        tuple(
-                                            identity
-                                            for (identity, _, whole) in writing_read_facts
-                                            if whole or kinds == ['patch_artifact_text']
+                                    if len(kinds) != 1:
+                                        raise ValueError("artifact operation needs one kind")
+                                    operation_kind = ArtifactChangeOperationKind(
+                                        native_kinds[kinds[0]]
+                                    )
+                                    sources = tuple(
+                                        (identity, locator, whole)
+                                        for identity, locator, whole in writing_read_facts
+                                        if (
+                                            whole
+                                            or operation_kind is ArtifactChangeOperationKind.PATCH
                                         )
-                                        + tuple(
-                                            item.evidence_id for item in core_status_facts
-                                            if empty_core_status_evidence(
-                                                locator=item.locator,
-                                                present=(
-                                                    item.status
-                                                    is not ContextSourceStatusKind.ABSENT
-                                                ),
-                                                utf8_bytes=item.source_utf8_bytes,
-                                                content_digest=item.source_digest,
-                                            )
+                                    ) + tuple(
+                                        (item.evidence_id, item.locator, True)
+                                        for item in core_status_facts
+                                        if empty_core_status_evidence(
+                                            locator=item.locator,
+                                            present=(
+                                                item.status is not ContextSourceStatusKind.ABSENT
+                                            ),
+                                            utf8_bytes=item.source_utf8_bytes,
+                                            content_digest=item.source_digest,
                                         )
-                                    ))
+                                    )
+                                    permitted = []
+                                    for identity, locator, _whole in sources:
+                                        allowed, destination_kind = artifact_source_operation_rule(
+                                            operation_kind, locator
+                                        )
+                                        if not allowed:
+                                            continue
+                                        if destination_kind is not None:
+                                            if destination_kind is not ArtifactKind.MANUSCRIPT:
+                                                raise ValueError("unsupported rename kind")
+                                            if artifact_domain(locator) not in target_domains:
+                                                continue
+                                            if (
+                                                rename_kind is not None
+                                                and destination_kind is not rename_kind
+                                            ):
+                                                raise ValueError("mixed rename kinds")
+                                            rename_kind = destination_kind
+                                        permitted.append(identity)
+                                    identities = tuple(dict.fromkeys(permitted))
                                     if not identities:
                                         continue
                                     fields["evidence_id"] = {"type": "string", "enum": list(identities)}
                                 for field in ("proposed_artifact_path", "proposed_destination_path"):
                                     if field in fields:
-                                        fields[field] = artifact_path_rule(rule.domains if rule else tuple(ArtifactReviewDomain))
+                                        guidance = artifact_path_rule(target_domains)
+                                        if (
+                                            field == "proposed_destination_path"
+                                            and rename_kind is None
+                                        ):
+                                            raise ValueError("missing rename kind")
+                                        path_kinds = (
+                                            (rename_kind,) if rename_kind is not None
+                                            else tuple(ArtifactKind)
+                                        )
+                                        path_rules = tuple(
+                                            artifact_kind_path_rule(kind) for kind in path_kinds
+                                        )
+                                        canonical = path_rules[0]
+                                        kind_pattern = canonical["pattern"]
+                                        if len(path_rules) > 1:
+                                            kind_pattern = "(?:" + "|".join(
+                                                item["pattern"] for item in path_rules
+                                            ) + ")"
+                                        scoped_pattern = (
+                                            "(?=" + guidance["pattern"] + ")" + kind_pattern
+                                        )
+                                        fields[field] = {
+                                            **guidance, **canonical, "pattern": scoped_pattern,
+                                        }
                                 eligible.append(operation)
                             if not eligible:
                                 raise ValueError("current artifact operations have no qualified member")

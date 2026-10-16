@@ -76,8 +76,7 @@ def _review_assessment():
 
 
 def _three_way_proposal_fixture(case, conversation_id):
-    return case.proposal(conversation_id,
-        domains=('plot_structure', 'character_world', 'tone_execution'),
+    return case.proposal(conversation_id, domains=('plot_structure', 'character_world', 'tone_execution'),
         assignments=_assignments(PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST),
         text=_REVIEW_BRIEF + '\n\nPlease check the story direction.', authoring_assessment=asdict(
         _review_assessment()))
@@ -157,8 +156,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
     ) -> None:
         conversation_id = self.conversation("Three-way parallel consultation")
         proposed = await _three_way_proposal_fixture(self, conversation_id)
-        self.assertEqual(tuple((item.max_physical_calls for item in proposed.proposal.assignments)),
-            (4, 3, 3))
+        self.assertEqual(tuple((item.max_physical_calls for item in proposed.proposal.assignments)), (4, 3, 3))
         self.assertEqual(proposed.proposal.budget.synthesis_max_physical_calls, 1)
         self.assertEqual(
             sum(item.max_physical_calls for item in proposed.proposal.assignments)
@@ -354,8 +352,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
 
         self.assertEqual(self.runtime._live_execution_markers, set())
         history = self.history(conversation_id)
-        self.assertIs(project_collaboration_history(history).current_state,
-            CollaborationStepState.RUNNING)
+        self.assertIs(project_collaboration_history(history).current_state, CollaborationStepState.RUNNING)
         submitted = _submitted_specialist_calls(history)
         self.assertEqual(len(submitted), 2)
         result = _payloads(history, CollaborationExecutionResult)[0]
@@ -375,8 +372,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             ((PLOT_ARCHITECT, CHARACTER_CUSTODIAN), ('plot_structure', 'character_world'))):
             with self.subTest(specialist_ids=specialist_ids):
                 conversation_id = self.conversation(f'Parallel width {len(specialist_ids)}')
-                proposed = (
-                    await self.proposal(conversation_id, assignments=_assignments(*specialist_ids),
+                proposed = ( await self.proposal(conversation_id, assignments=_assignments(*specialist_ids),
                     text=_REVIEW_BRIEF + '\n\nPlease check the story direction.',
                     authoring_assessment=asdict(_review_assessment()), domains=declared_domains))
                 entered = 0
@@ -439,12 +435,10 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
 
     async def test_execution_delivers_only_each_assignments_ordered_reference_subset(self) -> None:
         conversation_id = self.conversation("Assignment-local references")
-        proposed = (
-            await self.proposal(conversation_id,
+        proposed = ( await self.proposal(conversation_id,
             text=_REVIEW_BRIEF + '\n\n' + ('Check ${core_documents/global_outline.md}, '
             '${core_documents/character_sheets.md}, and ' '${manuscript/part-01/opening.md}#L2-L3.')
-            , assignments=[{'agent_id': PLOT_ARCHITECT,
-            'instruction': 'Check the outline against the opening range.',
+            , assignments=[{'agent_id': PLOT_ARCHITECT, 'instruction': 'Check the outline against the opening range.',
             'input_ids': ['user_input', 'reference_1', 'reference_3']},
             {'agent_id': CHARACTER_CUSTODIAN, 'instruction': 'Check the character sheet only.',
             'input_ids': ['reference_2']}, {'agent_id': EXECUTION_SPECIALIST,
@@ -454,8 +448,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
         self.backend.enqueue_for(EXECUTION_SPECIALIST, _specialist_outcome())
         self.backend.enqueue_for(CHARACTER_CUSTODIAN, _specialist_outcome("concern"))
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome(unresolved_input_ids=[
-            'reference_2']))
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome(unresolved_input_ids=[ 'reference_2']))
 
         decision = await self.runtime.decide_lead_step(
             _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
@@ -504,13 +497,10 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                     CollaborationConfirmationDecision.CONFIRM))
                 self.assertIs(decision.turn.state, CollaborationStepState.COMPLETED)
                 result = _payloads(self.history(conversation_id), CollaborationExecutionResult)[0]
-                self.assertIs(result.assignment_outcomes[0].outcome,
-                    CollaborationAssignmentOutcomeKind.SUCCEEDED)
+                self.assertIs(result.assignment_outcomes[0].outcome, CollaborationAssignmentOutcomeKind.SUCCEEDED)
                 self.assertIs(result.synthesis_outcome, CollaborationSynthesisOutcomeKind.SUCCEEDED)
-                reply = _payloads(self.history(conversation_id),
-                    CollaborationSpecialistReplyPayload)[0]
-                self.assertIs(reply.assessment,
-                    CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE)
+                reply = _payloads(self.history(conversation_id), CollaborationSpecialistReplyPayload)[0]
+                self.assertIs(reply.assessment, CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE)
                 self.assertIs(reply.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
                 self.assertEqual(reply.trace.action, "none")
                 reports = tuple(
@@ -565,13 +555,11 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         projection = project_collaboration_history(known)
         self.assertIs(projection.current_state, CollaborationStepState.RUNNING)
         self.assertEqual(len(_payloads(known, CollaborationExecutionResult)), 1)
-        expected = tuple((chunk for payload in _submitted_calls(
-            known) for chunk in payload.validation_details))
+        expected = tuple((chunk for payload in _submitted_calls( known) for chunk in payload.validation_details))
         self.assertTrue(expected)
         restarted_backend = _LeadBackend()
         restarted = StoryRuntime(self.control_workspace, restarted_backend)  # type: ignore[arg-type]
-        restored = await restarted.lead_turn(self.session_id, conversation_id,
-            'Finalize the known result.')
+        restored = await restarted.lead_turn(self.session_id, conversation_id, 'Finalize the known result.')
         self.assertIs(restored.state, CollaborationStepState.COMPLETED)
         self.assertEqual(restored.validation_details, expected)
         self.assertEqual(restarted_backend.calls, [])
@@ -624,8 +612,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 restarted = StoryRuntime(
                 self.control_workspace, restarted_backend,  # type: ignore[arg-type]
                 )
-                restored = await restarted.lead_turn(self.session_id, conversation_id,
-                    'Finalize the known result.')
+                restored = await restarted.lead_turn(self.session_id, conversation_id, 'Finalize the known result.')
                 self.assertIs(restored.state, CollaborationStepState.COMPLETED)
                 self.assertEqual(restored.validation_details, expected)
                 self.assertEqual(restarted_backend.calls, [])
@@ -640,8 +627,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         for role in (PLOT_ARCHITECT, CHARACTER_CUSTODIAN):
             self.backend.enqueue_for(role, _specialist_outcome(message=""))
             self.backend.enqueue_for(role, _specialist_outcome())
-        self.backend.enqueue_for(EXECUTION_SPECIALIST, _raw_outcome({'assessment': 'supports',
-            'message': 0}))
+        self.backend.enqueue_for(EXECUTION_SPECIALIST, _raw_outcome({'assessment': 'supports', 'message': 0}))
         self.backend.enqueue_for(EXECUTION_SPECIALIST, _specialist_outcome())
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
 
@@ -676,13 +662,11 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         restarted = StoryRuntime(
             self.control_workspace, restarted_backend,  # type: ignore[arg-type]
         )
-        restored = await restarted.lead_turn(self.session_id, conversation_id,
-            'Finalize concurrent results.')
+        restored = await restarted.lead_turn(self.session_id, conversation_id, 'Finalize concurrent results.')
         self.assertIs(restored.state, CollaborationStepState.COMPLETED)
         self.assertEqual(restored.validation_details, expected)
         self.assertEqual(restarted_backend.calls, [])
-        self.assertEqual(restarted._finalize_known_result_locked(self.session_id, known,
-            projection), restored)
+        self.assertEqual(restarted._finalize_known_result_locked(self.session_id, known, projection), restored)
 
     async def test_failed_specialist_retries_transient_validation_publication(self) -> None:
         conversation_id = self.conversation("Retry failed specialist diagnostic append")
@@ -733,8 +717,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         restarted = StoryRuntime(
             self.control_workspace, restarted_backend,  # type: ignore[arg-type]
         )
-        restored = await restarted.lead_turn(self.session_id, conversation_id,
-            'Finalize failed specialist result.')
+        restored = await restarted.lead_turn(self.session_id, conversation_id, 'Finalize failed specialist result.')
         self.assertIs(restored.state, CollaborationStepState.FAILED)
         self.assertEqual(restored.validation_details, notices[0].validation_details)
         self.assertEqual(restarted_backend.calls, [])
@@ -800,8 +783,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         conversation_id = self.conversation("Persistent diagnostic append failure")
         proposed = await self.proposal(conversation_id, text=_REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(_review_assessment()))
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome(message=""))
-        self.backend.enqueue_for(PLOT_ARCHITECT, _SubmittedFailure(RuntimeError(
-            'definite provider failure')))
+        self.backend.enqueue_for(PLOT_ARCHITECT, _SubmittedFailure(RuntimeError( 'definite provider failure')))
         with (mock.patch.object(self.runtime, '_append_validation_messages',
             side_effect=RuntimeError('persistent diagnostic append failure'))):
             with (self.assertRaisesRegex(RuntimeError, 'persistent diagnostic append failure')):
@@ -821,8 +803,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         restarted = StoryRuntime(
             self.control_workspace, restarted_backend,  # type: ignore[arg-type]
         )
-        recovered = await restarted.lead_turn(self.session_id, conversation_id,
-            'Inspect the uncertain attempt.')
+        recovered = await restarted.lead_turn(self.session_id, conversation_id, 'Inspect the uncertain attempt.')
         self.assertIs(recovered.state, CollaborationStepState.OUTCOME_UNKNOWN)
         self.assertEqual(restarted_backend.calls, [])
         self.assertEqual(_payloads(self.history(conversation_id), CollaborationExecutionResult), ())
@@ -900,8 +881,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertIs(decision.turn.state, CollaborationStepState.OUTCOME_UNKNOWN)
         restarted_backend = _LeadBackend()
         restarted = StoryRuntime(self.control_workspace, restarted_backend)  # type: ignore[arg-type]
-        recovery = await restarted.lead_turn(self.session_id, conversation_id,
-            'Do not replay the uncertain attempt.')
+        recovery = await restarted.lead_turn(self.session_id, conversation_id, 'Do not replay the uncertain attempt.')
         self.assertIs(recovery.state, CollaborationStepState.OUTCOME_UNKNOWN)
         self.assertEqual(len(self.backend.calls), calls)
         self.assertEqual(restarted_backend.calls, [])
@@ -948,8 +928,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         mismatch_id = self.conversation("Advisory owner mismatch")
         with self.assertRaisesRegex(ValueError, "required story specialist|owned by another reviewer"):
             await self.runtime.propose_specialist_advisory(self.session_id, mismatch_id,
-                CHARACTER_CUSTODIAN,
-                _REVIEW_BRIEF + '\n\n' + 'Check ${core_documents/global_outline.md}.',
+                CHARACTER_CUSTODIAN, _REVIEW_BRIEF + '\n\n' + 'Check ${core_documents/global_outline.md}.',
                 authoring_scope=AuthoringScope(AuthoringActivity.REVIEW, (), (
                 ArtifactReviewDomain.CHARACTER_WORLD,), 'Assess the current candidate.',
                 'advisory_other', 1), review_basis=ReviewBasis(('user_input',),
@@ -1024,8 +1003,7 @@ class SpecialistAccountingAcceptanceTests(LeadOrchestrationTestCase):
         self.workspace.append_agent_state(AgentStateEntry(PLOT_ARCHITECT, self.session_id, 'debate',
             'audit', 1, 'r1', 'outcome', 'own plot state needle', '2026-09-01T00:00:00+00:00'))
         self.workspace.append_agent_state(AgentStateEntry(CHARACTER_CUSTODIAN, self.session_id,
-            'debate', 'audit', 1, 'r1', 'outcome', 'sibling reply secret',
-            '2026-09-01T00:00:01+00:00'))
+            'debate', 'audit', 1, 'r1', 'outcome', 'sibling reply secret', '2026-09-01T00:00:01+00:00'))
         proposed = await self.proposal(
             conversation_id,
             text=_REVIEW_BRIEF + "\n\n" + "Check ${core_documents/global_outline.md}#L1-L2.",
@@ -1043,17 +1021,14 @@ class SpecialistAccountingAcceptanceTests(LeadOrchestrationTestCase):
             self.assertNotIn("sibling reply secret", json.dumps(dict(call.payload)))
             return _provider_envelope(call, {'assessment': 'supports',
                 'assignment_id': assignment.assignment_id, 'input_ids': list(assignment.input_ids),
-                'message': 'The bounded evidence supports the direction.'},
-                used_handles=provider.used_handles)
+                'message': 'The bounded evidence supports the direction.'}, used_handles=provider.used_handles)
 
         def search_current_proposal(call, _provider):
             return json.dumps({'action': {'kind': 'search', 'queries': [{
                 'text': 'own plot state needle', 'source_kinds': ['own_agent_state']}, {
-                'text': 'sibling reply secret', 'source_kinds': ['own_agent_state']}]}},
-                separators=(',', ':'))
+                'text': 'sibling reply secret', 'source_kinds': ['own_agent_state']}]}}, separators=(',', ':'))
 
-        self.backend.enqueue_for(PLOT_ARCHITECT, search_current_proposal, _read_history_hit,
-            answer_after_read)
+        self.backend.enqueue_for(PLOT_ARCHITECT, search_current_proposal, _read_history_hit, answer_after_read)
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
         decision = await self.runtime.decide_lead_step(
             _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
@@ -1084,8 +1059,7 @@ class SpecialistAccountingAcceptanceTests(LeadOrchestrationTestCase):
         conversation_id = self.conversation("Result persistence failure")
         proposed = await self.proposal(conversation_id, text=_REVIEW_BRIEF + "\n\nPlease check the story direction.", authoring_assessment=asdict(_review_assessment()))
         original = self.runtime.conversation_storage_services
-        failing = _FailingEventStore(original.event_store,
-            event_kind=CollaborationEventKind.EXECUTION_RESULT)
+        failing = _FailingEventStore(original.event_store, event_kind=CollaborationEventKind.EXECUTION_RESULT)
         services = ConversationStorageServices(
             original.catalog_binding,
             replace(original.event_store_binding, component=failing),

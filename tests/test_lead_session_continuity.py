@@ -4,10 +4,8 @@ from __future__ import annotations
 import hashlib
 from story_writing_agents.conversations import encode_collaboration_event
 from tests.test_collaboration_events import editorial, editorial_request
-from tests.test_lead_orchestration import (
-    _current_exploration_outcome,
-    _exploration_outcome,
-    _visible_outcome,
+from tests.test_lead_orchestration import ( _current_exploration_outcome,
+    _exploration_outcome, _visible_outcome,
 )
 from story_writing_agents import lead_exploration as exploration
 

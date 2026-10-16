@@ -137,8 +137,7 @@ def _artifact_outcome(
                 if row['provenance']['source_locator'] == path) for path, _query in read_queries)
             _provider.used_handles = selected_handles
             outer, inner = offered_fixture_bindings(call, action_type='read_context', response_type=None, family=0)
-            return indexed_response({'action_type': 'read_context',
-                'read_handles': finite_fixture_read_selection(
+            return indexed_response({'action_type': 'read_context', 'read_handles': finite_fixture_read_selection(
                     call.contract.offers.issued_handle_aliases, selected_handles)},
                 outer_schema_id=outer, inner_schema_id=inner)
         material = _live_material(call)
@@ -166,24 +165,20 @@ def _artifact_outcome(
         from story_writing_agents.agent_context.service import BoundContextProviderCallRequest
         if isinstance(call, BoundContextProviderCallRequest):
             from tests.provider_wire_fixture import (
-                result, lead_fixture_scope, lead_fixture_result, lead_fixture_response,
-                lead_fixture_assessment)
+                result, lead_fixture_scope, lead_fixture_result, lead_fixture_response, lead_fixture_assessment)
             from tests.test_lead_orchestration import _compact_scope, _compact_objective
-            value = {'kind': 'proposal', 'message': message,
-                     'artifact_intent': {'operations': resolved_operations}}
+            value = {'kind': 'proposal', 'message': message, 'artifact_intent': {'operations': resolved_operations}}
             if scope is not None:
                 value['authoring_scope'] = _compact_scope(scope)
             if authoring_assessment is not None:
                 value['authoring_assessment'] = deepcopy(authoring_assessment)
-            objective = (objective_intent(call, material) if callable(objective_intent)
-                         else objective_intent)
+            objective = (objective_intent(call, material) if callable(objective_intent) else objective_intent)
             if objective is not None:
                 value['artifact_intent']['objective_intent'] = _compact_objective(objective)
             native = result(value, 'lead-response-v9')
             if 'authoring_assessment' in native:
                 choices = dict(call.contract.semantic_index.policy.choices)
-                sources = (choices['input_ids'] if choices['source_binding'] == ('unbound',)
-                           else choices['source_ids'])
+                sources = (choices['input_ids'] if choices['source_binding'] == ('unbound',) else choices['source_ids'])
                 native['authoring_assessment'] = lead_fixture_assessment(
                     native['authoring_assessment'], source_choices=choices['input_ids'])
             if 'writing_task_scope' in native:
@@ -1252,8 +1247,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         def search(call, _provider):
             from tests.provider_wire_fixture import offered_fixture_bindings, indexed_response
             outer, inner = offered_fixture_bindings(call, action_type='search_context', response_type=None, family=1)
-            return indexed_response({'action_type': 'search_context',
-                'artifact_directory_prefix': 'core_documents/',
+            return indexed_response({'action_type': 'search_context', 'artifact_directory_prefix': 'core_documents/',
                 'queries': [{'search_text': 'needle', 'source_types': {'story_document': True}}]},
                 outer_schema_id=outer, inner_schema_id=inner)
         def answer(call, provider):

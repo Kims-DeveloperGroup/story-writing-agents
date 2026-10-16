@@ -17,10 +17,12 @@ from pathlib import Path
 from types import MappingProxyType
 from unittest.mock import patch
 
+from story_writing_agents.structured_output_validation import diagnose_value
+from story_writing_agents.writing_artifacts import catalog as catalog_module
 import story_writing_agents
 from story_writing_agents import writing_artifacts
 from story_writing_agents.writing_artifacts import (
-    CORE_ARTIFACT_PATHS,
+    CORE_ARTIFACT_PATHS, ArtifactChangeOperationKind,
     ArtifactChangeSetError,
     ArtifactChangeSetErrorCode,
     ArtifactCreateOperation,
@@ -102,8 +104,7 @@ _MODULE_EXPORTS = (
     "ArtifactRelationshipValidation",
     "ArtifactReviewDomain",
     "ArtifactReviewFact",
-    "ArtifactReviewReason",
-    "validate_artifact_relationships",
+    "ArtifactReviewReason", "artifact_source_operation_rule", "validate_artifact_relationships",
 )
 _MANUSCRIPT = "manuscript/part-01/opening.md"
 _SECOND_MANUSCRIPT = "manuscript/part-01/index.md"
@@ -293,8 +294,8 @@ class ArtifactRelationshipSurfaceTests(RelationshipTestCase):
         self.assertEqual(MAX_RELATIONSHIP_STATE_UTF8_BYTES, 64 * 1024 * 1024)
         self.assertEqual(MAX_RELATIONSHIP_EDGES, 65_536)
         self.assertEqual(tuple(relationship_module.__all__), _MODULE_EXPORTS)
-        self.assertEqual(len(writing_artifacts.__all__), 78)
-        for name in _MODULE_EXPORTS:
+        self.assertEqual(len(writing_artifacts.__all__), 80)
+        for name in (name for name in _MODULE_EXPORTS if name != 'artifact_source_operation_rule'):
             with self.subTest(name=name):
                 self.assertIs(
                     getattr(writing_artifacts, name),
@@ -333,6 +334,16 @@ class ArtifactRelationshipSurfaceTests(RelationshipTestCase):
             signature.parameters["attached_core_paths"].kind,
             inspect.Parameter.KEYWORD_ONLY,
         )
+        self.assertIs(writing_artifacts.artifact_kind_path_rule, catalog_module.artifact_kind_path_rule)
+        self.assertIs(writing_artifacts.artifact_source_operation_rule,
+                      relationship_module.artifact_source_operation_rule)
+        for name in ('artifact_kind_path_rule', 'artifact_source_operation_rule'):
+            self.assertNotIn(name, story_writing_agents.__all__)
+            self.assertFalse(hasattr(story_writing_agents, name))
+        self.assertEqual(tuple(inspect.signature(writing_artifacts.artifact_kind_path_rule).parameters),
+                         ('artifact_kind',))
+        self.assertEqual(tuple(inspect.signature(writing_artifacts.artifact_source_operation_rule).parameters),
+                         ('operation_kind', 'source_path'))
 
     def test_value_schemas_are_exact_frozen_slotted_and_content_free(self) -> None:
         expected_fields = {
@@ -686,6 +697,30 @@ class ArtifactRelationshipGrammarTests(RelationshipTestCase):
         self.assertEqual(validation.removed_edges, ())
         self.assertEqual(validation.retained_edges, ())
         self.assertEqual(validation.projected_dangling_edges, ())
+        longest = 'manuscript/p/' + ('d' * 128 + '/') * 7 + 'f' * 105 + '.md'
+        path_cases = [(path, ArtifactKind.CORE_DOCUMENT) for path in _CORE_DOMAINS] + [
+            ('manuscript/part-01/opening.md', ArtifactKind.MANUSCRIPT),
+            ('manuscript/' + 'p' * 64 + '/scene.md', ArtifactKind.MANUSCRIPT),
+            ('manuscript/p/' + 'd' * 128 + '/scene.md', ArtifactKind.MANUSCRIPT),
+            ('manuscript/p/' + 'f' * 125 + '.md', ArtifactKind.MANUSCRIPT),
+            (longest, ArtifactKind.MANUSCRIPT), (longest[:-3] + 'f.md', None),
+            ('core_documents/unknown.md', None), ('core_documents/Global_outline.md', None),
+            ('manuscript/' + 'p' * 65 + '/scene.md', None), ('manuscript/p/' + 'd' * 129 + '/scene.md', None),
+            ('manuscript/p/' + 'f' * 126 + '.md', None),
+            ('manuscript/p/.hidden.md', None), ('manuscript/p/scene.MD', None),
+            ('manuscript//scene.md', None), ('manuscript/p/../scene.md', None),
+            ('manuscript/p/café.md', None), ('manuscript/p/scene.md\n', None),
+            ('manuscript/p/scene.md\r', None), ('manuscript/p/a:b.md', None), ('manuscript/p/a\\b.md', None)]
+        self.assertEqual(len(longest.encode('utf-8')), 1024)
+        for path, expected_kind in path_cases:
+            try:
+                actual_kind = catalog_module.canonical_artifact_kind(path)
+            except ValueError:
+                actual_kind = None
+            self.assertIs(actual_kind, expected_kind)
+            for kind in (ArtifactKind.CORE_DOCUMENT, ArtifactKind.MANUSCRIPT):
+                self.assertEqual(not bool(diagnose_value(path, writing_artifacts.artifact_kind_path_rule(kind))),
+                                 kind is expected_kind, (kind, path))
 
     def test_noncanonical_destination_is_prose_but_unsafe_escape_is_error(self) -> None:
         safe = b"[ordinary](../../notes/private.md)"
@@ -759,7 +794,10 @@ class ArtifactRelationshipWorkflowTests(RelationshipTestCase):
                     )
 
     def test_scenario_reject_every_fixed_core_rename_and_delete(self) -> None:
+        self.assertEqual(tuple(CORE_ARTIFACT_PATHS), tuple(_CORE_DOMAINS))
         for path in CORE_ARTIFACT_PATHS:
+            for kind in (ArtifactChangeOperationKind.PATCH, ArtifactChangeOperationKind.REPLACE):
+                self.assertEqual(writing_artifacts.artifact_source_operation_rule(kind, path), (True, None))
             alternatives = tuple(item for item in CORE_ARTIFACT_PATHS if item != path)
             for operation in (
                 ArtifactRenameOperation(
@@ -772,6 +810,11 @@ class ArtifactRelationshipWorkflowTests(RelationshipTestCase):
                 _delete(path, b"core", kind=ArtifactKind.CORE_DOCUMENT),
             ):
                 with self.subTest(path=path, operation=type(operation).__name__):
+                    kind = (ArtifactChangeOperationKind.RENAME if isinstance(operation, ArtifactRenameOperation)
+                            else ArtifactChangeOperationKind.DELETE)
+                    self.assertEqual(writing_artifacts.artifact_source_operation_rule(kind, path),
+                                     (False, ArtifactKind.CORE_DOCUMENT if kind is ArtifactChangeOperationKind.RENAME
+                                      else None))
                     base = {path: b"core"}
                     change_set = build_artifact_change_set(base, (operation,))
                     self.assert_relationship_error(
@@ -851,6 +894,10 @@ class ArtifactRelationshipWorkflowTests(RelationshipTestCase):
             {edge.target_path for edge in validation.added_edges},
             {arrival},
         )
+        self.assertEqual(writing_artifacts.artifact_source_operation_rule(ArtifactChangeOperationKind.RENAME, opening),
+                         (True, ArtifactKind.MANUSCRIPT))
+        self.assertEqual(writing_artifacts.artifact_source_operation_rule(ArtifactChangeOperationKind.DELETE, opening),
+                         (True, None))
 
     def test_same_change_can_repair_an_existing_dangling_reference(self) -> None:
         missing = "manuscript/part-01/missing.md"
@@ -1726,8 +1773,11 @@ assert tuple(relationship_policy.__all__) == tuple(sys.argv[2].split(','))
                     if resolved is not None and resolved != module:
                         edges.add((module, resolved))
         self.assertEqual(len(modules), 163)
-        self.assertEqual(len(edges), 712)
+        self.assertEqual(len(edges), 730)
         relationship_name = "story_writing_agents.writing_artifacts.relationship_policy"
+        lead = 'story_writing_agents.lead_provider_contracts'
+        self.assertIn((lead, 'story_writing_agents.writing_artifacts.change_sets'), edges)
+        self.assertIn((lead, relationship_name), edges)
         self.assertEqual(
             {target for source, target in edges if source == relationship_name},
             {

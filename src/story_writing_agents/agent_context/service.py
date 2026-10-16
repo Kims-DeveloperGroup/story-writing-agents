@@ -42,6 +42,9 @@ from ..structured_output_validation import (
 from ..provider_auth_recovery import authentication_replay, request_authentication
 from ..provider_execution_workspace import ProviderExecutionWorkspace
 from ..workspace import Workspace
+from ..writing_artifacts.read_actions import (
+    AuthorizedArtifactReference, ReferenceReadRequest, ReferenceReadResult,
+)
 from ..conversations.session_context import (
     MAX_SESSION_CONTEXT_UTF8_BYTES,
     SessionContextCapacityError,
@@ -154,6 +157,7 @@ from .sources import (
     FocusedConversationSourceAdapter,
     OwnAgentStateSourceAdapter,
     WritingArtifactSourceAdapter,
+    writing_artifact_source_id,
 )
 
 __all__ = [
@@ -313,6 +317,7 @@ class ContextCallOffers:
     completed_read_facts: tuple[ContextCallReadFact, ...]
     delivery_read_facts: tuple[ContextCallReadFact, ...]
     core_status_facts: tuple[ContextSourceStatusReceipt, ...]
+    reference_read_digest: str | None = field(default=None, init=False)
     offer_digest: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -339,6 +344,8 @@ class ContextCallOffers:
                 or len({item.evidence_id for item in self.core_status_facts})
                 != len(self.core_status_facts)):
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        if self.reference_read_digest is not None:
+            _safe_digest(self.reference_read_digest)
         value = {"call_id": self.call_id, "scope": repr(self.scope), "action_index": self.action_index,
             "actions": self.allowed_actions, "limits": self.action_limits,
             "search_kinds": [kind.value for kind in self.search_source_kinds],
@@ -347,6 +354,8 @@ class ContextCallOffers:
             "delivery": [item.snapshot_value() for item in self.delivery_read_facts],
             "core_statuses": [_status_value(item) for item in self.core_status_facts],
         }
+        if self.reference_read_digest is not None:
+            value["reference_read_digest"] = self.reference_read_digest
         encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8", "strict")
         object.__setattr__(self, "offer_digest", hashlib.sha256(encoded).hexdigest())
 
@@ -2266,15 +2275,71 @@ class ContextReferencePreludeRequest:
 
 @dataclass(frozen=True, slots=True)
 class ContextReferencePreludeResult:
-    """Transient exact reference context loaded by the runtime."""
+    """Transient reference context and immutable proofs of its actual delivery."""
 
     context: tuple[Mapping[str, object], ...] = field(repr=False)
+    read_facts: tuple[ContextCallReadFact, ...] = field(default=(), init=False, repr=False)
+    _prelude_request: ContextReferencePreludeRequest | None = field(
+        default=None, init=False, repr=False, compare=False,
+    )
+    _read_request: ReferenceReadRequest | None = field(default=None, init=False, repr=False)
+    _authorized_references: tuple[AuthorizedArtifactReference, ...] = field(
+        default=(), init=False, repr=False,
+    )
 
     def __post_init__(self) -> None:
         if type(self.context) is not tuple or any(
             not isinstance(item, Mapping) for item in self.context
         ):
             raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+
+    @classmethod
+    def from_read_result(
+        cls,
+        result: ReferenceReadResult,
+        *,
+        request: ContextReferencePreludeRequest | None = None,
+    ) -> ContextReferencePreludeResult:
+        """Retain actual proofs; only a bound prelude may publish READ facts."""
+
+        if type(result) is not ReferenceReadResult or (
+            request is not None and type(request) is not ContextReferencePreludeRequest
+        ):
+            raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+        correlation = result.request.correlation
+        if request is not None and (
+            correlation.operation_id != request.reference_operation_id
+            or correlation.agent_id != request.scope.agent_id
+        ):
+            raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+        contents = result.contents
+        context = tuple({
+            "reference": {
+                "path": reference.path,
+                "line_range": (None if reference.line_range is None else {
+                    "start": reference.line_range.start,
+                    "end": reference.line_range.end,
+                }),
+            },
+            "content": content.decode("utf-8", errors="strict"),
+        } for reference, content in zip(result.request.references, contents, strict=True))
+        prelude = cls(context)
+        object.__setattr__(prelude, "_prelude_request", request)
+        object.__setattr__(prelude, "_read_request", result.request)
+        object.__setattr__(prelude, "_authorized_references", result.authorized_references)
+        if request is not None:
+            facts = tuple(ContextCallReadFact(
+                evidence_id=f"reference_{proof.ordinal}",
+                source_id=writing_artifact_source_id(proof.reference.path),
+                source_kind=ContextSourceKind.WRITING_ARTIFACT,
+                revision=f"sha256:{proof.source.source_sha256}",
+                source_digest=f"sha256:{proof.source.source_sha256}",
+                boundary_digest=f"sha256:{proof.selected_sha256}",
+                whole_source=proof.reference.line_range is None,
+                artifact_locator=proof.reference.path,
+            ) for proof in result.authorized_references)
+            object.__setattr__(prelude, "read_facts", facts)
+        return prelude
 
 
 @runtime_checkable
@@ -2597,30 +2662,96 @@ class ContextInvocationSession:
         with self._lock:
             return self._next_action_index
 
-    def contract_offers(self, call_id: str, *, allowed_actions: tuple[str, ...],
-                        delivery_read: ContextReadReceipt | None = None) -> ContextCallOffers:
+    def contract_offers(
+        self, call_id: str, *, allowed_actions: tuple[str, ...],
+        delivery_read: ContextReadReceipt | None = None,
+        reference_prelude: ContextReferencePreludeResult | None = None,
+        reference_request: ContextReferencePreludeRequest | None = None,
+    ) -> ContextCallOffers:
         with self._lock:
             if delivery_read is not None and delivery_read is not self._pending_receipt:
+                raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+            reference_facts = ()
+            reference_digest = None
+            if self.binding.mandatory_references:
+                if (type(reference_prelude) is not ContextReferencePreludeResult
+                        or type(reference_request) is not ContextReferencePreludeRequest
+                        or reference_prelude._prelude_request is not reference_request
+                        or reference_request.scope != self.binding.scope
+                        or reference_request.reference_operation_id
+                        != self.binding.reference_operation_id
+                        or type(reference_prelude._read_request) is not ReferenceReadRequest):
+                    raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+                read_request = reference_prelude._read_request
+                correlation = read_request.correlation
+                proofs = reference_prelude._authorized_references
+                reference_facts = reference_prelude.read_facts
+                reservations = self.binding.mandatory_references
+                if (correlation.operation_id != self.binding.reference_operation_id
+                        or correlation.agent_id != self.binding.scope.agent_id
+                        or len(proofs) != len(reservations)
+                        or len(reference_facts) != len(reservations)
+                        or len(read_request.references) != len(reservations)):
+                    raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+                snapshots = []
+                for proof, fact, reservation, reference in zip(
+                    proofs, reference_facts, reservations, read_request.references, strict=True,
+                ):
+                    if (type(proof) is not AuthorizedArtifactReference
+                            or type(fact) is not ContextCallReadFact
+                            or proof.ordinal != reservation.ordinal
+                            or proof.reference != reference
+                            or proof.source.path != reference.path
+                            or reference.token != reservation.provenance.locator
+                            or f"sha256:{proof.source.source_sha256}" != reservation.revision
+                            or f"sha256:{proof.selected_sha256}" != reservation.content_digest
+                            or proof.selected_utf8_bytes != reservation.utf8_bytes
+                            or fact.evidence_id != reservation.reference_id
+                            or fact.source_id != reservation.source_id
+                            or fact.source_kind is not ContextSourceKind.WRITING_ARTIFACT
+                            or fact.revision != reservation.revision
+                            or fact.source_digest != reservation.revision
+                            or fact.boundary_digest != reservation.content_digest
+                            or fact.whole_source is not (reference.line_range is None)
+                            or fact.artifact_locator != reference.path):
+                        raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+                    source = proof.source
+                    bounds = (None if reference.line_range is None else
+                              (reference.line_range.start, reference.line_range.end))
+                    snapshots.append((
+                        proof.ordinal, reference.path, bounds,
+                        (source.path, source.kind.value, source.source_sha256,
+                         source.source_utf8_bytes, source.device_id, source.inode,
+                         source.modified_ns, source.changed_ns),
+                        proof.selected_sha256, proof.selected_utf8_bytes, proof.source_line_count,
+                    ))
+                reference_digest = _digest(_canonical_bytes((
+                    "context-reference-read-v1", _scope_value(self.binding.scope),
+                    self.binding.operation_id, self.binding.result_correlation_id,
+                    reference_request.policy_fingerprint, reference_request.call_id,
+                    (correlation.operation_id, correlation.invocation_id,
+                     correlation.invocation_ordinal, correlation.agent_id, correlation.phase,
+                     correlation.round_number, correlation.attempt),
+                    snapshots,
+                )))
+            elif reference_prelude is not None or reference_request is not None:
                 raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
             names = ("nonterminal_actions", "provider_calls", "search_actions", "queries_per_search",
                      "cumulative_queries", "handles_per_read", "cumulative_handles", "query_characters")
             limits = tuple(zip(names, self.action_limits()))
-            completed = tuple(ContextCallReadFact.from_evidence(evidence)
-                              for receipt in self._completed_receipts for evidence in receipt.evidence)
-            delivery = (() if delivery_read is None else
-                        tuple(ContextCallReadFact.from_evidence(evidence) for evidence in delivery_read.evidence))
-            return ContextCallOffers(
-                call_id,
-                self.binding.scope,
-                self._next_action_index,
-                allowed_actions,
-                limits,
-                self._allowed_search_source_kinds,
-                tuple(self._full_handle_by_wire),
-                completed,
-                delivery,
-                self._core_statuses,
+            completed = reference_facts + tuple(ContextCallReadFact.from_evidence(evidence)
+                for receipt in self._completed_receipts for evidence in receipt.evidence)
+            delivery = (() if delivery_read is None else tuple(
+                ContextCallReadFact.from_evidence(evidence) for evidence in delivery_read.evidence))
+            offer = ContextCallOffers(
+                call_id, self.binding.scope, self._next_action_index, allowed_actions, limits,
+                self._allowed_search_source_kinds, tuple(self._full_handle_by_wire),
+                completed, delivery, self._core_statuses,
             )
+            if reference_digest is not None:
+                object.__setattr__(offer, "reference_read_digest", reference_digest)
+                offer.__post_init__()
+            return offer
 
     @property
     def completed_handles(self) -> tuple[ContextSourceHandle, ...]:
@@ -5782,6 +5913,8 @@ class AgentContextService:
 
             current_thread_id = active_thread_id
             reference_context: tuple[Mapping[str, object], ...] = ()
+            prelude = None
+            prelude_request = None
             if request.mandatory_references:
                 stage = "reference"
                 reference_started = True
@@ -5821,7 +5954,10 @@ class AgentContextService:
                 def build_call_request(call_id: str, lineage: BoundCallLineage | None):
                     nonlocal call_contract
                     if isinstance(request.result_contract, BoundCallFactory):
-                        offers = action_session.contract_offers(call_id, allowed_actions=allowed_actions, delivery_read=pending_read)
+                        offers = action_session.contract_offers(
+                            call_id, allowed_actions=allowed_actions, delivery_read=pending_read,
+                            reference_prelude=prelude, reference_request=prelude_request,
+                        )
                         call_contract = request.result_contract.for_offer(offers, lineage)
                         schema = call_contract.schema_value()
                     else:
@@ -5900,13 +6036,17 @@ class AgentContextService:
                                 if call_contract is not None:
                                     call_contract.require_current_offer(
                                         action_session.contract_offers(call_request.call_id, allowed_actions=allowed_actions,
-                                            delivery_read=pending_read))
+                                            delivery_read=pending_read,
+                                            reference_prelude=prelude,
+                                            reference_request=prelude_request))
                                 result = await provider.invoke_context(call_request)
                         else:
                             if call_contract is not None:
                                 call_contract.require_current_offer(
                                     action_session.contract_offers(call_request.call_id, allowed_actions=allowed_actions,
-                                        delivery_read=pending_read))
+                                        delivery_read=pending_read,
+                                        reference_prelude=prelude,
+                                        reference_request=prelude_request))
                             result = await provider.invoke_context(call_request)
                         break
                     except BaseException as failure:

@@ -4,6 +4,7 @@ import json
 import hashlib
 from pathlib import Path
 import unittest
+from story_writing_agents import specialist_routing as routing
 from story_writing_agents import lead_premise_decisions as premise
 from story_writing_agents import core_document_readiness as readiness
 
@@ -96,6 +97,20 @@ class SpecialistRoutingTests(unittest.TestCase):
             validate_specialist_routing(scope, ("plot_architect",))
         with self.assertRaisesRegex(ValueError, "order"):
             validate_specialist_routing(scope, ("execution_specialist", "plot_architect"))
+        current = self.scope(schema_version=3, activity=Activity.REVIEW,
+            domains=(Domain.PLOT_STRUCTURE, Domain.CHARACTER_WORLD),
+            contributions=(Contribution(Domain.PLOT_STRUCTURE, Role.DRAFT_OWNER),
+                           Contribution(Domain.CHARACTER_WORLD, Role.DRAFT_OWNER)))
+        rule = routing.authoring_scope_rules(current.activity, current.intent, current.domains,
+            current.contributions, schema_version=current.schema_version)
+        self.assertEqual(tuple(field.name for field in fields(type(rule)))[-1], 'schema_version')
+        self.assertEqual(rule.schema_version, 3)
+        self.assertEqual(routing.legal_specialist_rosters(rule), (('plot_architect', 'character_custodian'),))
+        self.assertEqual(tuple(routing.assignment_rule(rule, agent)
+                               for agent in ('plot_architect', 'character_custodian')), (Mode.REVIEW, Mode.REVIEW))
+        with self.assertRaises(ValueError):
+            routing.assignment_rule(rule, 'execution_specialist')
+        self.assertTrue(all(item.schema_version == 3 for item in routing.finite_authoring_scope_rules()))
 
     def test_scope_is_strict_versioned_immutable_and_content_safe(self):
         scope = self.scope()

@@ -8,10 +8,8 @@ import inspect
 import json
 import unittest
 from tests.provider_wire_fixture import (
-    assert_schema_descriptions, finite_fixture_read_selection, fixture_schema_node,
-    indexed_response,
-    lead_fixture_bound_scope, lead_fixture_response, lead_fixture_result, offered_fixture_bindings,
-)
+    assert_schema_descriptions, finite_fixture_read_selection, fixture_schema_node, indexed_response,
+    lead_fixture_bound_scope, lead_fixture_response, lead_fixture_result, offered_fixture_bindings,)
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import FrozenInstanceError, fields, replace
@@ -47,7 +45,7 @@ from story_writing_agents.agent_context.service import (
     context_provider_failure_facts, record_context_provider_failure,)
 from story_writing_agents.agent_context.sources import (
     CONTEXT_SOURCE_POLICY, ActiveDebateSourceAdapter, FocusedConversationSourceAdapter,
-    OwnAgentStateSourceAdapter, WritingArtifactSourceAdapter, ContextSourcePolicy,)
+    OwnAgentStateSourceAdapter, WritingArtifactSourceAdapter, ContextSourcePolicy, writing_artifact_source_id,)
 from story_writing_agents.agents import EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR
 from story_writing_agents.conversations import LeadProposalRelation
 from story_writing_agents.lead_provider_contracts import LeadContractError, LeadProviderConstraints
@@ -56,6 +54,8 @@ from story_writing_agents.orchestrator import (
 from story_writing_agents.specialist_routing import AuthoringActivity, AuthoringScope
 from story_writing_agents.conversation_storage import compose_filesystem_conversation_storage
 from story_writing_agents.conversations.session_context import SessionHistorySnapshot
+from story_writing_agents.writing_artifacts import (ArtifactReference, ArtifactReferenceBatch,
+    ReferenceAuthorizationErrorCode, ReferenceInvocationCorrelation, ReferenceReadAction, ReferenceReadActionKind)
 from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
 
 from tests.helpers import pristine_initialized_workspace
@@ -221,6 +221,9 @@ class _ScriptedProvider:
         self.provider_id = provider_id
         self.definition_fingerprint = definition_fingerprint
         self.reference_operation_id = reference_operation_id
+        self.reference_read = None
+        self.reference_authorization = None
+        self.reference_repository = None
         self.responses = list(responses)
         self.usage = usage
         self.calls: list[ContextProviderCallRequest] = []
@@ -304,16 +307,30 @@ class _ScriptedProvider:
         self.finalizers.append(finalizer)
         return ContextProviderCallResult(response, thread_id, accounting, finalizer)
 
-    async def prepare_references(self,
-        request: ContextReferencePreludeRequest) -> ContextReferencePreludeResult:
-        del request
-        return ContextReferencePreludeResult(({'content': 'PRIVATE_REFERENCE_BODY', 'ordinal': 1},))
+    async def prepare_references(self, request: ContextReferencePreludeRequest) -> ContextReferencePreludeResult:
+        reference_request = self.reference_read.request
+        action = ReferenceReadAction(ReferenceReadActionKind.READ_WRITING_ARTIFACTS,
+                                     reference_request.correlation, reference_request.references)
+        with self.reference_read.handle_reference_read_action(action) as result:
+            return ContextReferencePreludeResult.from_read_result(result, request=request)
 
     def complete_references(self, _scope: object, _policy: str) -> None:
+        if self.reference_read is not None:
+            self.reference_read.record_result_received()
+            self.reference_read.accept()
+            self.reference_repository.finish_reference_operation(self.reference_authorization, outcome=None)
+            self.reference_read = None
         self.completed_references += 1
 
     def abort_references(self, _scope: object, _policy: str, *, cancelled: bool,
         provider_failure: bool) -> None:
+        if self.reference_read is not None:
+            outcome = (ReferenceAuthorizationErrorCode.CANCELLED if cancelled else
+                       ReferenceAuthorizationErrorCode.PROVIDER_FAILURE if provider_failure else
+                       ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE)
+            self.reference_read.terminate(outcome)
+            self.reference_repository.finish_reference_operation(self.reference_authorization, outcome=outcome)
+            self.reference_read = None
         self.aborted_references.append((cancelled, provider_failure))
 
     def taint_context_thread(self, scope: object, policy_fingerprint: str) -> None:
@@ -327,6 +344,21 @@ class ContextExecutionTestCase(unittest.IsolatedAsyncioTestCase):
         self.workspace = pristine_initialized_workspace(self)
         self.service = AgentContextService(self.workspace)
         self.repository = WritingArtifactRepository(self.workspace.root)
+        self.reference_authorizations = {}
+
+    def reference(self, operation_id='reference-operation') -> MandatoryReferenceReservation:
+        path = 'core_documents/global_outline.md'
+        (self.workspace.root / path).write_bytes(b'PRIVATE_REFERENCE_BODY')
+        authorization = self.repository.capture_reference_authorization(operation_id=operation_id,
+            batch=ArtifactReferenceBatch('reference fixture', 'reference fixture', (ArtifactReference(path),)))
+        assert authorization is not None
+        self.addCleanup(authorization.close)
+        self.reference_authorizations[operation_id] = authorization
+        proof = authorization.authorized_references[0]
+        return MandatoryReferenceReservation(proof.ordinal, f'reference_{proof.ordinal}',
+            writing_artifact_source_id(proof.reference.path), f'sha256:{proof.source.source_sha256}',
+            ContextProvenance(ContextAuthorityKind.REFERENCE_AUTHORIZATION, proof.reference.token),
+            f'sha256:{proof.selected_sha256}', proof.selected_utf8_bytes)
 
     def request(self, **overrides: object) -> ContextInvocationRequest:
         values: dict[str, object] = {'session_id': 'session', 'subject_kind': ContextSubjectKind.
@@ -358,6 +390,14 @@ class ContextExecutionTestCase(unittest.IsolatedAsyncioTestCase):
         actual_request = request or self.request()
         actual_service = service or self.service
         collaborators = authorities or self.authorities(actual_request, service=actual_service)
+        if actual_request.mandatory_references:
+            provider.reference_repository = self.repository
+            provider.reference_authorization = self.reference_authorizations[actual_request.reference_operation_id]
+            workflow = (actual_request.invocation_kind.value if actual_request.invocation_kind is not None
+                        else 'conversation')
+            provider.reference_read = self.repository.begin_reference_invocation(provider.reference_authorization,
+                ReferenceInvocationCorrelation(actual_request.reference_operation_id, actual_request.operation_id, 1,
+                    actual_request.agent_id, phase or workflow, round_number, 1))
         return await actual_service.invoke(
             actual_request,
             provider,
@@ -552,16 +592,16 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
                 dictionary = dictionary[1:]
             self.assertEqual(dictionary, '')
             tokens = re.compile('|'.join(re.escape(token) for token in replacements))
-            descriptions = [tokens.sub(lambda match: replacements[match.group()], text)
-                for text in descriptions]
-        self.assertIn('result', ' '.join(descriptions).lower())
+            descriptions = [tokens.sub(lambda match: replacements[match.group()], text) for text in descriptions]
+        self.assertTrue(all(set(member['properties']) == {'action_type', 'schema_id', 'task_result'}
+                            for member in members))
         self.assertEqual(len(provider.calls), 3)
         self.assertEqual(result.answer, canonical_provider_json({'message':
             'Visible grounded lead answer.', 'authoring_scope': _LEAD_ANSWER_SCOPE}).decode())
         self.assertEqual(tuple((call.payload['response_contract']['workflow_phase'] for call in
             provider.calls)), ('lead_user_turn',) * 3)
         self.assertEqual(tuple((call.payload['response_contract']['result_contract_id'] for call in
-            provider.calls)), ('lead-response-v6',) * 3)
+            provider.calls)), (_LEAD_CALL_FACTORY.rule_seed.contract_id,) * 3)
         self.assertEqual(tuple((call.payload['response_contract']['allowed_action_types'] for call
             in provider.calls)), (['search_context', 'submit_result'], ['search_context',
             'read_context', 'submit_result'], ['submit_result']))
@@ -569,9 +609,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             'remaining_context_actions'] for call in provider.calls)), (2, 1, 0))
 
     async def test_local_reference_load_does_not_consume_lead_physical_limit(self) -> None:
-        reference = MandatoryReferenceReservation(1, 'reference-lead', 'artifact-lead',
-            'revision-lead', ContextProvenance(ContextAuthorityKind.REFERENCE_AUTHORIZATION,
-            'core_documents/global_outline.md'), _digest(b'reference'), 9)
+        reference = self.reference('reference-operation')
         request = self.request(invocation_kind=ContextInvocationKind.LEAD, result_contract=
             _LEAD_CALL_FACTORY, physical_call_limit=1, reference_operation_id='reference-operation',
             mandatory_references=(reference,), agent_id=LEAD_ORCHESTRATOR)
@@ -808,15 +846,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.assertIs(result.projection_accounting.mode, ContextDeliveryMode.BOOTSTRAP)
 
     async def test_reference_load_is_local_and_preserves_authorization(self) -> None:
-        reference = MandatoryReferenceReservation(
-            1,
-            "reference-1",
-            "artifact-1",
-            "revision-1",
-            ContextProvenance(ContextAuthorityKind.REFERENCE_AUTHORIZATION, "core_documents/global_outline.md"),
-            _digest(b"reference"),
-            9,
-        )
+        reference = self.reference('reference-operation')
         request = self.request(reference_operation_id='reference-operation', mandatory_references=(reference,))
         provider = _ScriptedProvider((_answer,), reference_operation_id="reference-operation")
         result = await self.invoke(provider, request)
@@ -1162,18 +1192,10 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
         self.assertEqual(terminal_indexes, [len(events) - 1])
 
     async def test_local_reference_load_does_not_change_provider_usage(self) -> None:
-        reference = MandatoryReferenceReservation(
-            1,
-            "reference-1",
-            "artifact-1",
-            "revision-1",
-            ContextProvenance(ContextAuthorityKind.REFERENCE_AUTHORIZATION, "core_documents/global_outline.md"),
-            _digest(b"reference"),
-            9,
-        )
         for (label, answer_usage, expected) in ((('exact', ProviderUsage(input_tokens=13), 13),
             ('missing-answer', None, None))):
             with self.subTest(label=label):
+                reference = self.reference(f'reference-{label}')
                 request = self.request( session_id=f"session-{label}",
                     operation_id=f"operation-{label}",
                     result_correlation_id=f"result-{label}",
@@ -1185,7 +1207,7 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
                 events: list[ContextExecutionEvent] = []
                 await self.invoke(provider, request, event_sink=events.append)
                 self.assertEqual(events[0].mandatory_reference_count, 1)
-                self.assertEqual(events[0].mandatory_reference_utf8_bytes, 9)
+                self.assertEqual(events[0].mandatory_reference_utf8_bytes, len(b'PRIVATE_REFERENCE_BODY'))
                 self.assertEqual(events[-1].provider_input_tokens, expected)
 
     async def test_debate_observation_requires_and_preserves_phase_and_round(self) -> None:
@@ -1265,9 +1287,7 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
         self.assertIsNone(self.inspect(provider, request).record)
 
     async def test_reference_observer_failure_aborts_and_taints_before_authority(self) -> None:
-        reference = MandatoryReferenceReservation(1, 'reference-observer', 'artifact-observer',
-            'revision-observer', ContextProvenance(ContextAuthorityKind.REFERENCE_AUTHORIZATION,
-            'core_documents/global_outline.md'), _digest(b'reference-observer'), 18)
+        reference = self.reference('reference-observer-operation')
         request = self.request(reference_operation_id='reference-observer-operation', mandatory_references=(reference,))
         provider = _ScriptedProvider((_answer,), reference_operation_id="reference-observer-operation")
         failure = RuntimeError("PRIVATE_REFERENCE_OBSERVER_FAILURE")
@@ -1299,9 +1319,7 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
             if event.kind is ContextExecutionEventKind.CHECKPOINT_ADVANCED:
                 raise failure
 
-        reference = MandatoryReferenceReservation(1, 'reference-terminal', 'artifact-terminal',
-            'revision-terminal', ContextProvenance(ContextAuthorityKind.REFERENCE_AUTHORIZATION,
-            'core_documents/global_outline.md'), _digest(b'reference-terminal'), 18)
+        reference = self.reference('reference-terminal-operation')
         provider = _ScriptedProvider((_answer,), reference_operation_id="reference-terminal-operation")
         request = self.request(reference_operation_id='reference-terminal-operation', mandatory_references=(reference,))
         with self.assertRaises(RuntimeError) as caught:

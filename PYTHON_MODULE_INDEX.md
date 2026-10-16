@@ -74,7 +74,7 @@ depend on terminal presentation or concrete persistence.
 
 Primary access is the root facade. `specialist_routing` owns pure shared `AuthoringIntent`, independent of activity; conversation codecs preserve its immutable task lineage. `config` owns configuration loading. Scope-v3 contribution/dependency declarations and consistent per-specialist roles remain pure routing contracts; historical scope constructors retain default version 2. Historical drafting-input eligibility is pure routing policy; current execution proof remains host-owned. `core_document_readiness` owns pure whole-book criteria, document dependencies and current-source projection; adapters qualify actual USER/READ origins and retain causal captures in existing event stores. Completion grants no execution or write authority. Scope duties and exact legal rosters share immutable pure declarations; admission, readiness, exploration and premise owners declare their intrinsic result rules and current finite coverage codecs.
 `prompts` owns captured policy bytes, stable fingerprints and runtime authority invariants; stages remain invocation data without provider execution.
-`models` carries optional diagnostics and keyword-only `AgentRequest.expected_reviewed_proposal` and `review_only` hints, without next-action authority.
+`models` carries optional diagnostics and keyword-only `AgentRequest.expected_reviewed_proposal` and `review_only` hints, without next-action authority. Frozen scope rules carry their version and own current exact specialist rosters shared with event validation.
 
 ### Runtime orchestration and providers
 
@@ -85,7 +85,7 @@ authentication, recovery, and diagnostic behavior behind provider-neutral contra
 - `provider_auth`, `provider_auth_recovery`, `provider_catalog`, `provider_process`, `provider_execution_workspace`
 - `provider_error_artifacts`, `debug_log`, `structured_output_validation`, `lead_provider_contracts`, `provider_wire`
 
-`orchestrator` composes domain contracts, storage, consensus, Git story commits, references, and provider-neutral backends. Its Apply handoff prepares the Git candidate before atomically publishing the known result with one exact Commit request; proven absence publishes a reprepare result, while ambiguous publication requires inspection.
+`orchestrator` composes domain contracts, storage, consensus, Git story commits, references, and provider-neutral backends. Its Apply handoff prepares the Git candidate before atomically publishing the known result with one exact Commit request; proven absence publishes a reprepare result, while ambiguous publication requires inspection. The shared reference loader forwards typed delivery proofs; legacy consumers receive context only.
 `provider_process` owns bounded subprocess transport and descriptor-pinned launch/cleanup for trusted native provider processes; it provides no OS filesystem confinement.
 Adapters own native command settings and resource validation; `provider_auth` owns probes; diagnostic adapters own their files.
 Concrete adapters depend on `provider_adapter`. `provider_execution_workspace` owns the internal exact-worktree capability
@@ -97,8 +97,8 @@ Continuation, structured repair, authentication replay, and deferred acceptance 
 
 `lead_exploration`, `editorial_state`/`editorial_scope`, `lead_premise_decisions`, and `lead_task_transitions` own immutable whole/ranged provisional material with explicit intent, USER editorial records with canonical coverage/causal relations and exact application observations, and whole premise choice/cost contracts and USER task/discussion/source receipts. Exploration shares pure specialist intent without an upward dependency. Consumers own workflow authority; conversation events/replay retain these facts in the existing store without a new registry or resource owner.
 
-`lead_provider_contracts` owns pure Lead rule owners and complete frozen semantic indices. Physical policy, exact finite choices, typed codecs and named checks derive schema IDs together; current duties, source edges and family details depend on domain and wire owners. Orchestration captures pure Lead planning seeds, stage, language and logical eligibility and constructs the typed factory before request composition. Current scope and prospective targets retain distinct owner constraints; substantive assignment and artifact eligibility remain in the shared rule graph. Complete indices use Wire-owned lossless annotation sharing after graph factoring. Orchestration and service retain confirmation, current-source membership, READ receipt and lifecycle authority.
-Empty-core evidence shares a pure eligibility rule with final runtime checks.
+`lead_provider_contracts` owns pure Lead rule owners and complete frozen semantic indices. Physical policy, exact finite choices, typed codecs and named checks derive schema IDs together; current duties, source edges and family details depend on domain and wire owners. Orchestration captures pure Lead planning seeds, stage, language and logical eligibility and constructs the typed factory before request composition. Current scope and prospective targets retain distinct owner constraints; substantive assignment and artifact eligibility remain in the shared rule graph. Complete indices use Wire-owned lossless annotation sharing after graph factoring. Orchestration and service retain confirmation, current-source membership, READ receipt and lifecycle authority. Current wire binds version-3 rosters; orchestration preserves reviewer-agent/input-alias pairs from actual receipts.
+Empty-core evidence shares a pure eligibility rule with final runtime checks. Artifact operations consume shared source protection and canonical destination-kind rules before frozen binding.
 
 ### Agent context and source budgeting
 
@@ -114,7 +114,7 @@ Dependencies flow from `service`, `sources`, and `progress` toward manifest/acti
 contracts. Filesystem source access is delegated to writing-artifact and workspace owners. Optional
 validation diagnostics preserve rejection, repair, checkpoint, and authority decisions.
 
-`service` owns provider delivery, exact payload UTF-8 capacity diagnostics and verified native continuity; host retains integrity receipts and complete-history coverage. `request_compaction` shares only when properties and bytes decrease before accounting; it owns no durable state or resources.
+`service` owns provider delivery, exact payload UTF-8 capacity diagnostics and verified native continuity; host retains integrity receipts and complete-history coverage. `request_compaction` shares only when properties and bytes decrease before accounting; it owns no durable state or resources. Genuine mandatory-reference proofs enter current READ offers only through the typed prelude factory and reservation checks; their complete metadata is bound into the offer digest.
 Actual status snapshots stay separate from READ and are pinned in offer and repair digests.
 `BoundCallContract` shares pure structural findings with accounting; typed and host checks run only
 during actual decoding.
@@ -193,14 +193,14 @@ Results may carry ordered provider validation details; historical serialized res
 
 Responsibility: parse artifact references, authorize reviewed changes, model change sets and
 relationships, read sources, and apply/persist artifacts through a repository boundary.
-`writing_artifacts` is the supported facade; underscored storage/evidence modules are private.
+`writing_artifacts` is the supported facade; underscored storage/evidence modules are private. `relationship_policy` owns shared source-operation/kind rules; `catalog` declares exact kind-path grammar for host and Lead.
 
 - `writing_artifacts`, `writing_artifacts.application_contracts`
 - `writing_artifacts.authorization`, `writing_artifacts.catalog`, `writing_artifacts.change_sets`, `writing_artifacts.directives`
 - `writing_artifacts.read_actions`, `writing_artifacts.references`, `writing_artifacts.relationship_policy`, `writing_artifacts.runtime_references`
 - `writing_artifacts.filesystem_sources`, `writing_artifacts.repository`, `writing_artifacts._reference_evidence`, `writing_artifacts._application_store`, `writing_artifacts._storage`
 
-`repository` owns artifact filesystem mutation and strict core absence batches; private stores own durable metadata.
+`repository` owns artifact filesystem mutation and strict core absence batches; private stores own durable metadata. The public `read_actions.ReferenceReadResult` preserves actual authorized delivery proofs beside closeable bytes; no lower reference owner imports context or backend code.
 Session callers borrow descriptor-bound repositories from the workspace binding; root configuration remains the control plane.
 Runtime references retain exact session-owned evidence and release their generation pin at terminal use.
 Callers must not import `_storage`, `_application_store`, or `_reference_evidence`.
