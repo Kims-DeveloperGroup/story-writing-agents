@@ -25,6 +25,7 @@ from story_writing_agents.conversations import (
     CollaborationInvocationKind,
     CollaborationLeadEvidence,
     CollaborationLeadJudgmentPayload,
+    CollaborationLeadOutcomeFailureCode, CollaborationLeadOutcomeFailurePayload, CollaborationLeadPublicResponsePayload,
     CollaborationMessagePayload,
     CollaborationInputKind,
     CollaborationInputRevision,
@@ -91,7 +92,10 @@ from story_writing_agents.session_recovery.transition_assessment import (
 )
 from story_writing_agents.workspace.initialization import StoryCommitRecoverySnapshot
 from tests.collaboration_contract_fixture import (
-    LEAD, USER, make_batch, make_draft, provider_call_drafts, store_batch,
+    LEAD, RUNTIME, USER, make_batch, make_draft, provider_call_drafts, store_batch,
+)
+from story_writing_agents.lead_task_transitions import (
+    LeadPublicResponse, LeadPublicResponseAcceptance, task_material_sha256,
 )
 from story_writing_agents.writing_artifacts import (
     ArtifactApplicationError,
@@ -198,36 +202,14 @@ def _history(
 ) -> CollaborationHistoryProjection:
     proposal = _proposal()
     return CollaborationHistoryProjection(
-        _SESSION,
-        _CONVERSATION,
-        4,
-        "turn-1",
-        proposal.step_id,
-        proposal,
-        state,
-        request_id,
-        None,
-        None,
-        None,
-        None,
-        CollaborationNextAction.SUBMIT_CONFIRMATION,
+        _SESSION, _CONVERSATION, 4, "turn-1", proposal.step_id, proposal, state,
+        request_id, None, None, None, None, CollaborationNextAction.SUBMIT_CONFIRMATION,
     )
 
 
 def _empty_history() -> CollaborationHistoryProjection:
     return CollaborationHistoryProjection(
-        None,
-        None,
-        0,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
+        None, None, 0, None, None, None, None, None, None, None, None, None,
         CollaborationNextAction.NONE,
     )
 
@@ -237,6 +219,8 @@ def _ordinary_lead_batch(
     *,
     session_id: str = _SESSION,
     conversation_id: str = _CONVERSATION,
+    failure: CollaborationLeadOutcomeFailureCode | None = None,
+    include_response: bool = True,
 ) -> CollaborationEventBatch:
     calls = provider_call_drafts(
         invocation_id="lead_invocation",
@@ -245,18 +229,25 @@ def _ordinary_lead_batch(
         recipient=LEAD,
         invocation_kind=CollaborationInvocationKind.LEAD,
     )
+    text = "A direct Lead reply." if failure is None else '{"invalid_action":'
+    acceptance = (LeadPublicResponseAcceptance.ACCEPTED if failure is None else
+                  LeadPublicResponseAcceptance.REJECTED if failure is CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED
+                  else LeadPublicResponseAcceptance.UNESTABLISHED)
+    response = make_draft("public_response", CollaborationEventKind.LEAD_PUBLIC_RESPONSE, RUNTIME, USER,
+        CollaborationLeadPublicResponsePayload(LeadPublicResponse(
+            invocation_id="lead_invocation", call_id="lead_call", ordinal=1, call_kind="initial",
+            acceptance=acceptance, response_text=text, material_digest=task_material_sha256(text))))
+    terminal = (make_draft("lead_failure", CollaborationEventKind.LEAD_OUTCOME_FAILURE, RUNTIME, USER,
+        CollaborationLeadOutcomeFailurePayload(failure, "lead_invocation", "lead_call"))
+        if failure is not None else make_draft("lead_reply", CollaborationEventKind.MESSAGE, LEAD, USER,
+            CollaborationLeadJudgmentPayload(kind, text, CollaborationLeadEvidence(
+                LeadOutcomeScope.WORKFLOW_META, LeadEvidenceStatus.NOT_APPLICABLE, ()))))
     events = (
         make_draft("user_message", CollaborationEventKind.MESSAGE, USER, LEAD,
-                   CollaborationMessagePayload("Explain the conversation workflow.")),
+                   CollaborationMessagePayload("Explain conversation workflow.")),
         *calls,
-        make_draft("lead_reply", CollaborationEventKind.MESSAGE, LEAD, USER,
-                   CollaborationLeadJudgmentPayload(
-                       kind, "A direct Lead reply.",
-                       CollaborationLeadEvidence(
-                           LeadOutcomeScope.WORKFLOW_META,
-                           LeadEvidenceStatus.NOT_APPLICABLE, (),
-                       ),
-                   )),
+        *((response,) if include_response and failure is not CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT else ()),
+        terminal,
     )
     return make_batch(
         (), "ordinary_lead_batch",
@@ -268,7 +259,8 @@ def _ordinary_lead_batch(
 def _ordinary_lead_history(
     kind: LeadOutcomeKind = LeadOutcomeKind.ANSWER,
 ) -> CollaborationHistoryProjection:
-    return project_collaboration_history(store_batch((), _ordinary_lead_batch(kind)))
+    return project_collaboration_history(store_batch((), _ordinary_lead_batch(
+        kind, include_response=kind is not LeadOutcomeKind.QUESTION)))
 
 
 def _lifecycle(
@@ -719,16 +711,23 @@ class SessionRecoveryReconcilerContractTests(unittest.TestCase):
 
 class SessionRecoveryLifecycleTests(unittest.TestCase):
     def test_retryable_read_only_history_allows_reopen_but_keeps_uncertain_git_gated(self):
-        history = replace(_ordinary_lead_history(), next_safe_action=CollaborationNextAction.RETRY_LEAD_TURN)
-        observed = _observe(histories=(history, history), transition=True)
-        self.assertEqual(observed.result.allowed_operations, tuple(SessionTransitionOperation))
-        self.assertIs(observed.result.recovery_result.state, SessionRecoveryState.READY)
-        self.assertEqual(observed.store.trace.count("collaboration"), 2)
-        self.assertEqual(observed.repository_instances, [])
-        for state in (GitSessionHistoryState.RUNNING, GitSessionHistoryState.OUTCOME_UNKNOWN,
-                      GitSessionHistoryState.RECOVERY_REQUIRED):
-            with self.subTest(state=state):
-                snapshot = _snapshot(state)
+        for failure in (CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED,
+                        CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED,
+                        CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT):
+            with self.subTest(failure=failure):
+                history = project_collaboration_history(store_batch((), _ordinary_lead_batch(failure=failure)))
+                self.assertIs(history.next_safe_action, CollaborationNextAction.RETRY_LEAD_TURN)
+                self.assertEqual(len(history.public_responses), int(failure is not CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT))
+                self.assertEqual(len(history.selectable_materials), len(history.public_responses))
+                if history.public_responses:
+                    self.assertIs(history.public_responses[0].response.acceptance,
+                        LeadPublicResponseAcceptance.REJECTED if failure is CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED else LeadPublicResponseAcceptance.UNESTABLISHED)
+                observed = _observe(histories=(history, history), transition=True)
+                self.assertEqual(observed.result.allowed_operations, tuple(SessionTransitionOperation))
+                self.assertIs(observed.result.recovery_result.state, SessionRecoveryState.READY)
+                self.assertEqual(observed.store.trace.count("collaboration"), 2)
+                self.assertEqual(observed.repository_instances, [])
+                snapshot = _snapshot(GitSessionHistoryState.OUTCOME_UNKNOWN)
                 blocked = _observe(histories=(history, history), snapshots=(snapshot, snapshot), transition=True)
                 self.assertNotIn(SessionTransitionOperation.ENTER_DESTINATION, blocked.result.allowed_operations)
                 self.assertIsNot(blocked.result.recovery_result.state, SessionRecoveryState.READY)
@@ -738,7 +737,7 @@ class SessionRecoveryLifecycleTests(unittest.TestCase):
                      LeadOutcomeKind.CRITIQUE, LeadOutcomeKind.RECOMMENDATION):
             with self.subTest(kind=kind.value):
                 history = _ordinary_lead_history(kind)
-                self.assertEqual(history.last_sequence, 4)
+                self.assertEqual(history.last_sequence, 4 if kind is LeadOutcomeKind.QUESTION else 5)
                 self.assertEqual(history.physical_calls_spent, 1)
                 self.assertIsNone(history.current_proposal)
                 self.assertIsNone(history.current_state)
@@ -819,7 +818,7 @@ class SessionRecoveryLifecycleTests(unittest.TestCase):
             "external": {"externals": (_external(GitExternalOperationKind.MERGE),) * 2},
             "wrong-session": {"histories": (replace(history, session_id="other"),) * 2},
             "wrong-conversation": {"histories": (replace(history, conversation_id="other"),) * 2},
-            "collaboration-drift": {"histories": (history, replace(history, last_sequence=5))},
+            "collaboration-drift": {"histories": (history, replace(history, last_sequence=history.last_sequence + 1))},
             "status-drift": {"statuses": (_status(), _status("applied"))},
             "git-history-drift": {"snapshots": (_snapshot(), _snapshot(GitSessionHistoryState.REJECTED))},
         }

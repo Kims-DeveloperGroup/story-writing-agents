@@ -763,6 +763,14 @@ codec, migration, or compatibility reader. See the
 
 ## Story-session transition assessment
 
+A rejected response, provider protocol failure, or timeout belongs to its turn,
+not to session-integrity recovery. Valid saved Lead history remains eligible for
+session entry even when it contains failed turns, public responses, task views,
+or selectable materials. Reopening preserves those records and does not retry a
+provider call. Fresh input follows the existing turn-level recovery policy.
+Unresolved collaboration execution, Apply, Commit, checkpoints, ownership, and
+Git state retain their separate verification and confirmation requirements.
+
 The package-internal `SessionTransitionAssessor` gives the backend, CLI, and
 interactive controller one content-safe answer about entering a destination,
 leaving a source, or pausing a session. It does not perform or authorize the

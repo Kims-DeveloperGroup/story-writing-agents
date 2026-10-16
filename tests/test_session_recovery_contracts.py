@@ -594,10 +594,10 @@ class SessionRecoveryProjectionTests(unittest.TestCase):
         base = replace(_base_evidence(), collaboration_history=history)
         ready = reconcile_session_recovery(base)
         self.assertIs(ready.state, SessionRecoveryState.READY)
-        self.assertEqual(ready.collaboration_tail_sequence, 4)
+        self.assertEqual(ready.collaboration_tail_sequence, 5)
         retry_history = replace(history, next_safe_action=CollaborationNextAction.RETRY_LEAD_TURN)
-        retry = reconcile_session_recovery(replace(base, collaboration_history=retry_history))
-        self.assertIs(retry.state, SessionRecoveryState.READY)
+        self.assertIs(reconcile_session_recovery(replace(base, collaboration_history=retry_history)).state,
+                      SessionRecoveryState.READY)
         malformed = {
             "proposal-only": {"current_proposal": _proposal()},
             "state-only": {"current_state": CollaborationStepState.COMPLETED},
