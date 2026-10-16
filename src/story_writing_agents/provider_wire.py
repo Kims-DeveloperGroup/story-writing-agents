@@ -608,11 +608,30 @@ def share_schema_descriptions(schema: Mapping) -> dict:
                 return result
             number -= 1
 
-    prefix = "~"
     source_text = original_bytes.decode("utf-8")
-    while any(prefix + short_name(i) + prefix in source_text
-              for i in range(len(candidates) + len(values) * (len(values) + 1) // 2)):
-        prefix += "~"
+    token_bound = len(candidates) + len(values) * (len(values) + 1) // 2
+    prefix_size = 1
+    if token_bound:
+        digits = {character: number + 1 for number, character in enumerate(alphabet)}
+        for word in re.finditer("[a-zA-Z]+", source_text):
+            start, end = word.span()
+            if (start == 0 or end == len(source_text)
+                    or source_text[start - 1] != "~" or source_text[end] != "~"):
+                continue
+            number = 0
+            for position in range(start, end):
+                number = number * len(alphabet) + digits[source_text[position]]
+                if number > token_bound:
+                    break
+            if number > token_bound:
+                continue
+            before, after = start, end
+            while before and source_text[before - 1] == "~":
+                before -= 1
+            while after < len(source_text) and source_text[after] == "~":
+                after += 1
+            prefix_size = max(prefix_size, min(start - before, after - end) + 1)
+    prefix = "~" * prefix_size
     segments = {value: [(False, value)] for value in values}
     literals: dict[str, str] = {}
     chunks: list[str] = []

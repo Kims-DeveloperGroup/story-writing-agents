@@ -815,27 +815,57 @@ def factor_rule_schema(schema: Mapping[str, object]) -> dict[str, object]:
         return compact_symbols(result)
 
     def share_annotations(graph: dict[str, object]) -> dict[str, object]:
-        groups: dict[str, list[object]] = {}
+        literal_ids: dict[tuple[object, ...], int] = {}
+        full_keys: dict[int, int] = {}
+        body_keys: dict[int, int] = {}
+
+        def literal_key(value: object) -> int:
+            if type(value) in {dict, list}:
+                identity = id(value)
+                if identity in full_keys:
+                    return full_keys[identity]
+                if type(value) is dict:
+                    pairs = tuple((field, literal_key(child))
+                                  for field, child in sorted(value.items()))
+                    signature = ("object", pairs)
+                    body = ("object", tuple(pair for pair in pairs
+                                            if pair[0] != "description"))
+                    body_keys[identity] = literal_ids.setdefault(body, len(literal_ids))
+                else:
+                    signature = ("array", tuple(literal_key(child) for child in value))
+                result = literal_ids.setdefault(signature, len(literal_ids))
+                full_keys[identity] = result
+                return result
+            signature = ("scalar", key(value))
+            return literal_ids.setdefault(signature, len(literal_ids))
+
+        groups: dict[int, list[object]] = {}
 
         def collect(node: object) -> None:
             if type(node) is not dict:
                 return
             if "$defs" not in node:
-                body = {name: value for name, value in node.items() if name != "description"}
-                groups.setdefault(key(body), []).append(node)
+                groups.setdefault(body_keys[id(node)], []).append(node)
             for child in children(node):
                 collect(child)
             for child in node.get("$defs", {}).values():
                 collect(child)
 
+        literal_key(graph)
         collect(graph)
         used = set(graph.get("$defs", {}))
-        selected: dict[str, str] = {}
-        for body, occurrences in sorted(groups.items()):
+        selected: dict[int, str] = {}
+        eligible: list[tuple[str, int, list[object]]] = []
+        for identity, occurrences in groups.items():
             meanings = {key({"description": node["description"]}) if "description" in node
                         else "" for node in occurrences}
             if len(occurrences) < 2 or len(meanings) < 2:
                 continue
+            representative = occurrences[0]
+            body = key({field: value for field, value in representative.items()
+                        if field != "description"})
+            eligible.append((body, identity, occurrences))
+        for body, identity, occurrences in sorted(eligible, key=lambda item: item[0]):
             number = len(selected)
             name = f"a{number}"
             while name in used:
@@ -846,15 +876,14 @@ def factor_rule_schema(schema: Mapping[str, object]) -> dict[str, object]:
                     - len(reference.encode("utf-8")))
                     - len(body.encode("utf-8")) - len(key(name).encode("utf-8")) - 2)
             if gain > 0:
-                selected[body] = name
+                selected[identity] = name
                 used.add(name)
         targets: dict[str, object] = {}
 
         def visit(node: object) -> object:
             if type(node) is not dict:
                 return node
-            body = {name: value for name, value in node.items() if name != "description"}
-            name = selected.get(key(body)) if "$defs" not in node else None
+            name = selected.get(body_keys[id(node)]) if "$defs" not in node else None
             result = dict(node)
             if "properties" in node:
                 result["properties"] = {name: visit(child)

@@ -1351,41 +1351,83 @@ _CONTRACT_INPUT_SEAL = object()
 _ContractValue = TypeVar("_ContractValue")
 
 
-def _hook_default_identity(value: object, seen: set[int]) -> object:
+def _hook_default_identity(
+    value: object, seen: set[int], *,
+    _digests: tuple[dict[int, tuple[object, str]], dict[int, tuple[object, str]]] | None = None,
+) -> object:
+    if _digests is None:
+        _digests = ({}, {})
     if value is None or type(value) in {str, int, bool}:
         return (type(value).__name__, value)
     if type(value) is bytes:
-        return ("bytes", hashlib.sha256(value).hexdigest())
+        cached_bytes = _digests[1].get(id(value))
+        if cached_bytes is None or cached_bytes[0] is not value:
+            cached_bytes = (value, hashlib.sha256(value).hexdigest())
+            _digests[1][id(value)] = cached_bytes
+        return ("bytes", cached_bytes[1])
     if type(value) in {float, Decimal}:
         if not (value.is_finite() if type(value) is Decimal else math.isfinite(value)):
             raise TypeError("hook defaults cannot contain nonfinite values")
         return (type(value).__name__, str(value))
     if isinstance(value, Enum):
-        return ("enum", type(value).__module__, type(value).__qualname__, _hook_default_identity(value.value, seen))
+        return ("enum", type(value).__module__, type(value).__qualname__, _hook_default_identity(
+            value.value,
+            seen,
+            _digests=_digests,
+        ))
     if id(value) in seen:
         raise TypeError("hook default declarations cannot be cyclic")
     seen.add(id(value))
     try:
         if type(value) in {tuple, list}:
-            return (type(value).__name__, tuple(_hook_default_identity(item, seen) for item in value))
+            return (type(value).__name__, tuple(_hook_default_identity(
+                item,
+                seen,
+                _digests=_digests,
+            ) for item in value))
         if isinstance(value, Mapping):
-            pairs = [(_hook_default_identity(key, seen), _hook_default_identity(item, seen)) for key, item in value.items()]
+            pairs = [(_hook_default_identity(
+                key,
+                seen,
+                _digests=_digests,
+            ), _hook_default_identity(
+                item,
+                seen,
+                _digests=_digests,
+            )) for key, item in value.items()]
             return ("mapping", sorted(pairs, key=lambda pair: json.dumps(pair[0], sort_keys=True)))
         if type(value) in {set, frozenset}:
-            return (type(value).__name__, sorted((_hook_default_identity(item, seen) for item in value),
+            return (type(value).__name__, sorted((_hook_default_identity(
+                item,
+                seen,
+                _digests=_digests,
+            ) for item in value),
                                                 key=lambda item: json.dumps(item, sort_keys=True)))
         if inspect.isfunction(value) or inspect.ismethod(value):
-            return ("function", _permitted_hook_identity(value, seen))
+            return ("function", _permitted_hook_identity(
+                value,
+                seen,
+                _digests=_digests,
+            ))
         if is_dataclass(value) and getattr(type(value), "__dataclass_params__").frozen:
             return ("frozen_dataclass", type(value).__module__, type(value).__qualname__,
-                    tuple((item.name, _hook_default_identity(getattr(value, item.name), seen)) for item in fields(value)))
+                    tuple((item.name, _hook_default_identity(
+                        getattr(value, item.name),
+                        seen,
+                        _digests=_digests,
+                    )) for item in fields(value)))
         raise TypeError("unsupported semantic hook default declaration")
     finally:
         seen.remove(id(value))
 
 
-def _permitted_hook_identity(callback: Callable, seen: set[int] | None = None) -> str:
+def _permitted_hook_identity(
+    callback: Callable, seen: set[int] | None = None, *,
+    _digests: tuple[dict[int, tuple[object, str]], dict[int, tuple[object, str]]] | None = None,
+) -> str:
     """Derived content-free actual hook provenance, never a caller-supplied pin."""
+    if _digests is None:
+        _digests = ({}, {})
     if inspect.ismethod(callback):
         function, receiver = callback.__func__, callback.__self__
     elif inspect.isfunction(callback):
@@ -1395,8 +1437,54 @@ def _permitted_hook_identity(callback: Callable, seen: set[int] | None = None) -
     if (inspect.iscoroutinefunction(function) or inspect.isgeneratorfunction(function)
             or inspect.isasyncgenfunction(function)):
         raise TypeError("owner hooks must be synchronous nongenerator functions")
-    code = hashlib.sha256(marshal.dumps(function.__code__, 2)).hexdigest()
-    defaults = _hook_default_identity((function.__defaults__, function.__kwdefaults__), set() if seen is None else seen)
+    code_object = function.__code__
+    cached_code = _digests[0].get(id(code_object))
+    if cached_code is None or cached_code[0] is not code_object:
+        code = hashlib.sha256(marshal.dumps(code_object, 2)).hexdigest()
+        immutable_constants = True
+        try:
+            pending_constants = [(code_object, False)]
+            active_constants: set[int] = set()
+            complete_constants: set[int] = set()
+            code_type = type(code_object)
+            while pending_constants:
+                value, leaving = pending_constants.pop()
+                if leaving:
+                    active_constants.remove(id(value))
+                    complete_constants.add(id(value))
+                    continue
+                if value is None or value is Ellipsis or value is StopIteration:
+                    continue
+                kind = type(value)
+                if kind in {bool, int, float, complex, str, bytes}:
+                    continue
+                if kind is code_type:
+                    children = (value.co_consts,)
+                elif kind in {tuple, frozenset}:
+                    children = value
+                else:
+                    immutable_constants = False
+                    break
+                identity = id(value)
+                if identity in active_constants:
+                    immutable_constants = False
+                    break
+                if identity in complete_constants:
+                    continue
+                active_constants.add(identity)
+                pending_constants.append((value, True))
+                pending_constants.extend((child, False) for child in children)
+        except (MemoryError, RecursionError):
+            immutable_constants = False
+        if immutable_constants:
+            _digests[0][id(code_object)] = (code_object, code)
+    else:
+        code = cached_code[1]
+    defaults = _hook_default_identity(
+        (function.__defaults__, function.__kwdefaults__),
+        set() if seen is None else seen,
+        _digests=_digests,
+    )
     provenance = (function.__module__, function.__qualname__, id(function),
                   None if receiver is None else id(receiver), code, defaults)
     return hashlib.sha256(json.dumps(provenance, separators=(",", ":")).encode("utf-8")).hexdigest()
@@ -1435,7 +1523,11 @@ class TypedDecoder(Generic[_ContractValue]):
         object.__setattr__(self, "binding_fingerprint", fingerprint)
 
     def require_provenance(self) -> None:
-        if tuple(_permitted_hook_identity(item) for item in (self.decode, *self.dependencies)) != self._hook_fingerprints:
+        digests = ({}, {})
+        if tuple(_permitted_hook_identity(
+            item,
+            _digests=digests,
+        ) for item in (self.decode, *self.dependencies)) != self._hook_fingerprints:
             raise ValueError("frozen typed decoder hook provenance changed")
 
     @staticmethod
@@ -1498,7 +1590,11 @@ class NamedHostCheck(Generic[_ContractValue]):
 
 
     def require_provenance(self) -> None:
-        if tuple(_permitted_hook_identity(item) for item in (self.check, *self.dependencies)) != self._hook_fingerprints:
+        digests = ({}, {})
+        if tuple(_permitted_hook_identity(
+            item,
+            _digests=digests,
+        ) for item in (self.check, *self.dependencies)) != self._hook_fingerprints:
             raise ValueError("frozen named owner hook provenance changed")
 
 

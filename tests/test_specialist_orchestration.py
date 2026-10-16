@@ -13,34 +13,21 @@ from unittest import mock
 
 from story_writing_agents.workspace import initialization as workspace_initialization
 from story_writing_agents import ReplyTraceOrigin, StoryRuntime
-from story_writing_agents.agents import ( CHARACTER_CUSTODIAN,
-    EXECUTION_SPECIALIST,
-    LEAD_ORCHESTRATOR,
-    PLOT_ARCHITECT,
+from story_writing_agents.agents import ( CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST,
+    LEAD_ORCHESTRATOR, PLOT_ARCHITECT,
 )
 from story_writing_agents.conversation_storage import ConversationStorageServices
-from story_writing_agents.conversations import (
-    CollaborationAssignmentOutcomeKind,
-    CollaborationConfirmationDecision,
-    CollaborationEventKind,
-    CollaborationExecutionOutcomeKind,
-    CollaborationExecutionResult,
-    CollaborationInputKind,
-    CollaborationInvocationKind,
-    CollaborationLeadSynthesisPayload,
-    CollaborationMessagePayload,
-    CollaborationNextAction,
-    CollaborationProviderCallKind,
-    CollaborationProviderCallPayload,
-    CollaborationProviderCallState,
-    CollaborationSpecialistAssessment,
-    CollaborationSpecialistReplyPayload,
-    CollaborationStepKind,
-    CollaborationStepState,
-    CollaborationSynthesisOutcomeKind,
-    CollaborationTerminalOutcomePayload,
-    project_collaboration_history,
-)
+from story_writing_agents.conversations import ( CollaborationAssignmentOutcomeKind,
+    CollaborationConfirmationDecision, CollaborationEventKind,
+    CollaborationExecutionOutcomeKind, CollaborationExecutionResult,
+    CollaborationInputKind, CollaborationInvocationKind,
+    CollaborationLeadSynthesisPayload, CollaborationMessagePayload,
+    CollaborationNextAction, CollaborationProviderCallKind,
+    CollaborationProviderCallPayload, CollaborationProviderCallState,
+    CollaborationSpecialistAssessment, CollaborationSpecialistReplyPayload,
+    CollaborationStepKind, CollaborationStepState,
+    CollaborationSynthesisOutcomeKind, CollaborationTerminalOutcomePayload,
+    project_collaboration_history,)
 from story_writing_agents.models import AgentStateEntry
 from story_writing_agents.errors import BackendProtocolError
 from story_writing_agents.structured_output_validation import failure_issues
@@ -48,16 +35,11 @@ from story_writing_agents.specialist_routing import AuthoringScope, AuthoringAct
 from story_writing_agents.workspace.initialization import SessionArtifactBinding
 
 from tests.test_lead_orchestration import (
-    LeadOrchestrationTestCase, LeadProviderConstraints, Rule, diagnose_json_text,
-    _LeadBackend,
-    _SubmittedFailure,
-    _decision,
-    _provider_envelope,
-    _read_history_hit,
-    _specialist_outcome,
-    _synthesis_outcome,
-    _submitted_calls,
-    _workflow_material,
+    LeadOrchestrationTestCase, LeadProviderConstraints, Rule, diagnose_json_text, _LeadBackend,
+    _SubmittedFailure, _decision,
+    _provider_envelope, _read_history_hit,
+    _specialist_outcome, _synthesis_outcome,
+    _submitted_calls, _workflow_material,
 )
 from tests.recommendation_fixture import task_assessment
 
@@ -771,11 +753,9 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 self.assertTrue(notices[0].validation_details[0].startswith('Original response'))
                 submitted = tuple(payload for payload in _submitted_calls(history) if payload.invocation_kind in {
                        CollaborationInvocationKind.SPECIALIST_ASSIGNMENT,
-                       CollaborationInvocationKind.LEAD_SYNTHESIS,
-                   })
+                       CollaborationInvocationKind.LEAD_SYNTHESIS,})
                 self.assertEqual(len(submitted), 3)
-                rejected = next(payload for payload in submitted
-                                if payload.role == rejected_role
+                rejected = next(payload for payload in submitted if payload.role == rejected_role
                                 and payload.call_id == notices[0].validation_call_id)
                 self.assertEqual(notices[0].validation_invocation_id, rejected.invocation_id)
 
@@ -891,10 +871,8 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
     ) -> None:
         conversation_id = self.conversation("Direct advisory")
         calls_before = len(self.backend.calls)
-        proposed = await self.runtime.session(
-            self.session_id
-        ).propose_specialist_advisory(
-            conversation_id,
+        proposed = await self.runtime.session( self.session_id
+        ).propose_specialist_advisory( conversation_id,
             PLOT_ARCHITECT,
             "Candidate: a choice precedes its consequence. Assess the plot chronology." + "\n\n" + _REVIEW_LATITUDE,
             authoring_scope=AuthoringScope(AuthoringActivity.REVIEW, (), (ArtifactReviewDomain.PLOT_STRUCTURE,),
@@ -1004,15 +982,12 @@ class SpecialistAccountingAcceptanceTests(LeadOrchestrationTestCase):
             'audit', 1, 'r1', 'outcome', 'own plot state needle', '2026-09-01T00:00:00+00:00'))
         self.workspace.append_agent_state(AgentStateEntry(CHARACTER_CUSTODIAN, self.session_id,
             'debate', 'audit', 1, 'r1', 'outcome', 'sibling reply secret', '2026-09-01T00:00:01+00:00'))
-        proposed = await self.proposal(
-            conversation_id,
+        proposed = await self.proposal( conversation_id,
             text=_REVIEW_BRIEF + "\n\n" + "Check ${core_documents/global_outline.md}#L1-L2.",
-            assignments=[
-                {
+            assignments=[ {
                     "agent_id": PLOT_ARCHITECT,
                     "instruction": "Search only the bounded assignment context.",
-                    "input_ids": ["user_input", "reference_1"],
-                }
+                    "input_ids": ["user_input", "reference_1"],}
             ], authoring_assessment=asdict(_review_assessment()))
 
         assignment = proposed.proposal.assignments[0]

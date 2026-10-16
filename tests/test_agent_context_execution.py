@@ -118,7 +118,8 @@ def _answer(call: ContextProviderCallRequest, _provider: '_ScriptedProvider', *,
         'content': content}}}, ensure_ascii=False, separators=(',', ':'))
 
 
-_LEAD_SCOPE = AuthoringScope(AuthoringActivity.WORKFLOW, (), (), "Context lifecycle.", "context-task", 1,)
+_LEAD_SCOPE = AuthoringScope(
+    AuthoringActivity.WORKFLOW, (), (), "Context lifecycle.", "context-task", 1, schema_version=3)
 _LEAD_CONSTRAINTS = LeadProviderConstraints(scope=_LEAD_SCOPE, task_revisions=(('context-task', 1),)
     , source_ids=('current-input',), objective_ids=(), allow_read_sources=True)
 

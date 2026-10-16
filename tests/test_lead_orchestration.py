@@ -56,14 +56,12 @@ from story_writing_agents.conversations import (
     CollaborationProviderCallPayload, CollaborationProviderCallState, CollaborationSideEffect,
     CollaborationStepState, LeadOutcomeKind, LeadOutcomeScope, LeadStepDecision,
     project_collaboration_history,)
-from story_writing_agents.conversation_storage import (
-    compose_filesystem_conversation_storage,)
+from story_writing_agents.conversation_storage import ( compose_filesystem_conversation_storage,)
 from story_writing_agents.errors import BackendProtocolError, SessionIdError
 from story_writing_agents.structured_output_validation import DomainValidationRule as Rule, diagnose_json_text, failure_issues
 from story_writing_agents.lead_provider_contracts import (
     LeadContractError, LeadProviderConstraints, canonical_assignments, canonical_scope,)
-from story_writing_agents.writing_artifacts.authorization import (ReferenceAuthorizationErrorCode,
-)
+from story_writing_agents.writing_artifacts.authorization import (ReferenceAuthorizationErrorCode,)
 from story_writing_agents.writing_artifacts.read_actions import (ReferenceReadAction,
     ReferenceReadActionKind,)
 from story_writing_agents.workspace.initialization import (SessionArtifactBindingError,
@@ -76,8 +74,7 @@ from tests.collaboration_contract_fixture import contract_batches
 from tests.helpers import materialize_pristine_initialized_workspace
 from tests.test_agent_context_accounting import _expanded_context_payload
 from story_writing_agents.specialist_routing import (
-    ArtifactReviewDomain, AuthoringActivity, AuthoringScope, ReviewBasis, artifact_domain,
-)
+    ArtifactReviewDomain, AuthoringActivity, AuthoringScope, ReviewBasis, artifact_domain,)
 
 
 _Response = str | BaseException | Callable[[ContextProviderCallRequest, '_LeadContextProvider'],
@@ -1511,8 +1508,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 self.backend.enqueue(recommendation(recommended_action=action(
                     kind="prepare_consultation", source_ids=("user_input",),
                     specialist_ids=( PLOT_ARCHITECT , CHARACTER_CUSTODIAN , EXECUTION_SPECIALIST , ),
-                ),
-                    mutate=lambda value: value.update(authoring_assessment=assessment),)
+                ), mutate=lambda value: value.update(authoring_assessment=assessment),)
                     if kind == "recommendation" else _visible_outcome(kind))
                 result = await self.runtime.session(self.session_id).lead_turn(conversation_id, (
                     _ADMISSION_BRIEF + '\n' if kind == 'recommendation' else '') +
@@ -1539,12 +1535,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
     ) -> None:
         def duplicate(call: ContextProviderCallRequest, _provider: object) -> str:
             scope = json.dumps(_compact_scope(_live_scope(call)))
-            return ( '{"action":{"kind":"answer","result":'
-                + '{"kind":"answer","kind":"question",'
-                '"message":"Visible.","authoring_scope":'
-                + scope
-                + '}'
-                + ',"used_handles":[]}}'
+            return ( '{"action":{"kind":"answer","result":' + '{"kind":"answer","kind":"question",'
+                '"message":"Visible.","authoring_scope":' + scope
+                + '}' + ',"used_handles":[]}}'
             )
 
         invalid_values: tuple[object, ...] = ({'kind': 'unknown', 'message': 'Visible.'}, {
@@ -1582,10 +1575,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 failures = _event_payloads(history, CollaborationLeadOutcomeFailurePayload)
                 self.assertEqual(len(failures), 1)
                 self.assertIs(failures[0].code, CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED,)
-                visible = tuple(
-                    event.payload
-                    for event in history
-                    if (
+                visible = tuple( event.payload
+                    for event in history if (
                         type(event.payload) is CollaborationMessagePayload
                         and event.sender.agent_id == LEAD_ORCHESTRATOR))
                 self.assertEqual(len(visible), 1)
@@ -3455,8 +3446,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertFalse(paired_rules.findings({'base': {'schema_id': 'outer-binding'},
                                                'semantic': {'schema_id': 'inner-binding'}}))
         for swapped in ( ({'base': {'schema_id': 'inner-binding'}, 'semantic': {'schema_id': 'inner-binding'}},
-            {'base': {'schema_id': 'outer-binding'}, 'semantic': {'schema_id': 'outer-binding'}})
-        ):
+            {'base': {'schema_id': 'outer-binding'}, 'semantic': {'schema_id': 'outer-binding'}})):
             self.assertTrue(paired_rules.findings(swapped))
 
     async def test_front_schema_rejection_is_repaired_once(self) -> None:
@@ -3623,11 +3613,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         from tests.test_specialist_routing_runtime import _fixture_assessment
         assessment = asdict(_fixture_assessment(foundation_ids=("user_input",), user_id="user_input"))
         conversation_id = self.conversation("Cross-domain proposal")
-        text = ( (
-            _REVIEW_USER_INPUT + "\n"
+        text = ( ( _REVIEW_USER_INPUT + "\n"
             + "Check sources in order: ${core_documents/global_outline.md} "
-            + "${core_documents/character_sheets.md} ${manuscript/part-01/opening.md}#L2-L3"
-        )
+            + "${core_documents/character_sheets.md} ${manuscript/part-01/opening.md}#L2-L3")
         )
         assignments = [
             { "agent_id" : PLOT_ARCHITECT , "instruction" : "Check outline causality and the opening range." , "input_ids" : [ "user_input" , "reference_1" , "reference_3" ] , },
@@ -3643,10 +3631,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         assert isinstance(proposal, CollaborationProposal)
         self.assertEqual(tuple((item.specialist_id for item in proposal.assignments)), (
             PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST))
-        self.assertEqual(
-            tuple(item.locator for item in proposal.basis.inputs[1:]),
-            (
-                "${core_documents/global_outline.md}",
+        self.assertEqual( tuple(item.locator for item in proposal.basis.inputs[1:]),
+            ( "${core_documents/global_outline.md}",
                 "${core_documents/character_sheets.md}",
                 "${manuscript/part-01/opening.md}#L2-L3",),)
         self.assertEqual(tuple(((item.start_line,
@@ -3967,8 +3953,20 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
             await case.runtime.decide_lead_task(replace(resume, request_id=hold.request_id))
         self.assertEqual(case.history(conversation), unchanged)
         self.assertEqual(len(case.backend.calls), spent)
-        case.backend.enqueue(_discussion_reply("Which direction should the resumed task pursue?", "clarification_question"))
-        case.backend.enqueue(scoped_proposal(PLOT_ARCHITECT, paths=(OUTLINE,), domains=(
+        def native_scoped(agent, **values):
+            def respond(call, provider):
+                choices = dict(call.contract.semantic_index.policy.choices)
+                inputs = {'family': 0, 'input_choices': choices['input_ids'],
+                          'source_choices': choices['input_ids'],
+                          'anchors': {agent: 'user_input'}, 'recipients': {'user_input': agent}}
+                return scoped_proposal(agent, native_inputs=inputs, **values)(call, provider)
+            return respond
+
+        case.backend.enqueue(lambda call, _provider: lead_fixture_response(call, {
+            'response_type': 'clarification_question',
+            'response_text': "Which direction should the resumed task pursue?",
+            'response_details': {'used_evidence_ids': {}}}, family=0))
+        case.backend.enqueue(native_scoped(PLOT_ARCHITECT, paths=(OUTLINE,), domains=(
             'plot_structure',), activity='draft', mutate=lambda value, _: value.update(
             message=original.goal), authoring_assessment=_fixture_assessment()))
         resumed = await case.runtime.decide_lead_task(resume)
@@ -4018,7 +4016,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         with self.assertRaises(ValueError):
             await case.runtime.decide_lead_task(task.LeadTaskDecision.from_task(retired.ref, task.LeadTaskAction.RESUME,
                                                                              text="Cannot revive discarded authority."))
-        case.backend.enqueue(scoped_proposal(
+        case.backend.enqueue(native_scoped(
             EXECUTION_SPECIALIST, paths=("manuscript/part-01/opening.md",), domains=("tone_execution",), activity="draft",
             authoring_assessment=task_assessment(foundation_ids=("user_input",), actions=("bounded prose drafting",)),))
         created = await case.runtime.decide_lead_task(task.LeadTaskDecision.from_task(
@@ -4043,8 +4041,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
                 '\nSupplied story facts: Mara wants safety and fears exposure. Review the story direction against '
                 'those facts and the exact requested references. You may give bounded story-direction review '
                 'judgments; preserve supplied facts and do not write files. Execution requires separate exact '
-                'confirmation.'
-            )),
+                'confirmation.')),
             assignments=[ { "agent_id" : PLOT_ARCHITECT , "instruction" : "Check the exact outline revision." , "input_ids" : [ "user_input" , "reference_1" ] , } ],
         authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded story-direction review judgments',))),
                          )
@@ -4437,8 +4434,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 def corrected(call: ContextProviderCallRequest, _provider: object) -> str:
                     material = _workflow_material(call.payload)
                     correction = material["response_correction"]
-                    correction_records.append(
-                        (
+                    correction_records.append( (
                             correction["rejection_code"],  # type: ignore[index]
                             correction["instruction"],  # type: ignore[index]
                             call.payload["response_contract"]["allowed_action_types"],  # type: ignore[index]
@@ -4467,15 +4463,11 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 self.assertEqual(tuple(event.ordinal for event in submitted), tuple(range(1, len(submitted) + 1)),)
                 self.assertEqual(len({event.invocation_id for event in submitted}), 1)
                 self.assertEqual(
-                    tuple(
-                        event.payload.content
-                        for event in history
-                        if type(event.payload) is CollaborationMessagePayload
-                        and event.sender.kind.value == "user"),
-                    ("One ordinary user message.",),)
+                    tuple( event.payload.content
+                        for event in history if type(event.payload) is CollaborationMessagePayload
+                        and event.sender.kind.value == "user"), ("One ordinary user message.",),)
                 self.assertEqual(
-                    tuple(
-                        event.payload.message
+                    tuple( event.payload.message
                         for event in history
                         if type(event.payload) is CollaborationLeadJudgmentPayload),
                     (f"Corrected {label} answer.",),)
@@ -4569,10 +4561,8 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         result = await runtime.lead_turn(self.session_id, conversation_id, 'Close the rejected result without replay.')
 
         history = self.history(conversation_id)
-        prepared = tuple(
-            event.payload
-            for event in history
-            if type(event.payload) is CollaborationProviderCallPayload
+        prepared = tuple( event.payload
+            for event in history if type(event.payload) is CollaborationProviderCallPayload
             and event.payload.state is CollaborationProviderCallState.PREPARED)
         submitted = _submitted_calls(history)
         failures = _event_payloads(history, CollaborationLeadOutcomeFailurePayload)

@@ -14461,6 +14461,23 @@ class StoryRuntime:
                     ),
                 ),
             )
+        events = self.conversation_storage_services.event_store.read(session_id, conversation_id)
+        control = next((event for event in events
+                        if type(event.payload) is CollaborationLeadTaskTransitionPayload
+                        and (event.turn_id, event.step_id) == (turn_id, step_id)
+                        and event.payload.receipt.action is LeadTaskAction.DISCUSS), None)
+        if control is not None:
+            current = project_collaboration_history(events)
+            return self._discussion_turn(
+                session_id, conversation_id, turn_id, step_id,
+                LeadDiscussionReport(response_kind="answer", response_text=message,
+                                     origin_control_event_id=control.event_id,
+                                     associated_task_ref=control.payload.receipt.source_task_ref),
+                current,
+
+                validation_details=validation_details,
+                provider_invocation_id=provider_invocation_id,
+            )
         evidence = CollaborationLeadEvidence(
             LeadOutcomeScope.WORKFLOW_META,
             LeadEvidenceStatus.NOT_APPLICABLE,
