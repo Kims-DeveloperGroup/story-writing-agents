@@ -23,8 +23,7 @@ def action(*, kind="prepare_artifact", source_ids=("current_response",),
         "expected_result": "One exact proposal awaiting its separate review decision.",
         "source_ids": list(source_ids), "objective_id": objective_id,
         "target_paths": list(target_paths) if kind == "prepare_artifact" else [],
-        "specialist_ids": list(specialist_ids) if kind == "prepare_consultation" else [],
-    }
+        "specialist_ids": list(specialist_ids) if kind == "prepare_consultation" else [],}
 
 
 def task_assessment(*, foundation_ids, actions):
@@ -60,8 +59,7 @@ def recommendation(*, message=DRAFT, recommended_action=None, mutate=None,
             owner_domains = tuple(dict.fromkeys(
                 [domains[agent] for agent in selected['specialist_ids']] +
                 ['plot_structure' for path in selected['target_paths'] if path == OUTLINE]))
-            scope = lead._live_scope(
-                call, activity='review', paths=tuple(selected['target_paths']),
+            scope = lead._live_scope(call, activity='review', paths=tuple(selected['target_paths']),
                 domains=owner_domains,
                 contributions=[{'domain': domain, 'role': 'constraint_assessor'}
                 for domain in owner_domains], task_index=0 if selected['objective_id'] is not None else -1)
@@ -72,8 +70,7 @@ def recommendation(*, message=DRAFT, recommended_action=None, mutate=None,
             "scope": "story_specific", "evidence_status": status["document_status"] if status["document_status"] in {"empty", "missing"} else "incomplete",
             "evidence_ids": [artifact._status_id(call, OUTLINE)], "proposal": None, "artifact_intent": None,
             "objective_intent": None, "recommended_action": selected,
-            "authoring_scope": scope,
-        }
+            "authoring_scope": scope,}
         if authoring_assessment is not None:
             assessment = authoring_assessment(call) if callable(authoring_assessment) else authoring_assessment
             value["authoring_assessment"] = asdict(assessment)
@@ -129,8 +126,7 @@ def decision(turn, kind=c.CollaborationConfirmationDecision.CONFIRM, **changes):
         request_id=request.request_id, action_id=request.action_id,
         action_revision=request.action_revision, action_digest=request.action_digest,
         kind=kind, revision_request=("Revise only the preparation plan."
-            if kind is c.CollaborationConfirmationDecision.REVISE else None),
-    )
+            if kind is c.CollaborationConfirmationDecision.REVISE else None),)
     values.update(changes)
     return c.LeadRecommendationDecision(**values)
 
@@ -159,13 +155,11 @@ def _unbound_preparation(turn, *, text=DRAFT, mutate=None, read_evidence=False):
             for path in request.target_paths],
         evidence_status="verified" if read_evidence else "empty",
         evidence_ids=lambda call, material: [selected_evidence(call, OUTLINE)],
-        objective_intent=intent,
-    )
+        objective_intent=intent,)
     if request.kind is c.LeadRecommendationActionKind.PREPARE_CONSULTATION:
         intent = (None if request.objective_id is None else {
             "action": "continue", "objective_id": request.objective_id,
-            "next_step": "consult", "draft_source_event_ids": selected,
-        })
+            "next_step": "consult", "draft_source_event_ids": selected,})
         sources = [item.input_id for item in request.basis.inputs]
         sources += ["recommendation_request", "recommendation_decision"]
         base = lead._proposal_outcome([ {"agent_id": item, "instruction": request.instruction, "input_ids": sources} for item in request.specialist_ids], purpose=request.purpose)
@@ -175,8 +169,7 @@ def _unbound_preparation(turn, *, text=DRAFT, mutate=None, read_evidence=False):
             value = json.loads(base(call, provider))
             if intent is not None:
                 value["action"]["result"]["proposal"]["objective_intent"] = (
-                    lead._compact_objective(intent)
-                )
+                    lead._compact_objective(intent))
             return json.dumps(value, ensure_ascii=False)
 
     def respond(call, provider):
@@ -234,12 +227,12 @@ def preparation(turn, *, text=DRAFT, mutate=None, read_evidence=False):
             return lead_fixture_response(call, lead_fixture_result(native), family=0)
         return consultation
     selected = [item.event_id for item in request.draft_sources]
-    intent = ({'action': 'start', 'target_paths': list(request.target_paths), 'next_step': 'prepare'}
-              if request.objective_id is None else {'action': 'continue',
-              'objective_id': request.objective_id, 'next_step': 'prepare'})
+    intent = ({'action': 'start', 'target_paths': dict.fromkeys(request.target_paths, True),
+               'next_step': 'prepare'} if request.objective_id is None else {'action': 'continue',
+               'objective_id': request.objective_id, 'next_step': 'prepare'})
     def respond(call, provider):
         from tests.provider_wire_fixture import (
-            result, lead_fixture_scope, lead_fixture_result, lead_fixture_response)
+            result, lead_fixture_scope, lead_fixture_result, lead_fixture_response, lead_fixture_assessment)
         operations = []
         reads = call.payload.get('context_observation', {}).get('read_results', [])
         for path in request.target_paths:
@@ -259,6 +252,9 @@ def preparation(turn, *, text=DRAFT, mutate=None, read_evidence=False):
         if mutate is not None:
             mutate(body)
         native = result(body, 'lead-response-v9')
+        if 'authoring_assessment' in native:
+            native['authoring_assessment'] = lead_fixture_assessment(native['authoring_assessment'],
+                source_choices=dict(call.contract.semantic_index.policy.choices)['input_ids'])
         from tests.provider_wire_fixture import lead_fixture_scope_record
         native.pop('writing_task_scope')
         native['task_scope'] = lead_fixture_bound_scope(call, body['authoring_scope'], record=True)
@@ -331,8 +327,8 @@ class RecommendationCase(ObjectiveCase):
             inner_ids = set(binding.semantic_index.expected_schema_ids)
             self.assertTrue(inner_ids)
             self.assertTrue(set(dict(binding.outer_inner_schema_ids).values()) - {None} <= inner_ids)
-            stem = binding.factory.rule_seed.contract_id
-            self.assertEqual(binding.semantic_index.branch_keys, (stem + ':family:0', stem + ':family:1'))
+            stem, owners = binding.factory.rule_seed.contract_id, binding.semantic_index.owners
+            self.assertEqual(tuple(o.variant.branch_key for o in owners), (stem + ':family:0', stem + ':family:1'))
         def search(call, _provider):
             retain_binding(call)
             outer, inner = offered_fixture_bindings(call, action_type='search_context', response_type=None, family=1)

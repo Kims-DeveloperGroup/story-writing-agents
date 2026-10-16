@@ -57,8 +57,7 @@ from story_writing_agents.structured_output_validation import (
 _PRIVATE_ANSWER = "PRIVATE_FINAL_ANSWER_한🙂"
 _PRIVATE_BODY_A = "PRIVATE_SOURCE_A needle 한🙂\n"
 _PRIVATE_BODY_B = "PRIVATE_SOURCE_B needle\n"
-_SCOPE = ContextScope(
-    "workspace",
+_SCOPE = ContextScope("workspace",
     "session",
     ContextSubjectKind.CONVERSATION,
     "conversation",
@@ -72,8 +71,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
     def test_diagnose_json_text_reports_all_independent_safe_issues(self) -> None:
         schema = {
             "type": "object",
-            "properties": {
-                "message": {"type": "string", "minLength": 1},
+            "properties": {"message": {"type": "string", "minLength": 1},
                 "count": {"type": "integer", "minimum": 1},
                 "maximum": {"type": "number", "maximum": 2},
                 "short": {"type": "string", "maxLength": 2},
@@ -86,14 +84,12 @@ class StructuredOutputValidationTests(unittest.TestCase):
             "required": ["message", "count", "items", "required_note"],
             "additionalProperties": False, }
         secret = "PRIVATE_PROVIDER_VALUE_한🙂"
-        body = json.dumps({
-            "message": "", "count": 0, "maximum": 3, "short": secret,
+        body = json.dumps({"message": "", "count": 0, "maximum": 3, "short": secret,
             "few": [], "many": [1, 2], "mode": secret,
             "items": ["", 3], secret: secret,
         }, ensure_ascii=False)
         issues = diagnose_json_text(body, schema)
-        self.assertEqual(issues, (
-            "$.required_note: required property is missing",
+        self.assertEqual(issues, ("$.required_note: required property is missing",
             "$: contains 1 unexpected properties (names withheld)",
             "$.message: expected at least 1 characters, got 0",
             "$.count: expected at least 1, got integer",
@@ -107,8 +103,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
         self.assertNotIn(secret, repr(issues))
 
     def test_union_selects_matching_branch_without_other_branch_noise(self) -> None:
-        schema = {"anyOf": [
-            {"type": "object", "properties": {
+        schema = {"anyOf": [{"type": "object", "properties": {
                 "kind": {"type": "string", "enum": ["search"]},
                 "query": {"type": "string"},
             }, "required": ["kind", "query"], "additionalProperties": False},
@@ -120,8 +115,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
                 "additionalProperties": False}, ]}
         issues = diagnose_json_text(
             '{"kind":"answer","message":0,"PRIVATE_UNKNOWN":"secret"}', schema, )
-        self.assertEqual(issues, (
-            "$.citation_ids: required property is missing",
+        self.assertEqual(issues, ("$.citation_ids: required property is missing",
             "$: contains 1 unexpected properties (names withheld)",
             "$.message: expected string, got integer", ))
         self.assertNotIn("query", repr(issues))
@@ -156,17 +150,14 @@ class StructuredOutputValidationTests(unittest.TestCase):
     def test_properties_omitted_from_required_remain_optional(self) -> None:
         schema = {
             "type": "object",
-            "properties": {
-                "message": {"type": "string"},
+            "properties": {"message": {"type": "string"},
                 "optional_count": {"type": "integer"}, },
             "required": ["message"],
             "additionalProperties": False, }
         self.assertEqual(diagnose_json_text('{"message":"ok"}', schema), ())
-        self.assertEqual(
-            diagnose_json_text('{"message":"ok","optional_count":"bad"}', schema),
+        self.assertEqual(diagnose_json_text('{"message":"ok","optional_count":"bad"}', schema),
             ("$.optional_count: expected integer, got string",), )
-        self.assertEqual(
-            diagnose_json_text("{}", schema),
+        self.assertEqual(diagnose_json_text("{}", schema),
             ("$.message: required property is missing",), )
 
     def test_bounded_chunks_preserve_order_and_over_32k_content(self) -> None:
@@ -204,8 +195,7 @@ def _artifact_id(path: str) -> str:
 
 
 def _closed_result_schema(properties: dict[str, object]) -> dict[str, object]:
-    return {
-        "additionalProperties": False,
+    return {"additionalProperties": False,
         "properties": properties,
         "required": list(properties),
         "type": "object", }
@@ -218,8 +208,7 @@ def _answer_wire(
     used_handles: tuple[str, ...] = (),
 ) -> dict[str, object]:
     del correlation, used_handles
-    return {
-        'agent_action': {
+    return {'agent_action': {
             'action_type': 'submit_result',
             'task_result': result, }, }
 
@@ -231,8 +220,7 @@ def _search_wire(
     path_prefix: str | None = None,
 ) -> dict[str, object]:
     del correlation
-    action: dict[str, object] = {
-        "action_type": "search_context",
+    action: dict[str, object] = {"action_type": "search_context",
         "queries": [{"search_text": text, "source_types": [
             {"writing_artifact": "story_document", "conversation": "conversation_history",
              "active_debate": "current_consensus_run", "own_agent_state": "agent_work_history"}.get(kind, kind)
@@ -255,15 +243,13 @@ def _snapshot(
     revision_seed: bytes | None = None,
 ) -> ContextSourceSnapshot:
     encoded = body.encode("utf-8")
-    record = ContextSourceRecord(
-        "line_1",
+    record = ContextSourceRecord("line_1",
         ContextSourceBoundary.artifact_lines(1, 1),
         body,
         body,
         _digest(encoded),
         len(encoded), )
-    descriptor = ContextSourceDescriptor(
-        scope,
+    descriptor = ContextSourceDescriptor(scope,
         _artifact_id(path),
         ContextSourceKind.WRITING_ARTIFACT,
         _digest(revision_seed or (path + "-revision").encode()),
@@ -278,8 +264,7 @@ def _snapshot(
 
 def _entry(snapshot: ContextSourceSnapshot, ordinal: int) -> ContextManifestEntry:
     descriptor = snapshot.descriptor
-    return ContextManifestEntry(
-        descriptor.source_id,
+    return ContextManifestEntry(descriptor.source_id,
         descriptor.source_kind,
         ContextSemanticChannel.FOCUSED_EVIDENCE,
         ContextPriority.P2_WORKING,
@@ -1315,12 +1300,10 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
             consumed,
             ContextReadAction(
                 _correlation(self.binding, 3),
-                (consumed_handle,),
-            ),
+                (consumed_handle,),),
             ContextActionErrorCode.HANDLE_INVALID,
             next_action_index=3,
-            extra_private=(consumed_handle.value,),
-        )
+            extra_private=(consumed_handle.value,),)
 
         drift_entry = self.manifest.entries[0]
         stable = self.snapshots[drift_entry.source_id]
@@ -1341,12 +1324,10 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
             drift,
             ContextReadAction(
                 _correlation(self.binding, 2),
-                (drift_handle,),
-            ),
+                (drift_handle,),),
             ContextActionErrorCode.HANDLE_INVALID,
             next_action_index=3,
-            extra_private=(drift_handle.value, "changed private body"),
-        )
+            extra_private=(drift_handle.value, "changed private body"),)
 
         terminal = _session(
             self.binding,
@@ -1360,12 +1341,10 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
             terminal,
             ContextReadAction(
                 _correlation(self.binding, 2),
-                (guessed,),
-            ),
+                (guessed,),),
             ContextActionErrorCode.INVALID_TRANSITION,
             next_action_index=2,
-            extra_private=(guessed.value,),
-        )
+            extra_private=(guessed.value,),)
 
     def test_read_captures_canonical_sources_twice_but_returns_requested_order(
         self,
@@ -1551,10 +1530,8 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                 self.snapshots[entry.source_id].descriptor,
                 self.snapshots[entry.source_id].records[0],
                 f"needle {index}",
-                len(f"needle {index}".encode()),
-            )
-            for index, entry in enumerate(reversed(entries), start=1)
-        )
+                len(f"needle {index}".encode()),)
+            for index, entry in enumerate(reversed(entries), start=1))
         registry.search = mock.Mock(
             return_value=(
                 matches,
@@ -1586,18 +1563,15 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
             _snapshot(
                 _SCOPE,
                 "manuscript/part_01/chapter.md",
-                scoped_body,
-            ),
+                scoped_body,),
             _snapshot(
                 _SCOPE,
                 "manuscript/part_010/chapter.md",
-                "needle outside exact part prefix\n",
-            ),
+                "needle outside exact part prefix\n",),
             _snapshot(
                 _SCOPE,
                 "core_documents/global_outline.md",
-                "needle outside manuscript prefix\n",
-            ),
+                "needle outside manuscript prefix\n",),
         )
         manifest = ContextManifest(
             _SCOPE,
@@ -1665,11 +1639,9 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                 (
                     "part one release needle\n"
                     if path in eligible_paths
-                    else "part one release needle " * 20 + "decoy\n"
-                ),
+                    else "part one release needle " * 20 + "decoy\n"),
             )
-            for path in (*eligible_paths, *decoy_paths)
-        )
+            for path in (*eligible_paths, *decoy_paths))
         manifest = ContextManifest(
             _SCOPE,
             tuple(
@@ -1720,10 +1692,8 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                 == tuple(
                     entry
                     for entry in manifest.entries
-                    if entry.provenance.locator in eligible_paths
-                )
-                for call in registry.capture.call_args_list
-            )
+                    if entry.provenance.locator in eligible_paths)
+                for call in registry.capture.call_args_list)
         )
         self.assertEqual(
             session._scan_utf8_bytes,
@@ -1746,24 +1716,21 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                 lambda: ContextSearchQuery(
                     "needle",
                     (ContextSourceKind.WRITING_ARTIFACT,),
-                    "manuscript/part_01/../",
-                ),
+                    "manuscript/part_01/../",),
             ),
             (
                 "lookalike_without_separator",
                 lambda: ContextSearchQuery(
                     "needle",
                     (ContextSourceKind.WRITING_ARTIFACT,),
-                    "manuscript/part_01",
-                ),
+                    "manuscript/part_01",),
             ),
             (
                 "incompatible_source",
                 lambda: ContextSearchQuery(
                     "needle",
                     (ContextSourceKind.CONVERSATION,),
-                    prefix,
-                ),
+                    prefix,),
             ),
             (
                 "mixed_prefixes",
@@ -1778,8 +1745,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                         ContextSearchQuery(
                             "two",
                             (ContextSourceKind.WRITING_ARTIFACT,),
-                            "manuscript/part_02/",
-                        ),
+                            "manuscript/part_02/",),
                     ),
                 ),
             ),
@@ -1799,15 +1765,13 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                 ContextAuthorityKind.WRITING_ARTIFACT_REPOSITORY,
                 "manuscript/part-01/chapter.md",
                 ContextSourceBoundary.artifact_lines(1, 1),
-                "artifact needle\n",
-            ),
+                "artifact needle\n",),
             (
                 ContextSourceKind.CONVERSATION,
                 ContextAuthorityKind.CONVERSATION_STORAGE,
                 "conversation/conversation-one",
                 ContextSourceBoundary.records(1, 1),
-                "conversation needle",
-            ),
+                "conversation needle",),
             (
                 ContextSourceKind.ACTIVE_DEBATE,
                 ContextAuthorityKind.ACTIVE_DEBATE,
@@ -1841,8 +1805,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                 ContextSourceKind.CONVERSATION: "conversation:conversation-one",
                 ContextSourceKind.ACTIVE_DEBATE: "active_debate:debate-one",
                 ContextSourceKind.OWN_AGENT_STATE: (
-                    "own_agent_state:lead_orchestrator"
-                ),
+                    "own_agent_state:lead_orchestrator"),
             }[kind]
             content_digest = _digest(encoded)
             descriptor = ContextSourceDescriptor(
@@ -1852,13 +1815,11 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                 (
                     _digest(f"revision-{index}".encode())
                     if kind is ContextSourceKind.WRITING_ARTIFACT
-                    else content_digest
-                ),
+                    else content_digest),
                 ContextProvenance(authority, locator),
                 content_digest,
                 len(encoded),
-                1,
-            )
+                1,)
             snapshot = object.__new__(ContextSourceSnapshot)
             object.__setattr__(snapshot, "descriptor", descriptor)
             object.__setattr__(snapshot, "records", (record,))
@@ -1886,10 +1847,8 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                 (
                     ContextSearchQuery(
                         "needle",
-                        service_module._SEARCH_SOURCE_KIND_ORDER,
-                    ),
-                ),
-            )
+                        service_module._SEARCH_SOURCE_KIND_ORDER,),
+                ),)
         )
         search_serialized = session.serialize_observation(search)
         search_wire = json.loads(search_serialized)
@@ -2054,11 +2013,9 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                 record=replace(
                     match.record,
                     record_id=f"line_{index}",
-                    boundary=ContextSourceBoundary.artifact_lines(index, index),
-                ),
+                    boundary=ContextSourceBoundary.artifact_lines(index, index),),
             )
-            for index, match in enumerate(matches, start=1)
-        )
+            for index, match in enumerate(matches, start=1))
         registry = _registry(_SCOPE, self.snapshots)
         registry.search = mock.Mock(
             return_value=(matches, False, snapshot.descriptor.utf8_bytes) )
@@ -2084,8 +2041,7 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
             max_excerpt_utf8_bytes=1,
             max_source_read_utf8_bytes=1,
             max_read_utf8_bytes=1,
-            max_observation_utf8_bytes=1,
-        )
+            max_observation_utf8_bytes=1,)
         registry = _registry(_SCOPE, self.snapshots)
         session = _session(self.binding, registry, action_policy=tiny)
         with self.assertRaises(ContextActionError) as caught:
@@ -2201,10 +2157,8 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                             _correlation(self.binding, 1),
                             (
                                 ContextSearchQuery(
-                                    "needle", (ContextSourceKind.WRITING_ARTIFACT,)
-                                ),
-                            ),
-                        )
+                                    "needle", (ContextSourceKind.WRITING_ARTIFACT,)),
+                            ),)
                     )
                 self.assertEqual(session.state, ContextInvocationState.FAILED)
                 self.assertEqual(session.next_action_index, 2)

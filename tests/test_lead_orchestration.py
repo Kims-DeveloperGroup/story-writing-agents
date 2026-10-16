@@ -4208,7 +4208,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         history = reopened.read(self.session_id, conversation_id)
         submitted = _submitted_calls(history)
         self.assertEqual(len(submitted), 1)
-        self.assertEqual(submitted[0].validation_details, ())
+        self.assertEqual(submitted[0].validation_details, result.validation_details)
         notices = _history_validation_details(history)
         self.assertEqual(notices, result.validation_details)
         self.assertEqual(project_collaboration_history(history).physical_calls_spent, 1)
@@ -4266,6 +4266,25 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                      ".artifact_intent.operations[0]." + field, requirement)
         rejected({**base, "kind": "answer", "objective_intent": {"action": "cancel", "objective_id": "PRIVATE/id"}},
                  ".objective_intent.objective_id", identifier, SessionIdError)
+
+        from story_writing_agents.structured_output_validation import carry_validation
+        from story_writing_agents.provider_wire import (
+            diagnostic_to_wire, project_lead_scope_diagnostic)
+        owned = LeadContractError((Rule.RECOMMENDATION_SPECIALISTS,))
+        carried = carry_validation(ValueError("PRIVATE_CARRIER"), owned)
+        issues = failure_issues(carried, path="$.agent_action.task_result")
+        native = tuple(project_lead_scope_diagnostic(diagnostic_to_wire(item)) for item in issues)
+        self.assertEqual(native, (
+            "$.agent_action.task_result.response_details.proposal_drafting_request."
+            "specialist_ids: select unique offered specialist IDs and include every "
+            "required authoring domain",))
+        self.assertEqual(tuple(project_lead_scope_diagnostic(item) for item in native), native)
+        for invalid in ((Rule.RECOMMENDATION_SPECIALISTS.value,),
+                        (Rule.RECOMMENDATION_SPECIALISTS, "PRIVATE_CARRIER"),
+                        (Rule.RECOMMENDATION_SPECIALISTS, carried.provider_validation_findings[0])):
+            owned.provider_validation_findings = invalid
+            rejected = carry_validation(ValueError("PRIVATE_CARRIER"), owned)
+            self.assertEqual(failure_issues(rejected), ())
 
     async def test_republishing_domain_notice_is_idempotent(self) -> None:
         conversation_id = self.conversation("Idempotent domain notice")

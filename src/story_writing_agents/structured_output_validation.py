@@ -60,6 +60,9 @@ def failure_findings(failure: BaseException) -> tuple[ValidationFinding, ...]:
         return ()
     if type(findings) is tuple and all(type(item) is ValidationFinding for item in findings):
         return findings
+    if (type(findings) is tuple and findings
+            and all(type(item) is DomainValidationRule for item in findings)):
+        return tuple(_DOMAIN_RULE_ISSUES[rule] for rule in findings)
     return ()
 
 
@@ -233,59 +236,162 @@ class DomainValidationRule(StrEnum):
 
 
 _DOMAIN_RULE_ISSUES = {
-    DomainValidationRule.OBJECTIVE_TARGETS: '$.action.result.objective_intent.target_paths: START requires nonempty unique target paths',
-    DomainValidationRule.ARTIFACT_OBJECTIVE_TARGETS: '$.action.result.artifact_intent.objective_intent.target_paths: START requires nonempty unique target paths',
-    DomainValidationRule.PROPOSAL_OBJECTIVE_TARGETS: '$.action.result.proposal.objective_intent.target_paths: START requires nonempty unique target paths',
-    DomainValidationRule.RECOMMENDATION_SPECIALISTS: '$.action.result.recommended_action.specialist_ids: select unique offered specialist IDs and include every required authoring domain',
-    DomainValidationRule.RECOMMENDATION_TARGETS: '$.action.result.recommended_action.target_paths: target paths must be nonempty and unique',
-    DomainValidationRule.RECOMMENDATION_OBJECTIVE_NOT_OFFERED: '$.action.result.recommended_action.objective_id: select only an offered OPEN objective ID',
-    DomainValidationRule.CONTINUATION_INSTRUCTION_REQUIRED: '$.action.result.next_intent.assignments: each instruction must be nonempty bounded UTF-8 text and satisfy review-criteria requirements',
-    DomainValidationRule.CONTINUATION_SPECIALIST_DUPLICATE: '$.action.result.next_intent.assignments: agent_id values must be unique before canonical ordering',
-    DomainValidationRule.CONTINUATION_ASSIGNMENT_INPUTS_REQUIRED: '$.action.result.next_intent.assignments: each input_ids must be a nonempty array of offered source aliases',
-    DomainValidationRule.CONTINUATION_INPUT_DUPLICATE: '$.action.result.next_intent.assignments: each input_ids array must contain unique aliases',
-    DomainValidationRule.CONTINUATION_INPUT_NOT_OFFERED: '$.action.result.next_intent.assignments: input_ids must use offered aliases',
-    DomainValidationRule.CONTINUATION_REVIEWER_INPUT: '$.action.result.next_intent.assignments: every mandatory core-document reviewer must receive its own source input',
-    DomainValidationRule.CONTINUATION_SPECIALIST_REQUIRED: '$.action.result.next_intent.assignments: include every specialist required by the authoring activity, target paths and domains',
-    DomainValidationRule.CONTINUATION_ASSIGNMENT_MODE: '$.action.result.next_intent.assignments: required specialists must use review for review activity, otherwise draft',
-    DomainValidationRule.MESSAGE_REQUIRED: '$.action.result.message: expected nonempty bounded UTF-8 text',
-    DomainValidationRule.INSTRUCTION_REQUIRED: '$.action.result.proposal.assignments: each instruction must be nonempty bounded UTF-8 text (also applies to next_intent assignments)',
-    DomainValidationRule.PURPOSE_REQUIRED: '$.action.result.next_intent.purpose: expected nonempty bounded UTF-8 text',
-    DomainValidationRule.DOMAIN_DUPLICATE: '$.action.result.authoring_scope.domains: domains must be unique before canonical ordering',
-    DomainValidationRule.TARGET_DUPLICATE: '$.action.result.authoring_scope.target_paths: target paths must be unique',
-    DomainValidationRule.SPECIALIST_DUPLICATE: '$.action.result.proposal.assignments: agent_id values must be unique before canonical ordering (also applies to next_intent)',
-    DomainValidationRule.ASSIGNMENT_INPUTS_REQUIRED: '$.action.result.proposal.assignments: each input_ids must be a nonempty array of offered source aliases',
-    DomainValidationRule.INPUT_DUPLICATE: '$.action.result.proposal.assignments: each input_ids array must contain unique aliases',
-    DomainValidationRule.INPUT_NOT_OFFERED: '$.action.result.proposal.assignments: input_ids must use offered aliases or completed authorized READ evidence IDs',
-    DomainValidationRule.INPUT_COVERAGE: '$.action.result.proposal.assignments: input_ids must cover every disclosed source; runtime appends only confirmed recommendation request/decision aliases',
-    DomainValidationRule.CONTINUATION_INPUT_COVERAGE: '$.action.result.next_intent.assignments: input_ids must cover every original input and every specialist reply',
-    DomainValidationRule.REVIEWER_INPUT: '$.action.result.proposal.assignments: every mandatory core-document reviewer must receive its own source input (also applies to next_intent)',
-    DomainValidationRule.SPECIALIST_REQUIRED: '$.action.result.proposal.assignments: include every specialist required by the authoring activity, target paths and domains',
-    DomainValidationRule.ASSIGNMENT_MODE: '$.action.result.proposal.assignments: required specialists must use review for review activity, otherwise draft (also applies to next_intent)',
-    DomainValidationRule.PREPARATION_SCOPE: '$.action.result.authoring_scope: retain the exact confirmed activity, task revision, target paths and domains',
-    DomainValidationRule.PREPARATION_SPECIALISTS: '$.action.result.proposal.assignments: agent_id values must match the exact confirmed specialist set',
-    DomainValidationRule.PREPARATION_KIND: '$.action.result.kind: confirmed preparation requires its exact proposal branch or a blocked question',
-    DomainValidationRule.PREPARATION_OBJECTIVE: '$.action.result.objective_intent: confirmed artifact preparation requires its exact START targets or CONTINUE objective; consultation must retain its confirmed objective',
-    DomainValidationRule.RECOMMENDATION_INSTRUCTION: '$.action.result.recommended_action.instruction: expected nonempty bounded UTF-8 text',
-    DomainValidationRule.RECOMMENDATION_SOURCES: '$.action.result.recommended_action.source_ids: expected nonempty unique offered source aliases',
-    DomainValidationRule.SOURCE_NOT_OFFERED: '$.action.result.recommended_action.source_ids: select only frozen offered aliases or evidence IDs from completed authorized READs',
-    DomainValidationRule.OBJECTIVE_NOT_OFFERED: '$.action.result.objective_intent.objective_id: select only an offered OPEN objective ID (also applies to recommended_action.objective_id)',
-    DomainValidationRule.OBJECTIVE_BRANCH: '$.action.result.objective_intent: use prepare for artifact_intent, consult for proposal, and clarify only for question direct outcomes; questions cannot cancel an objective',
-    DomainValidationRule.MALFORMED_RESULT: "$.action.result: malformed JSON",
-    DomainValidationRule.RESULT_OBJECT_REQUIRED: "$.action.result: expected object",
-    DomainValidationRule.RECOMMENDATION_REQUIRED: (
-        "$.action.result.recommended_action: required for a recommendation"
+    DomainValidationRule.OBJECTIVE_TARGETS: ValidationFinding(
+        '$.objective_intent.target_paths', 'START requires nonempty unique target paths',
     ),
-    DomainValidationRule.RECOMMENDATION_ONLY: (
-        "$.action.result.recommended_action: allowed only for a recommendation"
+    DomainValidationRule.ARTIFACT_OBJECTIVE_TARGETS: ValidationFinding(
+        '$.artifact_intent.objective_intent.target_paths',
+        'START requires nonempty unique target paths',
     ),
-    DomainValidationRule.OBJECTIVE_RECOMMENDATION_CONFLICT: (
-        "$.action.result.objective_intent: cannot accompany recommended_action"
+    DomainValidationRule.PROPOSAL_OBJECTIVE_TARGETS: ValidationFinding(
+        '$.proposal.objective_intent.target_paths', 'START requires nonempty unique target paths',
     ),
-    DomainValidationRule.PROPOSAL_KIND_REQUIRED: (
-        "$.action.result.proposal: proposal intent requires proposal kind"
+    DomainValidationRule.RECOMMENDATION_SPECIALISTS: ValidationFinding(
+        '$.recommended_action.specialist_ids',
+        'select unique offered specialist IDs and include every required authoring domain',
     ),
-    DomainValidationRule.LEAD_OUTCOME_REJECTED: (
-        "$.action.result: rejected by a lead outcome rule"
+    DomainValidationRule.RECOMMENDATION_TARGETS: ValidationFinding(
+        '$.recommended_action.target_paths', 'target paths must be nonempty and unique',
+    ),
+    DomainValidationRule.RECOMMENDATION_OBJECTIVE_NOT_OFFERED: ValidationFinding(
+        '$.recommended_action.objective_id', 'select only an offered OPEN objective ID',
+    ),
+    DomainValidationRule.CONTINUATION_INSTRUCTION_REQUIRED: ValidationFinding(
+        '$.next_intent.assignments',
+        'each instruction must be nonempty bounded UTF-8 text and satisfy review-criteria '
+        'requirements',
+    ),
+    DomainValidationRule.CONTINUATION_SPECIALIST_DUPLICATE: ValidationFinding(
+        '$.next_intent.assignments', 'agent_id values must be unique before canonical ordering',
+    ),
+    DomainValidationRule.CONTINUATION_ASSIGNMENT_INPUTS_REQUIRED: ValidationFinding(
+        '$.next_intent.assignments',
+        'each input_ids must be a nonempty array of offered source aliases',
+    ),
+    DomainValidationRule.CONTINUATION_INPUT_DUPLICATE: ValidationFinding(
+        '$.next_intent.assignments', 'each input_ids array must contain unique aliases',
+    ),
+    DomainValidationRule.CONTINUATION_INPUT_NOT_OFFERED: ValidationFinding(
+        '$.next_intent.assignments', 'input_ids must use offered aliases',
+    ),
+    DomainValidationRule.CONTINUATION_REVIEWER_INPUT: ValidationFinding(
+        '$.next_intent.assignments',
+        'every mandatory core-document reviewer must receive its own source input',
+    ),
+    DomainValidationRule.CONTINUATION_SPECIALIST_REQUIRED: ValidationFinding(
+        '$.next_intent.assignments',
+        'include every specialist required by the authoring activity, target paths and domains',
+    ),
+    DomainValidationRule.CONTINUATION_ASSIGNMENT_MODE: ValidationFinding(
+        '$.next_intent.assignments',
+        'required specialists must use review for review activity, otherwise draft',
+    ),
+    DomainValidationRule.MESSAGE_REQUIRED: ValidationFinding(
+        '$.message', 'expected nonempty bounded UTF-8 text',
+    ),
+    DomainValidationRule.INSTRUCTION_REQUIRED: ValidationFinding(
+        '$.proposal.assignments',
+        'each instruction must be nonempty bounded UTF-8 text (also applies to next_intent '
+        'assignments)',
+    ),
+    DomainValidationRule.PURPOSE_REQUIRED: ValidationFinding(
+        '$.next_intent.purpose', 'expected nonempty bounded UTF-8 text',
+    ),
+    DomainValidationRule.DOMAIN_DUPLICATE: ValidationFinding(
+        '$.authoring_scope.domains', 'domains must be unique before canonical ordering',
+    ),
+    DomainValidationRule.TARGET_DUPLICATE: ValidationFinding(
+        '$.authoring_scope.target_paths', 'target paths must be unique',
+    ),
+    DomainValidationRule.SPECIALIST_DUPLICATE: ValidationFinding(
+        '$.proposal.assignments',
+        'agent_id values must be unique before canonical ordering (also applies to next_intent)',
+    ),
+    DomainValidationRule.ASSIGNMENT_INPUTS_REQUIRED: ValidationFinding(
+        '$.proposal.assignments',
+        'each input_ids must be a nonempty array of offered source aliases',
+    ),
+    DomainValidationRule.INPUT_DUPLICATE: ValidationFinding(
+        '$.proposal.assignments', 'each input_ids array must contain unique aliases',
+    ),
+    DomainValidationRule.INPUT_NOT_OFFERED: ValidationFinding(
+        '$.proposal.assignments',
+        'input_ids must use offered aliases or completed authorized READ evidence IDs',
+    ),
+    DomainValidationRule.INPUT_COVERAGE: ValidationFinding(
+        '$.proposal.assignments',
+        'input_ids must cover every disclosed source; runtime appends only confirmed '
+        'recommendation request/decision aliases',
+    ),
+    DomainValidationRule.CONTINUATION_INPUT_COVERAGE: ValidationFinding(
+        '$.next_intent.assignments',
+        'input_ids must cover every original input and every specialist reply',
+    ),
+    DomainValidationRule.REVIEWER_INPUT: ValidationFinding(
+        '$.proposal.assignments',
+        'every mandatory core-document reviewer must receive its own source input (also applies '
+        'to next_intent)',
+    ),
+    DomainValidationRule.SPECIALIST_REQUIRED: ValidationFinding(
+        '$.proposal.assignments',
+        'include every specialist required by the authoring activity, target paths and domains',
+    ),
+    DomainValidationRule.ASSIGNMENT_MODE: ValidationFinding(
+        '$.proposal.assignments',
+        'required specialists must use review for review activity, otherwise draft (also applies '
+        'to next_intent)',
+    ),
+    DomainValidationRule.PREPARATION_SCOPE: ValidationFinding(
+        '$.authoring_scope',
+        'retain the exact confirmed activity, task revision, target paths and domains',
+    ),
+    DomainValidationRule.PREPARATION_SPECIALISTS: ValidationFinding(
+        '$.proposal.assignments', 'agent_id values must match the exact confirmed specialist set',
+    ),
+    DomainValidationRule.PREPARATION_KIND: ValidationFinding(
+        '$.kind', 'confirmed preparation requires its exact proposal branch or a blocked question',
+    ),
+    DomainValidationRule.PREPARATION_OBJECTIVE: ValidationFinding(
+        '$.objective_intent',
+        'confirmed artifact preparation requires its exact START targets or CONTINUE objective; '
+        'consultation must retain its confirmed objective',
+    ),
+    DomainValidationRule.RECOMMENDATION_INSTRUCTION: ValidationFinding(
+        '$.recommended_action.instruction', 'expected nonempty bounded UTF-8 text',
+    ),
+    DomainValidationRule.RECOMMENDATION_SOURCES: ValidationFinding(
+        '$.recommended_action.source_ids', 'expected nonempty unique offered source aliases',
+    ),
+    DomainValidationRule.SOURCE_NOT_OFFERED: ValidationFinding(
+        '$.recommended_action.source_ids',
+        'select only frozen offered aliases or evidence IDs from completed authorized READs',
+    ),
+    DomainValidationRule.OBJECTIVE_NOT_OFFERED: ValidationFinding(
+        '$.objective_intent.objective_id',
+        'select only an offered OPEN objective ID (also applies to '
+        'recommended_action.objective_id)',
+    ),
+    DomainValidationRule.OBJECTIVE_BRANCH: ValidationFinding(
+        '$.objective_intent',
+        'use prepare for artifact_intent, consult for proposal, and clarify only for question '
+        'direct outcomes; questions cannot cancel an objective',
+    ),
+    DomainValidationRule.MALFORMED_RESULT: ValidationFinding('$', 'malformed JSON'),
+    DomainValidationRule.RESULT_OBJECT_REQUIRED: ValidationFinding('$', 'expected object'),
+    DomainValidationRule.RECOMMENDATION_REQUIRED: ValidationFinding(
+        '$.recommended_action', 'required for a recommendation',
+    ),
+    DomainValidationRule.RECOMMENDATION_ONLY: ValidationFinding(
+        '$.recommended_action', 'allowed only for a recommendation',
+    ),
+    DomainValidationRule.OBJECTIVE_RECOMMENDATION_CONFLICT: ValidationFinding(
+        '$.objective_intent', 'cannot accompany recommended_action',
+    ),
+    DomainValidationRule.PROPOSAL_KIND_REQUIRED: ValidationFinding(
+        '$.proposal', 'proposal intent requires proposal kind',
+    ),
+    DomainValidationRule.LEAD_OUTCOME_REJECTED: ValidationFinding(
+        '$', 'rejected by a lead outcome rule',
     ),
 }
 
@@ -297,7 +403,9 @@ def domain_rule_chunks(rules: object) -> tuple[str, ...]:
         type(rule) is not DomainValidationRule for rule in rules
     ):
         return bounded_chunks(("$.action.result: rejected by a domain result rule",))
-    return bounded_chunks(tuple(_DOMAIN_RULE_ISSUES[rule] for rule in rules))
+    return bounded_chunks(tuple(
+        f"$.action.result{finding.path[1:]}: {finding.requirement}"
+        for finding in (_DOMAIN_RULE_ISSUES[rule] for rule in rules)))
 
 
 class _DuplicateKey(ValueError):

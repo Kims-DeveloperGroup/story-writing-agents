@@ -384,7 +384,7 @@ def restore_lead_scope_result(
 def project_lead_scope_diagnostic(
     text: str, *, _fields: tuple = LEAD_SCOPE_NATIVE_FIELDS,
 ) -> str:
-    """Translate trusted member scope paths into the current native result graph."""
+    """Translate trusted member detail/scope paths to the current native graph."""
     if _fields != LEAD_SCOPE_NATIVE_FIELDS:
         raise WireShapeError("$", "scope codec declaration changed")
 
@@ -395,6 +395,9 @@ def project_lead_scope_diagnostic(
         member_roots = ((), ("agent_action", "task_result"))
         scope_roots = member_roots + tuple(root + ("response_details",) for root in member_roots)
         markers = _lead_scope_names("marker", False, _fields)
+        details = {RESULT_FIELDS[name] for name in (
+            "proposal", "artifact_intent", "next_intent", "recommended_action", "objective_intent"
+        )}
         for index, token in enumerate(tokens):
             if token.startswith("["):
                 result += token
@@ -405,7 +408,7 @@ def project_lead_scope_diagnostic(
             scope_marker = (not context and prefix in scope_roots
                             and (token in markers or token in markers.values()))
             mapping = markers if scope_marker else _lead_scope_names(context, False, _fields)
-            if scope_marker and prefix in member_roots:
+            if prefix in member_roots and (scope_marker or token in details):
                 result += ".response_details"
             renamed = mapping.get(token, token)
             result += "." + renamed

@@ -12038,7 +12038,11 @@ class StoryRuntime:
                     )
                     rules = constraints.diagnose(answer, read_ids=read_ids, read_reviewers=read_reviewers)
                     if rules:
-                        raise _LeadOutcomeValidationError("lead result violates its offered constraints")
+                        raise carry_validation(
+                            _LeadOutcomeValidationError(
+                                'lead result violates its offered constraints'),
+                            LeadContractError(rules),
+                        )
                     decoded = self._decode_lead_outcome(
                         answer,
                         expected_relation=expected_relation,
@@ -13997,6 +14001,7 @@ class StoryRuntime:
                     'artifact evidence is missing runtime identity',
                 )
             locator = receipt.locator
+            whole_read = False
             if (
                 receipt.acquisition
                 is CollaborationEvidenceAcquisition.ATTACHED_REFERENCE
@@ -14021,14 +14026,18 @@ class StoryRuntime:
                     session_sources=session_sources,
                 )
                 source_digest = snapshot.descriptor.content_digest
+                whole_read = (
+                    receipt.content_digest == snapshot.descriptor.content_digest
+                    and receipt.utf8_bytes == snapshot.descriptor.utf8_bytes
+                )
             result.append(
                 ArtifactIntentEvidence(
                     evidence_id=receipt.evidence_id,
                     path=path,
                     source_digest=source_digest,
                     boundary_digest=receipt.content_digest,
-                    start_line=receipt.start_line,
-                    end_line=receipt.end_line,
+                    start_line=None if whole_read else receipt.start_line,
+                    end_line=None if whole_read else receipt.end_line,
                 )
             )
         return tuple(result)

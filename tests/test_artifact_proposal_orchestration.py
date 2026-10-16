@@ -1,7 +1,7 @@
 """Live lead-review workflows for exact artifact proposals."""
 
 from __future__ import annotations
-from tests.provider_wire_fixture import lead_fixture_bound_scope
+from tests.provider_wire_fixture import lead_fixture_bound_scope, lead_fixture_response
 
 import json
 import unittest
@@ -1251,10 +1251,11 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 'queries': [{'search_text': 'needle', 'source_types': {'story_document': True}}]},
                 outer_schema_id=outer, inner_schema_id=inner)
         def answer(call, provider):
-            evidence_id = call.payload["context_observation"]["read_results"][0]["evidence_id"]
-            return _provider_envelope(call, {
-                                                "recommended_action": None,"scope": "story_specific", "evidence_status": "verified", "evidence_ids": [evidence_id], "kind": "question", "message": "The selected line is visible; what should change?", "proposal": None, "artifact_intent": None, "objective_intent": None,
-                                                "authoring_scope": _live_scope(call, activity="review", domains=("plot_structure",), paths=(_OUTLINE,))}, used_handles=provider.used_handles)
+            scope = lead_fixture_bound_scope(call, _live_scope(call,
+                activity="review", domains=("plot_structure",), paths=(_OUTLINE,)), record=True)
+            return lead_fixture_response(call, {"response_type": "clarification_question",
+                "response_text": "The selected line is visible; what should change?",
+                "response_details": {"task_scope": scope}}, family=0)
         self.backend.enqueue(search, _read_history_hit, answer)
         result = await self.runtime.lead_turn(self.session_id, conversation_id, "Search and read the needle line before deciding.")
         self.assertIs(result.kind, c.LeadOutcomeKind.QUESTION)
@@ -1271,19 +1272,22 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         whole_sha = snapshot.descriptor.content_digest
         self.assertEqual(whole_sha, objectives.digest(text))
         self.assertNotEqual(snapshot.descriptor.revision, whole_sha)
-        # Whole READ is another legal READ boundary over the same owner-captured source.
-        whole = replace(receipt, boundary_kind="whole", boundary_start=None, boundary_end=None, start_line=None, end_line=None, content_digest=whole_sha, utf8_bytes=len(text.encode("utf-8")))
+        # Full-span READ keeps receipt identity; the artifact bridge normalizes whole bounds.
         ranged = replace(receipt, boundary_kind="artifact_lines", boundary_start=2, boundary_end=2, start_line=2, end_line=2, content_digest=objectives.digest("needle 민\r\n"), utf8_bytes=len("needle 민\r\n".encode("utf-8")))
-        for selected in (whole, ranged):
-            with self.subTest(boundary=selected.boundary_kind):
+        whole = replace(ranged, boundary_start=1, boundary_end=3, start_line=1, end_line=3,
+                        content_digest=whole_sha, utf8_bytes=len(text.encode("utf-8")))
+        for selected, expected_bounds in ((whole, (None, None)), (ranged, (2, 2))):
+            with self.subTest(boundary="full_span" if selected is whole else "partial"):
                 evidence = replace(result.evidence, receipts=(selected,))
                 converted, = self.runtime._artifact_intent_evidence(evidence, session_id=self.session_id, conversation_id=conversation_id, artifact_binding=self.runtime._session_artifact_binding(self.session_id))
                 self.assertEqual(converted.source_digest, whole_sha)
                 self.assertEqual(converted.boundary_digest, selected.content_digest)
-                self.assertEqual((converted.start_line, converted.end_line), (selected.start_line, selected.end_line))
+                self.assertEqual((converted.start_line, converted.end_line), expected_bounds)
                 from story_writing_agents.artifact_proposals import ArtifactProposalIntent, ArtifactReplaceIntent, ArtifactPatchIntent
                 from story_writing_agents.specialist_routing import AuthoringActivity, AuthoringScope
-                intent = ArtifactReplaceIntent(selected.evidence_id, "Whole replacement.\n") if selected.boundary_kind == "whole" else ArtifactPatchIntent(selected.evidence_id, "Revised 민 line.\r\n")
+                intent = (ArtifactReplaceIntent(selected.evidence_id, "Whole replacement.\n")
+                          if selected is whole else
+                          ArtifactPatchIntent(selected.evidence_id, "Revised 민 line.\r\n"))
                 review_scope = AuthoringScope(AuthoringActivity.REVIEW, (_OUTLINE,), (),
                     "Review the exact synthetic whole or ranged candidate.", "synthetic_review", 1)
                 candidate = self.runtime._construct_artifact_review_candidate(session_id=self.session_id, conversation_id=conversation_id, turn_id=result.turn_id, step_id=result.step_id, intent=ArtifactProposalIntent((intent,)), evidence=evidence, authoring_scope=review_scope, artifact_binding=self.runtime._session_artifact_binding(self.session_id))

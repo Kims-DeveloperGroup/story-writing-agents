@@ -16,7 +16,9 @@ from typing import Generic, TypeVar
 from dataclasses import dataclass, field, replace
 
 from .agent_context.actions import ContextSourceStatusKind, ContextSourceStatusReceipt
-from .writing_artifacts.catalog import CORE_ARTIFACT_PATHS, ArtifactKind, artifact_kind_path_rule
+from .writing_artifacts.catalog import (
+    CORE_ARTIFACT_PATHS, ArtifactKind, artifact_kind_path_rule, canonical_artifact_kind,
+)
 from .writing_artifacts.change_sets import ArtifactChangeOperationKind
 from .writing_artifacts.relationship_policy import artifact_source_operation_rule
 from .provider_wire import (
@@ -65,6 +67,7 @@ class LeadContractError(ValueError):
 
     def __init__(self, rules: tuple[DomainValidationRule, ...]) -> None:
         self.rules = rules
+        self.provider_validation_findings = rules
         super().__init__("Lead result violates its offered constraints")
 
 
@@ -369,7 +372,8 @@ class LeadResultContractOwner(ContractOwner[LeadDecodedResult]):
     def typed_decoder(self) -> TypedDecoder[LeadDecodedResult]:
         return TypedDecoder("lead.current_codec", "848-v3:typed-family-owner", self.decode_typed,
                             (self.variant.decode, schema_fragment_findings,
-             artifact_source_operation_rule, artifact_kind_path_rule, artifact_domain,
+             artifact_source_operation_rule, artifact_kind_path_rule, canonical_artifact_kind,
+             artifact_domain,
              authoring_scope_rules, finite_authoring_scope_rules, legal_specialist_rosters,
              assignment_rule, AuthoringScopeRuleSet.__post_init__,
              map_current_task_literals,
@@ -497,6 +501,64 @@ def _compile_closed_choices(
             fingerprints[key] = schema_rule_fingerprints(original, selected=node)[0]
         return fingerprints[key]
 
+    def prefill_grouping_fingerprints(choices: list, names: list[str]) -> None:
+        nonlocal fingerprints
+        if len(names) < 2:
+            return
+        try:
+            # Check source trees before intentional probe aliases are introduced.
+            pending: list[object] = [original, choices]
+            seen: set[int] = set()
+            while pending:
+                value = pending.pop()
+                if type(value) in (dict, list):
+                    if id(value) in seen:
+                        return
+                    seen.add(id(value))
+                    if type(value) is dict:
+                        if any(type(key) is not str for key in value):
+                            return
+                        pending.extend(value.values())
+                    else:
+                        pending.extend(value)
+                elif value is not None and type(value) not in (bool, int, float, str):
+                    return
+            missing: dict[str, Mapping[str, object]] = {}
+            for name in names:
+                for choice in choices:
+                    if closed(choice) and name in choice["properties"]:
+                        for field, child in sorted(choice["properties"].items()):
+                            if field == name:
+                                continue
+                            key = encoded(child)
+                            if key not in fingerprints and key not in missing:
+                                missing[key] = child
+            if len(missing) < 2:
+                return
+            definitions = dict(original.get("$defs", {}))
+            probe_keys: dict[str, str] = {}
+            for key, node in missing.items():
+                name = f"_grouping_{len(probe_keys)}"
+                while name in definitions:
+                    name += "_"
+                definitions[name] = node
+                probe_keys[key] = name
+            _, digests = schema_rule_fingerprints({
+                "$ref": f"#/$defs/{next(iter(probe_keys.values()))}",
+                "$defs": definitions,
+            })
+            if any(digests[name] != expected
+                   for name, expected in original_fingerprints[1].items()):
+                return
+            additions = {key: digests[name] for key, name in probe_keys.items()}
+            if any(type(value) is not str for value in additions.values()):
+                return
+            updated = {**fingerprints, **additions}
+        except Exception:
+            # The unchanged ordered queries retain original failure authority.
+            return
+        fingerprints = updated
+
     try:
         final_costs: dict[str, int] | None = {}
     except MemoryError:
@@ -587,6 +649,7 @@ def _compile_closed_choices(
             choices = before["anyOf"]
             names = sorted({name for choice in choices if closed(choice)
                             for name in choice["properties"]})
+            prefill_grouping_fingerprints(choices, names)
             best = None
             best_size = size
             for name in names:
@@ -1444,6 +1507,62 @@ class LeadProviderConstraints:
         container_description = (
             projected.get("description") if "anyOf" in projected else None
         )
+        def member_compilation_is_identity(schema: dict[str, object]) -> bool:
+            if type(schema) is not dict:
+                return False
+            try:
+                pending: list[object] = [schema]
+                seen: set[int] = set()
+                alternatives: list[list[dict[str, object]]] = []
+                while pending:
+                    node = pending.pop()
+                    if type(node) in (dict, list):
+                        if id(node) in seen:
+                            return False
+                        seen.add(id(node))
+                        if type(node) is dict:
+                            if any(type(name) is not str for name in node):
+                                return False
+                            if "anyOf" in node:
+                                choices = node["anyOf"]
+                                if type(choices) is not list or any(
+                                    type(choice) is not dict for choice in choices
+                                ):
+                                    return False
+                                alternatives.append(choices)
+                            pending.extend(node.values())
+                        else:
+                            pending.extend(node)
+                    elif node is not None and type(node) not in (bool, int, float, str):
+                        return False
+                # Reuse the central dialect and default-cap check, without reordering schema.
+                SchemaRules.declare(schema)
+                for choices in alternatives:
+                    objects = [choice for choice in choices
+                               if (all(type(name) is str for name in choice)
+                                   and type(choice.get("type")) is str
+                                   and choice.get("type") == "object")]
+                    if len(objects) < 2:
+                        continue
+                    descriptors: set[tuple[str, tuple[str, ...]]] = set()
+                    for choice in objects:
+                        properties = choice.get("properties")
+                        if type(properties) is not dict:
+                            return False
+                        metadata = {field: value for field, value in choice.items()
+                                    if field != "properties"}
+                        descriptor = (
+                            json.dumps(metadata, sort_keys=True, ensure_ascii=False,
+                                       allow_nan=False, separators=(",", ":")),
+                            tuple(sorted(properties)),
+                        )
+                        if descriptor in descriptors:
+                            return False
+                        descriptors.add(descriptor)
+            except Exception:
+                return False
+            return True
+
         def requires_nonempty_member(template: object, name: str) -> bool:
             if type(template) is not dict:
                 return False
@@ -1761,7 +1880,67 @@ class LeadProviderConstraints:
                         maximum = min(child.get("maxItems", len(choices)), len(choices))
                         return choices, minimum, maximum
 
-                    def available(node):
+                    def restrict_specialists(selection, required):
+                        definitions = selection.get("$defs", {})
+                        narrowed = {}
+                        visiting = set()
+
+                        def restrict(node):
+                            if "$ref" in node:
+                                reference = node["$ref"]
+                                prefix = "#/$defs/"
+                                if not reference.startswith(prefix):
+                                    raise ValueError("finite selection needs local definitions")
+                                name = reference[len(prefix):]
+                                if name in visiting or name not in definitions:
+                                    raise ValueError("finite selection definition is not acyclic")
+                                if name not in narrowed:
+                                    visiting.add(name)
+                                    narrowed[name] = restrict(definitions[name])
+                                    visiting.remove(name)
+                                return None if narrowed[name] is None else deepcopy(node)
+                            result = deepcopy(node)
+                            if "properties" in node:
+                                for name, child in node["properties"].items():
+                                    if name in required:
+                                        if child.get("type") != "boolean":
+                                            raise ValueError(
+                                                "specialist selection needs boolean leaves")
+                                        if True not in child.get("enum", (False, True)):
+                                            return None
+                                        result["properties"][name] = {**child, "enum": [True]}
+                                    else:
+                                        child = restrict(child)
+                                        if child is None:
+                                            return None
+                                        result["properties"][name] = child
+                            if "anyOf" in node:
+                                retained = [restrict(arm) for arm in node["anyOf"]]
+                                retained = [arm for arm in retained if arm is not None]
+                                if not retained:
+                                    return None
+                                if len(retained) == 1:
+                                    if set(node) != {"anyOf"}:
+                                        raise ValueError(
+                                        "finite count union has unexpected siblings")
+                                    return retained[0]
+                                result["anyOf"] = retained
+                            return result
+
+                        root = {key: value for key, value in selection.items() if key != "$defs"}
+                        result = restrict(root)
+                        for name in definitions:
+                            restrict({"$ref": "#/$defs/" + name})
+                        if result is None:
+                            raise ValueError("required specialists have no finite selection")
+                        if definitions:
+                            result["$defs"] = {
+                                name: narrowed[name] for name in definitions
+                                if narrowed[name] is not None
+                            }
+                        return result
+
+                    def available(node, path=()):
                         if type(node) is not dict:
                             return True
                         for name, child in node.get("properties", {}).items():
@@ -1769,12 +1948,18 @@ class LeadProviderConstraints:
                             if choice is not None:
                                 if choice[1] > choice[2]:
                                     return False
-                            elif not available(child):
+                                if (path + (name,) == (
+                                        "proposal_drafting_request", "specialist_ids")
+                                        and rule is not None
+                                        and (not set(rule.required_specialists).issubset(choice[0])
+                                             or len(rule.required_specialists) > choice[2])):
+                                    return False
+                            elif not available(child, path + (name,)):
                                 return False
                         if "anyOf" in node:
                             if set(node) - {"anyOf", "description", "$defs"}:
                                 raise ValueError("finite alternatives have structural siblings")
-                            retained = [arm for arm in node["anyOf"] if available(arm)]
+                            retained = [arm for arm in node["anyOf"] if available(arm, path)]
                             if not retained:
                                 return False
                             if len(retained) == 1:
@@ -1793,7 +1978,7 @@ class LeadProviderConstraints:
                                 node["anyOf"] = retained
                         if "items" in node and node.get("maxItems") != 0:
                             original = deepcopy(node["items"])
-                            if not available(node["items"]):
+                            if not available(node["items"], path + ("*",)):
                                 if node.get("minItems", 0) > 0:
                                     return False
                                 node["maxItems"] = 0
@@ -1820,8 +2005,14 @@ class LeadProviderConstraints:
                                     props[name] = _fixed_selection(choices)
                                     selectors.append((child_path, choices, None, guards))
                                 else:
-                                    props[name] = finite_selection_rule(
+                                    selection = finite_selection_rule(
                                         choices, minimum=minimum, maximum=maximum)
+                                    if (child_path == (
+                                            "proposal_drafting_request", "specialist_ids")
+                                            and rule is not None and rule.required_specialists):
+                                        selection = restrict_specialists(
+                                            selection, rule.required_specialists)
+                                    props[name] = selection
                                     if "description" in child:
                                         props[name]["description"] = child["description"]
                                     selectors.append(
@@ -1838,8 +2029,10 @@ class LeadProviderConstraints:
                     selections(offered)
                     selector_schema = json.dumps(hoist_schema_definitions(deepcopy(offered)),
                         ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                    raw_member = hoist_schema_definitions(offered)
                     encoded_rules = SchemaRules.declare(factor_rule_schema(
-                        _compile_closed_choices(hoist_schema_definitions(offered))))
+                        raw_member if member_compilation_is_identity(raw_member)
+                        else _compile_closed_choices(raw_member)))
                     def decode(body: dict[str, object], *, bound_rule=rule, bound_scoped=scoped,
                                bound_paths=tuple(allocation_paths), bound_active=active,
                                bound_selectors=tuple(selectors),
