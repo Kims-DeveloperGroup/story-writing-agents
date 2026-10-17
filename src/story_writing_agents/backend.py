@@ -78,6 +78,7 @@ from .config import ConfigurationSnapshot, ConfigManager
 from .codex_adapter import CodexAdapter
 from .conversations import CollaborationEventStore
 from .conversations.session_context import (
+    MAX_PROVIDER_INPUT_UTF8_BYTES,
     MAX_SESSION_CONTEXT_UTF8_BYTES,
     SessionContextCapacityError,
 )
@@ -4906,7 +4907,10 @@ class AgentBackend:
                 and "agent_action" in schema.get("properties", {})):
             if invocation.payload_accounting is None:
                 raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
-            if invocation.payload_accounting.serialized_input_utf8_bytes > MAX_SESSION_CONTEXT_UTF8_BYTES:
+            if (
+                invocation.payload_accounting.serialized_input_utf8_bytes
+                > MAX_PROVIDER_INPUT_UTF8_BYTES
+            ):
                 raise SessionContextCapacityError()
         provider_diagnostic: str | None = None
         provider_cause: BaseException | None = None
@@ -5364,8 +5368,11 @@ class AgentBackend:
         if invocation.call_accounting is None or invocation.payload_json is None:
             raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         if bound_agent.definition.agent_id == LEAD_ORCHESTRATOR and "agent_action" in schema.get("properties", {}):
-            if (invocation.payload_accounting is None
-                    or invocation.payload_accounting.serialized_input_utf8_bytes > MAX_SESSION_CONTEXT_UTF8_BYTES):
+            if (
+                invocation.payload_accounting is None
+                or invocation.payload_accounting.serialized_input_utf8_bytes
+                > MAX_PROVIDER_INPUT_UTF8_BYTES
+            ):
                 raise SessionContextCapacityError()
         elif continuation_identity is not None and len(invocation.payload_json) > MAX_SESSION_CONTEXT_UTF8_BYTES:
             raise SessionContextCapacityError()

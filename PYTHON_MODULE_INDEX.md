@@ -114,7 +114,7 @@ Dependencies flow from `service`, `sources`, and `progress` toward manifest/acti
 contracts. Filesystem source access is delegated to writing-artifact and workspace owners. Optional
 validation diagnostics preserve rejection, repair, checkpoint, and authority decisions.
 
-`service` owns provider delivery, exact payload UTF-8 capacity diagnostics and verified native continuity; host retains integrity receipts and complete-history coverage. `request_compaction` shares only when properties and bytes decrease before accounting; it owns no durable state or resources. Genuine mandatory-reference proofs enter current READ offers only through the typed prelude factory and reservation checks; their complete metadata is bound into the offer digest.
+`service` owns provider delivery, exact payload UTF-8 capacity diagnostics and verified native continuity; `backend` enforces the combined schema-plus-payload input budget from `conversations.session_context`. Individual payload and schema preflights retain their limits. Host retains integrity receipts and complete-history coverage. `request_compaction` shares only when properties and bytes decrease before accounting; it owns no durable state or resources. Genuine mandatory-reference proofs enter current READ offers only through the typed prelude factory and reservation checks; their complete metadata is bound into the offer digest.
 Actual status snapshots stay separate from READ and are pinned in offer and repair digests.
 `BoundCallContract` shares pure structural findings with accounting; typed and host checks run only
 during actual decoding.
