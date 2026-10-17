@@ -582,8 +582,7 @@ class LiveHarnessAuditTests(unittest.TestCase):
                 self.assertTrue(all(marker == harness.MARKER for marker in markers))
                 if markers:
                     marked_cases.add(spec["id"])
-        self.assertEqual(
-            marked_cases,
+        self.assertEqual(marked_cases,
             {"L01-PRO-HIGH-PTY", "L02-PRO-LOW-ONE", "L04-SONNET-ONE"},
         )
 
@@ -780,8 +779,7 @@ class LiveRecoveryCoverageTests(unittest.IsolatedAsyncioTestCase):
 class LiveReferenceDriftTests(unittest.IsolatedAsyncioTestCase):
     async def test_reference_drift_accepts_only_exact_authority_rejection(self):
         message = "lead proposal authority drift requires regeneration and confirmation"
-        errors = (
-            harness.BackendProtocolError(message),
+        errors = (harness.BackendProtocolError(message),
             harness.BackendProtocolError("unrelated backend failure"),
             ValueError(message),
         )

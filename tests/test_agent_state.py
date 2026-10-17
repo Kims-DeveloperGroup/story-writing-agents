@@ -27,8 +27,7 @@ def _state_entry(index: int, content: str = "outcome") -> AgentStateEntry:
         revision=f"r{index}",
         kind="approval",
         content=content,
-        timestamp="2026-01-01T00:00:00+00:00",
-    )
+        timestamp="2026-01-01T00:00:00+00:00",)
 
 
 def _owner_bytes(entries: tuple[AgentStateEntry, ...]) -> int:
@@ -39,8 +38,7 @@ def _owner_bytes(entries: tuple[AgentStateEntry, ...]) -> int:
             separators=(",", ":"),
             sort_keys=True,
         ).encode("utf-8")
-        for entry in entries
-    )
+        for entry in entries)
     return sum(map(len, encoded)) + max(0, len(encoded) - 1)
 
 
@@ -48,8 +46,7 @@ class OwnerOutcomeWindowTests(unittest.TestCase):
     def test_entry_and_utf8_caps_keep_only_the_newest_complete_suffix(self) -> None:
         entries = tuple(
             _state_entry(index, f"multibyte-{index}-한글-😀")
-            for index in range(OWNER_OUTCOME_MAX_ENTRIES + 1)
-        )
+            for index in range(OWNER_OUTCOME_MAX_ENTRIES + 1))
         window = select_owner_outcome_window(entries)
         self.assertEqual(window.entries, entries[-OWNER_OUTCOME_MAX_ENTRIES:])
         self.assertEqual(
@@ -58,8 +55,7 @@ class OwnerOutcomeWindowTests(unittest.TestCase):
                 window.retained_entries,
                 window.omitted_entries,
                 window.retained_utf8_bytes,
-                window.truncated,
-            ),
+                window.truncated,),
             (
                 OWNER_OUTCOME_MAX_ENTRIES + 1,
                 OWNER_OUTCOME_MAX_ENTRIES,
@@ -76,8 +72,7 @@ class OwnerOutcomeWindowTests(unittest.TestCase):
                         entry.to_dict(),
                         ensure_ascii=False,
                         separators=(",", ":"),
-                        sort_keys=True,
-                    )
+                        sort_keys=True,)
                     for entry in window.entries
                 )
             ),
@@ -97,8 +92,7 @@ class OwnerOutcomeWindowTests(unittest.TestCase):
         self.assertEqual(exact_window.entries, (exact,))
         self.assertEqual(
             exact_window.retained_utf8_bytes,
-            OWNER_OUTCOME_MAX_UTF8_BYTES,
-        )
+            OWNER_OUTCOME_MAX_UTF8_BYTES,)
         self.assertFalse(exact_window.truncated)
 
         one_over = _state_entry(
@@ -113,16 +107,14 @@ class OwnerOutcomeWindowTests(unittest.TestCase):
                 over_window.retained_entries,
                 over_window.omitted_entries,
                 over_window.retained_utf8_bytes,
-                over_window.truncated,
-            ),
+                over_window.truncated,),
             (1, 0, 1, 0, True),
         )
 
         older = _state_entry(1, "small older outcome")
         oversized_newest = _state_entry(
             2,
-            "한" * OWNER_OUTCOME_MAX_UTF8_BYTES,
-        )
+            "한" * OWNER_OUTCOME_MAX_UTF8_BYTES,)
         newest_window = select_owner_outcome_window((older, oversized_newest))
         self.assertEqual(newest_window.entries, ())
         self.assertEqual(newest_window.omitted_entries, 2)

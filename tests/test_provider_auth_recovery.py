@@ -389,7 +389,7 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
         calls, bound_result, failed = await self._bound_replay(
             (search, lead._read_history_hit, auth_failure(), lead._answer_from_history),seed="Bound history evidence")
         self._require_bound_replay(calls, bound_result, failed, count=4, failure_index=2)
-        self.assertEqual([call.contract.offers.action_index for call in calls], [0, 1, 2, 2])
+        self.assertEqual([call.contract.offers.action_index for call in calls], [1, 2, 3, 3])
         self.assertEqual(calls[2].contract.eligibility_offers.completed_read_facts,
                          calls[3].contract.eligibility_offers.completed_read_facts)
         self.assertEqual(calls[2].contract.eligibility_offers.delivery_read_facts,

@@ -4,7 +4,8 @@ from __future__ import annotations
 from story_writing_agents import authoring_admission as admission
 from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
 
-from tests.test_lead_orchestration import _exploration_outcome, _read_history_hit
+from tests.test_lead_orchestration import (
+    _exploration_outcome, _current_exploration_outcome, _read_history_hit)
 from tests.provider_wire_fixture import indexed_response, offered_fixture_bindings
 from story_writing_agents import lead_exploration as exploration
 import hashlib
@@ -330,12 +331,42 @@ def _missing_outcome(*, proposal: bool = False, authoring_assessment=None):
                 else None
             ),
         }
-        return _provider_envelope(call, value)
+        if not proposal:
+            from tests.recommendation_fixture import recommendation
+            return recommendation(
+                message=value["message"], recommended_action=value["recommended_action"],
+                authoring_scope=value["authoring_scope"],
+                authoring_assessment=value.get("authoring_assessment"))(call, _provider)
+        from tests.provider_wire_fixture import (
+            lead_fixture_assignments, lead_fixture_bound_scope,
+            lead_fixture_assessment, lead_fixture_response,
+            author_positive_fixture_review_bases)
+        choices = dict(call.contract.semantic_index.policy.choices)
+        row = value["proposal"]["assignments"][0]
+        allocated = lead_fixture_assignments(author_positive_fixture_review_bases([{
+            "agent_id": row["agent_id"], "task_instructions": row["instruction"],
+            "assignment_type": "review_content", "input_source_ids": row["input_ids"]}],
+                candidate_choices=choices["review_candidate_ids"]),
+            input_choices=choices["allocation_input_ids"],
+            review_choices=choices["review_candidate_ids"],
+            anchors={row["agent_id"]: row["input_ids"][0]},
+            recipients={source: row["agent_id"] for source in row["input_ids"]})
+        return lead_fixture_response(call, {
+            "response_type": "specialist_consultation_proposal",
+            "response_text": value["message"], "response_details": {
+                "task_scope": lead_fixture_bound_scope(
+                    call, value["authoring_scope"], record=True),
+                "authoring_assessment": lead_fixture_assessment(
+                    value.get("authoring_assessment"), source_choices=choices["input_ids"]),
+                "specialist_consultation_proposal": {
+                    "shared_premises": value["proposal"]["shared_premises"], **allocated}}},
+            family=0)
 
     return respond
 
 
-def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False, authoring_assessment=None):
+def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False,
+                        authoring_assessment=None, native_proposal=False):
     def respond(call, _provider):
         aliases = call.payload["task_input"]["available_input_sources"]
         target_paths = tuple(
@@ -343,7 +374,7 @@ def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False, 
             for item in aliases
             if item["input_source_id"] != "user_input"
         )
-        return _provider_envelope(call, {
+        value = {
             **({"authoring_assessment": admission.assessment_to_dict(authoring_assessment)}
                if authoring_assessment is not None else {}),
             "kind": "question" if factual else "proposal",
@@ -364,7 +395,48 @@ def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False, 
                                  "review_basis":{"schema_version":1,"candidate_input_ids":evidence_ids,"criteria":"Assess the exact candidate references."}}
                                 for agent in (PLOT_ARCHITECT, "execution_specialist")],
             },
-        })
+        }
+        if factual:
+            from tests.provider_wire_fixture import (
+                lead_fixture_bound_scope, lead_fixture_response, lead_fixture_assessment)
+            details = {"task_scope": lead_fixture_bound_scope(
+                call, value["authoring_scope"], record=True), "authoring_assessment": None}
+            if "authoring_assessment" in value:
+                choices = dict(call.contract.semantic_index.policy.choices)
+                details["authoring_assessment"] = lead_fixture_assessment(
+                    value["authoring_assessment"], source_choices=choices["input_ids"])
+            return lead_fixture_response(call, {
+                "response_type": "clarification_question", "response_text": value["message"],
+                "response_details": details}, family=0)
+        if not native_proposal:
+            return _provider_envelope(call, value)
+        from tests.provider_wire_fixture import (
+            lead_fixture_assignments, lead_fixture_assessment, lead_fixture_response,
+            lead_fixture_bound_scope)
+        choices = dict(call.contract.semantic_index.policy.choices)
+        rows = []
+        for row in value['proposal']['assignments']:
+            basis = row['review_basis']
+            if basis['schema_version'] != 1:
+                raise ValueError('this positive fixture authors exactly domain basis version1')
+            rows.append({'agent_id': row['agent_id'], 'task_instructions': row['instruction'],
+                         'assignment_type': 'review_content', 'input_source_ids': row['input_ids'],
+                         'review_basis': {key: basis[key]
+                                          for key in ('candidate_input_ids', 'criteria')}})
+        allocated = lead_fixture_assignments(
+            rows, input_choices=choices['allocation_input_ids'],
+            review_choices=choices['review_candidate_ids'],
+            anchors={row['agent_id']: row['input_source_ids'][0] for row in rows},
+            recipients={source: PLOT_ARCHITECT for source in choices['required_input_ids']})
+        return lead_fixture_response(call, {
+            'response_type': 'specialist_consultation_proposal',
+            'response_text': value['message'], 'response_details': {
+                'task_scope': lead_fixture_bound_scope(call, value['authoring_scope'], record=True),
+                'authoring_assessment': lead_fixture_assessment(
+                    value.get('authoring_assessment'), source_choices=choices['input_ids']),
+                'specialist_consultation_proposal': {
+                    'shared_premises': value['proposal']['shared_premises'], **allocated}}},
+            family=0)
     return respond
 
 
@@ -516,7 +588,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 status="conflicting",
                 evidence_ids=["reference_1", "reference_2"],
                 authoring_assessment=_fixture_assessment(foundation_ids=("reference_1", "reference_2")),
-            )
+            native_proposal=True)
         )
         result = await self.runtime.lead_turn(
             self.session_id,
@@ -537,6 +609,12 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         self.assertEqual(tuple((item.start_line, item.end_line) for item in attached), ((None, None), (2, 3)),)
         self.assertEqual(result.proposal.basis.evidence, result.evidence)
         basis = result.proposal.basis.authoring_admission
+        expected_basis = (('reference_1', 'reference_2'), 'Assess the exact candidate references.')
+        self.assertEqual({row.agent_id: (row.review_basis.candidate_input_ids,
+                                       row.review_basis.criteria)
+                          for row in result.proposal.assignments},
+                         {PLOT_ARCHITECT: expected_basis, 'execution_specialist': expected_basis})
+
         read_facts = tuple(v for v in basis.sources if v.kind is admission.AdmissionSourceKind.READ)
         self.assertEqual(tuple(v.source_id for v in read_facts), ("reference_1", "reference_2"))
         self.assertEqual(tuple(v.utf8_bytes for v in read_facts), tuple(v.utf8_bytes for v in attached))
@@ -553,14 +631,28 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         observed = []
         def grounded(call, _provider):
             observed.append(call.payload["context_observation"]["read_results"][0])
-            return _exploration_outcome(observations=({"text": "The current artifact READ supports this observation.", "evidence_input_ids": [observed[-1]["evidence_id"]]},))
+            from story_writing_agents.agent_context.manifest import ContextSourceKind
+            from tests.provider_wire_fixture import finite_fixture_selection
+            facts = call.contract.eligibility_offers
+            read_ids = tuple(dict.fromkeys(
+                item.evidence_id for item in facts.completed_read_facts + facts.delivery_read_facts
+                if item.source_kind is ContextSourceKind.WRITING_ARTIFACT))
+            return _current_exploration_outcome(observations=({
+                "text": "The current artifact READ supports this observation.",
+                "evidence_input_ids": finite_fixture_selection(
+                    read_ids, (observed[-1]["evidence_id"],))},))(call, _provider)
         self.backend.enqueue(_search("current-exploration-evidence", ["w"]), _read_history_hit, grounded)
         explored = await self.runtime.lead_turn(self.session_id, self.conversation("Grounded exploration"), "Explore using the current artifact.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
         receipt = explored.exploration.grounded_observations[0].receipts[0]
         self.assertEqual((receipt.evidence_id, receipt.source_id), (observed[0]["evidence_id"], observed[0]["source"]["source_id"]))
         self.assertEqual((receipt.source_digest, receipt.boundary_digest, receipt.start_line, receipt.end_line), ("sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(), "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(), 1, 2))
         self.assertIn("manuscript/part-01/exploration.md", receipt.locator)
-        unsupported = _exploration_outcome(observations=({"text": "An input alias is not artifact evidence.", "evidence_input_ids": ["user_input"]},))
+        def unsupported(call, provider):
+            packet = json.loads(_current_exploration_outcome()(call, provider))
+            packet['agent_action']['task_result']['response_details']['grounded_observations'] = [{
+                "text": "An input alias is not artifact evidence.",
+                "evidence_input_ids": {"user_input": True}}]
+            return json.dumps(packet, ensure_ascii=False)
         self.backend.enqueue(unsupported, unsupported)
         refused = await self.runtime.lead_turn(self.session_id, self.conversation("False evidence claim"), "Explore alternatives.", interaction_mode=exploration.LeadInteractionMode.EXPLORATION)
         self.assertIsNone(refused.exploration)
@@ -587,7 +679,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         self.backend.enqueue(_referenced_outcome(
             status="empty", evidence_ids=["reference_1"],
             authoring_assessment=_fixture_assessment(foundation_ids=("reference_1",)),
-        ))
+            native_proposal=True))
         unqualified = await self.runtime.lead_turn(
             self.session_id, self.conversation("Empty READ foundation"),
             "Use ${manuscript/part-01/empty.md} as the sole foundation.\n" + _ADMISSION_BRIEF,
@@ -613,7 +705,8 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 self.assertIs(raised.exception.code, code)
 
     async def test_unknown_duplicate_reordered_and_prior_turn_ids_fail_once(self) -> None:
-        def selected_sources(ids: list[str], *, references: bool = False):
+        def selected_sources(ids: list[str], *, references: bool = False,
+                             expect_unoffered: bool = False):
             def respond(call, _provider):
                 self.assertEqual(
                     [item["evidence_id"] for item in call.payload["core_document_statuses"]],
@@ -654,7 +747,59 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                     "proposal": None,
                 })
                 self.assertEqual(json.loads(response)["action"]["result"]["recommended_action"]["source_ids"], ids)
-                return response
+                value = json.loads(response)['action']['result']
+                choices = dict(call.contract.semantic_index.policy.choices)
+                if expect_unoffered:
+                    self.assertTrue(all(item not in choices['source_ids'] for item in ids))
+                foreign = any(identity not in choices['source_ids'] for identity in ids)
+                duplicate = len(set(ids)) != len(ids)
+                base_sources = ['user_input'] if foreign else ids[:1] if duplicate else ids
+                from tests.recommendation_fixture import recommendation
+                packet = json.loads(recommendation(
+                    message=value['message'],
+                    recommended_action={**value['recommended_action'],
+                                        'source_ids': base_sources},
+                    authoring_scope=value['authoring_scope'],
+                    authoring_assessment=value['authoring_assessment'])(call, _provider))
+                source_path = ('agent_action', 'task_result', 'response_details',
+                               'proposal_drafting_request', 'source_ids')
+                selector = packet
+                for key in source_path:
+                    selector = selector[key]
+                if foreign:
+                    self.assertTrue(all(identity not in choices['source_ids'] for identity in ids))
+                    pending = [selector]
+                    while pending:
+                        node = pending.pop()
+                        for key, item in node.items():
+                            if type(item) is dict:
+                                pending.append(item)
+                            else:
+                                node[key] = False
+                    selector[ids[0]] = True
+                if duplicate:
+                    self.assertEqual(ids, ['reference_1', 'reference_1'])
+                    leaves = [(selector, source_path)]
+                    while leaves:
+                        node, path = leaves.pop()
+                        if ids[0] in node:
+                            duplicate_path = path
+                            break
+                        leaves.extend((item, (*path, key)) for key, item in node.items()
+                                      if type(item) is dict)
+                    else:
+                        raise AssertionError('the offered source leaf must exist')
+
+                    def encode_at(value, path):
+                        pairs = list(value.items())
+                        if not path:
+                            pairs.append((ids[1], value[ids[0]]))
+                        return '{' + ','.join(json.dumps(key) + ':' + (
+                            encode_at(item, path[1:]) if path and key == path[0]
+                            else json.dumps(item, ensure_ascii=False)) for key, item in pairs) + '}'
+
+                    return encode_at(packet, duplicate_path)
+                return json.dumps(packet, ensure_ascii=False)
             return respond
 
         for index, ids in enumerate((
@@ -662,9 +807,11 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         )):
             with self.subTest(ids=ids):
                 conversation_id = self.conversation(f"Current source selection {index}")
-                self.backend.enqueue(selected_sources(ids, references=True))
+                self.backend.enqueue(selected_sources(ids, references=True,
+                    expect_unoffered=index == 0))
                 if index != 2:
-                    self.backend.enqueue(selected_sources(ids, references=True))
+                    self.backend.enqueue(selected_sources(ids, references=True,
+                    expect_unoffered=index == 0))
                 result = await self.runtime.lead_turn(
                     self.session_id, conversation_id,
                     _ADMISSION_BRIEF +
@@ -699,8 +846,8 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 else:
                     self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
                     self.assertIs(failure_payloads[0].code,
-                        CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED)
-                    source_rule = ("expected nonempty unique offered source aliases" if index == 1
+                        CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED)
+                    source_rule = ("$: duplicate object key" if index == 1
                         else "select only frozen offered aliases or evidence IDs from completed authorized READs")
                     self.assertIn(source_rule, "\n".join(result.validation_details))
 
@@ -713,16 +860,32 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             observation = call.payload["context_observation"]
             evidence_id = observation["read_results"][0]["evidence_id"]
             prior_evidence_ids.append(evidence_id)
-            return _provider_envelope(
-                call,
-                {
-                    "recommended_action": None, "kind": "answer",
-                    "message": "The current READ supports this answer.", "scope": "story_specific",
-                    "evidence_status": "verified", "evidence_ids": [evidence_id], "artifact_intent": None,
-                "objective_intent": None,
-                    "proposal": None,
-                }, used_handles=provider.used_handles,
-            )
+            from story_writing_agents.agent_context.manifest import ContextSourceKind
+            from story_writing_agents.lead_provider_contracts import lead_outcome_scope_paths
+            from story_writing_agents.specialist_routing import (
+                ArtifactReviewDomain, AuthoringActivity)
+            from tests.provider_wire_fixture import (
+                finite_fixture_selection, lead_fixture_bound_scope, lead_fixture_response)
+            offers = call.contract.offers
+            writing_facts = tuple((item.evidence_id, item.artifact_locator, item.whole_source)
+                for item in offers.completed_read_facts + offers.delivery_read_facts
+                if item.source_kind is ContextSourceKind.WRITING_ARTIFACT)
+            self.assertTrue(any(identity == evidence_id
+                and locator == "core_documents/global_outline.md"
+                for identity, locator, _whole in writing_facts))
+            eligible_paths = lead_outcome_scope_paths(
+                LeadOutcomeKind.ANSWER, AuthoringActivity.REVIEW,
+                (ArtifactReviewDomain.PLOT_STRUCTURE,), writing_facts, ordinary_answer=True)
+            native_scope = lead_fixture_bound_scope(call, _live_scope(
+                call, activity="review", domains=("plot_structure",)), record=True)
+            constraints = call.contract.factory.constraints
+            if constraints.scope is None and constraints.adoption_intent is None:
+                native_scope['paths'] = finite_fixture_selection(eligible_paths, ())
+            return lead_fixture_response(call, {
+                'response_type': 'answer',
+                'response_text': 'The current READ supports this answer.',
+                'response_details': {'task_scope': native_scope}}, family=0,
+                branch_key=call.contract.factory.rule_seed.contract_id + ':family:0')
 
         conversation_id = self.conversation("Stale prior-turn evidence")
         self.backend.enqueue(_search("Outline", ["w"]), read_prior_turn, answer_prior_turn)
@@ -731,8 +894,10 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         self.assertEqual(first.message, "The current READ supports this answer.")
         self.assertEqual(len(prior_evidence_ids), 1)
 
-        self.backend.enqueue(selected_sources(prior_evidence_ids))
-        self.backend.enqueue(selected_sources(prior_evidence_ids))
+        self.backend.enqueue(selected_sources(prior_evidence_ids,
+                    expect_unoffered=True))
+        self.backend.enqueue(selected_sources(prior_evidence_ids,
+                    expect_unoffered=True))
         stale = await self.runtime.lead_turn(
             self.session_id, conversation_id,
             _ADMISSION_BRIEF + "\nReject evidence issued to the prior invocation.",
@@ -744,7 +909,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         failure = next(event.payload for event in self.history(conversation_id)
                        if event.turn_id == stale.turn_id and type(
                            event.payload) is CollaborationLeadOutcomeFailurePayload)
-        self.assertIs(failure.code, CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED)
+        self.assertIs(failure.code, CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED)
         self.assertIn("select only frozen offered aliases or evidence IDs from completed authorized READs",
                       "\n".join(stale.validation_details))
 

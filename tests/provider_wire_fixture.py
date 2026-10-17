@@ -571,8 +571,30 @@ def lead_fixture_result(value):
     return result
 
 
-def lead_fixture_assignments(rows, *, input_choices, anchors, recipients):
-    """Encode explicit edges without dropping supplied unknown or malformed values."""
+def author_positive_fixture_review_bases(rows, *, candidate_choices):
+    """Author the selected-input/instruction basis for explicitly opted positive fixtures."""
+    authored = copy.deepcopy(rows)
+    for row in authored:
+        if 'review_basis' in row:
+            continue
+        if row['assignment_type'] != 'review_content':
+            row['review_basis'] = None
+            continue
+        selected = row['input_source_ids']
+        criteria = row['task_instructions']
+        if (type(selected) not in (list, tuple) or not selected
+                or any(type(item) is not str for item in selected)
+                or len(set(selected)) != len(selected)
+                or any(item not in candidate_choices for item in selected)
+                or type(criteria) is not str or not criteria.strip()):
+            raise ValueError('positive review authoring requires eligible edges and criterion')
+        row['review_basis'] = {
+            'candidate_input_ids': list(selected), 'criteria': criteria}
+    return authored
+
+
+def lead_fixture_assignments(rows, *, input_choices, review_choices, anchors, recipients):
+    """Encode authored edges and basis without inventing a missing review value."""
     if (type(rows) not in (list, tuple)
             or any(type(row) is not dict or type(row.get('agent_id')) is not str for row in rows)):
         return {'assignments': copy.deepcopy(rows), 'required_input_recipients': copy.deepcopy(recipients)}
@@ -583,6 +605,19 @@ def lead_fixture_assignments(rows, *, input_choices, anchors, recipients):
         identity = row['agent_id']
         native = {key: copy.deepcopy(value) for key, value in row.items()
                   if key not in ('agent_id', 'input_source_ids')}
+        if 'review_basis' not in native:
+            raise ValueError('fixture allocation requires an authored review_basis value')
+        basis = native['review_basis']
+        if type(basis) is dict:
+            if set(basis) != {'candidate_input_ids', 'criteria'}:
+                raise ValueError('fixture review basis requires its closed native semantic fields')
+            native['review_basis'] = {
+                'candidate_input_ids': finite_fixture_selection(
+                    review_choices, tuple(basis['candidate_input_ids'])),
+                'criteria': copy.deepcopy(basis['criteria']),
+            }
+        elif basis is not None:
+            raise ValueError('fixture review basis must be an authored object or null')
         selected = row.get('input_source_ids')
         required = ([source for source, agent in recipients.items() if agent == identity]
                     if type(recipients) is dict else [])

@@ -99,15 +99,22 @@ async def _confirmed_premise(case, conversation, *, reference=False, recommendat
                 "question": "Who knows the concealed motive?", "dependent_domains": ["plot_structure", "character_world"]}
         assignments = [{"agent_id": agent, "instruction": "Compare alternatives and their residual costs.",
                         "input_ids": list(facts["available_assignment_input_source_ids"]), "mode": "premise_analysis"} for agent in agents]
-        from tests.provider_wire_fixture import lead_fixture_response, lead_fixture_assignments
+        from tests.provider_wire_fixture import (
+            lead_fixture_response, lead_fixture_assignments,
+            author_positive_fixture_review_bases)
         native = wire_result({
                 "kind": "proposal", "message": "Assess the unresolved knowledge choice.",
                 "authoring_scope": None,
                 "proposal": {"assignments": assignments, "premise_decision": spec},}, None,
                              native_types={"proposal": "specialist_consultation_proposal"})
         proposal = native["specialist_consultation_proposal"]
+        choices = dict(call.contract.semantic_index.policy.choices)
+        proposal['assignments'] = author_positive_fixture_review_bases(
+            proposal['assignments'],
+            candidate_choices=choices['review_candidate_ids'])
         proposal.update(lead_fixture_assignments(proposal["assignments"],
-            input_choices=dict(call.contract.semantic_index.policy.choices)["input_ids"],
+            input_choices=choices['allocation_input_ids'],
+            review_choices=choices['review_candidate_ids'],
             anchors={agent: "user_input" for agent in agents},recipients={source: PLOT_ARCHITECT for source in facts[
                 "available_assignment_input_source_ids"]}))
         proposal["premise_decision"]["dependent_domains"] = dict.fromkeys(spec["dependent_domains"], True)
@@ -482,7 +489,6 @@ def _live_assignments(assignments):
         for assignment in assignments:
             if type(assignment) is not dict: continue
             assignment.setdefault("mode", "review")
-            assignment.pop("review_basis", None)
     return assignments
 
 
@@ -717,11 +723,13 @@ def _proposal_outcome(assignments: list[dict[str, object]], *, relation: str='ne
 
 def _current_proposal_outcome(assignments, *, domains, relation='new_step',
                               purpose='Review the unresolved story direction.',
-                              authoring_assessment=None, activity='review', paths=()):
+                              authoring_assessment=None, activity='review', paths=(),
+                              author_review_basis=False):
     """A separate valid producer: callers declare domains and retain every supplied value."""
     def respond(call, provider):
         from tests.provider_wire_fixture import (
-            lead_fixture_assignments, lead_fixture_response, lead_fixture_assessment)
+            lead_fixture_assignments, lead_fixture_response, lead_fixture_assessment,
+            author_positive_fixture_review_bases)
         task = _live_material(call)['authoring_tasks'][-1]
         native_scope = lead_fixture_bound_scope(call, {'writing_intent': 'authoring',
             'activity_type': {'review': 'review_writing', 'draft': 'draft_writing'}[activity],
@@ -733,12 +741,19 @@ def _current_proposal_outcome(assignments, *, domains, relation='new_step',
         rows = [{'agent_id': row['agent_id'], 'task_instructions': row['instruction'],
                  'assignment_type': {'review': 'review_content', 'draft': 'draft_content',
                     'constraint_assessment': 'assess_constraints'}[row.get('mode', 'review')],
-                 'input_source_ids': list(row['input_ids'])} for row in assignments]
+                 'input_source_ids': list(row['input_ids']),
+            **({'review_basis': copy.deepcopy(row['review_basis'])}
+               if 'review_basis' in row else {})} for row in assignments]
+        if author_review_basis:
+            rows = author_positive_fixture_review_bases(
+                rows, candidate_choices=choices['review_candidate_ids'])
         anchors = {row['agent_id']: row['input_source_ids'][0] for row in rows}
         recipients = {source: next(row['agent_id'] for row in rows if source in row['input_source_ids'])
                       for source in choices['required_input_ids']
                       if any(source in row['input_source_ids'] for row in rows)}
-        allocated = lead_fixture_assignments(rows, input_choices=choices['input_ids'],
+        allocated = lead_fixture_assignments(
+            rows, input_choices=choices['allocation_input_ids'],
+            review_choices=choices['review_candidate_ids'],
                                              anchors=anchors, recipients=recipients)
         supplied = {'response_type': 'specialist_consultation_proposal',
                     'response_text': 'Specialist review would resolve the open question.',
@@ -884,7 +899,8 @@ _READINESS_DOCUMENTS = (("core_documents/global_outline.md", "Nora departs with 
     ("core_documents/character_sheets.md", "Nora's role is courier; she wants to honor her trusting brother. " "The keeper guards the bridge, suspects theft, and helps after recognizing the brother's seal.\n"),
     ("core_documents/narrative_rules.md", "Close third person and past tense; restrained tone and plain " "expression. Narration follows Nora; dialogue reveals the seal. No perspective exceptions.\n"),)
 
-def _whole_book_assessment(call, answer, *, offered_inputs):
+def _whole_book_assessment(call, answer, *, offered_inputs, logical_transform: Callable[
+    [core_readiness.CoreDocumentAssessment], core_readiness.CoreDocumentAssessment] | None = None):
     reads = {path: next((source['input_source_id'] for source in offered_inputs if source[
         'source_locator'] == '${' + path + '}')) for path, _ in _READINESS_DOCUMENTS}
     if getattr(call, 'contract', None) is not None:
@@ -909,12 +925,15 @@ def _whole_book_assessment(call, answer, *, offered_inputs):
         'Departure, crossing and return are the entire book.', ('user_input',), ('user_input',),
         units, (), (), ('Keep the stated ending.',)), findings, (),
         'All actual whole documents cover the exact whole-book USER fixture.'))
+    if logical_transform is not None:
+        assessment = logical_transform(assessment)
     if getattr(call, 'contract', None) is not None:
         native_assessment = core_readiness.assessment_to_dict(assessment)
         choices = dict(call.contract.semantic_index.policy.choices)
         basis = native_assessment['book_basis']
         documents = native_assessment['document_judgments']
-        rows = (basis, *basis['whole_book_units'], *(finding for document in documents
+        rows = (basis, *basis['whole_book_units'], *basis['author_decisions'],
+                *(finding for document in documents
                 for finding in document['criteria_findings']),
                 *(secret for document in documents for secret in document['intentional_reader_secrets']))
         for row in rows:
@@ -1023,6 +1042,7 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
         (self.backend.enqueue(_current_proposal_outcome(assignments or [{'agent_id':
             PLOT_ARCHITECT, 'instruction': 'Check the story direction against the request.',
             'input_ids': ['user_input']}], relation=relation, domains=domains,
+            author_review_basis=True,
             authoring_assessment=authoring_assessment)))
         return await self.runtime.lead_turn(self.session_id, conversation_id, text,)
 
@@ -1030,7 +1050,7 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
     def _require_fixture_census(self, bound, expected_families):
         from collections import Counter
         from story_writing_agents.agent_context.manifest import ContextSourceKind
-        self.assertEqual({item.owner.variant.branch_key
+        self.assertEqual({item.owner.variant.branch_key.split(':partition:', 1)[0]
                           for item in bound.semantic_index.contracts}, expected_families)
         pairs = dict(bound.outer_inner_schema_ids)
         self.assertEqual(set(pairs), set(bound.action_index.expected_schema_ids))
@@ -1040,7 +1060,8 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
                       'read': ('read_context', ('action_type', 'read_handles')),
                       'answer': ('submit_result', ('action_type', 'task_result'))}
         offers = bound.eligibility_offers
-        expected = Counter({signatures[name]: (len(expected_families) if name == 'answer' else 1)
+        physical_results = len(bound.semantic_index.expected_schema_ids)
+        expected = Counter({signatures[name]: (physical_results if name == 'answer' else 1)
                             for name in offers.allowed_actions})
         if ('search' in offers.allowed_actions
                 and ContextSourceKind.WRITING_ARTIFACT in offers.search_source_kinds):
@@ -1305,6 +1326,25 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertTrue(calls[1].contract.offers.issued_handle_aliases)
         self.assertEqual(calls[1].contract.offers.completed_read_facts, preflight)
         self.assertTrue(calls[2].contract.offers.delivery_read_facts)
+        read_bound = calls[2].contract
+        read_choices = dict(read_bound.semantic_index.policy.choices)
+        original_candidates = dict(calls[0].contract.semantic_index.policy.choices)[
+            'review_candidate_ids']
+        fixed_read_owner = replace(read_bound.factory, constraints=replace(
+            read_bound.factory.constraints, input_ids=read_choices['input_ids'],
+            required_input_ids=read_choices['required_input_ids'],
+            review_candidate_ids=original_candidates))
+        fixed_read = fixed_read_owner.for_offer(read_bound.offers)
+        fixed_read_choices = dict(fixed_read.semantic_index.policy.choices)
+        self.assertEqual(read_choices['review_candidate_ids'], read_choices['input_ids'])
+        self.assertEqual(fixed_read_choices['review_candidate_ids'], original_candidates)
+        self.assertEqual(fixed_read_choices['review_candidate_binding'], ('bound',))
+        self.assertEqual(fixed_read_choices['input_ids'], read_choices['input_ids'])
+        self.assertEqual(fixed_read_choices['required_input_ids'],
+                         read_choices['required_input_ids'])
+        self.assertEqual(fixed_read.offers, read_bound.offers)
+        self.assertEqual(fixed_read.offers.delivery_read_facts,
+                         read_bound.offers.delivery_read_facts)
         delivered = tuple(row['evidence_id'] for row in calls[2].payload['context_observation']['read_results'])
         self.assertEqual(tuple(fact.evidence_id for fact in calls[2].contract.offers.delivery_read_facts), delivered)
         current_frame = json.loads(_visible_outcome('answer')(calls[2], None))
@@ -1432,22 +1472,24 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertIs(selection.record.approval_state, editorial.EditorialApprovalState.SELECTED)
 
         def assess_selected_plan(call, provider):
-            answer = json.loads(_whole_book_assessment(call, json.loads(_answer_from_history(call, provider)),
-                                                      offered_inputs=offered_inputs))
-            result = answer['agent_action']['task_result']
-            details = result['response_details']
-            value = core_readiness.assessment_from_dict(details['core_document_assessment'])
             receipt = call.payload["context_observation"]["read_results"][0]["evidence_id"]
-            choice = core_readiness.AuthorDecision("courier_plan", plan_text, "supplied", ("departure",),
-                                                   (receipt,), "Actual READ of the USER-selected character plan.")
-            rows = tuple(replace(row, criteria_findings=(
-                replace(row.criteria_findings[0], source_ids=(*row.criteria_findings[0].source_ids, receipt),
-                        depends_on_author_decision_ids=(choice.author_decision_id,)),
-                *row.criteria_findings[1:])) if row.document_path == character.document_path else row
-                for row in value.document_judgments)
-            value = replace(value, book_basis=replace(value.book_basis, author_decisions=(choice,)),
-                            document_judgments=rows)
-            details['core_document_assessment'] = core_readiness.assessment_to_dict(value)
+            choice = core_readiness.AuthorDecision(
+                "courier_plan", plan_text, "supplied", ("departure",),
+                (receipt,), "Actual READ of the USER-selected character plan.")
+            def with_selected_plan(value):
+                rows = tuple(replace(row, criteria_findings=(
+                    replace(row.criteria_findings[0],
+                            source_ids=(*row.criteria_findings[0].source_ids, receipt),
+                            depends_on_author_decision_ids=(choice.author_decision_id,)),
+                    *row.criteria_findings[1:])) if row.document_path == character.document_path
+                    else row for row in value.document_judgments)
+                return replace(value,
+                    book_basis=replace(value.book_basis, author_decisions=(choice,)),
+                    document_judgments=rows)
+            answer = json.loads(_whole_book_assessment(
+                call, json.loads(_answer_from_history(call, provider)),
+                offered_inputs=offered_inputs, logical_transform=with_selected_plan))
+            result = answer['agent_action']['task_result']
             result['response_text'] = ( 'Readiness includes the acquired USER-selected'
                 ' character plan.')
             return json.dumps(answer)
@@ -1659,7 +1701,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertLessEqual(max(len(member.rule_graph.canonical_bytes) for member in result_index.contracts),
             64 * 1024)
         for metadata in ("correlation", "schema_version", "evidence_status", "evidence_ids", "interpretation", "review_basis", "additional_review_domains", "expected_result"):
-            self.assertNotIn(f'"{metadata}"', encoded)
+            if metadata == 'review_basis':
+                self.assertIn(f'"{metadata}"', encoded)
+            else:
+                self.assertNotIn(f'"{metadata}"', encoded)
         null_slots = {"response_details." + key: owners for key, owners in (
             ("writing_task_scope", (12, 13)), ("authoring_assessment", (6, 8, 9, 11)),
             ("authoring_assessment.direction", (6, 8, 9, 11)),("authoring_assessment.creative_scope", (6, 8, 9, 11)),
@@ -1853,8 +1898,12 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 'dependency_slots': [], }
             assigned = lead_fixture_assignments(
                 [{'agent_id': PLOT_ARCHITECT, 'task_instructions': 'Review supplied material.',
-                  'assignment_type': mode, 'input_source_ids': ['user_input']}],
-                input_choices=('user_input',), anchors={PLOT_ARCHITECT: 'user_input'},
+                  'assignment_type': mode, 'input_source_ids': ['user_input'],
+             'review_basis': None if mode != 'review_content' else {
+                 'candidate_input_ids': ['user_input'],
+                 'criteria': 'Review supplied material.'}}],
+                input_choices=('user_input',), review_choices=('user_input',),
+                anchors={PLOT_ARCHITECT: 'user_input'},
                 recipients={} if intent == 'review_only' else {'user_input': PLOT_ARCHITECT})
             details = {'task_scope': lead_fixture_scope(writing_scope),
                        'specialist_consultation_proposal': {**assigned, 'shared_premises': []}}
@@ -1864,6 +1913,42 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 'response_text': 'Prepare explicit selected work.',
                 'response_details': details}, family=0 if intent == 'authoring' else 1)
             native = json.loads(encoded)
+            allocation = native['agent_action']['task_result']['response_details'][
+                'specialist_consultation_proposal']['assignments'][PLOT_ARCHITECT]
+            self.assertEqual(set(allocation), {'task_instructions', 'assignment_type',
+                'review_basis', 'input_anchor_id', 'optional_inputs'})
+            valid_basis = {'candidate_input_ids': {'user_input': True},
+                           'criteria': 'Review supplied material.'}
+            self.assertEqual(allocation['review_basis'],
+                             valid_basis if mode == 'review_content' else None)
+            for invalid_basis in (None if mode == 'review_content' else valid_basis,
+                    {'candidate_input_ids': {'user_input': False},
+                     'criteria': 'Review supplied material.'},
+                    {'candidate_input_ids': {'user_input': True}, 'criteria': ''}):
+                bad_basis = copy.deepcopy(native)
+                bad_basis['agent_action']['task_result']['response_details'][
+                    'specialist_consultation_proposal']['assignments'][PLOT_ARCHITECT][
+                    'review_basis'] = invalid_basis
+                self.assertTrue(bound.rule_graph.findings(bad_basis))
+                with self.assertRaises(ValueError):
+                    bound.decode_response(json.dumps(bad_basis))
+            if mode == 'draft_content':
+                empty_owner = replace(call.contract.factory, constraints=replace(
+                    call.contract.factory.constraints, review_candidate_ids=()))
+                empty_bound = empty_owner.for_offer(call.contract.offers)
+                available_modes, pending_modes = set(), [empty_bound.schema_value()]
+                while pending_modes:
+                    node = pending_modes.pop()
+                    if type(node) is dict:
+                        field = node.get('properties', {}).get('assignment_type', {})
+                        available_modes.update(field.get('enum', ()))
+                        pending_modes.extend(node.values())
+                    elif type(node) is list:
+                        pending_modes.extend(node)
+                self.assertNotIn('review_content', available_modes)
+                self.assertIn('draft_content', available_modes)
+                self.assertEqual(dict(empty_bound.semantic_index.policy.choices)[
+                    'review_candidate_ids'], ())
             self._require_fixture_field_neighbors(bound, native)
             self._require_fixture_text_boundaries( bound, native, authorization=front_authorization)
             import sys
@@ -1985,8 +2070,11 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertTrue(bound.rule_graph.findings(bad))
         current_assignments = lead_fixture_assignments(
             [{'agent_id': PLOT_ARCHITECT, 'task_instructions': 'Review supplied material.',
-              'assignment_type': 'review_content', 'input_source_ids': ['user_input']}],
-            input_choices=('user_input',), anchors={PLOT_ARCHITECT: 'user_input'},
+              'assignment_type': 'review_content', 'input_source_ids': ['user_input'],
+             'review_basis': {'candidate_input_ids': ['user_input'],
+                 'criteria': 'Review supplied material.'}}],
+            input_choices=('user_input',), review_choices=('user_input',),
+            anchors={PLOT_ARCHITECT: 'user_input'},
             recipients={'user_input': PLOT_ARCHITECT})
         workflow_work = lead_fixture_response(call, {'response_type': 'specialist_consultation_proposal',
             'response_text': 'Invalid current work.',
@@ -2522,6 +2610,45 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             reviewer_inputs=(), source_ids=('user_input',), objective_ids=(), scope=None,
             scope_rule=None, preparation_kind=None, preparation_targets=(),
             preparation_specialists=(), task_revisions=((task['task_id'], 1),))
+        offered_owner = replace(factory, constraints=declared)
+        offered_review = offered_owner.for_offer(call.contract.offers)
+        offered_choices = dict(offered_review.semantic_index.policy.choices)
+        fixed_owner = replace(factory, constraints=replace(declared,
+            input_ids=offered_choices['input_ids'],
+            review_candidate_ids=offered_choices['input_ids']))
+        fixed_review = fixed_owner.for_offer(call.contract.offers)
+        fixed_choices = dict(fixed_review.semantic_index.policy.choices)
+        self.assertEqual(offered_choices['review_candidate_ids'],
+                         fixed_choices['review_candidate_ids'])
+        self.assertEqual(offered_choices['review_candidate_binding'], ('offered',))
+        self.assertEqual(fixed_choices['review_candidate_binding'], ('bound',))
+        owner_id = offered_review.semantic_index.owners[0].owner_id
+        self.assertEqual(fixed_review.semantic_index.owners[0].owner_id, owner_id)
+        self.assertNotEqual(offered_review.semantic_index.policy.identity_for(owner_id),
+                            fixed_review.semantic_index.policy.identity_for(owner_id))
+        ordered_facts = replace(declared, input_ids=('user_input', 'outline', 'draft_reply'),
+            required_input_ids=('draft_reply', 'user_input'), per_assignment_input_ids=(),
+            reviewer_inputs=(), review_candidate_ids=('draft_reply',))
+        front_choices = dict(ordered_facts.choice_snapshot())
+        continuation_choices = dict(replace(ordered_facts, continuation=True).choice_snapshot())
+        self.assertEqual(front_choices['allocation_input_ids'],
+                         ('user_input', 'outline', 'draft_reply'))
+        self.assertEqual(continuation_choices['allocation_input_ids'],
+                         ('user_input', 'draft_reply'))
+        self.assertEqual(continuation_choices['required_input_ids'],
+                         ('draft_reply', 'user_input'))
+        self.assertEqual(continuation_choices['review_candidate_ids'], ('draft_reply',))
+        self.assertEqual(continuation_choices['input_ids'], front_choices['input_ids'])
+        with self.assertRaises(ValueError):
+            replace(ordered_facts, continuation=True,
+                    review_candidate_ids=('outline',)).choice_snapshot()
+        with self.assertRaises(ValueError):
+            replace(ordered_facts, continuation=True,
+                    per_assignment_input_ids=('outline',)).choice_snapshot()
+        with self.assertRaisesRegex(ValueError, 'assignment obligations exceed current allocation'):
+            replace(factory, constraints=replace(ordered_facts, continuation=True,
+                reviewer_inputs=((PLOT_ARCHITECT, 'outline'),))).for_offer(call.contract.offers)
+
         def require_final_case(seed, supplied, expected, *, branch, constraints=declared):
             owner = replace(factory, rule_seed=seed, constraints=constraints)
             selected = owner.for_offer(call.contract.offers)
@@ -2787,6 +2914,19 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             reviewer = profile_roster[domain]
             self.assertIn(reviewer + ':' + fact.evidence_id, free_choices['reviewer_inputs'])
             self.assertNotIn(fact.evidence_id + ':' + reviewer, free_choices['reviewer_inputs'])
+        from tests.provider_wire_fixture import _fixture_partition_matches
+        paired_inner_ids = {inner for _outer, inner in profile_binding.outer_inner_schema_ids
+                            if inner is not None}
+        plain_scope_members = []
+        for member in profile_binding.semantic_index.contracts:
+            original_key = member.owner.variant.branch_key.split(':partition:', 1)[0]
+            if member.schema_id not in paired_inner_ids or original_key not in (
+                    stem + ':family:1', stem + ':family:5'):
+                continue
+            group_schema = member.rule_graph.schema_value()
+            root = fixture_schema_node(group_schema, group_schema)
+            types = fixture_schema_node(group_schema, root['properties']['response_type'])['enum']
+            plain_scope_members.append((original_key, group_schema, tuple(types)))
         accepted_profiles = set()
         for intent, activity in product(('authoring', 'review_only'), ('workflow', 'draft', 'revise', 'review')):
             for size in range(4):
@@ -2802,11 +2942,12 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                             'task_id': task['task_id'], 'task_revision': 1,
                             'contributions': duties, 'dependency_slots': []}
                         native_scope = lead_fixture_scope_record(supplied_scope)
-                        base = {'response_type': 'answer', 'response_text': 'Current free-scope profile.',
+                        base = {'response_type': 'clarification_question',
+                                'response_text': 'Current free-scope profile.',
                                 'response_details': {'task_scope': native_scope}}
                         fixture_call = SimpleNamespace(contract=profile_binding)
                         complete = json.loads(lead_fixture_response(
-                            fixture_call, base, family=0, branch_key=stem + ':family:0'))
+                            fixture_call, base, family=0, branch_key=stem + ':family:1'))
                         self.assertEqual(not bool(profile_binding.rule_graph.findings(
                             complete)), legal, (intent, activity, domains, roles))
                         if not legal:
@@ -2816,8 +2957,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                             'domains': list(domains), 'task': task['task_id'] + '@1',
                             'contributions': duties, 'dependency_slots': []}
                         decoded_profile = profile_binding.decode_response(json.dumps(complete))
-                        self.assertEqual(json.loads(decoded_profile.answer_json), {'message': base['response_text'],
-                                          'authoring_scope': expected_scope})
+                        self.assertEqual(json.loads(decoded_profile.answer_json),
+                            {'kind': 'question', 'message': base['response_text'],
+                             'authoring_scope': expected_scope})
                         self._require_fixture_field_neighbors(profile_binding, complete)
                         required_agents = tuple(agent for domain, agent in profile_roster.items() if domain in domains)
                         selected_agents = tuple(agent for agent in profile_roster.values()
@@ -2856,10 +2998,20 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                 else 'constraint_assessment') for domain, role in zip(domains, roles)}
                             assignments = [{'agent_id': agent, 'instruction': 'Assess supplied concern.',
                                 'mode': 'review' if activity == 'review' else modes[agent],
-                                'input_ids': list(free_inputs)} for agent in active]
+                                'input_ids': list(free_inputs),
+                                **({'review_basis': {'candidate_input_ids': list(free_inputs),
+                                    'criteria': 'Assess supplied concern.'}}
+                                   if activity == 'review' else {})} for agent in active]
                             native_proposal = {'assignments': {row['agent_id']: {
-                                'task_instructions': row['instruction'], 'assignment_type': native_modes[row['mode']],
-                                'input_anchor_id': 'user_input', 'optional_inputs': dict.fromkeys(free_inputs, True)}
+                                'task_instructions': row['instruction'],
+                                'assignment_type': native_modes[row['mode']],
+                                'input_anchor_id': 'user_input',
+                                'optional_inputs': dict.fromkeys(free_inputs, True),
+                                'review_basis': ({
+                                    'candidate_input_ids': finite_fixture_selection(
+                                        free_choices['review_candidate_ids'], tuple(free_inputs)),
+                                    'criteria': 'Assess supplied concern.'}
+                                    if activity == 'review' else None)}
                                 for row in assignments}, 'required_input_recipients': (
                                     {identity: active[0] for identity in free_choices['required_input_ids']
                                      if intent == 'authoring' or identity != 'user_input'}), 'shared_premises': []}
@@ -2883,7 +3035,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                             profile_cases.append((6 if intent == 'authoring' else 7,
                                 'specialist_consultation_proposal', 'proposal', extra, semantic_extra))
                         if intent == 'authoring':
-                            artifact_cases = ([(literal_operations[0], {'change_type': 'create',
+                            artifact_cases = ([(literal_operations[0], {'kind': 'create',
                                 'suggested_path': future_path, 'new_text': literal_text})]
                                 if 'tone_execution' in domains else [])
                             for identity, locator, whole in artifact_receipts:
@@ -2897,7 +3049,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                             or kind == 'rename' and domain != 'tone_execution'):
                                         continue
                                     native_operation = {'change_type': native_kind, 'evidence_id': identity}
-                                    operation = {'change_type': kind, 'evidence_id': identity}
+                                    operation = {'kind': kind, 'evidence_id': identity}
                                     if native_field is not None:
                                         text = future_path if kind == 'rename' else literal_text
                                         native_operation[native_field] = text
@@ -2909,7 +3061,22 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                     'authoring_assessment': native_assessment}, {
                                     'artifact_intent': {'operations': [operation]},
                                     'authoring_assessment': incomplete_assessment}))
+                        checked_profile_cases = []
                         for (family, response_kind, semantic_kind, extra, semantic_extra) in profile_cases:
+                            checked_profile_cases.append((family, response_kind))
+                            if (activity != 'workflow' and
+                                    (family == 5 or family == 1 and response_kind == 'critique')):
+                                compatible_types = {
+                                    kind for key, schema, kinds in plain_scope_members
+                                    if key == stem + ':family:' + str(family)
+                                    and _fixture_partition_matches(schema, base)
+                                    for kind in kinds}
+                                self.assertNotIn(response_kind, compatible_types)
+                                if family == 1:
+                                    self.assertIn('clarification_question', compatible_types)
+                                else:
+                                    self.assertFalse(compatible_types)
+                                continue
                             if semantic_kind == 'recommendation' and intent == 'authoring':
                                 extra['authoring_assessment'] = None
                                 semantic_extra['authoring_assessment'] = None
@@ -2923,7 +3090,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                 {'kind': semantic_kind, 'message': base['response_text'],
                                  'authoring_scope': expected_scope, **semantic_extra})
                             if (semantic_kind == 'proposal' and 'artifact_intent' in semantic_extra
-                                    and semantic_extra['artifact_intent']['operations'][0]['change_type'] == 'rename'):
+                                    and semantic_extra['artifact_intent']['operations'][0]['kind']
+                                    == 'rename'):
                                 wrong_kind = copy.deepcopy(packet)
                                 wrong_kind['agent_action']['task_result']['response_details'][
                                     'artifact_change_proposal']['artifact_changes'][0][
@@ -2946,6 +3114,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                                         profile_binding.decode_response(json.dumps(missing_specialist))
                                     for schema in native_schemas:
                                         self.assertTrue(SchemaRules.declare(schema).findings(missing_specialist))
+                        self.assertEqual(checked_profile_cases,
+                            [(case[0], case[1]) for case in profile_cases])
                         if intent == 'authoring':
                             for identity, locator, whole in artifact_receipts:
                                 if artifact_domains.get(locator) not in domains or not whole:
@@ -2967,6 +3137,94 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                             'task_scope']['task']['id'] = 'not-current-task'
                         self.assertTrue(profile_binding.rule_graph.findings(bad_task))
         self.assertEqual(len(accepted_profiles), 91)
+        from story_writing_agents.agent_context.actions import ContextCallReadFact
+        from story_writing_agents.agent_context.manifest import ContextSourceKind
+        unit_metadata = dict(evidence_id='unit-read', source_id='unit-source', revision='unit-v1',
+                             source_digest='a' * 64, boundary_digest='b' * 64, whole_source=True)
+        unit_writing = ContextCallReadFact(**unit_metadata,
+            source_kind=ContextSourceKind.WRITING_ARTIFACT,
+            artifact_locator='core_documents/global_outline.md')
+        unit_generic = ContextCallReadFact(**unit_metadata,
+            source_kind=ContextSourceKind.CONVERSATION, artifact_locator=None)
+        unit_cases = (
+            ((), 'review', 'plot_structure', (), False),
+            ((unit_generic,), 'review', 'plot_structure', (), False),
+            ((unit_writing,), 'review', 'plot_structure', (), True),
+            ((unit_writing,), 'draft', 'plot_structure', (), False),
+            ((unit_writing,), 'revise', 'plot_structure', (), False),
+            ((unit_writing,), 'review', 'character_world', (), False),
+            ((unit_writing,), 'review', 'plot_structure',
+             ('core_documents/part_outlines.md',), False))
+        for facts, activity, domain, targets, answer_available in unit_cases:
+            unit_record = {'schema_version': 3, 'intent': 'authoring', 'activity': activity,
+                'target_paths': list(targets), 'domains': [domain], 'task_id': task['task_id'],
+                'task_revision': 1, 'contributions': [{'domain': domain, 'role': 'draft_owner'}],
+                'dependency_slots': []}
+            unit_constraints = replace(declared, scope=authoring_scope_from_dict(unit_record),
+                recommendation_only=False, readiness_source_basis_ref=None)
+            unit_seed = orchestrator_module._lead_front_result_contract(
+                orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',),
+                constraints=unit_constraints)
+            unit_offers = replace(call.contract.offers,
+                completed_read_facts=facts, delivery_read_facts=())
+            unit_bound = replace(factory, rule_seed=unit_seed,
+                constraints=unit_constraints).for_offer(unit_offers)
+            unit_call = SimpleNamespace(contract=unit_bound)
+            unit_native_scope = lead_fixture_scope_record(
+                unit_record, fixed_targets=True, fixed_dependencies=True)
+            unit_question = json.loads(lead_fixture_response(unit_call, {
+                'response_type': 'clarification_question',
+                'response_text': 'Inspect the READ scope.',
+                'response_details': {'task_scope': unit_native_scope}}, family=0,
+                branch_key=unit_seed.contract_id + ':family:1'))
+            self.assertFalse(unit_bound.rule_graph.findings(unit_question))
+            unit_decoded = unit_bound.decode_response(json.dumps(unit_question))
+            self.assertEqual(json.loads(unit_decoded.answer_json)['kind'], 'question')
+            unit_schema = unit_bound.schema_value()
+            unit_native_schemas = (unit_schema,
+                                   AntigravityAdapter.native_output_schema(unit_schema))
+            for schema in unit_native_schemas:
+                self.assertFalse(diagnose_json_text(json.dumps(unit_question), schema))
+            unit_paired = {inner for _outer, inner in unit_bound.outer_inner_schema_ids}
+            unit_answer_members = []
+            for member in unit_bound.semantic_index.contracts:
+                if (member.schema_id not in unit_paired or
+                    member.owner.variant.branch_key.split(':partition:', 1)[0] !=
+                        unit_seed.contract_id + ':family:0'):
+                    continue
+                member_schema = member.rule_graph.schema_value()
+                member_root = fixture_schema_node(member_schema, member_schema)
+                types = fixture_schema_node(member_schema,
+                    member_root['properties']['response_type'])['enum']
+                if 'answer' in types:
+                    unit_answer_members.append(member.schema_id)
+            self.assertEqual(bool(unit_answer_members), answer_available)
+            if not answer_available:
+                continue
+            unit_answer = json.loads(lead_fixture_response(unit_call, {
+                'response_type': 'answer',
+                'response_text': 'The canonical READ supports inspection.',
+                'response_details': {'task_scope': unit_native_scope}}, family=0,
+                branch_key=unit_seed.contract_id + ':family:0'))
+            self.assertFalse(unit_bound.rule_graph.findings(unit_answer))
+            unit_decoded = unit_bound.decode_response(json.dumps(unit_answer))
+            self.assertEqual(json.loads(unit_decoded.answer_json),
+                {'message': 'The canonical READ supports inspection.', 'authoring_scope': {
+                    'intent': 'authoring', 'activity': 'review', 'target_paths': [],
+                    'domains': ['plot_structure'], 'task': task['task_id'] + '@1',
+                    'contributions': [{'domain': 'plot_structure', 'role': 'draft_owner'}],
+                    'dependency_slots': []}})
+            for schema in unit_native_schemas:
+                self.assertFalse(diagnose_json_text(json.dumps(unit_answer), schema))
+            for authority in ('proposal_drafting_request', 'assignments',
+                              'artifact_change_proposal', 'document_change_request_update'):
+                authority_frame = copy.deepcopy(unit_answer)
+                authority_frame['agent_action']['task_result']['response_details'][authority] = {}
+                self.assertTrue(unit_bound.rule_graph.findings(authority_frame))
+                for schema in unit_native_schemas:
+                    self.assertTrue(diagnose_json_text(json.dumps(authority_frame), schema))
+                with self.assertRaises(ValueError):
+                    unit_bound.decode_response(json.dumps(authority_frame))
         free_record = {**profile_record, 'activity': 'draft', 'domains': list(domain_order),
             'contributions': [{'domain': domain, 'role': role} for domain, role in zip(
                 domain_order, ('draft_owner', 'draft_owner', 'constraint_assessor'))],
@@ -2975,9 +3233,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=declared)
         free_bound = replace(factory, rule_seed=free_seed, constraints=declared).for_offer(call.contract.offers)
         free_packet = json.loads(lead_fixture_response(SimpleNamespace(contract=free_bound), {
-            'response_type': 'answer', 'response_text': 'Retain the declared dependency subset.',
+            'response_type': 'clarification_question',
+            'response_text': 'Retain the declared dependency subset.',
             'response_details': {'task_scope': lead_fixture_scope_record(free_record)}},
-            family=0, branch_key=free_seed.contract_id + ':family:0'))
+            family=0, branch_key=free_seed.contract_id + ':family:1'))
         free_schema = free_bound.schema_value()
         free_native = (free_schema, AntigravityAdapter.native_output_schema(free_schema))
         for free_selection, free_expected in (({'plot_structure': True, 'character_world': True},
@@ -3032,8 +3291,11 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             orchestrator_module.LeadProposalRelation.NEW_STEP, ('user_input',), constraints=consultation_facts)
         consultation = lead_fixture_assignments([{
             'agent_id': EXECUTION_SPECIALIST, 'task_instructions': 'Assess supplied constraint.',
-            'assignment_type': 'review_content', 'input_source_ids': ['user_input']}],
-            input_choices=('user_input',), anchors={EXECUTION_SPECIALIST: 'user_input'},
+            'assignment_type': 'review_content', 'input_source_ids': ['user_input'],
+             'review_basis': {'candidate_input_ids': ['user_input'],
+                 'criteria': 'Assess supplied constraint.'}}],
+            input_choices=('user_input',), review_choices=('user_input',),
+            anchors={EXECUTION_SPECIALIST: 'user_input'},
             recipients={'user_input': EXECUTION_SPECIALIST})
         require_final_case(consultation_seed, {'response_type': 'specialist_consultation_proposal',
              'response_text': 'Prepare exact consultation.', 'response_details': {
@@ -3282,9 +3544,11 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             observation_packet_binding.decode_response(json.dumps(empty_observation))
         premise_seed = _lead_result_rule_seed('lead-response-v8', premise.front_schema())
         premise_rows = [{'agent_id': PLOT_ARCHITECT, 'task_instructions': 'Assess this premise only.',
-                         'assignment_type': 'analyze_premise', 'input_source_ids': ['user_input']}]
+                         'assignment_type': 'analyze_premise', 'input_source_ids': ['user_input'],
+                         'review_basis': None}]
         premise_allocations = lead_fixture_assignments(premise_rows,
-            input_choices=('user_input',), anchors={PLOT_ARCHITECT: 'user_input'},
+            input_choices=('user_input',), review_choices=('user_input',),
+            anchors={PLOT_ARCHITECT: 'user_input'},
             recipients={'user_input': PLOT_ARCHITECT})
         premise_message = 'Separately confirm provisional premise analysis.'
         require_final_case(premise_seed, {'response_type': 'specialist_consultation_proposal',
@@ -3342,7 +3606,14 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             'contributions': [{'domain': 'tone_execution', 'role': 'constraint_assessor'}],
             'dependency_slots': []}
         scope_value = authoring_scope_from_dict(scope_record)
-        synthesis_constraints = replace(declared, scope=scope_value, continuation=True)
+        synthesis_constraints = replace(
+            declared, scope=scope_value, continuation=True, review_candidate_ids=('user_input',))
+        with self.assertRaisesRegex(ValueError, 'physical continuation requires frozen review'):
+            replace(factory,
+                    rule_seed=synthesis_seed,
+                    constraints=replace(synthesis_constraints, review_candidate_ids=None)
+                    ).for_offer(call.contract.offers)
+
         evidence = CollaborationLeadEvidence(LeadOutcomeScope.STORY_SPECIFIC, LeadEvidenceStatus.EMPTY, ())
         synthesis_seed = _lead_synthesis_result_contract(evidence=evidence, input_ids=('user_input',
             ), reply_event_ids=(), allow_next_intent=True, artifact_review=False,
@@ -3353,8 +3624,11 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             branch='consultation-summary-v4:family:0', constraints=synthesis_constraints)
         followup = lead_fixture_assignments([{'agent_id': EXECUTION_SPECIALIST,
             'task_instructions': 'Review the remaining supplied concern.',
-            'assignment_type': 'review_content', 'input_source_ids': ['user_input']}],
-            input_choices=('user_input',), anchors={EXECUTION_SPECIALIST: 'user_input'},
+            'assignment_type': 'review_content', 'input_source_ids': ['user_input'],
+             'review_basis': {'candidate_input_ids': ['user_input'],
+                 'criteria': 'Review the remaining supplied concern.'}}],
+            input_choices=('user_input',), review_choices=('user_input',),
+            anchors={EXECUTION_SPECIALIST: 'user_input'},
             recipients={'user_input': EXECUTION_SPECIALIST})
         require_final_case(synthesis_seed, {'response_type': 'consultation_summary',
             'response_text': 'Retain the remaining concern.', 'response_details': {
@@ -3704,6 +3978,9 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
     async def test_runtime_repairs_then_safely_ignores_invalid_proposals(self) -> None:
         from tests.recommendation_fixture import task_assessment
         assignment = {"agent_id": PLOT_ARCHITECT, "instruction": "Review the input.", "input_ids": ["user_input"]}
+        control_basis = {'candidate_input_ids': {'user_input': True},
+                         'criteria': assignment['instruction']}
+
         rules = {"duplicate-specialist": ("$: duplicate object key",),
             "missing-reviewer": (
                 '$.agent_action.task_result.response_details.specialist_consultation_proposal.'
@@ -3730,6 +4007,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         'task_id': task['task_id'], 'task_revision': task['task_revision']}})
                 leaf = {'task_instructions': 'Review input.', 'assignment_type': 'review_content',
                         'input_anchor_id': 'user_input', 'optional_inputs': {'user_input': True}}
+                leaf['review_basis'] = copy.deepcopy(control_basis)
                 sources = {'user_input': PLOT_ARCHITECT}
                 native = ( lead_fixture_response(call,
                     {'response_type': 'specialist_consultation_proposal',
@@ -3790,6 +4068,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     wire_assignments[row['agent_id']] = ( {'task_instructions': row['instruction'],
                         'assignment_type': 'review_content', 'input_anchor_id': supplied[0],'optional_inputs': selected}
                     )
+                for entry in projected.values():
+                    entry['review_basis'] = copy.deepcopy(control_basis)
                     for required in offered['required_input_ids']:
                         if required in supplied:
                             recipients[required] = row['agent_id']
@@ -3832,6 +4112,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         'assignment_type': 'review_content',
                         'input_anchor_id': 'reference_1','optional_inputs': {source: source == 'reference_1'
                             for source in offered['input_ids']}}
+                    proposal['assignments'][PLOT_ARCHITECT]['review_basis'] = (
+                        copy.deepcopy(control_basis))
                     proposal['required_input_recipients']['reference_1'] = PLOT_ARCHITECT
                     self.assertEqual(proposal['assignments'][CHARACTER_CUSTODIAN], projected[CHARACTER_CUSTODIAN])
                     self.assertFalse(call.contract.rule_graph.findings(neighbor))
@@ -3939,7 +4221,8 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         revised_source = await self.proposal(revise_id, text=qualified_request, authoring_assessment=assessment,)
         self.backend.enqueue(_current_proposal_outcome([{'agent_id': PLOT_ARCHITECT,
             'instruction': 'Perform the revised plot check.', 'input_ids': ['user_input']}],
-            domains=('plot_structure',), relation='revise_pending', authoring_assessment=assessment))
+            domains=('plot_structure',), relation='revise_pending', authoring_assessment=assessment,
+                                 author_review_basis=True))
         revised = await self._decide(revised_source, CollaborationConfirmationDecision.REVISE)
         replacement = revised.turn.proposal
         assert replacement is not None
@@ -4854,7 +5137,8 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         def invalid_proposal(call, _provider):
             response = json.loads(_current_proposal_outcome([{
                 'agent_id': PLOT_ARCHITECT, 'instruction': 'Review request.',
-                'input_ids': ['user_input']}], domains=('plot_structure',))(call, _provider))
+                'input_ids': ['user_input']}], domains=('plot_structure',),
+                                      author_review_basis=True)(call, _provider))
             value = response['agent_action']['task_result']
             value['response_details']['specialist_consultation_proposal']['assignments'] = []
             value['response_text'] = 'PRIVATE_PROPOSAL_TEXT'
@@ -5254,7 +5538,8 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
             domains=('plot_structure', 'character_world', 'tone_execution'),
             purpose='Check the story evidence before recommending a change.',
             activity='draft' if infeasible else 'review', authoring_assessment=assessment, paths=(
-            'manuscript/part-01/opening.md',) if infeasible else ()))
+            'manuscript/part-01/opening.md',) if infeasible else (),
+                                                                         author_review_basis=True))
         proposed = await self.runtime.lead_turn( self.session_id,
             conversation_id, (
                 ("Draft from this story. " if infeasible else "Review complete supplied candidate: ")
@@ -5289,13 +5574,20 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
                 'purpose': 'Review every unresolved input again.', 'assignments': [{
                 'agent_id': agent, 'instruction': 'Reconsider the original facts and replies.',
                 'input_ids': [*input_ids, *reply_event_ids],'mode': 'review'} for agent in agents]}}
+            for row in value['next_intent']['assignments']:
+                row['review_basis'] = {
+                    'candidate_input_ids': list(input_ids),
+                    'criteria': 'Reconsider the original facts and replies.'}
             expected.update(reply_event_ids=reply_event_ids, unresolved_input_ids=input_ids)
             from tests.provider_wire_fixture import lead_fixture_assignments, lead_fixture_response
             native = wire_result(value, 'consultation-summary-v4')
             follow_up = native['follow_up_consultation']
             rows = follow_up['assignments']
             choices = dict(call.contract.semantic_index.policy.choices)
-            allocated = lead_fixture_assignments(rows, input_choices=choices['input_ids'],
+            self.assertTrue(set(input_ids).issubset(choices['review_candidate_ids']))
+            allocated = lead_fixture_assignments(
+                    rows, input_choices=choices['allocation_input_ids'],
+                    review_choices=choices['review_candidate_ids'],
                 anchors={agent: input_ids[0] for agent in agents},
                 recipients={identity: agents[0] for identity in choices['required_input_ids']})
             follow_up.update(allocated)

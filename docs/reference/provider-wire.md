@@ -365,14 +365,14 @@ values, bounds, and branch order. Current bound contract IDs use `lead_v11_` and
 include `swa-annotation-rules-v2` provenance. Copy only the IDs offered by the
 current call.
 
-Budget declarations are frozen with the call policy. Each offered Lead semantic
-member is bounded at 65,536 bytes. Combined semantic/action indexes and complete
-contextual/native schemas use a separate 262,144-byte aggregate bound. That
-allowance does not widen a member contract. The service separately enforces its
-262,144-byte serialized request/context-frame limit. The transport also counts
-the rendered schema and payload together against the invocation input limit.
-Affected action templates compose directly from the frozen semantic rules;
-generic result contracts keep their existing defaults.
+Budget declarations are frozen call policy. For bound Lead calls, each semantic
+member stays within 65,536 UTF-8 bytes; semantic aggregates and inner action
+contracts stay within 262,144 bytes. The final contextual/provider schema has a
+524,288-byte limit. The service retains its 262,144-byte serialized request and
+context-frame limit, while transport counts rendered schema plus payload against
+the 786,432-byte invocation-input limit. These physical allowances do not widen
+member, semantic, history or generic-contract limits. Action templates compose
+the frozen semantic rules; generic result contracts keep their existing defaults.
 
 Every built-in semantic result includes `response_type`. Objects and their nested
 variants are closed: return every required field and no extra properties.
@@ -396,6 +396,22 @@ nested choices preserve the coupled scope, assignment, source, target and
 assessment rules. The runtime validates the selected graph before extracting
 these declared fields for the typed result; the Python API keeps its existing
 domain values.
+
+Every native allocation requires `review_basis`. Non-review assignments return
+`null`; review assignments return a closed object containing independent `criteria`
+and a nonempty finite `candidate_input_ids` selection over the current eligible
+choices. Candidates are decoded in offer order and included in assignment inputs.
+Required recipients remain assignment inputs without automatically becoming review
+candidates, and task instructions do not replace the review criteria. Continuation
+eligibility is frozen before the call and does not expand after READ. When no
+candidate is eligible, the review alternative is unavailable; an empty submitted
+selection is rejected. Actual material, revision and READ authority are still
+checked by the host.
+
+On continuation, READ can add evidence to the input offer. Assignment selections
+remain limited to the original required inputs, and frozen candidate eligibility
+must fit that same set. Inconsistent obligations are rejected before the provider
+call.
 
 Some finite-choice collections use closed keyed objects to preserve uniqueness
 and coverage through the supported schema dialect. Return every declared key
@@ -425,6 +441,16 @@ Follow the current branch's mode, role and coverage restrictions.
 | `specialist-assignment-response-v4` | Constraint assignment result with `constraints_assessed`, `concerns_found`, `conflicts_found`, or `insufficient_evidence`; no draft or final-review support. |
 | `consultation-summary-v4` | `consultation_summary` and `response_text`; permitted variants can add `follow_up_consultation` or `proposal_drafting_request`. |
 | `artifact-review-summary-v4` | `artifact_review_summary`, `review_outcome`, and `response_text`. |
+
+Plain result availability also depends on the offered scope. Workflow guidance
+keeps answers, questions and critiques. For a writing scope, a plain answer is
+available only for factual `review_writing` inspection backed by current
+writing-artifact READs covering every declared domain and target. Empty targets
+can be valid. Draft/revise answers and writing-scope critiques are unavailable;
+questions, proposals and recommendations keep their existing scoped rules.
+Cancel-request answer/critique variants are workflow-only. These choices grant
+no specialist execution, candidate, Apply or Commit authority. Readiness and
+premise-analysis null-scope branches retain their own exact contracts.
 
 An illustrative specialist draft response is:
 

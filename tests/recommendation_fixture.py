@@ -194,7 +194,8 @@ def preparation(turn, *, text=DRAFT, mutate=None, read_evidence=False):
             if not hasattr(call, 'contract'):
                 return unbound(call, provider)
             from tests.provider_wire_fixture import (result, lead_fixture_assignments,
-                lead_fixture_scope_record, lead_fixture_result, lead_fixture_response)
+                lead_fixture_scope_record, lead_fixture_result, lead_fixture_response,
+                author_positive_fixture_review_bases)
             inputs = [item.input_id for item in request.basis.inputs]
             proposal = {'relation': 'new_step', 'purpose': request.instruction,
                 'assignments': [{'agent_id': agent, 'instruction': request.instruction,
@@ -218,12 +219,16 @@ def preparation(turn, *, text=DRAFT, mutate=None, read_evidence=False):
                 'task_instructions': row['instruction'],
                 'input_source_ids': list(row['input_ids'])} for row in body['proposal'][
                 'assignments']])
+            rows = author_positive_fixture_review_bases(
+                rows, candidate_choices=choices['review_candidate_ids'])
             anchors = {row['agent_id']: row['input_source_ids'][0] for row in rows}
             recipients = {source: next(row['agent_id'] for row in rows
                 if source in row['input_source_ids']) for source in choices['required_input_ids']
                 if any(source in row['input_source_ids'] for row in rows)}
             native['specialist_consultation_proposal'].update(lead_fixture_assignments(
-                rows, input_choices=choices['input_ids'], anchors=anchors, recipients=recipients))
+                rows, input_choices=choices['allocation_input_ids'],
+                review_choices=choices['review_candidate_ids'],
+                anchors=anchors, recipients=recipients))
             return lead_fixture_response(call, lead_fixture_result(native), family=0)
         return consultation
     selected = [item.event_id for item in request.draft_sources]

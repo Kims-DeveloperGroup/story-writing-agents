@@ -34,7 +34,7 @@ from .authoring_admission import assessment_from_dict
 from .authoring_admission import assessment_schema as admission_rule
 from .core_document_readiness import current_assessment_schema, decode_current_assessment, assessment_from_dict as core_assessment_from_dict
 from .agents import SPECIALIST_IDS
-from .conversations import COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES
+from .conversations import COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES, LeadOutcomeKind
 from .conversations.events import authoring_scope_from_dict
 from .conversations.session_context import MAX_PROVIDER_SCHEMA_UTF8_BYTES
 from .specialist_routing import (
@@ -189,7 +189,9 @@ def _decode_scope_wire(value: dict[str, object], rule: AuthoringScopeRuleSet,
 def _allocation_wire_rule(template: Mapping[str, object], *, active: tuple[str, ...],
                           rule: AuthoringScopeRuleSet | None, inputs: tuple[str, ...],
                           required: tuple[str, ...], reviewers: tuple[tuple[str, str], ...],
-                          premise: bool = False, forced_inputs: tuple[str, ...] = ()) -> dict[str, object]:
+                          premise: bool = False, forced_inputs: tuple[str, ...] = (),
+                          review_candidate_ids: tuple[str, ...] | None = None,
+) -> dict[str, object]:
     if not active or not inputs or not set(required).issubset(inputs):
         raise ValueError("assignment has no legal current source graph")
     properties = deepcopy(dict(template))["properties"]
@@ -197,6 +199,7 @@ def _allocation_wire_rule(template: Mapping[str, object], *, active: tuple[str, 
     leaf_template = properties["assignments"]["items"]
     candidates = leaf_template.get("anyOf", [leaf_template])
     assignments = {}
+    candidate_choices = inputs if review_candidate_ids is None else review_candidate_ids
     for specialist in active:
         candidate = next((item for item in candidates if specialist in item.get("properties", {}).get("agent_id", {}).get("enum", ())), candidates[0])
         candidate_properties = candidate.get("properties", {})
@@ -207,9 +210,20 @@ def _allocation_wire_rule(template: Mapping[str, object], *, active: tuple[str, 
         selected_instruction = _owned_visible_text_rule(
             selected_instruction, nonblank=mode == "review")
         forced = {identity for agent, identity in reviewers if agent == specialist} | set(forced_inputs)
+        if not forced.issubset(inputs):
+            raise ValueError("assignment obligations exceed current allocation inputs")
+        review_basis = {"type": "null"}
+        if mode == "review":
+            review_basis = closed_object({
+                "candidate_input_ids": string_array(
+                    candidate_choices, minimum=1, maximum=len(candidate_choices)),
+                "criteria": _owned_visible_text_rule(
+                    nonempty_text_schema(), nonblank=True),
+            })
         assignments[specialist] = closed_object({
             "task_instructions": selected_instruction,
             "assignment_type": {"type": "string", "enum": [ASSIGNMENT_TYPES[mode]]},
+            "review_basis": review_basis,
             "input_anchor_id": {"type": "string", "enum": list(inputs)},
             "optional_inputs": closed_object({identity: {"type": "boolean", **({"enum": [True]} if identity in forced else {})} for identity in inputs}),
         })
@@ -222,17 +236,36 @@ def _allocation_wire_rule(template: Mapping[str, object], *, active: tuple[str, 
     return result
 
 
-def _decode_allocation_wire(value: dict[str, object], inputs: tuple[str, ...], active: tuple[str, ...]) -> None:
+def _decode_allocation_wire(value: dict[str, object], inputs: tuple[str, ...],
+                            active: tuple[str, ...], *,
+                            review_candidate_ids: tuple[str, ...] | None = None) -> None:
     assignments = value["assignments"]
     recipients = value.pop("required_input_recipients")
     decoded = []
+    candidate_choices = inputs if review_candidate_ids is None else review_candidate_ids
     for specialist in active:
         item = assignments[specialist]
-        edges = {item["input_anchor_id"], *(identity for identity, recipient in recipients.items() if recipient == specialist),
+        candidate_ids = ()
+        review_basis = None
+        if item["assignment_type"] == ASSIGNMENT_TYPES["review"]:
+            basis = item["review_basis"]
+            candidate_ids = decode_finite_selection(
+                basis["candidate_input_ids"], candidate_choices,
+                minimum=1, maximum=len(candidate_choices))
+            review_basis = {
+                "candidate_input_ids": list(candidate_ids),
+                "criteria": basis["criteria"],
+            }
+        edges = {item["input_anchor_id"], *candidate_ids,
+                 *(identity for identity, recipient in recipients.items()
+                   if recipient == specialist),
                  *(identity for identity, selected in item["optional_inputs"].items() if selected)}
-        decoded.append({"agent_id": specialist, "task_instructions": item["task_instructions"],
-                        "assignment_type": item["assignment_type"],
-                        "input_source_ids": [identity for identity in inputs if identity in edges]})
+        assignment = {"agent_id": specialist, "task_instructions": item["task_instructions"],
+                      "assignment_type": item["assignment_type"],
+                      "input_source_ids": [identity for identity in inputs if identity in edges]}
+        if review_basis is not None:
+            assignment["review_basis"] = review_basis
+        decoded.append(assignment)
     value["assignments"] = decoded
 
 
@@ -377,6 +410,7 @@ class LeadResultContractOwner(ContractOwner[LeadDecodedResult]):
              artifact_domain,
              authoring_scope_rules, finite_authoring_scope_rules, legal_specialist_rosters,
              assignment_rule, AuthoringScopeRuleSet.__post_init__,
+             LeadProviderConstraints._allocation_input_ids, lead_outcome_scope_paths, normalize_result,
              map_current_task_literals,
             _require_intrinsic_lead_result,
                              project_lead_scope_schema, restore_lead_scope_result, project_lead_scope_diagnostic))
@@ -1358,6 +1392,62 @@ def visible_text(value: object) -> bool:
         return False
 
 
+def lead_outcome_scope_paths(
+    kind: LeadOutcomeKind,
+    activity: AuthoringActivity,
+    domains: tuple[ArtifactReviewDomain, ...],
+    writing_read_facts: tuple[tuple[str, str, bool], ...],
+    *,
+    target_paths: tuple[str, ...] = (),
+    ordinary_answer: bool = False,
+) -> tuple[str, ...] | None:
+    """Derive current Lead kind/scope eligibility without granting authority.
+
+    None means unavailable; an empty tuple is a valid WORKFLOW result. Existing
+    substantive QUESTION/PROPOSAL/RECOMMENDATION scopes retain their targets.
+    Ordinary factual ANSWER requires REVIEW and returns canonical writing-READ
+    paths in offered order. Whole and ranged READs may both support inspection.
+    """
+    if (type(kind) is not LeadOutcomeKind or type(ordinary_answer) is not bool
+            or type(activity) is not AuthoringActivity
+            or type(domains) is not tuple
+            or any(type(domain) is not ArtifactReviewDomain for domain in domains)
+            or len(set(domains)) != len(domains)
+            or type(target_paths) is not tuple
+            or any(type(path) is not str for path in target_paths)
+            or len(set(target_paths)) != len(target_paths)
+            or type(writing_read_facts) is not tuple
+            or any(type(fact) is not tuple or len(fact) != 3
+                   or type(fact[0]) is not str or not fact[0]
+                   or type(fact[1]) is not str or not fact[1]
+                   or type(fact[2]) is not bool for fact in writing_read_facts)):
+        raise ValueError("Lead outcome scope requires exact current kind and READ facts")
+    if activity is AuthoringActivity.WORKFLOW:
+        return () if not domains and not target_paths else None
+    if not domains:
+        return None
+    if kind in (LeadOutcomeKind.QUESTION, LeadOutcomeKind.PROPOSAL,
+                LeadOutcomeKind.RECOMMENDATION):
+        return target_paths
+    if (kind is not LeadOutcomeKind.ANSWER or not ordinary_answer
+            or activity is not AuthoringActivity.REVIEW):
+        return None
+    read_domains = {
+        locator: artifact_domain(locator) for _, locator, _ in writing_read_facts
+    }
+    if not set(domains).issubset(set(read_domains.values())):
+        return None
+    paths = tuple(path for path, domain in read_domains.items() if domain in domains)
+    if not set(target_paths).issubset(paths):
+        return None
+    return paths
+
+
+_LEAD_OUTCOME_SCOPE_DECLARATION = (
+    lead_outcome_scope_paths, lead_outcome_scope_paths.__code__,
+)
+
+
 @dataclass(frozen=True, slots=True)
 class LeadExplorationConstraints:
     """Offered provisional choices; runtime authorizes actual artifact READs."""
@@ -1419,6 +1509,7 @@ class LeadProviderConstraints:
     input_ids: tuple[str, ...] = ()
     scope_rule: AuthoringScopeRuleSet | None = field(default=None, kw_only=True)
     required_input_ids: tuple[str, ...] | None = field(default=None, kw_only=True)
+    review_candidate_ids: tuple[str, ...] | None = field(default=None, kw_only=True)
     per_assignment_input_ids: tuple[str, ...] = field(default=(), kw_only=True)
     reviewer_inputs: tuple[tuple[str, str], ...] = ()
     task_revisions: tuple[tuple[str, int], ...] = ()
@@ -1438,7 +1529,8 @@ class LeadProviderConstraints:
     readiness_source_basis_ref: str | None = None
 
     def __post_init__(self) -> None:
-        for values in (self.per_assignment_input_ids, self.required_input_ids):
+        for values in (self.per_assignment_input_ids, self.required_input_ids,
+                       self.review_candidate_ids):
             if values is not None and (type(values) is not tuple
                     or any(type(item) is not str or not item for item in values)
                     or len(set(values)) != len(values) or not set(values).issubset(self.input_ids)):
@@ -1469,11 +1561,29 @@ class LeadProviderConstraints:
             if (not self.preparation_kind or item not in PREPARATION_INPUT_IDS)
             and not (self.adoption_intent is AuthoringIntent.REVIEW_ONLY and item == "user_input"))
 
+    def _allocation_input_ids(self) -> tuple[str, ...]:
+        required = self.required_assignment_input_ids()
+        inputs = (
+            tuple(identity for identity in self.input_ids if identity in required)
+            if self.continuation else self.input_ids
+        )
+        obligations = (required, self.per_assignment_input_ids)
+        if self.review_candidate_ids is not None:
+            obligations += (self.review_candidate_ids,)
+        if any(not set(values).issubset(inputs) for values in obligations):
+            raise ValueError("assignment obligations exceed current allocation inputs")
+        return inputs
+
     def choice_snapshot(self) -> tuple[tuple[str, tuple[str, ...]], ...]:
         return (
             ("input_ids", self.input_ids),
+            ("allocation_input_ids", self._allocation_input_ids()),
             ("required_input_ids", self.required_assignment_input_ids()),
             ("per_assignment_input_ids", self.per_assignment_input_ids),
+            ("review_candidate_ids", self.input_ids
+             if self.review_candidate_ids is None else self.review_candidate_ids),
+            ("review_candidate_binding",
+             ("offered" if self.review_candidate_ids is None else "bound",)),
             ("reviewer_inputs", tuple(agent + ":" + alias for agent, alias in self.reviewer_inputs)),
             ("source_ids", () if self.source_ids is None else self.source_ids),
             ("objective_ids", () if self.objective_ids is None else self.objective_ids),
@@ -1502,6 +1612,9 @@ class LeadProviderConstraints:
         writing_read_facts: tuple[tuple[str, str, bool], ...] = (),
         core_status_facts: tuple[ContextSourceStatusReceipt, ...] = (),
     ) -> tuple[LeadWireVariant, ...]:
+        function, code = _LEAD_OUTCOME_SCOPE_DECLARATION
+        if lead_outcome_scope_paths is not function or function.__code__ is not code:
+            raise ValueError("frozen Lead outcome scope rule changed")
         if type(contract) is not LeadResultRuleSeed or self.allow_read_sources:
             raise ValueError("current Lead wire compilation requires a qualified snapshot")
         if (self.scope is not None
@@ -1510,6 +1623,7 @@ class LeadProviderConstraints:
         if (self.scope_rule is not None
                 and self.scope_rule.schema_version != AUTHORING_SCOPE_SCHEMA_VERSION):
             raise ValueError("current Lead wire requires current scope rule version")
+        allocation_inputs = self._allocation_input_ids()
         source_schema = contract.schema_value()
         # Existing callers already project the provider vocabulary. Preserve their complete graph.
         projected = source_schema
@@ -1591,8 +1705,25 @@ class LeadProviderConstraints:
         variants = []
         for root_number, root in enumerate(roots):
             properties = root.get("properties", {})
+            ordinary_answer = (
+                set(properties) == {"response_type", "response_text", "writing_task_scope"}
+                and properties["response_type"].get("enum") == ["answer"]
+            )
             scope_template = properties.get("writing_task_scope")
             scoped = type(scope_template) is dict and scope_template.get("type") == "object"
+            scope_kinds = ()
+            if scoped:
+                # Translate trusted owner literals through the existing native codec.
+                for native_kind in properties.get("response_type", {}).get("enum", ()):
+                    header = normalize_result({"response_type": native_kind}, contract.contract_id)
+                    domain_kind = header.get("kind")
+                    if domain_kind is None and native_kind == "answer":
+                        domain_kind = LeadOutcomeKind.ANSWER.value
+                    if domain_kind is None:
+                        # Other typed result owners retain their separate scope declarations.
+                        scope_kinds = ()
+                        break
+                    scope_kinds += ((native_kind, LeadOutcomeKind(domain_kind)),)
             targets = (self.scope.target_paths if self.scope is not None else self.adoption_targets if self.adoption_intent is not None else None)
             if scoped:
                 rules = ((authoring_scope_rules(self.scope.activity, self.scope.intent, self.scope.domains, self.scope.contributions,
@@ -1624,9 +1755,33 @@ class LeadProviderConstraints:
             for scope_number, rule in enumerate(rules):
                 if rule is not None and rule.schema_version != AUTHORING_SCOPE_SCHEMA_VERSION:
                     raise ValueError("current Lead graph has a noncurrent rule")
+                scope_paths = ()
+                eligible_kinds = ()
+                if scope_kinds:
+                    for native_kind, kind in scope_kinds:
+                        paths = lead_outcome_scope_paths(
+                            kind, rule.activity, rule.required_domains, writing_read_facts,
+                            target_paths=targets or (), ordinary_answer=ordinary_answer,
+                        )
+                        if paths is not None:
+                            eligible_kinds += (native_kind,)
+                            if ordinary_answer:
+                                scope_paths = paths
+                    if not eligible_kinds:
+                        continue
                 root_schema = deepcopy(root)
+                if scope_kinds:
+                    root_schema["properties"]["response_type"]["enum"] = list(eligible_kinds)
                 if scoped:
                     root_schema["properties"]["writing_task_scope"] = _scope_wire_rule(rule, scope_template, self.scope, targets, tasks)
+                    if (ordinary_answer and rule.activity is AuthoringActivity.REVIEW
+                            and targets is None):
+                        scope_properties = root_schema["properties"]["writing_task_scope"]["properties"]
+                        scope_properties["target_artifact_paths"] = {
+                            "type": "array",
+                            "items": {"type": "string", "enum": list(scope_paths)},
+                            "minItems": 0, "maxItems": len(scope_paths),
+                        }
                 if "response_text" in root_schema["properties"]:
                     root_schema["properties"]["response_text"] = _owned_visible_text_rule(
                         root_schema["properties"]["response_text"], nonblank=scoped)
@@ -1860,11 +2015,12 @@ class LeadProviderConstraints:
                     # Separate shared nodes so every occurrence registers its decoder path.
                     offered = json.loads(json.dumps(root_schema, ensure_ascii=False))
                     for node, path in allocations(offered):
-                        replacement = _allocation_wire_rule(node, active=active, rule=rule, inputs=self.input_ids,
+                        replacement = _allocation_wire_rule(node, active=active, rule=rule, inputs=allocation_inputs,
                                                              required=(self.input_ids if self.required_input_ids is None else self.required_input_ids) if premise else
                                 tuple(identity for identity in self.required_assignment_input_ids()
                                       if not (rule is not None and rule.intent is AuthoringIntent.REVIEW_ONLY and identity == "user_input")), reviewers=() if premise else self.reviewer_inputs, premise=premise,
-                            forced_inputs=self.per_assignment_input_ids)
+                            forced_inputs=self.per_assignment_input_ids,
+                        review_candidate_ids=self.review_candidate_ids)
                         if premise:
                             question = replacement["properties"]["premise_decision"]
                             domains = tuple(domain.value for number, domain in enumerate(ArtifactReviewDomain)
@@ -1875,21 +2031,29 @@ class LeadProviderConstraints:
                     def finite_choices(name, child):
                         if (child.get("type") != "array"
                                 or name not in {"source_ids", "basis_input_ids",
-                                    "used_evidence_ids", "evidence_input_ids",
-                                    "dependency_source_ids", "specialist_ids",
-                                    "alternative_keys", "target_artifact_paths"}
+                                                "candidate_input_ids",
+                                                "used_evidence_ids", "evidence_input_ids",
+                                                "dependency_source_ids", "specialist_ids",
+                                                "alternative_keys", "target_artifact_paths"}
                                 or (name == "target_artifact_paths"
                                     and not child.get("items", {}).get("enum"))):
                             return None
                         choices = tuple(child.get("items", {}).get("enum", ()))
                         if not choices:
-                            choices = (
-                                writing_read_ids
-                                if name in {"used_evidence_ids", "evidence_input_ids"} else
-                                tuple(SPECIALIST_IDS) if name == "specialist_ids" else
-                                () if child.get("maxItems") == 0 else
-                                self.input_ids if name == "basis_input_ids" else
-                                self.source_ids if self.source_ids is not None else self.input_ids)
+                            if name in {"used_evidence_ids", "evidence_input_ids"}:
+                                choices = writing_read_ids
+                            elif name == "specialist_ids":
+                                choices = tuple(SPECIALIST_IDS)
+                            elif child.get("maxItems") == 0:
+                                choices = ()
+                            elif name == "basis_input_ids":
+                                choices = self.input_ids
+                            elif name == "candidate_input_ids":
+                                choices = (self.input_ids if self.review_candidate_ids is None
+                                           else self.review_candidate_ids)
+                            else:
+                                choices = (self.source_ids if self.source_ids is not None
+                                           else self.input_ids)
                         minimum = child.get("minItems", 0)
                         maximum = min(child.get("maxItems", len(choices)), len(choices))
                         return choices, minimum, maximum
@@ -2029,8 +2193,12 @@ class LeadProviderConstraints:
                                     props[name] = selection
                                     if "description" in child:
                                         props[name]["description"] = child["description"]
-                                    selectors.append(
-                                        (child_path, choices, (minimum, maximum), guards))
+                                    if not (name == "candidate_input_ids"
+                                            and child_path[-2:] == (
+                                                "review_basis", "candidate_input_ids")
+                                            and "assignments" in child_path[:-2]):
+                                        selectors.append(
+                                            (child_path, choices, (minimum, maximum), guards))
                             else:
                                 selections(child, child_path,
                                            schema_path + ("properties", name), guards)
@@ -2083,7 +2251,9 @@ class LeadProviderConstraints:
                         for path in bound_paths:
                             node = result
                             for name in path: node = node[name]
-                            _decode_allocation_wire(node, self.input_ids, bound_active)
+                            _decode_allocation_wire(
+                            node, allocation_inputs, bound_active,
+                            review_candidate_ids=self.review_candidate_ids)
                         for path, (choices, counts) in selection_plan.items():
                             parent = at(result, path[:-1])
                             name = path[-1]
@@ -2117,141 +2287,152 @@ class LeadProviderConstraints:
             raise ValueError("current Lead stage has no eligible response branch")
         families = []
         for root_number, root in enumerate(roots):
-            members = tuple(item for item in variants if item.branch_key.split(":")[-3] == str(root_number))
-            if not members:
+            root_members = tuple(item for item in variants if item.branch_key.split(":")[-3] == str(root_number))
+            if not root_members:
                 continue
             sources = tuple(
                 rebase_schema_definitions(member.rules.schema_value(), f"g{number}")
-                for number, member in enumerate(members)
+                for number, member in enumerate(root_members)
             )
-            first = sources[0]
-            common_names = tuple(name for name in first["properties"] if name == "response_text" or
-                                 name == "response_type" or name.endswith("_result_type"))
-            common = {name: first["properties"][name] for name in common_names}
-            common_fingerprints = {
-                name: members[0].rules.node_fingerprint((name,)) for name in common_names
-            }
-            details = []
-            guidance = []
-            for source, source_member in zip(sources, members, strict=True):
-                for name in common_names:
-                    if source_member.rules.node_fingerprint((name,)) != common_fingerprints[name]:
-                        raise ValueError("Lead family has incompatible common scalar rules")
-                detail_properties = {name: value for name, value in source["properties"].items() if name not in common_names}
-                scope_node = detail_properties.get("writing_task_scope")
-                if type(scope_node) is dict and "description" in scope_node:
-                    notice = "writing_task_scope: " + scope_node["description"]
-                    if notice not in guidance: guidance.append(notice)
-                detail = {
-                    **closed_object(detail_properties),
-                    "description": source["description"],
+            scalar_groups = {}
+            for source, member in zip(sources, root_members, strict=True):
+                names = tuple(name for name in source["properties"] if name == "response_text" or
+                              name == "response_type" or name.endswith("_result_type"))
+                key = tuple((name, member.rules.node_fingerprint((name,))) for name in names)
+                scalar_groups.setdefault(key, []).append((source, member))
+            family_partitions = []
+            for common_key, group in scalar_groups.items():
+                sources, members = tuple(zip(*group, strict=True))
+                first = sources[0]
+                common_names = tuple(name for name, _ in common_key)
+                common = {name: first["properties"][name] for name in common_names}
+                common_fingerprints = {
+                    name: members[0].rules.node_fingerprint((name,)) for name in common_names
                 }
-                if "$defs" in source: detail["$defs"] = source["$defs"]
-                details.append(detail)
-            detail_graph = alternatives(details)
-            if guidance: detail_graph["description"] = " ".join(guidance)
-            family_graph = closed_object({**common, "response_details": detail_graph})
-            if "description" in root: family_graph["description"] = root["description"]
-            if container_description is not None:
-                family_graph["description"] = container_description
-                if "description" in root and root["description"] != container_description:
-                    family_graph["description"] += "\n" + root["description"]
-            family_graph = project_lead_scope_schema(factor_rule_schema(
-                _compile_closed_choices(hoist_schema_definitions(family_graph))))
-            family_graph = factor_rule_schema(family_graph)
-            maximum_bytes = members[0].rules.maximum_bytes
-            if any(member.rules.maximum_bytes != maximum_bytes for member in members):
-                raise ValueError("Lead family has incompatible member budgets")
+                details = []
+                guidance = []
+                for source, source_member in zip(sources, members, strict=True):
+                    for name in common_names:
+                        if source_member.rules.node_fingerprint((name,)) != common_fingerprints[name]:
+                            raise ValueError("Lead family has incompatible common scalar rules")
+                    detail_properties = {name: value for name, value in source["properties"].items() if name not in common_names}
+                    scope_node = detail_properties.get("writing_task_scope")
+                    if type(scope_node) is dict and "description" in scope_node:
+                        notice = "writing_task_scope: " + scope_node["description"]
+                        if notice not in guidance: guidance.append(notice)
+                    detail = {
+                        **closed_object(detail_properties),
+                        "description": source["description"],
+                    }
+                    if "$defs" in source: detail["$defs"] = source["$defs"]
+                    details.append(detail)
+                detail_graph = alternatives(details)
+                if guidance: detail_graph["description"] = " ".join(guidance)
+                family_graph = closed_object({**common, "response_details": detail_graph})
+                if "description" in root: family_graph["description"] = root["description"]
+                if container_description is not None:
+                    family_graph["description"] = container_description
+                    if "description" in root and root["description"] != container_description:
+                        family_graph["description"] += "\n" + root["description"]
+                family_graph = project_lead_scope_schema(factor_rule_schema(
+                    _compile_closed_choices(hoist_schema_definitions(family_graph))))
+                family_graph = factor_rule_schema(family_graph)
+                maximum_bytes = root_members[0].rules.maximum_bytes
+                if any(member.rules.maximum_bytes != maximum_bytes for member in root_members):
+                    raise ValueError("Lead family has incompatible member budgets")
 
-            def complete_size(graph: dict[str, object]) -> int:
-                bound = deepcopy(graph)
-                bound["properties"]["schema_id"] = {
-                    "type": "string", "enum": ["lead_v11_" + "0" * 32],
-                }
-                bound["required"] = [*bound["required"], "schema_id"]
-                return len(json.dumps(bound, ensure_ascii=False, sort_keys=True,
-                                      separators=(",", ":")).encode("utf-8"))
+                def complete_size(graph: dict[str, object]) -> int:
+                    bound = deepcopy(graph)
+                    bound["properties"]["schema_id"] = {
+                        "type": "string", "enum": ["lead_v11_" + "0" * 32],
+                    }
+                    bound["required"] = [*bound["required"], "schema_id"]
+                    return len(json.dumps(bound, ensure_ascii=False, sort_keys=True,
+                                          separators=(",", ":")).encode("utf-8"))
 
-            def references(node: object) -> set[str]:
-                if type(node) is list:
-                    return set().union(*(references(child) for child in node))
-                if type(node) is not dict:
-                    return set()
-                names = {node["$ref"].removeprefix("#/$defs/")} if "$ref" in node else set()
-                return names.union(*(references(child) for key, child in node.items()
-                                     if key != "$defs"))
+                def references(node: object) -> set[str]:
+                    if type(node) is list:
+                        return set().union(*(references(child) for child in node))
+                    if type(node) is not dict:
+                        return set()
+                    names = {node["$ref"].removeprefix("#/$defs/")} if "$ref" in node else set()
+                    return names.union(*(references(child) for key, child in node.items()
+                                         if key != "$defs"))
 
-            definitions = family_graph.get("$defs", {})
+                definitions = family_graph.get("$defs", {})
 
-            def closure(names: set[str]) -> set[str]:
-                pending = list(names)
-                while pending:
-                    name = pending.pop()
-                    if name not in definitions:
-                        raise ValueError("Lead family refers to an undeclared definition")
-                    extra = references(definitions[name]) - names
-                    names.update(extra)
-                    pending.extend(extra)
-                return names
+                def closure(names: set[str]) -> set[str]:
+                    pending = list(names)
+                    while pending:
+                        name = pending.pop()
+                        if name not in definitions:
+                            raise ValueError("Lead family refers to an undeclared definition")
+                        extra = references(definitions[name]) - names
+                        names.update(extra)
+                        pending.extend(extra)
+                    return names
 
-            retained = set(definitions) - closure(references(family_graph))
-            detail_rule = family_graph["properties"]["response_details"]
-            clauses = tuple(detail_rule.get("anyOf", (detail_rule,)))
+                retained = set(definitions) - closure(references(family_graph))
+                detail_rule = family_graph["properties"]["response_details"]
+                clauses = tuple(detail_rule.get("anyOf", (detail_rule,)))
 
-            def part_graph(first: int, last: int) -> dict[str, object]:
-                part = deepcopy(family_graph)
-                detail = part["properties"]["response_details"]
-                if "anyOf" in detail:
-                    selected = deepcopy(clauses[first:last])
-                    if len(selected) > 1:
-                        detail["anyOf"] = list(selected)
-                    else:
-                        annotation = {key: value for key, value in detail.items()
-                                      if key != "anyOf"}
-                        target = selected[0]
-                        if all(key not in target or target[key] == value
-                               for key, value in annotation.items()):
-                            part["properties"]["response_details"] = {**target, **annotation}
+                def part_graph(first: int, last: int) -> dict[str, object]:
+                    part = deepcopy(family_graph)
+                    detail = part["properties"]["response_details"]
+                    if "anyOf" in detail:
+                        selected = deepcopy(clauses[first:last])
+                        if len(selected) > 1:
+                            detail["anyOf"] = list(selected)
                         else:
-                            name = f"family_part_{first}_{last}"
-                            while name in part.get("$defs", {}):
-                                name += "_"
-                            part.setdefault("$defs", {})[name] = target
-                            part["properties"]["response_details"] = {
-                                "$ref": f"#/$defs/{name}", **annotation,
-                            }
-                local_definitions = part.pop("$defs", {})
-                needed = references(part) | retained
-                pending = list(needed)
-                while pending:
-                    name = pending.pop()
-                    extra = references(local_definitions[name]) - needed
-                    needed.update(extra)
-                    pending.extend(extra)
-                if needed:
-                    part["$defs"] = {name: rule for name, rule in local_definitions.items()
-                                     if name in needed}
-                return part
+                            annotation = {key: value for key, value in detail.items()
+                                          if key != "anyOf"}
+                            target = selected[0]
+                            if all(key not in target or target[key] == value
+                                   for key, value in annotation.items()):
+                                part["properties"]["response_details"] = {**target, **annotation}
+                            else:
+                                name = f"family_part_{first}_{last}"
+                                while name in part.get("$defs", {}):
+                                    name += "_"
+                                part.setdefault("$defs", {})[name] = target
+                                part["properties"]["response_details"] = {
+                                    "$ref": f"#/$defs/{name}", **annotation,
+                                }
+                    local_definitions = part.pop("$defs", {})
+                    needed = references(part) | retained
+                    pending = list(needed)
+                    while pending:
+                        name = pending.pop()
+                        extra = references(local_definitions[name]) - needed
+                        needed.update(extra)
+                        pending.extend(extra)
+                    if needed:
+                        part["$defs"] = {name: rule for name, rule in local_definitions.items()
+                                         if name in needed}
+                    return part
 
-            pending = [(0, len(clauses))]
-            partitions = []
-            while pending:
-                first, last = pending.pop(0)
-                part = part_graph(first, last)
-                if complete_size(part) <= maximum_bytes:
-                    partitions.append((first, last, part))
-                elif last - first > 1:
-                    middle = (first + last) // 2
-                    pending[:0] = [(first, middle), (middle, last)]
-                else:
-                    raise ValueError("complete Lead clause exceeds its member schema budget")
-            if tuple(index for first, last, _ in partitions for index in range(first, last)) != (
-                    tuple(range(len(clauses)))):
-                raise ValueError("Lead family partition lost an ordered clause")
-            for name, rule in definitions.items():
-                if not any(part.get("$defs", {}).get(name) == rule for _, _, part in partitions):
-                    raise ValueError("Lead family partition lost a declared definition")
-            for part_number, (_first, _last, part) in enumerate(partitions):
+                pending = [(0, len(clauses))]
+                partitions = []
+                while pending:
+                    first, last = pending.pop(0)
+                    part = part_graph(first, last)
+                    if complete_size(part) <= maximum_bytes:
+                        partitions.append((first, last, part))
+                    elif last - first > 1:
+                        middle = (first + last) // 2
+                        pending[:0] = [(first, middle), (middle, last)]
+                    else:
+                        raise ValueError("complete Lead clause exceeds its member schema budget")
+                if tuple(index for first, last, _ in partitions for index in range(first, last)) != (
+                        tuple(range(len(clauses)))):
+                    raise ValueError("Lead family partition lost an ordered clause")
+                for name, rule in definitions.items():
+                    if not any(part.get("$defs", {}).get(name) == rule for _, _, part in partitions):
+                        raise ValueError("Lead family partition lost a declared definition")
+                family_partitions.extend(
+                    (part, members, common_names) for _, _, part in partitions
+                )
+            for part_number, (part, members, common_names) in enumerate(family_partitions):
                 family_rules = SchemaRules.declare(part, maximum_bytes=maximum_bytes)
 
                 def family_decode(body: dict[str, object], *, candidates=members,
@@ -2270,7 +2451,7 @@ class LeadProviderConstraints:
                             return candidate.decode(expanded)
                     raise ValueError("selected family details violate its bound choice graph")
                 branch_key = f"{contract.contract_id}:family:{root_number}"
-                if len(partitions) > 1:
+                if len(family_partitions) > 1:
                     branch_key += f":partition:{part_number}"
                 families.append(LeadWireVariant(branch_key, family_rules, family_decode))
         return tuple(families)
@@ -2296,7 +2477,7 @@ class LeadProviderConstraints:
                 "Use needs_information/analysis_only and grounded questions when inadequate. Rejected public "
                 "answers stay input-only. The assessment grants no confirmation, write or budget authority."
             ),
-            "offered_assignment_input_ids": list(self.input_ids),
+            "offered_assignment_input_ids": list(self._allocation_input_ids()),
             "required_input_ids": [item for item in self.input_ids if (not self.preparation_kind or item not in PREPARATION_INPUT_IDS)
                                    and not (self.adoption_intent is AuthoringIntent.REVIEW_ONLY and item == "user_input")],
             "mandatory_reviewer_inputs": [

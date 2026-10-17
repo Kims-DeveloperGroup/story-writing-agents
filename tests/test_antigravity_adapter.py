@@ -77,8 +77,7 @@ _REQUIRED_HEADLESS_FLAGS = (
     "--output-format",
     "--print",
     "--print-timeout",
-    "--sandbox",
-)
+    "--sandbox",)
 
 
 def _json_result(
@@ -95,8 +94,7 @@ def _json_result(
 
     terminal: dict[str, object] = {
         "conversation_id": conversation_id if result_conversation_id is None else result_conversation_id,
-        "status": status,
-    }
+        "status": status,}
     for field, value in (("structured_output", structured_output), ("json_schema", json_schema), ("response", response), ("usage", usage)):
         if value is not _UNSET:
             terminal[field] = value
@@ -120,8 +118,7 @@ def _directory_snapshot(root: Path) -> tuple[int, tuple[tuple[object, ...], ...]
                 path.relative_to(root).as_posix(),
                 stat.S_IFMT(value.st_mode),
                 stat.S_IMODE(value.st_mode),
-                path.read_bytes() if stat.S_ISREG(value.st_mode) else None,
-            )
+                path.read_bytes() if stat.S_ISREG(value.st_mode) else None,)
         )
     return _mode(root), tuple(entries)
 
@@ -250,12 +247,10 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         )
         codex_definition = PromptAssembler(self.workspace).build_definition(
             session_id="definition_session",
-            agent_id=PLOT_ARCHITECT,
-        )
+            agent_id=PLOT_ARCHITECT,)
         self.definition = replace(
             codex_definition,
-            backend="antigravity",
-        )
+            backend="antigravity",)
 
     def adapter(
         self,
@@ -283,8 +278,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             "explicit_effort": effort,
             "system_model": system_model,
             "system_effort": system_effort,
-            "agent_settings": agent_settings,
-        }
+            "agent_settings": agent_settings,}
         if create_process is not None:
             arguments["create_process"] = lambda: create_process
         if wait_for is not None:
@@ -311,8 +305,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             round_number=0,
             revision_id="r0",
             task="Perform the requested phase.",
-            user_payload="PRIVATE_STORY_PAYLOAD",
-        )
+            user_payload="PRIVATE_STORY_PAYLOAD",)
 
     def execution_workspace(self, session_id: str, *, install_role: bool = True):
         """Keep a real owner-issued call capability live for this test."""
@@ -330,8 +323,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 with owner.open_ready_resources() as access:
                     access.install_provider_role(role)
             self._execution_workspaces[session_id] = self._execution_stack.enter_context(
-                live_provider_execution_workspace(self._execution_control.root, session_id)
-            )
+                live_provider_execution_workspace(self._execution_control.root, session_id))
         return self._execution_workspaces[session_id]
 
     def provider_invocation(self, session_id: str) -> ProviderInvocation:
@@ -439,8 +431,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             invocation = ProviderInvocation(
                 session_id=session_id, schema={"type": "object"},
                 payload={"story": "PRIVATE_STORY_PAYLOAD"}, thread_id=None,
-                execution_workspace=execution_workspace,
-            )
+                execution_workspace=execution_workspace,)
             process = mock.AsyncMock(side_effect=AssertionError("provider process invoked"))
             with mock.patch("story_writing_agents.antigravity_adapter.run_process", process):
                 with self.assertRaises(ProviderInvocationError) as caught:
@@ -512,8 +503,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             [
                 entry.name
                 for entry in target.parent.iterdir()
-                if entry.name.startswith(f".{target.name}.")
-            ],
+                if entry.name.startswith(f".{target.name}.")],
             [],
         )
 
@@ -539,8 +529,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         error = caught.exception
         self.assertEqual(
             str(error),
-            "Antigravity provider workspace could not be prepared",
-        )
+            "Antigravity provider workspace could not be prepared",)
         self.assertIs(error.taint_existing_thread, False)
         self.assertNotIn("PRIVATE", str(error))
         forbidden_process.assert_not_awaited()
@@ -569,8 +558,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             sum(
                 component.serialized_utf8_bytes
-                for component in first.binding_components
-            ),
+                for component in first.binding_components),
             len(agent_before),
         )
         self.assertEqual(
@@ -582,8 +570,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 ContextComponentKind.RESPONSE_LANGUAGE,
                 *(
                     ContextComponentKind.CORE_DOCUMENT
-                    for _ in self.definition.context_document_files
-                ),
+                    for _ in self.definition.context_document_files),
                 ContextComponentKind.PROVIDER_CONSTRAINTS,
             ),
         )
@@ -591,8 +578,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             tuple(
                 component.identity
                 for component in first.binding_components
-                if component.kind is ContextComponentKind.CORE_DOCUMENT
-            ),
+                if component.kind is ContextComponentKind.CORE_DOCUMENT),
             tuple(
                 f"core_documents/{reference.path.name}"
                 for reference in self.definition.context_document_files
@@ -610,14 +596,12 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             [
                 path.relative_to(state_root).as_posix()
                 for path in state_root.rglob("*")
-                if path.is_file()
-            ],
+                if path.is_file()],
             [f"definitions/plot_architect/{self.definition.fingerprint}/agent.md"],
         )
         body, body_components = AntigravityAdapter._definition_file(self.definition)
         custom_agent, custom_components = AntigravityAdapter._custom_agent_file(
-            self.definition
-        )
+            self.definition)
         native_agent_id = adapter.session_role_projection(first).native_agent_id
         wrapper = AntigravityAdapter._custom_agent_wrapper(native_agent_id)
         self.assertEqual(agent_before, custom_agent)
@@ -637,8 +621,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 for custom, original in zip(
                     custom_components,
                     body_components,
-                    strict=True,
-                )
+                    strict=True,)
             ),
             (len(wrapper),) + (0,) * (len(body_components) - 1),
         )
@@ -655,8 +638,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(reference.read_text(), rules)
         self.assertIn(
             f"Use {self.definition.language} for all visible story content.",
-            rules,
-        )
+            rules,)
         self.assertIn("Do not use shell commands, web search, plugins", rules)
         self.assertIn("by calling finish with that complete object as its arguments.", rules)
         self.assertFalse((state_root / "sessions").exists())
@@ -758,8 +740,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                             adapter,
                             f"ordinary-{seam}",
                             "ordinary-mode",
-                            structured_output={"value": "ok"},
-                        ),
+                            structured_output={"value": "ok"},),
                         stderr=b"",
                         returncode=0,
                     )
@@ -776,20 +757,17 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     stack.enter_context(
                         mock.patch(
                             "story_writing_agents.antigravity_adapter.os",
-                            adapter_os,
-                        )
+                            adapter_os,)
                     )
                     stack.enter_context(
                         mock.patch(
                             "story_writing_agents.antigravity_adapter.run_process",
-                            process,
-                        )
+                            process,)
                     )
                     binding = adapter.bind(self.definition)
                     result = await adapter.invoke(
                         binding,
-                        invocation,
-                    )
+                        invocation,)
 
                 self.assertEqual(
                     result,
@@ -803,23 +781,19 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             for exception_type in controls:
                 with self.subTest(stage=stage, control=exception_type.__name__):
                     adapter = self.adapter(
-                        f"control-mode-{stage}-{exception_type.__name__.lower()}"
-                    )
+                        f"control-mode-{stage}-{exception_type.__name__.lower()}")
                     if stage == "invoke":
                         binding = adapter.bind(self.definition)
                         invocation = self.provider_invocation(
-                            f"control-{exception_type.__name__.lower()}"
-                        )
+                            f"control-{exception_type.__name__.lower()}")
                     failure = exception_type(f"PRIVATE_{stage.upper()}_CONTROL")
                     forbidden_process = mock.AsyncMock(
-                        side_effect=AssertionError("provider process invoked")
-                    )
+                        side_effect=AssertionError("provider process invoked"))
                     with (
                         mock.patch.object(os, "supports_follow_symlinks", set()),
                         mock.patch(
                             "story_writing_agents.antigravity_adapter.os.fchmod",
-                            side_effect=failure,
-                        ),
+                            side_effect=failure,),
                         mock.patch(
                             "story_writing_agents.antigravity_adapter.run_process",
                             forbidden_process,
@@ -882,27 +856,23 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 with (
                     mock.patch(
                         "story_writing_agents.antigravity_adapter.run_process",
-                        forbidden_process,
-                    ),
+                        forbidden_process,),
                     self.assertRaises(NotADirectoryError) as caught,
                 ):
                     adapter.bind(self.definition)
 
                 self.assertEqual(
                     str(caught.exception),
-                    "Antigravity state directory is unsafe",
-                )
+                    "Antigravity state directory is unsafe",)
                 self.assertEqual(_directory_snapshot(outside), outside_before)
                 self.assertEqual(_mode(parent), parent_mode_before)
                 self.assertEqual(
                     parent_sentinel.read_bytes(),
-                    b"PRIVATE_PARENT_BYTES",
-                )
+                    b"PRIVATE_PARENT_BYTES",)
                 if unsafe_before is not None:
                     self.assertEqual(
                         (_mode(unsafe), unsafe.read_bytes()),
-                        unsafe_before,
-                    )
+                        unsafe_before,)
                 forbidden_process.assert_not_awaited()
 
     async def test_runtime_chain_rejects_links_and_files_before_launch(self) -> None:
@@ -1059,8 +1029,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         environment = dict(
             os.environ,
             PYTHONPATH=str(repository_root / "src"),
-            PYTHONDONTWRITEBYTECODE="1",
-        )
+            PYTHONDONTWRITEBYTECODE="1",)
         script = (
             "import story_writing_agents as facade; "
             "from story_writing_agents import antigravity_adapter as module; "
@@ -1248,8 +1217,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     "contextual-conversation",
                     structured_output={"action": "answer"},
                     json_schema=schema,
-                    usage={"input_tokens": 0, "output_tokens": 4},
-                ),
+                    usage={"input_tokens": 0, "output_tokens": 4},),
                 stderr=b"",
                 returncode=0,
             )
@@ -1282,8 +1250,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "input_tokens": 0,
                     "output_tokens": 2,
-                    "cache_read_tokens": 3,
-                },
+                    "cache_read_tokens": 3,},
                 ProviderUsage(0, 2, 3),
             ),
             ({"input_tokens": 4}, ProviderUsage(input_tokens=4)),
@@ -1320,8 +1287,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     "input_tokens": True,
                     "output_tokens": -1,
                     "cache_read_tokens": "3",
-                    "unknown": 4,
-                },
+                    "unknown": 4,},
             ),
             expected_thread_id=None,
             expected_schema=_DEFAULT_RESULT_SCHEMA,
@@ -1337,14 +1303,12 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         agent_settings = {
             PLOT_ARCHITECT: ("agent-model", "medium"),
-            CHARACTER_CUSTODIAN: (None, None),
-        }
+            CHARACTER_CUSTODIAN: (None, None),}
         adapter = self.adapter(
             "precedence-state",
             system_model="system-model",
             system_effort="low",
-            agent_settings=agent_settings,
-        )
+            agent_settings=agent_settings,)
         agent_settings[PLOT_ARCHITECT] = ("mutated-model", "high")
         self.assertEqual(
             adapter.invocation_settings(PLOT_ARCHITECT),
@@ -1362,8 +1326,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             schema={"type": "object"},
             thread_id=None,
             agent_id=PLOT_ARCHITECT,
-            native_agent_id=native_agent_id,
-        )
+            native_agent_id=native_agent_id,)
         self.assertEqual(
             command[command.index("--model") :],
             ["--model", "agent-model", "--effort", "medium", "--new-project"],
@@ -1379,8 +1342,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     schema={"type": "object"},
                     thread_id=None,
                     agent_id=semantic_id,
-                    native_agent_id=selected_id,
-                )
+                    native_agent_id=selected_id,)
 
         explicit = self.adapter(
             "explicit-state",
@@ -1388,8 +1350,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             effort="high",
             system_model="system-model",
             system_effort="low",
-            agent_settings={PLOT_ARCHITECT: ("agent-model", "medium")},
-        )
+            agent_settings={PLOT_ARCHITECT: ("agent-model", "medium")},)
         self.assertEqual(
             explicit.invocation_settings(PLOT_ARCHITECT),
             ("explicit-model", "high"),
@@ -1416,8 +1377,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         defaults.update(
             {
                 "antigravity_model": "persisted-system-model",
-                "antigravity_effort": "low",
-            }
+                "antigravity_effort": "low",}
         )
         self.workspace.write_json("config/system_defaults.json", defaults)
         agents = self.workspace.read_json("config/agent_configs.json")
@@ -1425,15 +1385,13 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             {
                 "backend": "antigravity",
                 "antigravity_model": "persisted-agent-model",
-                "antigravity_effort": "medium",
-            }
+                "antigravity_effort": "medium",}
         )
         self.workspace.write_json("config/agent_configs.json", agents)
         backend = AgentBackend(
             self.workspace,
             executable=sys.executable,
-            antigravity_executable="private-agy",
-        )
+            antigravity_executable="private-agy",)
         self.addCleanup(backend.close)
         self.assertEqual(
             (backend.antigravity_model, backend.antigravity_effort),
@@ -1463,15 +1421,13 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             {},
         )()
         circular_payload: dict[str, object] = {
-            "story": "CONFIDENTIAL_CIRCULAR_PAYLOAD",
-        }
+            "story": "CONFIDENTIAL_CIRCULAR_PAYLOAD",}
         circular_payload["cycle"] = circular_payload
         cases = (
             (
                 "nonserializable schema",
                 {"type": "object", "const": confidential_schema_value},
-                {"story": "safe"},
-            ),
+                {"story": "safe"},),
             (
                 "circular payload",
                 {"type": "object"},
@@ -1510,8 +1466,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     error = caught.exception
                     self.assertEqual(
                         str(error),
-                        "Antigravity request could not be encoded",
-                    )
+                        "Antigravity request could not be encoded",)
                     self.assertEqual(
                         error.args,
                         ("Antigravity request could not be encoded",),
@@ -1522,11 +1477,9 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIsNone(error.__context__)
                     self.assertEqual(
                         provider_failure_accounting(error).state,
-                        ProviderCallState.PREPARED,
-                    )
+                        ProviderCallState.PREPARED,)
                     self.assertIsNone(
-                        provider_failure_accounting(error).actual_transport_utf8_bytes
-                    )
+                        provider_failure_accounting(error).actual_transport_utf8_bytes)
                     self.assertFalse(sessions_root.exists())
 
         forbidden_process.assert_not_awaited()
@@ -1579,8 +1532,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         first_invocation = first_invoke.await_args.args[1]
         self.assertIsNone(first_invocation.thread_id)
         manifest = control.read_json(
-            f"agent_states/orchestrator_state/provider_sessions/{session_id}.json"
-        )
+            f"agent_states/orchestrator_state/provider_sessions/{session_id}.json")
         self.assertEqual(len(manifest["provider_threads"]), 1)
         thread_key, thread = next(iter(manifest["provider_threads"].items()))
         self.assertRegex(thread_key, r"\Aantigravity:plot_architect:[0-9a-f]{64}\Z")
@@ -1592,8 +1544,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 "fingerprint": thread_key.removeprefix("antigravity:plot_architect:"),
                 "thread_id": "agy-conversation",
                 "tainted": False,
-                "updated_at": thread["updated_at"],
-            },
+                "updated_at": thread["updated_at"],},
         )
         retained_staging = bound.staging_directory
         backend.close()
@@ -1614,8 +1565,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         second_invoke = mock.AsyncMock(
             return_value=ProviderResult(
                 thread_id="agy-conversation",
-                response_text='{"response_type":"candidate_draft","response_text":"resumed"}',
-            )
+                response_text='{"response_type":"candidate_draft","response_text":"resumed"}',)
         )
         with mock.patch.object(
             resumed_backend._antigravity_adapter,
@@ -1623,8 +1573,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             second_invoke,
         ):
             resumed_reply = await resumed_bound.invoke(
-                self.request(session_id, debate_id="debate-two")
-            )
+                self.request(session_id, debate_id="debate-two"))
         self.assertEqual(
             resumed_reply,
             replace(
@@ -1661,8 +1610,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                         payload={},
                         thread_id=None,
                     ),
-                    "Antigravity session ID is invalid",
-                ),
+                    "Antigravity session ID is invalid",),
                 (
                     ProviderInvocation(
                         session_id="safe-session",
@@ -1684,8 +1632,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("CONFIDENTIAL", str(caught.exception))
         forbidden_process.assert_not_awaited()
         self.assertFalse(
-            (self.workspace.path("validation-state") / "sessions").exists()
-        )
+            (self.workspace.path("validation-state") / "sessions").exists())
 
         confidential = "CONFIDENTIAL_PROVIDER_OUTPUT"
 
@@ -1735,8 +1682,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 "nonzero",
                 9,
                 None,
-                "Antigravity CLI exited with status 9",
-            ),
+                "Antigravity CLI exited with status 9",),
             (
                 "timeout",
                 None,
@@ -1759,8 +1705,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     communication.set_result(
                         (
                             b"CONFIDENTIAL_PROVIDER_STDOUT",
-                            b"CONFIDENTIAL_PROVIDER_STDERR",
-                        )
+                            b"CONFIDENTIAL_PROVIDER_STDERR",)
                     )
                 stopped = asyncio.Future()
                 stopped.set_result(None)
@@ -1787,8 +1732,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     f"transport-{label}",
                     timeout_seconds=4,
                     create_process=create_process,
-                    wait_for=wait_for,
-                )
+                    wait_for=wait_for,)
                 binding = adapter.bind(self.definition)
                 invocation = ProviderInvocation(
                     session_id=f"transport-{label}",
@@ -1839,8 +1783,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         backend = AgentBackend(
             self.workspace,
             executable=sys.executable,
-            antigravity_executable="CONFIDENTIAL_AGY_EXECUTABLE",
-        )
+            antigravity_executable="CONFIDENTIAL_AGY_EXECUTABLE",)
         self.addCleanup(backend.close)
         resolved = mock.Mock(backend="antigravity")
         forbidden_process = mock.AsyncMock(
@@ -1850,8 +1793,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         with (
             mock.patch(
                 "story_writing_agents.backend.ConfigManager.resolve_from_snapshot",
-                return_value=resolved,
-            ),
+                return_value=resolved,),
             mock.patch.object(
                 backend._antigravity_adapter,
                 "executable_available",
@@ -1873,8 +1815,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         error = caught.exception
         self.assertEqual(
             str(error),
-            "Antigravity CLI headless capabilities could not be verified",
-        )
+            "Antigravity CLI headless capabilities could not be verified",)
         self.assertNotIn("CONFIDENTIAL", str(error))
         self.assertIsNone(error.__cause__)
         self.assertIsNone(error.__context__)
@@ -1905,8 +1846,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     [],
                     7,
                     stdout=b"PRIVATE_STDOUT",
-                    stderr=b"PRIVATE_STDERR",
-                ),
+                    stderr=b"PRIVATE_STDERR",),
                 False,
             ),
             (
@@ -1986,8 +1926,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             "capability-state",
             timeout_seconds=9,
             which=which,
-            capability_run=capability_run,
-        )
+            capability_run=capability_run,)
         binding = adapter.bind(self.definition)
         agent_before = (binding.staging_directory / "agent.md").read_bytes()
         native_state = (
@@ -2016,17 +1955,14 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 else:
                     self.assertIs(
                         adapter.headless_capabilities_available(),
-                        expected,
-                    )
+                        expected,)
                 self.assertFalse(expected_probe.exists())
                 self.assertEqual(
                     (binding.staging_directory / "agent.md").read_bytes(),
-                    agent_before,
-                )
+                    agent_before,)
                 self.assertEqual(
                     native_state.read_bytes(),
-                    b"PRIVATE_RETAINED_PROVIDER_STATE",
-                )
+                    b"PRIVATE_RETAINED_PROVIDER_STATE",)
 
         self.assertEqual(which.call_count, len(cases))
         self.assertEqual(

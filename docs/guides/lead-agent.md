@@ -3,9 +3,11 @@
 The Lead Orchestrator is the normal user-facing story agent in both the
 interactive shell and Python runtime. Users discuss story work with the lead; they do not need to choose an
 agent for every turn. The lead answers workflow/status questions and asks
-focused clarification questions directly. In ordinary orchestration, substantive
-story answers, critiques, drafting, revision and review require a bounded
-proposal covering every affected specialist domain. The Lead may first recommend preparing that scoped
+focused clarification questions directly. The lead can also answer factual questions by inspecting current writing-artifact
+READs under a review scope covering the relevant domains. This inspection does
+not draft or revise story text or grant specialist, candidate or write authority.
+Substantive story critiques, drafting, revision and specialist review require a
+bounded proposal covering every affected specialist domain. The Lead may first recommend preparing that scoped
 proposal; preparation grants no specialist execution authority. For a requested
 story-file change, the lead can also describe a
 provider-neutral edit intent. Runtime code—not the lead provider—resolves that
@@ -422,7 +424,7 @@ The lead returns one `LeadTurnResult`:
 
 | `kind` | User meaning | `next_action` |
 | --- | --- | --- |
-| `answer` | A workflow/status answer, without substantive story authoring. | `continue_with_lead` |
+| `answer` | Workflow/status guidance or a verified factual writing-READ inspection, without story authoring. | `continue_with_lead` |
 | `question` | One material user choice is missing. | `reply_to_lead` |
 | `critique` | A non-authoring workflow critique; substantive story critique needs specialists. | `continue_with_lead` |
 | `recommendation` | A fresh preparation recommendation, or a runtime workflow/recovery notice. | `submit_recommendation_decision` for a fresh action; otherwise state-specific. |
@@ -615,8 +617,13 @@ target. Constraint assessment returns `constraints_assessed`, `concern`,
 `conflict`, or `insufficient_evidence`; it supplies constraints to the draft owner
 and cannot supply draft proof or review support. Review requires `ReviewBasis`
 schema 1 with nonempty `candidate_input_ids` and visible `criteria`; a brief or
-status receipt alone is not a review candidate. When the user supplies a complete
+status receipt alone is not a review candidate. The candidate subset and criteria
+remain independent of the assignment's other required inputs and task instructions.
+A continuation preserves its frozen candidate eligibility after READ. When the user supplies a complete
 candidate, the Lead must disclose that interpretation.
+
+Continuation assignments keep the original required input set after READ adds
+evidence. Review candidates remain separately frozen within that set.
 
 Active same-session tasks come from validated conversation catalog/events. The
 Lead explicitly selects a runtime-offered task/revision to continue it across
@@ -796,11 +803,11 @@ scope. Evidence and authoring routing remain separate from execution authority:
 | --- | --- | --- |
 | `workflow_meta` / `not_applicable` | No receipts | `answer`, `question`, `critique`, `recommendation` |
 | `premise_analysis` / `not_applicable` | No receipts; exact typed analysis Spec in the same batch, with no AuthoringScope | Candidate-free `proposal` only |
-| `story_specific` / `verified` | One nonempty attached reference or completed READ | All five kinds |
+| `story_specific` / `verified` | One nonempty attached reference or completed READ | `question`, `recommendation`, `proposal`; a factual `answer` also requires the current writing-READ review scope |
 | `story_specific` / `missing` | An absent canonical-core status, or a complete non-truncated zero-hit SEARCH whose authorized scope includes writing artifacts | `question`, `recommendation`, `proposal` |
 | `story_specific` / `empty` | A zero-byte canonical-core status or a zero-byte whole attached reference | `question`, `recommendation`, `proposal` |
-| `story_specific` / `incomplete` | At least one current content or canonical-core status receipt | `question`, `critique`, `recommendation`, `proposal` |
-| `story_specific` / `conflicting` | At least two distinct, nonempty current content receipts | `question`, `critique`, `recommendation`, `proposal` |
+| `story_specific` / `incomplete` | At least one current content or canonical-core status receipt | `question`, `recommendation`, `proposal` |
+| `story_specific` / `conflicting` | At least two distinct, nonempty current content receipts | `question`, `recommendation`, `proposal` |
 
 The `premise_analysis` scope is host-derived after strict validation of the
 offered question and analyst assignments; a provider cannot select it. A typed

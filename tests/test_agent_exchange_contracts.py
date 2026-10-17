@@ -113,8 +113,7 @@ class AgentExchangeContractTests(unittest.TestCase):
             "AgentExchangeScopeKind",
             "AgentExchangeSelection",
             "AgentExchangeSnapshot",
-            "AgentExchangeStorageError",
-        ]
+            "AgentExchangeStorageError",]
         self.assertEqual(contracts.__all__, contract_names)
         self.assertEqual(
             agent_exchanges.__all__,
@@ -154,8 +153,7 @@ class AgentExchangeContractTests(unittest.TestCase):
             AgentExchangeProvider.CODEX,
             "e" + "-" * 127,
             AgentExchangeRequestType.REQUEST,
-            "PRIVATE request body",
-        )
+            "PRIVATE request body",)
         self.assertNotIn("PRIVATE", repr(value))
         self.assertFalse(hasattr(value, "__dict__"))
         with self.assertRaises(dataclasses.FrozenInstanceError):
@@ -170,8 +168,7 @@ class AgentExchangeContractTests(unittest.TestCase):
                 exchange_id="e",
                 request_type=AgentExchangeRequestType.REQUEST,
                 content="body",
-                transport="PRIVATE transport",
-            )
+                transport="PRIVATE transport",)
 
     def test_input_rejects_unsafe_identity_enum_content_and_surrogates(self) -> None:
         base: dict[str, object] = {
@@ -182,8 +179,7 @@ class AgentExchangeContractTests(unittest.TestCase):
             "provider": AgentExchangeProvider.CODEX,
             "exchange_id": "exchange",
             "request_type": AgentExchangeRequestType.REQUEST,
-            "content": "body",
-        }
+            "content": "body",}
         cases = (
             ({"session_id": "../PRIVATE_PATH"}, ValueError),
             ({"scope_id": "space value"}, ValueError),
@@ -226,8 +222,7 @@ class AgentExchangeContractTests(unittest.TestCase):
         )
         self.assertEqual(
             tuple(
-                field.name for field in dataclasses.fields(AgentExchangeAppendReceipt)
-            ),
+                field.name for field in dataclasses.fields(AgentExchangeAppendReceipt)),
             tuple(inspect.signature(AgentExchangeAppendReceipt).parameters),
         )
         receipt = AgentExchangeAppendReceipt(
@@ -242,8 +237,7 @@ class AgentExchangeContractTests(unittest.TestCase):
             content_full_characters=4,
             content_retained_characters=3,
             content_truncated=True,
-            content_sha256=_DIGEST,
-        )
+            content_sha256=_DIGEST,)
         selection = _selection()
         inventory = AgentExchangeInventoryItem(selection, 2, 1, 3, 2, 4)
         snapshot = AgentExchangeSnapshot(selection, b"{}\n{}\n", 2, 1, 3, 2, 4)
@@ -268,8 +262,7 @@ class AgentExchangeContractTests(unittest.TestCase):
             {"content_retained_characters": 5},
             {"content_full_characters": 3, "content_retained_characters": 3},
             {"content_truncated": False},
-            {"content_sha256": "PRIVATE digest"},
-        )
+            {"content_sha256": "PRIVATE digest"},)
         for overrides in invalid_receipts:
             values: dict[str, object] = {
                 "session_id": "session_1",
@@ -283,8 +276,7 @@ class AgentExchangeContractTests(unittest.TestCase):
                 "content_full_characters": 4,
                 "content_retained_characters": 3,
                 "content_truncated": True,
-                "content_sha256": _DIGEST,
-            }
+                "content_sha256": _DIGEST,}
             values.update(overrides)
             with (
                 self.subTest(overrides=overrides),
@@ -309,8 +301,7 @@ class AgentExchangeContractTests(unittest.TestCase):
             self.assertIs(error.failure, failure)
             self.assertEqual(
                 str(error),
-                f"agent exchange storage failure: {failure.value}",
-            )
+                f"agent exchange storage failure: {failure.value}",)
             self.assertFalse(hasattr(error, "path"))
             self.assertNotIn("PRIVATE", str(error))
         with self.assertRaises(TypeError):

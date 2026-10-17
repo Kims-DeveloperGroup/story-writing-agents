@@ -4426,7 +4426,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 async def invoke_context(self, request):
                     nonlocal schema, payload, response, returned
                     schema, payload = request.schema, request.payload
-                    response = lead_fixture_response(request, authored, family=0)
+                    response = lead_fixture_response(
+                        request, authored, family=1 if summary is False else 0)
                     returned = await provider.invoke_context(request)
                     return returned
 

@@ -135,7 +135,8 @@ def _artifact_outcome(
             read_phase = 2
             hits = call.payload['context_observation']['search_results']
             selected_handles = tuple(next(row['read_handle'] for row in hits
-                if row['provenance']['source_locator'] == path) for path, _query in read_queries)
+                if row['provenance']['source_locator'] == path.removeprefix('manuscript/'))
+                for path, _query in read_queries)
             _provider.used_handles = selected_handles
             outer, inner = offered_fixture_bindings(call, action_type='read_context', response_type=None, family=0)
             return indexed_response({'action_type': 'read_context', 'read_handles': finite_fixture_read_selection(
@@ -1111,11 +1112,37 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self.assertNotIn("context_observation", self.backend.calls[-3].payload)
         self.assertEqual(self.backend.calls[-2].payload["context_observation"]["observation_type"], "context_search_results")
         self.assertEqual(self.backend.calls[-1].payload["context_observation"]["observation_type"], "context_read_results")
-        actions = self.backend.calls[-3].schema["properties"]["agent_action"]["anyOf"]
-        answer = next(variant for variant in actions
-                      if variant["properties"]["action_type"]["enum"] == ["submit_result"])
-        self.assertTrue(any("artifact_change_proposal" in variant["properties"]
-                            for variant in answer["properties"]["task_result"]["anyOf"]))
+        from tests.provider_wire_fixture import fixture_schema_node
+        bound_call = self.backend.calls[-3]
+        native_schema = bound_call.schema
+        inner_by_outer = dict(bound_call.contract.outer_inner_schema_ids)
+        issued_answers = {
+            member.schema_id: inner_by_outer[member.schema_id]
+            for member in bound_call.contract.action_index.contracts
+            if member.rule_graph.literal_at(("action_type",)) == "submit_result"
+        }
+        actions = fixture_schema_node(
+            native_schema, native_schema["properties"]["agent_action"])["anyOf"]
+        artifact_capabilities = []
+        for variant in actions:
+            native_action = fixture_schema_node(native_schema, variant)
+            outer_id = fixture_schema_node(
+                native_schema, native_action["properties"]["schema_id"])["enum"][0]
+            if outer_id not in issued_answers:
+                continue
+            native_answer = fixture_schema_node(
+                native_schema, native_action["properties"]["task_result"])
+            inner_id = fixture_schema_node(
+                native_schema, native_answer["properties"]["schema_id"])["enum"][0]
+            native_details = fixture_schema_node(
+                native_schema, native_answer["properties"]["response_details"])
+            native_options = (
+                native_details["anyOf"] if "anyOf" in native_details else (native_details,))
+            artifact_capabilities.append(
+                inner_id == issued_answers[outer_id]
+                and any("artifact_change_proposal" in fixture_schema_node(
+                    native_schema, option)["properties"] for option in native_options))
+        self.assertTrue(any(artifact_capabilities))
         read_evidence_id = self.backend.calls[-1].payload["context_observation"]["read_results"][0]["evidence_id"]
         self.assertIn(
             read_evidence_id,

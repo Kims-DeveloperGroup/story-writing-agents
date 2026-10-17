@@ -34,8 +34,7 @@ class AgentPolicyCompositionTests(unittest.TestCase):
         assembler = PromptAssembler(self.workspace)
         return {
             agent_id: assembler.build_contextual_definition(
-                session_id="policy-session", agent_id=agent_id
-            )
+                session_id="policy-session", agent_id=agent_id)
             for agent_id in ROSTER
         }
 
@@ -53,19 +52,16 @@ class AgentPolicyCompositionTests(unittest.TestCase):
                 else (
                     COMMON_BEHAVIOR_POLICY_FILE,
                     SPECIALIST_COLLABORATION_POLICY_FILE,
-                    AGENT_SPECS[agent_id].system_prompt_file,
-                )
+                    AGENT_SPECS[agent_id].system_prompt_file,)
             )
             paths = tuple(
                 item.path.relative_to(self.workspace.root).as_posix()
-                for item in definition.behavior_policy_components
-            )
+                for item in definition.behavior_policy_components)
             self.assertEqual(paths, expected)
             expected_components = tuple(raw_policy_files[path] for path in expected)
             self.assertEqual(
                 tuple(item.content for item in definition.behavior_policy_components),
-                expected_components,
-            )
+                expected_components,)
             self.assertEqual(tuple(item.sha256 for item in definition.behavior_policy_components),
                              tuple(hashlib.sha256(content).hexdigest() for content in expected_components))
             self.assertEqual(
@@ -84,8 +80,7 @@ class AgentPolicyCompositionTests(unittest.TestCase):
         )
         self.assertEqual(
             {path: self.workspace.path(path).read_bytes() for path in raw_policy_files},
-            raw_policy_files,
-        )
+            raw_policy_files,)
 
     def test_component_edits_have_exact_fingerprint_impact(self) -> None:
         original = self._definitions()
@@ -105,8 +100,7 @@ class AgentPolicyCompositionTests(unittest.TestCase):
                         agent_id
                         for agent_id in ROSTER
                         if changed[agent_id].fingerprint
-                        != original[agent_id].fingerprint
-                    },
+                        != original[agent_id].fingerprint},
                     impacted,
                 )
                 target.write_bytes(initial)

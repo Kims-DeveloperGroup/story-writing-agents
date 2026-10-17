@@ -1,6 +1,7 @@
 """Runtime routing accepts typed task facts and keeps draft/review authority separate."""
 from tests.provider_wire_fixture import ( result as wire_result, lead_fixture_bound_scope, lead_fixture_assignments,
     finite_fixture_selection, lead_fixture_result, lead_fixture_response,)
+from tests.provider_wire_fixture import author_positive_fixture_review_bases
 from tests.provider_wire_fixture import answer as wire_answer, contract_id as wire_contract_id
 
 from functools import partial
@@ -117,8 +118,13 @@ def scoped_proposal(*agents, authoring_assessment=None, activity='draft', paths=
                             record['source_ids'] = finite_fixture_selection(choices, tuple(cells))
         proposal = body.get('specialist_consultation_proposal')
         if type(proposal) is dict and 'assignments' in proposal:
+            choices = dict(call.contract.semantic_index.policy.choices)
+            proposal['assignments'] = author_positive_fixture_review_bases(
+                proposal['assignments'],
+                candidate_choices=choices['review_candidate_ids'])
             allocation = lead_fixture_assignments(
-                proposal['assignments'], input_choices=native_inputs['input_choices'], anchors=native_inputs['anchors'],
+                proposal['assignments'], input_choices=choices['allocation_input_ids'],
+                review_choices=choices['review_candidate_ids'], anchors=native_inputs['anchors'],
                 recipients=proposal.get('required_input_recipients'))
             proposal['assignments'] = allocation['assignments']
         return lead_fixture_response(call, lead_fixture_result(body),
@@ -1278,7 +1284,11 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                 native['authoring_assessment'], source_choices=choices['input_ids'])
             proposal = native['specialist_consultation_proposal']
             allocation = lead_fixture_assignments(
-                proposal['assignments'], input_choices=choices['input_ids'],
+                author_positive_fixture_review_bases(
+                    proposal['assignments'],
+                    candidate_choices=choices['review_candidate_ids']),
+                input_choices=choices['allocation_input_ids'],
+                review_choices=choices['review_candidate_ids'],
                 anchors={PLOT_ARCHITECT: request.basis.inputs[0].input_id},
                 recipients={source: PLOT_ARCHITECT for source in choices['required_input_ids']})
             proposal.update(allocation)

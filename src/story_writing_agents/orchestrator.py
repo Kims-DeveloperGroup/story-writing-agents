@@ -40,6 +40,7 @@ from .lead_provider_contracts import (
     LeadResultRuleSeed,
     LeadDecodedResult,
     empty_core_status_evidence,
+    lead_outcome_scope_paths,
 )
 from .provider_wire import normalize_result, recover_lead_public_response, hoist_schema_definitions
 
@@ -886,8 +887,9 @@ def _lead_front_result_contract(
         variants = [
             _closed_result_object(scoped,
                 description=(
-                    "Answer workflow or status questions directly when no clarification, request "
-                    "update, or specialist proposal is needed."
+                    "Answer workflow or status questions directly, or report facts supported "
+                    "by current writing READs in a REVIEW scope, without requesting "
+                    "specialist or document actions."
                 ),
             ),
             _closed_result_object({**scoped, "kind": {"enum": ["question", "critique"], "type": "string"}},
@@ -1588,15 +1590,20 @@ class _DuplicateJsonKey(ValueError):
     pass
 
 
-def _provider_review_basis(input_ids: tuple[str, ...], instruction: str) -> ReviewBasis:
-    """Preserve review validation under its provider assignment field names."""
-    try:
-        return ReviewBasis(input_ids, instruction)
-    except (TypeError, ValueError) as failure:
-        raise remap_validation(failure, {
-            "$.candidate_input_ids": "$.input_ids",
-            "$.criteria": "$.instruction",
-        })
+def _provider_review_basis(value: object) -> ReviewBasis:
+    """Preserve explicit candidate inputs and independent review criteria."""
+    if type(value) is not dict or set(value) != {"candidate_input_ids", "criteria"}:
+        raise validation_failure(
+            ValueError("review basis must be a closed object"),
+            "$", "expected a closed review basis with candidate_input_ids and criteria",
+        )
+    candidate_ids = value["candidate_input_ids"]
+    if type(candidate_ids) is not list:
+        raise validation_failure(
+            TypeError("review candidate inputs must be an array"),
+            "$.candidate_input_ids", "expected an array of current input identifiers",
+        )
+    return ReviewBasis(tuple(candidate_ids), value["criteria"])
 
 
 class _LeadOutcomeValidationError(BackendProtocolError):
@@ -2399,6 +2406,11 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
         init=False, repr=False, compare=False,
     )
 
+    _outcome_scope_rule: tuple[object, object] = field(
+        default=(lead_outcome_scope_paths, lead_outcome_scope_paths.__code__),
+        init=False, repr=False, compare=False,
+    )
+
     def __init_subclass__(cls, **kwargs):
         raise TypeError("orchestration Lead factory declaration cannot be overridden")
 
@@ -2419,6 +2431,8 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
         self._require_status_rule()
         if type(offers) is not ContextCallOffers:
             raise TypeError("Lead declaration requires actual service-owned physical offers")
+        if self.constraints.continuation and self.constraints.review_candidate_ids is None:
+            raise ValueError("physical continuation requires frozen review candidates")
         facts = offers.completed_read_facts + offers.delivery_read_facts
         read_ids = tuple(dict.fromkeys(item.evidence_id for item in facts))
         writing_ids = tuple(dict.fromkeys(item.evidence_id for item in facts
@@ -2430,17 +2444,19 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
             for item in facts if item.source_kind is ContextSourceKind.WRITING_ARTIFACT)))
         current = replace(self.constraints, input_ids=inputs, source_ids=sources, reviewer_inputs=reviewers,
                           allow_read_sources=False, required_input_ids=self.constraints.required_assignment_input_ids())
-        variants = current.current_wire_variants(self.rule_seed, read_ids=read_ids, writing_read_ids=writing_ids,
-            writing_read_facts=tuple(
-                    (item.evidence_id, item.artifact_locator, item.whole_source)
-                    for item in facts
-                    if item.source_kind is ContextSourceKind.WRITING_ARTIFACT
-                ),
-            core_status_facts=offers.core_status_facts,
+        writing_reads = tuple(
+            (item.evidence_id, item.artifact_locator, item.whole_source)
+            for item in facts if item.source_kind is ContextSourceKind.WRITING_ARTIFACT
+        )
+        variants = current.current_wire_variants(
+            self.rule_seed, read_ids=read_ids, writing_read_ids=writing_ids,
+            writing_read_facts=writing_reads, core_status_facts=offers.core_status_facts,
         )
         tasks = current.task_revisions or (() if current.scope is None else ((current.scope.task_id, current.scope.task_revision),))
         facts_bytes = json.dumps({"requirements": [{"path": "$", "rule": "ACTUAL_CURRENT_OWNER_AUTHORIZATION",
             "expected": {"physical_call_id": offers.call_id, "input_ids": current.input_ids,
+                "review_candidate_ids": current.review_candidate_ids,
+                "factual_answer_writing_read_facts": writing_reads,
                 "read_evidence": "DELIVERED_AND_COMPLETED_CURRENT_OWNER_READ", "rejected_answer_authority": "INPUT_ONLY",
                 "new_target_path": "ACTUAL_CURRENT_PHYSICAL_ROOT_POLICY",
                 "admission": "EXISTING_OWNER_STATE_AND_FINAL_ADMISSION"}}]},
@@ -2452,7 +2468,8 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
             AuthorizedAnswerHostContext,
             facts_bytes,
             self._require_authorized_result,
-            dependencies=(self.authorized_validator, self._status_rule[0]),
+            dependencies=(self.authorized_validator, self._status_rule[0],
+                          self._outcome_scope_rule[0], parse_artifact_references),
         )
         owners = tuple(LeadResultContractOwner(variant, tasks, (check,)) for variant in variants)
         return LeadStagePolicy(self.stage, offers.call_id, tasks, self.language, offers.offer_digest,
@@ -2467,6 +2484,9 @@ class OrchestrationLeadCallFactory(BoundCallFactory):
             or function.__code__ is not code
         ):
             raise ValueError("frozen empty-core evidence rule changed")
+        function, code = self._outcome_scope_rule
+        if lead_outcome_scope_paths is not function or function.__code__ is not code:
+            raise ValueError("frozen Lead outcome scope rule changed")
 
     def _require_authorized_result(self, result: LeadDecodedResult, context: HostCheckContext) -> None:
         self._require_status_rule()
@@ -8131,6 +8151,12 @@ class StoryRuntime:
         current_projection = self.conversation_storage_services.event_store.read_context(session_id, conversation_id)
         constraints = LeadProviderConstraints(
             input_ids=(*(item.input_id for item in proposal.basis.inputs), *reply_event_ids),
+            review_candidate_ids=tuple(dict.fromkeys((
+                *(item.input_id for item in proposal.basis.inputs),
+                *(reply_event_id for reply_event_id, reply in
+                  zip(reply_event_ids, replies, strict=True)
+                  if reply.assessment is CollaborationSpecialistAssessment.DRAFTED),
+            ))),
             reviewer_inputs=tuple((reviewer, item.input_id) for item in proposal.basis.inputs
                 if item.kind in {CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.MANUSCRIPT,
                                  CollaborationInputKind.WRITING_ARTIFACT}
@@ -8191,6 +8217,7 @@ class StoryRuntime:
                 attempt_id=attempt_id,
                 reply_event_ids=reply_event_ids,
                 replies=replies,
+                    review_candidate_ids=constraints.review_candidate_ids,
             )
             if decoded.recommended_action is not None:
                 current_events = self.conversation_storage_services.event_store.read(session_id, conversation_id)
@@ -10569,6 +10596,7 @@ class StoryRuntime:
         attempt_id: str,
         reply_event_ids: tuple[str, ...],
         replies: tuple[CollaborationSpecialistReplyPayload, ...],
+        review_candidate_ids: tuple[str, ...],
     ) -> _LeadSynthesisResult:
         try:
             value = cls._strict_json_object(
@@ -10609,12 +10637,7 @@ class StoryRuntime:
                     raw_intent,
                     authoring_scope=proposal.authoring_scope,
                     shared_premises=cls._captured_premise_intents(proposal.basis),
-                    review_candidate_ids=frozenset(
-                                             {
-                                                 *known_input_order,
-                                                 *(reply_event_id for reply_event_id, reply in zip(reply_event_ids, replies, strict=True) if reply.assessment is CollaborationSpecialistAssessment.DRAFTED),
-                                             },
-                                         ),
+                    review_candidate_ids=review_candidate_ids,
                 )
                 actual_ids = {
                     input_id
@@ -10704,7 +10727,7 @@ class StoryRuntime:
         value: object,
         *,
         authoring_scope: AuthoringScope,
-        review_candidate_ids: frozenset[str],
+        review_candidate_ids: tuple[str, ...],
         shared_premises: tuple[LeadSharedPremiseIntent, ...] = (),
     ) -> LeadProposalIntent:
         if type(value) is not dict or set(value) != {"assignments", "purpose"}:
@@ -10725,15 +10748,33 @@ class StoryRuntime:
             assignment_index = next(
                 index for index, raw in enumerate(raw_assignments) if raw is item
             )
-            if (
-                type(item) is not dict
-                or set(item) != {"agent_id", "input_ids", "instruction", "mode"}
-                or type(item["input_ids"]) is not list
-            ):
+            expected_fields = {"agent_id", "input_ids", "instruction", "mode"}
+            if (type(item) is dict
+                    and item.get("mode") == SpecialistAssignmentMode.REVIEW.value):
+                expected_fields.add("review_basis")
+            if (type(item) is not dict or set(item) != expected_fields
+                    or type(item["input_ids"]) is not list):
                 raise validation_failure(
                     ValueError(),
                     f'$.assignments[{assignment_index}]',
-                    'each assignment must contain agent_id, input_ids (array), instruction, and mode',
+                    'expected current assignment fields, input_ids array '
+                    'and review_basis for review',
+                )
+            mode = validation_call(
+                f'$.assignments[{assignment_index}].mode', SpecialistAssignmentMode, item["mode"])
+            review_basis = (
+                validation_call(
+                    f'$.assignments[{assignment_index}].review_basis',
+                    _provider_review_basis, item["review_basis"],
+                )
+                if mode is SpecialistAssignmentMode.REVIEW else None
+            )
+            if (review_basis is not None
+                    and not set(review_basis.candidate_input_ids).issubset(review_candidate_ids)):
+                raise validation_failure(
+                    ValueError(),
+                    f'$.assignments[{assignment_index}].review_basis.candidate_input_ids',
+                    'review candidates must be current eligible review inputs',
                 )
             assignments.append(
                 validation_call(
@@ -10742,23 +10783,8 @@ class StoryRuntime:
                     agent_id=item['agent_id'],
                     instruction=item['instruction'],
                     input_ids=tuple(item['input_ids']),
-                    mode=validation_call(
-                             f'$.assignments[{assignment_index}].mode',
-                             SpecialistAssignmentMode,
-                             item['mode'],
-                         ),
-                    review_basis=(
-                                     validation_call(
-                                         f'$.assignments[{assignment_index}]',
-                                         _provider_review_basis,
-                                         tuple(
-                                             (input_id for input_id in item['input_ids'] if input_id in review_candidate_ids),
-                                         ),
-                                         item['instruction'],
-                                     )
-                                     if item['mode'] == SpecialistAssignmentMode.REVIEW.value
-                                     else None
-                                 ),
+                    mode=mode,
+                    review_basis=review_basis,
                 )
             )
         specialist_ids = tuple(item.agent_id for item in assignments)
@@ -12211,16 +12237,49 @@ class StoryRuntime:
                                 (*authoring_scope.target_paths, *objective_paths),
                             )))
                     resolved_scope = self._resolve_authoring_scope(authoring_scope, inputs, decoded_evidence, selected_prior)
-                    if resolved_scope.activity is not AuthoringActivity.WORKFLOW and decoded.kind not in {
-                        LeadOutcomeKind.PROPOSAL, LeadOutcomeKind.QUESTION, LeadOutcomeKind.RECOMMENDATION,
-                    }:
-                        raise validation_failure(
-                            _LeadOutcomeValidationError(
-                                'substantive story work requires specialist involvement',
-                            ),
-                            '$.kind',
-                            'substantive story work requires specialist involvement',
+                    if resolved_scope.activity is not AuthoringActivity.WORKFLOW:
+                        ordinary_answer = (
+                            decoded.kind is LeadOutcomeKind.ANSWER
+                            and not any((decoded.proposal, decoded.recommended_action,
+                                         decoded.objective_intent, decoded.artifact_intent))
                         )
+                        writing_reads = ()
+                        if ordinary_answer and decoded.evidence_status is LeadEvidenceStatus.VERIFIED:
+                            writing_reads = tuple(
+                                (item.evidence_id, item.provenance.locator,
+                                 item.source_digest == item.boundary_digest
+                                 and item.source_utf8_bytes == item.boundary_utf8_bytes)
+                                for item in authorization.used_evidence
+                                if item.source_kind is ContextSourceKind.WRITING_ARTIFACT
+                            )
+                            for receipt in decoded_evidence.receipts:
+                                if (receipt.acquisition
+                                        is CollaborationEvidenceAcquisition.ATTACHED_REFERENCE
+                                        and receipt.source_kind in {
+                                            CollaborationInputKind.CORE_DOCUMENT,
+                                            CollaborationInputKind.MANUSCRIPT,
+                                            CollaborationInputKind.WRITING_ARTIFACT,
+                                        }):
+                                    references = parse_artifact_references(receipt.locator).references
+                                    if len(references) != 1 or references[0].token != receipt.locator:
+                                        raise _LeadOutcomeValidationError(
+                                            "factual READ reference is not exact")
+                                    writing_reads += ((receipt.evidence_id, references[0].path,
+                                                       references[0].line_range is None),)
+                        scope_paths = lead_outcome_scope_paths(
+                            decoded.kind, resolved_scope.activity,
+                            required_authoring_domains(resolved_scope), writing_reads,
+                            target_paths=resolved_scope.target_paths,
+                            ordinary_answer=ordinary_answer,
+                        )
+                        if scope_paths is None:
+                            raise validation_failure(
+                                _LeadOutcomeValidationError(
+                                    'substantive story work requires specialist involvement',
+                                ),
+                                '$.kind',
+                                'substantive story work requires specialist involvement',
+                            )
                     if decoded.proposal is not None:
                         if decoded.proposal.authoring_scope != decoded.authoring_scope:
                             raise validation_failure(
@@ -14798,9 +14857,11 @@ class StoryRuntime:
                 assignment_index = next(
                     index for index, raw in enumerate(raw_assignments) if raw is item
                 )
-                if type(item) is not dict or set(item) != {
-                    "agent_id", "input_ids", "instruction", "mode",
-                }:
+                expected_fields = {"agent_id", "input_ids", "instruction", "mode"}
+                if (type(item) is dict
+                        and item.get("mode") == SpecialistAssignmentMode.REVIEW.value):
+                    expected_fields.add("review_basis")
+                if type(item) is not dict or set(item) != expected_fields:
                     raise validation_failure(
                         ValueError(),
                         f'$.proposal.assignments[{assignment_index}]',
@@ -14825,15 +14886,13 @@ class StoryRuntime:
                                  item['mode'],
                              ),
                         review_basis=(
-                                         validation_call(
-                                             f'$.proposal.assignments[{assignment_index}]',
-                                             _provider_review_basis,
-                                             tuple(item['input_ids']),
-                                             item['instruction'],
-                                         )
-                                         if item['mode'] == SpecialistAssignmentMode.REVIEW.value
-                                         else None
-                                     ),
+                            validation_call(
+                                f'$.proposal.assignments[{assignment_index}].review_basis',
+                                _provider_review_basis,
+                                item["review_basis"],
+                            )
+                            if item["mode"] == SpecialistAssignmentMode.REVIEW.value else None
+                        ),
                     )
                 )
             proposal = validation_call(
