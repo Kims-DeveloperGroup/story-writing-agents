@@ -851,7 +851,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         response = _artifact_outcome(
             operations=[{"kind":"create", "suggested_path":path, "new_text":"Summons leads to a choice; the choice causes a consequence.\n"}],
             evidence_status="incomplete", evidence_ids=lambda call,m:[call.payload["core_document_statuses"][0]["evidence_id"]],
-            objective_intent={"action": "start", "target_paths": [path], "next_step": "prepare"},
+            objective_intent=dict(action="start", target_paths={path: True}, next_step="prepare"),
             authoring_scope=lambda _: c.authoring_scope_to_dict(drafted.proposal.authoring_scope),
             authoring_assessment=asdict(_fixture_assessment(foundation_ids=("adopted_idea",))),)
         def integrate(call, provider):
@@ -966,7 +966,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                            "new_text": "The changed tide preserves the current consequence.\n"}],
                            evidence_status="incomplete", evidence_ids=lambda call, material:
                            [call.payload["core_document_statuses"][0]["evidence_id"]],
-            objective_intent={"action": "start", "target_paths": [fresh_path],
+            objective_intent={"action": "start", "target_paths": {fresh_path: True},
                 "next_step": "prepare"},
             authoring_scope=lambda _: c.authoring_scope_to_dict(fresh.proposal.authoring_scope),
             authoring_assessment=asdict(_fixture_assessment(foundation_ids=("adopted_idea",))),)
