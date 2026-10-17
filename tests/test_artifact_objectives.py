@@ -74,15 +74,13 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
             subprocess.check_output(["git", "diff", "--cached", "--binary"], cwd=self.workspace.root),
         )
 
-    def question(self, *, intent=None, message=DRAFT,
-            native_update=None):
+    def question(self, *, intent=None, message=DRAFT, native_update=None):
         def respond(call, _provider):
             if native_update is not None:
                 return _native_objective_response(call, response_type='clarification_question', message=message,
-                    scope=self.scope(call, intent=intent, activity='draft'),
+                    scope={**self.scope(call, intent=intent, activity='draft'), 'domains': ['plot_structure']},
                     update=native_update, branch='lead-response-v8:family:2')
-            return lead._provider_envelope(call, {
-                "recommended_action": None,
+            return lead._provider_envelope(call, {"recommended_action": None,
                 "scope": "story_specific", "evidence_status": "empty",
                 "evidence_ids": [artifact._status_id(call, OUTLINE)],
                 "kind": "question", "message": message, "proposal": None,
@@ -103,7 +101,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         from tests.test_specialist_routing_runtime import scoped_proposal
         from tests.recommendation_fixture import task_assessment
 
-        native_first = (conversation_id is None and specialist_ids == (PLOT_ARCHITECT,)
+        native_start = (specialist_ids == (PLOT_ARCHITECT,)
                         and objective_id is None and target_path == OUTLINE and authoring_paths is None)
         conversation_id = conversation_id or self.conversation()
         paths = () if target_path is None else (target_path,)
@@ -120,9 +118,13 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
                 'input_choices': ('user_input',), 'anchors': {PLOT_ARCHITECT: 'user_input'},
                 'recipients': {'user_input': PLOT_ARCHITECT},
                 'source_choices': ('user_input',), 'family': 0}
-                if (native_first or native_continuation) else None)
+                if (native_start or native_continuation) else None)
+            if native_start and native_inputs is None:
+                choices = dict(call.contract.semantic_index.policy.choices)
+                self.assertEqual(tuple(choices['required_input_ids']), ('user_input',))
+                native.update(input_choices=choices['input_ids'], source_choices=choices['input_ids'])
             def mutate(value, material):
-                if native_first:
+                if native_start:
                     value['proposal'].update(objective_intent={
                         'action': 'start', 'target_paths': list(paths), 'next_step': 'consult'})
                 elif native_continuation:
@@ -134,7 +136,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
             return scoped_proposal(
                 *specialist_ids, native_inputs=native,
                 paths=authoring_paths if authoring_paths is not None else paths,
-                domains=(('plot_structure',) if (native_first or native_continuation) else ()
+                domains=(('plot_structure',) if (native_start or native_continuation) else ()
                     if target_path is not None and specialist_ids == (PLOT_ARCHITECT,) else tuple(
                     {'plot_architect': 'plot_structure', 'character_custodian': 'character_world',
                      'execution_specialist': 'tone_execution'}[agent] for agent in specialist_ids)),
@@ -272,8 +274,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         events = self.history(conversation_id)
         transition = [e for e in events if isinstance(e.payload, c.ArtifactObjectivePayload)][-1]
         payload = transition.payload
-        bad_payloads = [
-            replace(payload, previous_objective_event_id="not_the_predecessor"),
+        bad_payloads = [replace(payload, previous_objective_event_id="not_the_predecessor"),
             replace(payload, facts=replace(payload.facts, origin_user_event_id="foreign_user")),
             replace(payload, facts=replace(payload.facts, request="changed origin")),
             replace(payload, facts=replace(payload.facts, target_paths=("core_documents/narrative_rules.md",))),

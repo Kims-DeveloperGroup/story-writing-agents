@@ -266,8 +266,7 @@ class _LeadContextProvider:
     provider_id = "codex"
 
     def __init__(self, backend: '_LeadBackend', agent_id: str, definition_fingerprint: str,
-        responses: tuple[_Response | _SubmittedFailure, ...],
-        reference_read: object | None) -> None:
+        responses: tuple[_Response | _SubmittedFailure, ...], reference_read: object | None) -> None:
         self.backend = backend
         self.agent_id = agent_id
         self.definition_fingerprint = definition_fingerprint
@@ -309,8 +308,7 @@ class _LeadContextProvider:
         return self._threads.get(self._thread_key(scope, policy_fingerprint))
 
     @staticmethod
-    def _account(schema: object, payload: object, *, call_kind: ProviderCallKind,
-        component_paths: object=None,
+    def _account(schema: object, payload: object, *, call_kind: ProviderCallKind, component_paths: object=None,
         mandatory_reference_paths: object=()) -> ProviderCallAccounting:
         encoded, accounting = account_provider_payload(
             schema,  # type: ignore[arg-type]
@@ -322,8 +320,7 @@ class _LeadContextProvider:
         return ProviderCallAccounting(accounting, state=ProviderCallState.SUBMITTED,
             actual_transport_utf8_bytes=len(encoded))
 
-    async def prepare_references(self,
-        request: ContextReferencePreludeRequest) -> ContextReferencePreludeResult:
+    async def prepare_references(self, request: ContextReferencePreludeRequest) -> ContextReferencePreludeResult:
         self._require_active(request.scope, request.policy_fingerprint)
         self.backend.reference_calls.append(request)
         if self.reference_read is None or self._reference_prepared:
@@ -340,8 +337,7 @@ class _LeadContextProvider:
         self.backend.reference_records.append((self.agent_id, context))
         return carrier
 
-    async def invoke_context(self,
-        request: ContextProviderCallRequest) -> ContextProviderCallResult:
+    async def invoke_context(self, request: ContextProviderCallRequest) -> ContextProviderCallResult:
         self._require_active(request.scope, request.policy_fingerprint)
         self.backend.calls.append(request)
         capture_sample(request)
@@ -465,8 +461,7 @@ def _live_material(call):
     except LookupError: return _LIVE_CONTEXT[call.payload["request_correlation_token"]]
 
 
-def _live_scope(call, *, activity='workflow', domains=(), paths=(), task_index=-1,
-                contributions=None):
+def _live_scope(call, *, activity='workflow', domains=(), paths=(), task_index=-1, contributions=None):
     """Declare synthetic test semantics using one exact runtime-offered task pair."""
     material = _live_material(call)
     if "authoring_tasks" not in material:
@@ -799,12 +794,9 @@ def _submitted_calls(history): return tuple(
         and event.payload.state is CollaborationProviderCallState.SUBMITTED)
 
 
-def _synthesis_outcome(*,
-    message: str = "The specialist evidence supports proceeding.",
-    unresolved_input_ids: list[str] | None = None, next_intent: object = None,
-    recommended_action: object = None,
-    recommendation_family: int | None = None,
-):
+def _synthesis_outcome(*, message: str = "The specialist evidence supports proceeding.",
+    unresolved_input_ids: list[str] | None = None, next_intent: object = None, recommended_action: object = None,
+    recommendation_family: int | None = None,):
     def respond(
         call: ContextProviderCallRequest,
         _provider: _LeadContextProvider,
@@ -839,11 +831,16 @@ def _synthesis_outcome(*,
 
 
 def _search_history(call, _provider, text="A prior lead response"):
+    action = {"action_type": "search_context", "queries": [{
+        "search_text": text, "source_types": {"conversation_history": True}}]}
+    if type(call) is ContextProviderCallRequest:
+        assert call.scope.agent_id in SPECIALIST_IDS
+        action["queries"][0]["source_types"] = ["conversation_history"]
+        return json.dumps({"agent_action": action})
+    assert type(call) is BoundContextProviderCallRequest and call.scope.agent_id == LEAD_ORCHESTRATOR
     outer, inner = offered_fixture_bindings(call, action_type="search_context", response_type=None, family=0)
     assert inner is None
-    return indexed_response({"action_type": "search_context", "queries": [{
-        "search_text": text, "source_types": {"conversation_history": True},
-    }]}, outer_schema_id=outer, inner_schema_id=None)
+    return indexed_response(action, outer_schema_id=outer, inner_schema_id=None)
 
 
 def _read_history_hit(call: ContextProviderCallRequest, provider: _LeadContextProvider):
@@ -1016,8 +1013,7 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
         return readiness
 
 
-    async def proposal(self,
-        conversation_id: str, *,
+    async def proposal(self, conversation_id: str, *,
         text: str = "Please check the story direction.",
         assignments: list[dict[str, object]] | None = None,
         relation: str = "new_step",
@@ -1299,10 +1295,13 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             current_inputs = dict(current.semantic_index.policy.choices)['input_ids']
             for fact in current.offers.completed_read_facts + current.offers.delivery_read_facts:
                 self.assertIn(fact.evidence_id, current_inputs)
-        self.assertFalse(calls[0].contract.offers.completed_read_facts)
+        preflight = calls[0].contract.offers.completed_read_facts
+        self.assertEqual(
+            tuple((fact.source_kind.value, fact.artifact_locator, fact.whole_source) for fact in preflight),
+            tuple(('writing_artifact', path, True) for path, _ in document_texts))
         self.assertFalse(calls[0].contract.offers.delivery_read_facts)
         self.assertTrue(calls[1].contract.offers.issued_handle_aliases)
-        self.assertFalse(calls[1].contract.offers.completed_read_facts)
+        self.assertEqual(calls[1].contract.offers.completed_read_facts, preflight)
         self.assertTrue(calls[2].contract.offers.delivery_read_facts)
         delivered = tuple(row['evidence_id'] for row in calls[2].payload['context_observation']['read_results'])
         self.assertEqual(tuple(fact.evidence_id for fact in calls[2].contract.offers.delivery_read_facts), delivered)
