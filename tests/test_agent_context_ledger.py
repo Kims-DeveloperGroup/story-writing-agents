@@ -261,8 +261,7 @@ class LedgerTestCase(unittest.TestCase):
 
     def ready(self,
         *, usage: ProviderUsage | None = None,
-        key: ContextLedgerKey | None = None,
-        projection: ContextProjection | None = None,
+        key: ContextLedgerKey | None = None, projection: ContextProjection | None = None,
         plan: ContextLedgerAttemptPlan | None = None,) -> ContextLedgerInspection:
         selected_key = key or self.key
         selected_projection, selected_plan, reserved = self.reserve(key=selected_key,
@@ -625,8 +624,7 @@ class LedgerLifecycleTests(LedgerTestCase):
             plan=self.plan,)
         self.assert_ledger_error(
             lambda: self.ledger.reserve_attempt(
-                self.key,
-                expected_generation=reserved.generation,
+                self.key, expected_generation=reserved.generation,
                 plan=replace(self.plan, attempt_id="attempt-2"),),
             ContextLedgerErrorCode.INVALID_TRANSITION,)
         self.assert_ledger_error(
@@ -708,8 +706,7 @@ class LedgerAuthorizationTests(LedgerTestCase):
             self.key,
             expected_generation=0,
             plan=self.plan,)
-        first = self.ledger.append_provider_call(
-            self.key,
+        first = self.ledger.append_provider_call(self.key,
             expected_generation=reserved.generation,
             attempt_id=self.plan.attempt_id,
             provider_call=_provider_call(
@@ -1217,8 +1214,7 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
             for ordinal in range(1, MAX_CONTEXT_LEDGER_PROVIDER_CALLS + 2))
         self.assert_ledger_error(lambda: ContextLedgerAttempt(
                 self.plan, calls,
-                ContextLedgerAttemptOutcome.IN_PROGRESS,
-                "2026-08-28T00:00:00.000000Z",
+                ContextLedgerAttemptOutcome.IN_PROGRESS, "2026-08-28T00:00:00.000000Z",
                 "2026-08-28T00:00:00.000000Z",),
             ContextLedgerErrorCode.LIMIT_EXCEEDED,)
         sources = []
@@ -1262,8 +1258,7 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
         before = self.record_path().read_bytes()
         self.assert_ledger_error(
             lambda: self.ledger.append_provider_call(
-                self.key,
-                expected_generation=current.generation,
+                self.key, expected_generation=current.generation,
                 attempt_id=plan.attempt_id,
                 provider_call=_provider_call(MAX_CONTEXT_LEDGER_PROVIDER_CALLS + 1),),
             ContextLedgerErrorCode.LIMIT_EXCEEDED,)
@@ -1431,8 +1426,7 @@ class LedgerStorageSecurityAndAtomicityTests(LedgerTestCase):
             (2, ContextLedgerRecordState.INCOMPLETE),)
         self.assertEqual(
             self.ledger.reserve_attempt(
-                self.key,
-                expected_generation=stale.generation,
+                self.key, expected_generation=stale.generation,
                 plan=self.plan,),
             observed,)
 
@@ -1657,19 +1651,14 @@ class LedgerBoundaryTests(LedgerTestCase):
             for node in ast.walk(tree)
             if isinstance(node, ast.ImportFrom) and node.level}
         self.assertEqual(relative_dependencies,
-            {
-                (1, "accounting"),
-                (1, "manifest"),
-                (1, "planning"),
+            {(1, "accounting"),
+                (1, "manifest"), (1, "planning"),
                 (2, "runtime_state_paths"),
                 (2, "workspace"),},
         )
-        self.assertFalse(
-            [
-                node
-                for node in ast.walk(tree)
-                if isinstance(node, ast.Import)
-                and any(
+        self.assertFalse([
+                node for node in ast.walk(tree)
+                if isinstance(node, ast.Import) and any(
                     alias.name.startswith(("requests", "httpx", "subprocess", "socket"))
                     for alias in node.names)
             ])

@@ -6144,7 +6144,26 @@ class ControllerConversationCommandTests(ControllerTestCase):
         report = next(e.payload.report for e in case.history(source)
                       if type(e.payload) is collaboration.CollaborationLeadExplorationResultPayload)
         idea = report.ideas[0]
-        case.backend.enqueue(scoped_proposal(PLOT_ARCHITECT, candidate_ids=("adopted_idea",), authoring_assessment=task_assessment(foundation_ids=('adopted_idea',), actions=('draft from the exact selected provisional idea for the chosen targets',))))
+        def adopted_plot_proposal(call, provider):
+            choices = dict(call.contract.semantic_index.policy.choices)
+            required = choices['required_input_ids']
+            self.assertEqual(set(required), {'user_input', 'adopted_idea'})
+            frame = scoped_proposal(
+                PLOT_ARCHITECT, candidate_ids=required,
+                authoring_assessment=task_assessment(
+                    foundation_ids=('adopted_idea',),
+                    actions=('draft from the exact selected provisional idea '
+                             'for the chosen targets',)),
+                domains=('plot_structure',),
+                native_inputs={
+                    'family': 0, 'source_choices': choices['input_ids'],
+                    'anchors': {PLOT_ARCHITECT: 'adopted_idea'},
+                    'recipients': {source: PLOT_ARCHITECT for source in required},
+                })(call, provider)
+            self.assertFalse(call.contract.structural_findings(frame))
+            self.assertTrue(call.contract.decode_response(frame).belongs_to(call.contract))
+            return frame
+        case.backend.enqueue(adopted_plot_proposal)
         controller, _, callbacks = self.make_controller(case.control_workspace,
                         conversation_storage_services=case.runtime.conversation_storage_services, terminal_width=200)
         controller._runtime, controller._runner = case.runtime, runner

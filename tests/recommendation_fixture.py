@@ -72,7 +72,116 @@ def _bounded_failure_note(*snapshots):
     return note if len(note) <= 1024 else '["unsupported-note-size"]'
 
 
-def _stored_failure_snapshots(backend):
+def _scoped_failure_snapshots(backend, scoped, result):
+    from story_writing_agents.agent_context.actions import ContextCallReadFact
+    from story_writing_agents.agent_context.manifest import (
+        ContextScope, ContextSourceKind, ContextSubjectKind)
+    from story_writing_agents.agent_context.service import (
+        BoundCallContract, BoundContextProviderCallRequest, ContextCallOffers,
+        ContextProviderTerminalCode as Code)
+    unsupported = (('scoped', 'unsupported'),)
+    if type(backend) is not lead._LeadBackend or type(scoped) is not tuple or len(scoped) != 6:
+        return unsupported
+    starts, session, conversation, progress, submitted, proof = scoped
+    containers = backend.calls, backend.call_records, backend.finalizers
+    if (type(starts) is not tuple or len(starts) != 3
+            or any(type(rows) is not list for rows in containers)
+            or any(type(n) is not int or not 0 <= n <= 65535 for n in starts)
+            or type(session) is not str or type(conversation) is not str
+            or len(session) > 4096 or len(conversation) > 4096):
+        return unsupported
+    totals = tuple(len(rows) for rows in containers)
+    if any(total > 65535 for total in totals):
+        return (('scoped', 'overflow'),)
+    if any(start > total for start, total in zip(starts, totals)):
+        return unsupported
+    deltas = tuple(total - start for start, total in zip(starts, totals))
+    if any(n > 8 for n in deltas):
+        return (('scoped', 'overflow', deltas),)
+    calls, records, finalizers = tuple(rows[start:] for rows, start in zip(containers, starts))
+    aligned = len(calls) == len(records) and all(
+        type(row) is tuple and len(row) == 2 and row[1] is call
+        and type(row[0]) is str and row[0] == lead.LEAD_ORCHESTRATOR
+        for call, row in zip(calls, records))
+    known = bool(calls) and all(type(call) is BoundContextProviderCallRequest
+                and type(call.scope) is ContextScope for call in calls)
+    same_scope = known and all(
+        call.scope.session_id == session and call.scope.subject_id == conversation
+        and call.scope.subject_kind is ContextSubjectKind.CONVERSATION
+        and call.scope.agent_id == lead.LEAD_ORCHESTRATOR for call in calls)
+    last = ('last', 'unsupported')
+    if known and calls and type(calls[-1].contract) is BoundCallContract:
+        contract = calls[-1].contract
+        phase = contract.phase
+        phase = phase if type(phase) is str and phase in (
+            'ordinary', 'repair', 'replay', 'replay_repair') else 'unsupported'
+        offers = contract.eligibility_offers
+        if type(offers) is ContextCallOffers:
+            facts = offers.completed_read_facts, offers.delivery_read_facts
+            reads = ('unsupported',)
+            if all(type(rows) is tuple and len(rows) <= 64 and all(
+                    type(row) is ContextCallReadFact for row in rows) for rows in facts):
+                reads = tuple(sum(row.source_kind is ContextSourceKind.WRITING_ARTIFACT
+                                  for row in rows) for rows in facts)
+            action_index = offers.action_index
+            action_index = (action_index if type(action_index) is int
+                            and 0 <= action_index <= 65535 else 'unsupported')
+            last = ('last', phase, action_index, reads, calls[-1].expected_thread_id is None)
+    stages = ('unsupported',)
+    if type(progress) is list and len(progress) == 3 and all(
+            type(n) is int and 0 <= n <= 8 for n in progress):
+        stages = tuple(progress)
+    submitted = (submitted if type(submitted) is int and 0 <= submitted <= 65535
+                 else 'unsupported')
+    proof = proof if type(proof) is bool else 'unsupported'
+    tags = ('accepted', 'rejected', 'cancelled', 'post_response_runtime_failure')
+    codes = (Code.MALFORMED_STRUCTURED_RESPONSE, Code.RESPONSE_CORRELATION_MISMATCH,
+             Code.RESPONSE_SEMANTIC_REJECTED, Code.ACTION_EXHAUSTED,
+             Code.ANSWER_VALIDATION_FAILED, Code.REFERENCE_RUNTIME_FAILED,
+             Code.CONTEXT_RUNTIME_FAILED)
+    tag_counts, code_counts = [0] * 4, [0] * 7
+    cardinalities = [0, 0, 0]
+    supported, overflow = True, False
+    for finalizer in finalizers:
+        if type(finalizer) is not lead._Finalizer or type(finalizer.calls) is not list:
+            supported = False
+            continue
+        if len(finalizer.calls) > 8:
+            supported, overflow = False, True
+            continue
+        cardinalities[min(len(finalizer.calls), 2)] += 1
+        for terminal in finalizer.calls:
+            if type(terminal) is not tuple or len(terminal) != 2:
+                supported = False
+                continue
+            tag, code = terminal
+            if type(tag) is not str or tag not in tags:
+                supported = False
+                continue
+            tag_counts[tags.index(tag)] += 1
+            if code is None and tag in ('accepted', 'cancelled'):
+                continue
+            matches = [i for i, known_code in enumerate(codes) if code is known_code]
+            if len(matches) != 1 or tag not in ('rejected', 'post_response_runtime_failure'):
+                supported = False
+                continue
+            code_counts[matches[0]] += 1
+    dto = ('dto', 'unsupported')
+    if (type(result) is c.LeadTurnResult and type(result.kind) is c.LeadOutcomeKind
+            and type(result.next_action) is c.CollaborationNextAction
+            and (result.state is None or type(result.state) is c.CollaborationStepState)):
+        dto = ('dto', result.kind.name, result.next_action.name,
+               'none' if result.state is None else result.state.name,
+               result.recommendation_request is not None, result.evidence is not None)
+    return (('scoped_req', deltas, aligned, same_scope, last),
+            ('scoped_stage', stages, submitted, proof, dto),
+            ('scoped_fin', supported, overflow, tuple(cardinalities),
+             tuple(tag_counts), tuple(code_counts)))
+
+
+def _stored_failure_snapshots(backend, *, scoped=None, result=None):
+    if scoped is not None:
+        return _scoped_failure_snapshots(backend, scoped, result)
     from types import MappingProxyType
     from story_writing_agents.agent_context.service import (
         BoundCallContract, BoundContextProviderCallRequest, ContextCallOffers,
@@ -224,7 +333,11 @@ def _zero_hit_failure_snapshots(call, targets):
 
 
 
-def _current_policy_failure_note(backend, result=None, *, projection=None, selection=None):
+def _current_policy_failure_note(
+        backend, result=None, *, projection=None, selection=None, scoped=None):
+    if scoped is not None:
+        return _bounded_failure_note(
+            *_stored_failure_snapshots(backend, scoped=scoped, result=result))
     from types import MappingProxyType
     from story_writing_agents.agent_context.service import (
         BoundCallContract, BoundContextProviderCallRequest, ContextCallOffers)

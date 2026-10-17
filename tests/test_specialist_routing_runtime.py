@@ -260,22 +260,39 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
 
         prefix = self.history(conversation)
         late_call_start = len(self.backend.calls)
-        self.backend.enqueue(partial(_search_history, text="Nora must recover her brother's letter"), _read_history_hit, _visible_outcome("answer", "This third submission must not be invoked."))
+        late_helper_failure = 'not_observed'
+
+        def late_read_history_hit(call, provider):
+            nonlocal late_helper_failure
+            try:
+                return _read_history_hit(call, provider)
+            except (AssertionError, IndexError, KeyError, TypeError, ValueError) as failure:
+                late_helper_failure = {
+                    AssertionError: 'AssertionError', IndexError: 'IndexError',
+                    KeyError: 'KeyError', TypeError: 'TypeError', ValueError: 'ValueError',
+                }.get(type(failure), 'unsupported_builtin_subclass')
+                raise
+
+        self.backend.enqueue(
+            partial(_search_history, text="Nora must recover her brother's letter"),
+            late_read_history_hit,
+            _visible_outcome("answer", "This third submission must not be invoked."))
         bounded = await self.runtime.lead_turn(self.session_id, conversation, "Inspect context before offering fresh work.")
         calls = _submitted_calls(self.history(conversation)[len(prefix):])
         note = None
         if len(calls) != 2:
             from types import MappingProxyType
             from story_writing_agents.agent_context.service import (
-                BoundContextProviderCallRequest, ContextCallOffers)
+                BoundCallContract, BoundContextProviderCallRequest, ContextCallOffers)
 
             def late_snapshot(row):
                 if (type(row) is not BoundContextProviderCallRequest
+                        or type(row.contract) is not BoundCallContract
                         or type(row.contract.offers) is not ContextCallOffers
                         or type(row.payload) is not MappingProxyType):
                     return ('unsupported',)
                 offer = row.contract.offers
-                observation = row.payload.get('o')
+                observation = row.payload.get('context_observation')
                 kind = 'missing' if observation is None else 'unsupported'
                 hits = -1
                 if type(observation) is dict:
@@ -305,17 +322,30 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                                     if name == 'nonterminal_actions')
                     if len(matches) == 1:
                         remaining = min(matches[0], 65)
+                contract_phase = row.contract.phase
+                if (type(contract_phase) is not str or contract_phase not in (
+                        'ordinary', 'repair', 'replay', 'replay_repair')):
+                    contract_phase = 'unsupported'
+                eligibility = row.contract.eligibility_offers
+                eligible_read = 'unsupported'
+                if (type(eligibility) is ContextCallOffers
+                        and type(eligibility.allowed_actions) is tuple
+                        and len(eligibility.allowed_actions) <= 3
+                        and all(type(action) is str and action in ('search', 'read', 'answer')
+                                for action in eligibility.allowed_actions)):
+                    eligible_read = 'read' in eligibility.allowed_actions
                 return (
                     phase, min(offer.action_index, 65),
                     tuple(a in offer.allowed_actions for a in ('search', 'read', 'answer')),
                     remaining, kind, hits,
                     min(len(offer.issued_handle_aliases), 65),
-                    'context_observation' in row.payload)
+                    'context_observation' in row.payload, contract_phase, eligible_read)
 
             late = self.backend.calls[late_call_start:]
             from tests.recommendation_fixture import _stored_failure_snapshots
             finalizer_counts = _stored_failure_snapshots(self.backend)[1]
             note = ('late_history', min(len(calls), 65), min(len(late), 65),
+                    late_helper_failure,
                     len(late) > 3, 'absolute_physical_limit_not_retained', finalizer_counts,
                     tuple(late_snapshot(row) for row in late[-3:]))
         self.assertEqual(len(calls), 2, note)

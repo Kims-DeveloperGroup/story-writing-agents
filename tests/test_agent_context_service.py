@@ -27,28 +27,17 @@ from story_writing_agents.agent_context.manifest import (ContextAuthorityKind,
     ContextProvenance,
     ContextScope,
     ContextSemanticChannel,
-    ContextSourceKind,
-    ContextSubjectKind, )
-from story_writing_agents.agent_context.planning import (
-    MandatoryReferenceReservation, )
-from story_writing_agents.agent_context.service import (
-    ContextInvocationBinding,
-    ContextInvocationKind,
-    ContextInvocationSession,
-    ContextInvocationState,
-    ContextJsonObjectResultContract, )
-from story_writing_agents.agent_context.sources import (
-    CONTEXT_SOURCE_POLICY,
-    ContextSourceDescriptor,
-    ContextSourceError,
-    ContextSourceErrorCode,
-    ContextSourcePolicy,
-    ContextSourceRecord,
-    ContextSourceRegistry,
-    ContextSourceSearchMatch,
-    ContextSourceSnapshot, )
-from story_writing_agents.structured_output_validation import (
-    bounded_chunks,
+    ContextSourceKind, ContextSubjectKind, )
+from story_writing_agents.agent_context.planning import (MandatoryReferenceReservation, )
+from story_writing_agents.agent_context.service import (ContextInvocationBinding,
+    ContextInvocationKind, ContextInvocationSession,
+    ContextInvocationState, ContextJsonObjectResultContract, )
+from story_writing_agents.agent_context.sources import (CONTEXT_SOURCE_POLICY,
+    ContextSourceDescriptor, ContextSourceError,
+    ContextSourceErrorCode, ContextSourcePolicy,
+    ContextSourceRecord, ContextSourceRegistry,
+    ContextSourceSearchMatch, ContextSourceSnapshot, )
+from story_writing_agents.structured_output_validation import (bounded_chunks,
     diagnose_json_text,
     carry_validation, diagnose_value, encoding_failure, failure_issues, validation_call, validation_failure,
 )
@@ -58,10 +47,8 @@ _PRIVATE_ANSWER = "PRIVATE_FINAL_ANSWER_한🙂"
 _PRIVATE_BODY_A = "PRIVATE_SOURCE_A needle 한🙂\n"
 _PRIVATE_BODY_B = "PRIVATE_SOURCE_B needle\n"
 _SCOPE = ContextScope("workspace",
-    "session",
-    ContextSubjectKind.CONVERSATION,
-    "conversation",
-    "lead_orchestrator", )
+    "session", ContextSubjectKind.CONVERSATION,
+    "conversation", "lead_orchestrator", )
 
 
 from tests.provider_wire_fixture import assert_schema_descriptions
@@ -75,18 +62,15 @@ class StructuredOutputValidationTests(unittest.TestCase):
                 "count": {"type": "integer", "minimum": 1},
                 "maximum": {"type": "number", "maximum": 2},
                 "short": {"type": "string", "maxLength": 2},
-                "few": {"type": "array", "minItems": 1},
-                "many": {"type": "array", "maxItems": 1},
-                "mode": {"type": "string", "enum": ["draft", "review"]},
-                "items": {
+                "few": {"type": "array", "minItems": 1}, "many": {"type": "array", "maxItems": 1},
+                "mode": {"type": "string", "enum": ["draft", "review"]}, "items": {
                     "type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 0, },
                 "required_note": {"type": "string"}, },
             "required": ["message", "count", "items", "required_note"],
             "additionalProperties": False, }
         secret = "PRIVATE_PROVIDER_VALUE_한🙂"
         body = json.dumps({"message": "", "count": 0, "maximum": 3, "short": secret,
-            "few": [], "many": [1, 2], "mode": secret,
-            "items": ["", 3], secret: secret,
+            "few": [], "many": [1, 2], "mode": secret, "items": ["", 3], secret: secret,
         }, ensure_ascii=False)
         issues = diagnose_json_text(body, schema)
         self.assertEqual(issues, ("$.required_note: required property is missing",
@@ -95,8 +79,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
             "$.count: expected at least 1, got integer",
             "$.maximum: expected at most 2, got integer",
             f"$.short: expected at most 2 characters, got {len(secret)}",
-            "$.few: expected at least 1 items, got 0",
-            "$.many: expected at most 1 items, got 2",
+            "$.few: expected at least 1 items, got 0", "$.many: expected at most 1 items, got 2",
             '$.mode: expected one of ["draft", "review"] (string), got string',
             "$.items[0]: expected at least 1 characters, got 0",
             "$.items[1]: expected string, got integer", ))
@@ -104,15 +87,12 @@ class StructuredOutputValidationTests(unittest.TestCase):
 
     def test_union_selects_matching_branch_without_other_branch_noise(self) -> None:
         schema = {"anyOf": [{"type": "object", "properties": {
-                "kind": {"type": "string", "enum": ["search"]},
-                "query": {"type": "string"},
+                "kind": {"type": "string", "enum": ["search"]}, "query": {"type": "string"},
             }, "required": ["kind", "query"], "additionalProperties": False},
-            {"type": "object", "properties": {
-                "kind": {"type": "string", "enum": ["answer"]},
+            {"type": "object", "properties": {"kind": {"type": "string", "enum": ["answer"]},
                 "message": {"type": "string", "minLength": 1},
                 "citation_ids": {"type": "array", "minItems": 0},
-            }, "required": ["kind", "message", "citation_ids"],
-                "additionalProperties": False}, ]}
+            }, "required": ["kind", "message", "citation_ids"], "additionalProperties": False}, ]}
         issues = diagnose_json_text(
             '{"kind":"answer","message":0,"PRIVATE_UNKNOWN":"secret"}', schema, )
         self.assertEqual(issues, ("$.citation_ids: required property is missing",
@@ -151,8 +131,7 @@ class StructuredOutputValidationTests(unittest.TestCase):
         schema = {
             "type": "object",
             "properties": {"message": {"type": "string"},
-                "optional_count": {"type": "integer"}, },
-            "required": ["message"],
+                "optional_count": {"type": "integer"}, }, "required": ["message"],
             "additionalProperties": False, }
         self.assertEqual(diagnose_json_text('{"message":"ok"}', schema), ())
         self.assertEqual(diagnose_json_text('{"message":"ok","optional_count":"bad"}', schema),
@@ -196,21 +175,16 @@ def _artifact_id(path: str) -> str:
 
 def _closed_result_schema(properties: dict[str, object]) -> dict[str, object]:
     return {"additionalProperties": False,
-        "properties": properties,
-        "required": list(properties),
+        "properties": properties, "required": list(properties),
         "type": "object", }
 
 
-def _answer_wire(
-    correlation: str,
-    result: object,
-    *,
-    used_handles: tuple[str, ...] = (),
-) -> dict[str, object]:
+def _answer_wire(correlation: str,
+    result: object, *,
+    used_handles: tuple[str, ...] = (),) -> dict[str, object]:
     del correlation, used_handles
     return {'agent_action': {
-            'action_type': 'submit_result',
-            'task_result': result, }, }
+            'action_type': 'submit_result', 'task_result': result, }, }
 
 
 def _search_wire(

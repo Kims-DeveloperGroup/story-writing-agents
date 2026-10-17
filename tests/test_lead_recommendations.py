@@ -43,6 +43,7 @@ class LeadRecommendationTests(RecommendationCase):
 
 
     async def test_artifact_confirm_runs_one_preparation_and_stops_at_exact_review(self):
+        self.workspace.path(OUTLINE).write_text("Outline source.\n", encoding="utf-8")
         before = self.snapshots()
         conversation_id, turn = await self.recommend()
         request = turn.recommendation_request
@@ -165,6 +166,7 @@ class LeadRecommendationTests(RecommendationCase):
 
 
     async def test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority(self):
+        self.workspace.path(OUTLINE).write_text("Outline source.\n", encoding="utf-8")
         conversation_id, turn = await self.recommend()
         snapshots = self.snapshots()
         choice = decision(turn)

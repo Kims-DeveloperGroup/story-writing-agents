@@ -1738,41 +1738,79 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             ("writing_task_scope", (12, 13)), ("authoring_assessment", (6, 8, 9, 11)),
             ("authoring_assessment.direction", (6, 8, 9, 11)),("authoring_assessment.creative_scope", (6, 8, 9, 11)),
             ("specialist_consultation_proposal.shared_premises.*.selected_premise", (8, 9, 10)),
-            ('specialist_consultation_proposal.assignments.plot_architect.review_basis', (8,)),
-            ('specialist_consultation_proposal.assignments.character_custodian.review_basis', (8,)),
-            ('specialist_consultation_proposal.assignments.execution_specialist.review_basis', (8,)),
             ("core_document_assessment.document_judgments.*.document_read_source_id", (13,)), )}
         docs = tuple("core_documents/" + name + ".md" for name in
                      ("global_outline", "part_outlines", "character_sheets", "narrative_rules"))
         document_map = ("response_details", "core_document_assessment", "document_judgments")
-        def assert_strict(node, owner=None, path=(), refs=()):
+        assignment_paths = tuple(
+            ("response_details", "specialist_consultation_proposal", "assignments", agent)
+            for agent in ("plot_architect", "character_custodian", "execution_specialist"))
+        basis_paths = tuple(path + ("review_basis",) for path in assignment_paths)
+        basis_types = {"review_content": "object", "draft_content": "null",
+                       "assess_constraints": "null", "analyze_premise": "null"}
+        def resolve_arm_field(node, refs):
+            self.assertIsInstance(node, Mapping)
+            while "$ref" in node:
+                ref = node["$ref"]
+                self.assertTrue(isinstance(ref, str) and ref.startswith("#/$defs/"))
+                name = ref.removeprefix("#/$defs/").replace("~1", "/").replace("~0", "~")
+                self.assertTrue(name in definitions and name not in refs)
+                refs += (name,)
+                node = definitions[name]
+                self.assertIsInstance(node, Mapping)
+            return node
+        def assert_strict(node, owner=None, path=(), refs=(), basis_mode=None):
             if isinstance(node, Mapping):
                 self.assertNotIn("null", node)
                 if node.get("type") == "array": self.assertIs(type(node.get("minItems")), int)
                 if node.get("type") == "object":
                     self.assertEqual(set(node["required"]), set(node["properties"]))
                     self.assertIs(node["additionalProperties"], False)
+                if (owner is not None and path in assignment_paths
+                        and node.get("type") == "object"):
+                    properties = node["properties"]
+                    self.assertIn("assignment_type", properties)
+                    self.assertIn("review_basis", properties)
+                    mode_rule = resolve_arm_field(properties["assignment_type"], refs)
+                    self.assertEqual(mode_rule.get("type"), "string")
+                    modes = mode_rule.get("enum")
+                    self.assertIs(type(modes), list)
+                    self.assertEqual(len(modes), 1)
+                    basis_mode = modes[0]
+                    self.assertIs(type(basis_mode), str)
+                    self.assertIn(basis_mode, basis_types)
+                    basis_rule = resolve_arm_field(properties["review_basis"], refs)
+                    self.assertEqual(basis_rule.get("type"), basis_types[basis_mode],
+                                     ("assignment_basis_type", owner, path, basis_mode))
+                    if basis_mode == "review_content":
+                        self.assertEqual(set(basis_rule["properties"]),
+                                         {"candidate_input_ids", "criteria"})
                 if "$ref" in node:
                     ref = node["$ref"]
                     self.assertTrue(isinstance(ref, str) and ref.startswith("#/$defs/"))
                     name = ref.removeprefix("#/$defs/").replace("~1", "/").replace("~0", "~")
                     self.assertTrue(name in definitions and name not in refs)
-                    assert_strict(definitions[name], owner, path, refs + (name,))
+                    assert_strict(definitions[name], owner, path, refs + (name,), basis_mode)
                 if owner is None:
                     for value in node.values():
-                        assert_strict(value, owner, path, refs)
+                        assert_strict(value, owner, path, refs, basis_mode)
                 else:
                     for name, value in node.get("properties", {}).items():
                         component = "*" if path == document_map and name in docs else name
-                        assert_strict(value, owner, path + (component,), refs)
+                        assert_strict(value, owner, path + (component,), refs, basis_mode)
                     for key in ("anyOf", "items", "type"):
                         if key in node:
                             child_path = path + ("*",) if key == "items" else path
-                            assert_strict(node[key], owner, child_path, refs)
+                            assert_strict(node[key], owner, child_path, refs, basis_mode)
             elif isinstance(node, (list, tuple)):
                 for value in node:
-                    assert_strict(value, owner, path, refs)
+                    assert_strict(value, owner, path, refs, basis_mode)
             elif node == "null" and owner is not None:
+                if path in basis_paths:
+                    self.assertIsNotNone(basis_mode, ("assignment_basis_mode", owner, path))
+                    self.assertEqual(basis_types[basis_mode], "null",
+                                     ("assignment_basis_type", owner, path, basis_mode))
+                    return
                 self.assertIn(owner, null_slots.get(".".join(path), ()),
                               ("nullable_native_slot", owner, ".".join(path)))
         definitions = logical_schema.get("$defs", {})
@@ -2960,6 +2998,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             root = fixture_schema_node(group_schema, group_schema)
             types = fixture_schema_node(group_schema, root['properties']['response_type'])['enum']
             plain_scope_members.append((original_key, group_schema, tuple(types)))
+        review_basis_control = None
+        nonreview_basis_controls = {}
         accepted_profiles = set()
         for intent, activity in product(('authoring', 'review_only'), ('workflow', 'draft', 'revise', 'review')):
             for size in range(4):
@@ -3122,6 +3162,19 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                             self.assertEqual(json.loads(decoded_profile.answer_json),
                                 {'kind': semantic_kind, 'message': base['response_text'],
                                  'authoring_scope': expected_scope, **semantic_extra})
+                            if family in (6, 7):
+                                profile_assignments = packet["agent_action"]["task_result"][
+                                    "response_details"]["specialist_consultation_proposal"][
+                                    "assignments"]
+                                for agent, assignment in profile_assignments.items():
+                                    mode = assignment["assignment_type"]
+                                    if mode == "review_content" and review_basis_control is None:
+                                        review_basis_control = (
+                                            copy.deepcopy(packet),
+                                            copy.deepcopy(assignment["review_basis"]))
+                                    elif mode in ("draft_content", "assess_constraints"):
+                                        nonreview_basis_controls.setdefault(
+                                            mode, (copy.deepcopy(packet), agent))
                             if (semantic_kind == 'proposal' and 'artifact_intent' in semantic_extra
                                     and semantic_extra['artifact_intent']['operations'][0]['kind']
                                     == 'rename'):
@@ -3170,6 +3223,27 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                             'task_scope']['task']['id'] = 'not-current-task'
                         self.assertTrue(profile_binding.rule_graph.findings(bad_task))
         self.assertEqual(len(accepted_profiles), 91)
+        self.assertIsNotNone(review_basis_control)
+        self.assertEqual(set(nonreview_basis_controls), {"draft_content", "assess_constraints"})
+        review_packet, current_review_basis = review_basis_control
+        for mode in ("draft_content", "assess_constraints"):
+            positive, agent = nonreview_basis_controls[mode]
+            for control in (review_packet, positive):
+                self.assertFalse(profile_binding.rule_graph.findings(control))
+                self.assertTrue(profile_binding.decode_response(
+                    json.dumps(control)).belongs_to(profile_binding))
+            invalid_basis = copy.deepcopy(positive)
+            assignment = invalid_basis["agent_action"]["task_result"]["response_details"][
+                "specialist_consultation_proposal"]["assignments"][agent]
+            self.assertEqual(assignment["assignment_type"], mode)
+            self.assertIsNone(assignment["review_basis"])
+            assignment["review_basis"] = copy.deepcopy(current_review_basis)
+            self.assertTrue(profile_binding.rule_graph.findings(invalid_basis))
+            with self.assertRaises(orchestrator_module.LeadContractRejection) as rejected:
+                profile_binding.decode_response(json.dumps(invalid_basis))
+            self.assertIs(type(rejected.exception), orchestrator_module.LeadContractRejection)
+            self.assertEqual(rejected.exception.code, "LEAD_SCHEMA_RULE_REJECTED")
+            self.assertTrue(rejected.exception.requirements)
         from story_writing_agents.agent_context.actions import ContextCallReadFact
         from story_writing_agents.agent_context.manifest import ContextSourceKind
         unit_metadata = dict(evidence_id='unit-read', source_id='unit-source', revision='unit-v1',
@@ -4167,9 +4241,13 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     self.assertFalse(call.contract.rule_graph.findings(neighbor))
                     decoded = call.contract.decode_response(json.dumps(neighbor))
                     expected = [{'agent_id': PLOT_ARCHITECT, 'instruction': 'Review the input.',
-                        'mode': 'review', 'input_ids': ['reference_1']},
+                        'mode': 'review', 'input_ids': ['reference_1'],
+                        'review_basis': {'candidate_input_ids': ['reference_1'],
+                                         'criteria': 'Review the input.'}},
                         {'agent_id': CHARACTER_CUSTODIAN, 'instruction': 'Review the input.',
-                            'mode': 'review', 'input_ids': ['user_input', 'reference_1']}]
+                            'mode': 'review', 'input_ids': ['user_input', 'reference_1'],
+                            'review_basis': {'candidate_input_ids': ['user_input'],
+                                             'criteria': 'Review the input.'}}]
                     self.assertEqual(json.loads(decoded.answer_json)['proposal']['assignments'], expected)
                 return frame
             return respond
@@ -5286,7 +5364,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertTrue(all(len(chunk.encode("utf-8")) < 32_768 for chunk in details))
         self.assertIn('$.agent_action.task_result.response_details.task_scope.paths[0]', report)
         notice_note = "bounded report lacks the omitted-issues notice"
-        if '$.agent_action: additional validation issues omitted' not in report:
+        if '$: additional validation issues omitted' not in report:
             if (type(details) is tuple and len(details) <= 8 and type(report) is str
                     and all(type(chunk) is str for chunk in details)):
                 sizes = tuple(len(chunk.encode('utf-8')) for chunk in details)
@@ -5301,7 +5379,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                     secret in report)
             else:
                 notice_note = (notice_note, 'unsupported-shape')
-        self.assertTrue('$.agent_action: additional validation issues omitted' in report,
+        self.assertTrue('$: additional validation issues omitted' in report,
                         notice_note)
         self.assertFalse('$.agent_action.task_result.response_details.task_scope.paths[11999]' in report,
                          "bounded report includes an out-of-budget array index")

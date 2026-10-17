@@ -153,8 +153,29 @@ def _artifact_outcome(
         material = _live_material(call)
         if read_queries:
             reads = call.payload['context_observation']['read_results']
-            qualified = {row['provenance']['source_locator']: row['evidence_id'] for row in reads}
-            if set(qualified) != {path for path, _query in read_queries}:
+            paths = tuple(path for path, _query in read_queries)
+            locators = tuple(path.removeprefix('manuscript/') for path in paths)
+            if (len(set(paths)) != len(paths) or len(set(locators)) != len(paths)
+                    or len(selected_handles) != len(paths)
+                    or len(set(selected_handles)) != len(paths)):
+                raise ValueError('Caller paths and selected issued handles must be unambiguous')
+            if type(reads) is not list or len(reads) != len(paths):
+                raise ValueError('The READ must return exactly the selected issued handles')
+            returned_handles = tuple(row['read_handle'] for row in reads)
+            if (len(set(returned_handles)) != len(returned_handles)
+                    or set(returned_handles) != set(selected_handles)):
+                raise ValueError('The READ has duplicate, missing, extra or foreign handles')
+            by_handle = dict(zip(returned_handles, reads, strict=True))
+            qualified = {}
+            for path, locator, handle in zip(paths, locators, selected_handles, strict=True):
+                row = by_handle[handle]
+                if (row['source']['source_type'] != 'story_document'
+                        or row['provenance']['authority_type'] != 'writing_artifact_repository'
+                        or row['provenance']['source_locator'] != locator):
+                    raise ValueError('The READ source differs from the selected caller artifact')
+                qualified[path] = row['evidence_id']
+            if (set(qualified) != set(paths)
+                    or len(set(qualified.values())) != len(paths)):
                 raise ValueError('The READ must complete the exact caller-supplied artifact set')
             material = {**material, 'qualified_read_ids': qualified}
         resolved_operations = (

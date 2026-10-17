@@ -293,6 +293,16 @@ def _search(query: str, kinds: list[str]):
     return respond
 
 
+def _scoped_progress(script, progress):
+    def respond(call, provider):
+        progress[0] += 1
+        frame = script(call, provider)
+        progress[1] += 1
+        progress[2] += 1
+        return frame
+    return respond
+
+
 def _missing_outcome(*, proposal: bool = False, authoring_assessment=None):
     def respond(call, _provider):
         observation = call.payload["context_observation"]
@@ -407,7 +417,8 @@ def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False,
                     value["authoring_assessment"], source_choices=choices["input_ids"])
             return lead_fixture_response(call, {
                 "response_type": "clarification_question", "response_text": value["message"],
-                "response_details": details}, family=1)
+                "response_details": details}, family=0,
+                branch_key=call.contract.factory.rule_seed.contract_id + ":family:1")
         if not native_proposal:
             return _provider_envelope(call, value)
         from tests.provider_wire_fixture import (
@@ -447,8 +458,13 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         for index, kinds in enumerate((["w"], ["w", "c"], ["c"])):
             with self.subTest(kinds=kinds):
                 conversation_id = self.conversation(f"Zero hit {index}")
+                progress = [0, 0, 0]
+                scoped = ((len(self.backend.calls), len(self.backend.call_records),
+                           len(self.backend.finalizers)), self.session_id,
+                          conversation_id, progress, None, None)
                 self.backend.enqueue(_search("phrase absent from every source", kinds),
-                    _missing_outcome(authoring_assessment=_fixture_assessment()),)
+                    _scoped_progress(
+                        _missing_outcome(authoring_assessment=_fixture_assessment()), progress),)
                 result = await self.runtime.lead_turn(
                     self.session_id,
                     conversation_id,
@@ -460,7 +476,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 except AssertionError as failure:
                     from tests.recommendation_fixture import _current_policy_failure_note
                     failure.add_note(_current_policy_failure_note(
-                        self.backend, result))
+                        self.backend, result, scoped=scoped))
                     raise
                 assert result.evidence is not None
                 zero_hits = tuple(
@@ -500,8 +516,13 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         conversation_id = self.conversation("Content-free zero hit")
+        progress = [0, 0, 0]
+        scoped = ((len(self.backend.calls), len(self.backend.call_records),
+                   len(self.backend.finalizers)), self.session_id,
+                  conversation_id, progress, None, None)
         self.backend.enqueue(_search("private internal search phrase", ["w"]),
-            _missing_outcome(authoring_assessment=_fixture_assessment()),)
+            _scoped_progress(
+                _missing_outcome(authoring_assessment=_fixture_assessment()), progress),)
         result = await self.runtime.lead_turn(self.session_id, conversation_id,
             _ADMISSION_BRIEF + "\n" + "Check canonical artifacts.",)
         self.assertIs(result.kind, LeadOutcomeKind.RECOMMENDATION)
@@ -510,7 +531,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         except AssertionError as failure:
             from tests.recommendation_fixture import _current_policy_failure_note
             failure.add_note(_current_policy_failure_note(
-                self.backend, result))
+                self.backend, result, scoped=scoped))
             raise
         self.assertIsNotNone(result.evidence)
         assert result.evidence is not None
@@ -740,12 +761,12 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 assessment = _fixture_assessment(
                     foundation_ids=("reference_1", "reference_2") if references else ("user_input",),
                 )
+                authored_scope = _live_scope(
+                    call, activity="review", domains=("plot_structure", "tone_execution"),
+                    paths=("core_documents/global_outline.md", "manuscript/part-01/opening.md"))
                 response = _provider_envelope(call, {
                     "authoring_assessment": admission.assessment_to_dict(assessment),
-                    "authoring_scope": _live_scope(call, activity="review", domains=("plot_structure",
-                        "tone_execution"),
-                                                  paths=("core_documents/global_outline.md",
-                                                      "manuscript/part-01/opening.md")),
+                    "authoring_scope": authored_scope,
                     "recommended_action": {
                         "kind": "prepare_consultation",
                         "purpose": "Check the exact current source selection.",
@@ -777,7 +798,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                     message=value['message'],
                     recommended_action={**value['recommended_action'],
                                         'source_ids': base_sources},
-                    authoring_scope=value['authoring_scope'],
+                    authoring_scope=authored_scope,
                     authoring_assessment=assessment)(call, _provider))
                 source_path = ('agent_action', 'task_result', 'response_details',
                                'proposal_drafting_request', 'source_ids')
@@ -872,7 +893,9 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                     self.assertIs(failure_payloads[0].code,
                         CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED)
                     source_rule = ("$: duplicate object key" if index == 1
-                        else "select only frozen offered aliases or evidence IDs from completed authorized READs")
+                        else "$.agent_action.task_result.response_details."
+                             "proposal_drafting_request.source_ids: "
+                             "contains 1 unexpected properties (names withheld)")
                     try:
                         self.assertIn(source_rule, "\n".join(result.validation_details))
                     except AssertionError as failure:
@@ -918,7 +941,12 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 branch_key=call.contract.factory.rule_seed.contract_id + ':family:0')
 
         conversation_id = self.conversation("Stale prior-turn evidence")
-        self.backend.enqueue(_search("Outline", ["w"]), read_prior_turn, answer_prior_turn)
+        progress = [0, 0, 0]
+        scoped = ((len(self.backend.calls), len(self.backend.call_records),
+                   len(self.backend.finalizers)), self.session_id,
+                  conversation_id, progress, None, None)
+        self.backend.enqueue(_search("Outline", ["w"]), read_prior_turn,
+                             _scoped_progress(answer_prior_turn, progress))
         first = await self.runtime.lead_turn(self.session_id, conversation_id, "Read current evidence.")
         self.assertIs(first.kind, LeadOutcomeKind.ANSWER)
         try:
@@ -926,7 +954,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         except AssertionError as failure:
             from tests.recommendation_fixture import _current_policy_failure_note
             failure.add_note(_current_policy_failure_note(
-                self.backend, first))
+                self.backend, first, scoped=scoped))
             raise
         self.assertEqual(len(prior_evidence_ids), 1)
 
@@ -934,6 +962,9 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                     expect_unoffered=True))
         self.backend.enqueue(selected_sources(prior_evidence_ids,
                     expect_unoffered=True))
+        scoped = ((len(self.backend.calls), len(self.backend.call_records),
+                   len(self.backend.finalizers)), self.session_id,
+                  conversation_id, None, None, None)
         stale = await self.runtime.lead_turn(
             self.session_id, conversation_id,
             _ADMISSION_BRIEF + "\nReject evidence issued to the prior invocation.",
@@ -946,104 +977,246 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                        if event.turn_id == stale.turn_id and type(
                            event.payload) is CollaborationLeadOutcomeFailurePayload)
         self.assertIs(failure.code, CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED)
-        self.assertIn("select only frozen offered aliases or evidence IDs from completed authorized READs",
-                      "\n".join(stale.validation_details))
+        try:
+            self.assertIn("select only frozen offered aliases or evidence IDs "
+                          "from completed authorized READs",
+                          "\n".join(stale.validation_details))
+        except AssertionError as failure:
+            from tests.recommendation_fixture import _current_policy_failure_note
+            failure.add_note(_current_policy_failure_note(
+                self.backend, stale, scoped=scoped))
+            raise
 
     async def test_unread_and_truncated_search_fall_back_while_reads_attach_locally(
         self,
     ) -> None:
-        def invalid_correction(call, _provider):
-            return _provider_envelope(
-                call,
-                {
-                    "recommended_action": None, "kind": "answer",
-                    "message": "Correction still claims unread evidence.", "scope": "story_specific",
-                    "evidence_status": "verified", "evidence_ids": ["invented"], "artifact_intent": None,
-                "objective_intent": None,
-                    "proposal": None,
-                },
-            )
+        from story_writing_agents import conversations as c
+        from story_writing_agents.agent_context.manifest import (
+            ContextSourceKind, ContextSubjectKind)
+        from tests.test_lead_orchestration import _Finalizer
+        from story_writing_agents.lead_provider_contracts import (
+            LeadContractRejection, lead_outcome_scope_paths)
+        from story_writing_agents.specialist_routing import ArtifactReviewDomain, AuthoringActivity
+        from tests.provider_wire_fixture import (
+            finite_fixture_read_selection, finite_fixture_selection,
+            lead_fixture_bound_scope, lead_fixture_response)
+
+        answer_returns = 0
+
+        def writing_bytes():
+            return {path.relative_to(self.workspace.root): path.read_bytes()
+                    for directory in ('core_documents', 'manuscript')
+                    for path in (self.workspace.root / directory).rglob('*.md')}
+
+        def check_native_delivery(conversation_id, call_start, finalizer_start,
+                                  expected_returns, expected_states):
+            calls = self.backend.calls[call_start:]
+            self.assertEqual(len(calls), 3)
+            self.assertTrue(all(
+                call.scope.session_id == self.session_id
+                and call.scope.subject_kind is ContextSubjectKind.CONVERSATION
+                and call.scope.subject_id == conversation_id
+                and call.scope.agent_id == LEAD_ORCHESTRATOR for call in calls))
+            self.assertEqual(answer_returns, expected_returns)
+            self.assertEqual(len(_submitted_calls(self.history(conversation_id))), 3)
+            finalizers = self.backend.finalizers[finalizer_start:]
+            self.assertEqual(len(finalizers), 3)
+            states = []
+            for finalizer in finalizers:
+                self.assertTrue(type(finalizer) is _Finalizer)
+                self.assertEqual(len(finalizer.calls), 1)
+                state, code = finalizer.calls[0]
+                self.assertTrue(type(state) is str and state in ('accepted', 'rejected'))
+                if state == 'accepted':
+                    self.assertTrue(code is None)
+                else:
+                    self.assertTrue(
+                        code is ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)
+                states.append(state)
+            self.assertCountEqual(states, expected_states)
+
+        def unread_answer(call, message, domain):
+            nonlocal answer_returns
+            offers = call.contract.offers
+            writing_facts = tuple(item for item in
+                offers.completed_read_facts + offers.delivery_read_facts
+                if item.source_kind is ContextSourceKind.WRITING_ARTIFACT)
+            self.assertEqual(writing_facts, ())
+            eligibility = call.contract.eligibility_offers
+            eligibility_writing_facts = tuple(item for item in
+                eligibility.completed_read_facts + eligibility.delivery_read_facts
+                if item.source_kind is ContextSourceKind.WRITING_ARTIFACT)
+            self.assertTrue(eligibility_writing_facts == ())
+            scope = lead_fixture_bound_scope(call, _live_scope(
+                call, activity='review', domains=(domain.value,)), record=True)
+            workflow_scope = lead_fixture_bound_scope(
+                call, _live_scope(call, activity='workflow'), record=True)
+            stem = call.contract.factory.rule_seed.contract_id
+            seed = json.loads(lead_fixture_response(call, {
+                'response_type': 'answer', 'response_text': message,
+                'response_details': {'task_scope': workflow_scope}},
+                family=0, branch_key=stem + ':family:0'))
+            self.assertFalse(call.contract.rule_graph.findings(seed))
+            self.assertTrue(call.contract.decode_response(
+                json.dumps(seed)).belongs_to(call.contract))
+            question = json.loads(lead_fixture_response(call, {
+                'response_type': 'clarification_question',
+                'response_text': 'Clarify the concrete review source.',
+                'response_details': {'task_scope': scope}},
+                family=0, branch_key=stem + ':family:1'))
+            self.assertFalse(call.contract.rule_graph.findings(question))
+            self.assertTrue(call.contract.decode_response(
+                json.dumps(question)).belongs_to(call.contract))
+            negative = json.loads(json.dumps(seed))
+            negative['agent_action']['task_result']['response_details']['task_scope'] = scope
+            self.assertTrue(call.contract.rule_graph.findings(negative))
+            frame = json.dumps(negative, ensure_ascii=False, separators=(',', ':'))
+            with self.assertRaises(LeadContractRejection) as rejected:
+                call.contract.decode_response(frame)
+            self.assertIs(type(rejected.exception), LeadContractRejection)
+            self.assertEqual(rejected.exception.code, 'LEAD_SCHEMA_RULE_REJECTED')
+            answer_returns += 1
+            return frame
+
+        def invalid_correction(domain):
+            def respond(call, _provider):
+                return unread_answer(call, 'Correction still claims unread evidence.', domain)
+            return respond
 
         def answer_with_unread_id(call, _provider):
-            observation = call.payload["context_observation"]
-            self.assertEqual(observation["observation_type"], "context_search_results")
-            return _provider_envelope(
-                call,
-                {
-                    "recommended_action": None, "kind": "answer", "message": "A SEARCH hit is not READ evidence.",
-                    "scope": "story_specific", "evidence_status": "verified", "evidence_ids": ["search_1"],
-                    "artifact_intent": None,
-                "objective_intent": None,
-                    "proposal": None,
-                },
-            )
+            observation = call.payload['context_observation']
+            self.assertEqual(observation['observation_type'], 'context_search_results')
+            return unread_answer(call, 'A SEARCH hit is not READ evidence.',
+                                 ArtifactReviewDomain.PLOT_STRUCTURE)
 
         def read_first(call, provider: _LeadContextProvider):
-            observation = call.payload["context_observation"]
-            handle = observation["search_results"][0]["read_handle"]
+            observation = call.payload['context_observation']
+            handle = observation['search_results'][0]['read_handle']
             provider.used_handles = (handle,)
-            return json.dumps(
-                {
-                    "action": {"kind": "read", "handles": [handle]},
-                },
-                separators=(",", ":"),
-            )
+            outer, inner = offered_fixture_bindings(
+                call, action_type='read_context', response_type=None, family=0)
+            self.assertIsNone(inner)
+            return indexed_response({'action_type': 'read_context', 'read_handles':
+                finite_fixture_read_selection(
+                    call.contract.offers.issued_handle_aliases, (handle,))},
+                outer_schema_id=outer, inner_schema_id=inner)
+
+        read_evidence = []
+        positive_message = 'The completed READ grounds this factual answer.'
 
         def answer_without_using_read(call, _provider):
-            observation = call.payload["context_observation"]
-            self.assertEqual(observation["observation_type"], "context_read_results")
-            return _provider_envelope(
-                call,
-                {
-                    "recommended_action": None, "kind": "answer",
-                    "message": "An unused READ cannot ground this answer.", "scope": "story_specific",
-                    "evidence_status": "verified", "evidence_ids": [observation["read_results"][0]["evidence_id"]],
-                    "artifact_intent": None,
-                "objective_intent": None,
-                    "proposal": None,
-                }, used_handles=(),
-            )
+            nonlocal answer_returns
+            observation = call.payload['context_observation']
+            self.assertEqual(observation['observation_type'], 'context_read_results')
+            evidence_id = observation['read_results'][0]['evidence_id']
+            read_evidence.append(evidence_id)
+            offers = call.contract.offers
+            writing_facts = tuple((item.evidence_id, item.artifact_locator, item.whole_source)
+                for item in offers.completed_read_facts + offers.delivery_read_facts
+                if item.source_kind is ContextSourceKind.WRITING_ARTIFACT)
+            self.assertTrue(any(identity == evidence_id
+                and locator == 'core_documents/global_outline.md'
+                for identity, locator, _whole in writing_facts))
+            eligible_paths = lead_outcome_scope_paths(
+                LeadOutcomeKind.ANSWER, AuthoringActivity.REVIEW,
+                (ArtifactReviewDomain.PLOT_STRUCTURE,), writing_facts, ordinary_answer=True)
+            self.assertIsNotNone(eligible_paths)
+            scope = lead_fixture_bound_scope(call, _live_scope(
+                call, activity='review', domains=('plot_structure',)), record=True)
+            constraints = call.contract.factory.constraints
+            self.assertIsNone(constraints.scope)
+            self.assertIsNone(constraints.adoption_intent)
+            scope['paths'] = finite_fixture_selection(eligible_paths, ())
+            frame = lead_fixture_response(call, {
+                'response_type': 'answer', 'response_text': positive_message,
+                'response_details': {'task_scope': scope}}, family=0,
+                branch_key=call.contract.factory.rule_seed.contract_id + ':family:0')
+            self.assertFalse(call.contract.rule_graph.findings(json.loads(frame)))
+            self.assertTrue(call.contract.decode_response(frame).belongs_to(call.contract))
+            answer_returns += 1
+            return frame
 
         cases = (
-            (_search("Outline", ["w"]), answer_with_unread_id),
-            (_search("Outline", ["w"]), read_first, answer_without_using_read),
+            (_search('Outline', ['w']), answer_with_unread_id),
+            (_search('Outline', ['w']), read_first, answer_without_using_read),
         )
         for index, scripts in enumerate(cases):
-            conversation_id = self.conversation(f"Unread evidence {index}")
+            conversation_id = self.conversation(f'Unread evidence {index}')
+            before = writing_bytes()
+            answer_returns = 0
+            call_start = len(self.backend.calls)
+            finalizer_start = len(self.backend.finalizers)
             self.backend.enqueue(*scripts)
-            self.backend.enqueue(invalid_correction)
+            if index == 0:
+                self.backend.enqueue(invalid_correction(ArtifactReviewDomain.PLOT_STRUCTURE))
             result = await self.runtime.lead_turn(
-                self.session_id,
-                conversation_id,
-                "Do not accept unread evidence.",
-            )
-            self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD,)
+                self.session_id, conversation_id, 'Do not accept unread evidence.')
+            check_native_delivery(
+                conversation_id, call_start, finalizer_start, 2 if index == 0 else 1,
+                ('accepted', 'rejected', 'rejected') if index == 0
+                else ('accepted', 'accepted', 'accepted'))
+            if index == 0:
+                self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
+            else:
+                self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
+                self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
+                self.assertEqual(result.message, positive_message)
+                self.assertEqual(len(read_evidence), 1)
+                self.assertIsNotNone(result.evidence)
+                receipts = tuple(item for item in result.evidence.receipts
+                                 if item.evidence_id == read_evidence[0])
+                self.assertEqual(len(receipts), 1)
+                self.assertIs(receipts[0].acquisition, CollaborationEvidenceAcquisition.READ)
+                self.assertIn('core_documents/global_outline.md', receipts[0].locator)
+            self.assertIsNone(result.proposal)
+            self.assertIsNone(result.artifact_proposal)
+            self.assertIsNone(result.artifact_application_request)
+            self.assertIsNone(result.story_commit_request)
+            self.assertIsNone(result.recommendation_request)
+            self.assertEqual(writing_bytes(), before)
+            self.assertFalse(any(type(event.payload) in (
+                c.ArtifactObjectivePayload, c.ArtifactObjectivePayloadV2)
+                for event in self.history(conversation_id)))
 
         for index in range(12):
-            self.workspace.path(f"manuscript/part-01/shared-{index}.md").write_text(
-                "Shared grounding phrase.\n",
-                encoding="utf-8",
-            )
+            self.workspace.path(f'manuscript/part-01/shared-{index}.md').write_text(
+                'Shared grounding phrase.\n', encoding='utf-8')
 
-        def truncated_answer(call, provider):
-            self.assertTrue(call.payload["context_observation"]["truncated"])
-            return answer_with_unread_id(call, provider)
+        def truncated_answer(call, _provider):
+            self.assertTrue(call.payload['context_observation']['truncated'])
+            self.assertEqual(call.payload['context_observation']['observation_type'],
+                             'context_search_results')
+            return unread_answer(call, 'A SEARCH hit is not READ evidence.',
+                                 ArtifactReviewDomain.TONE_EXECUTION)
 
-        conversation_id = self.conversation("Truncated search")
-        self.backend.enqueue(_search("Shared grounding phrase", ["w"]), truncated_answer,)
-        self.backend.enqueue(invalid_correction)
+        conversation_id = self.conversation('Truncated search')
+        before = writing_bytes()
+        answer_returns = 0
+        call_start = len(self.backend.calls)
+        finalizer_start = len(self.backend.finalizers)
+        self.backend.enqueue(_search('Shared grounding phrase', ['w']), truncated_answer)
+        self.backend.enqueue(invalid_correction(ArtifactReviewDomain.TONE_EXECUTION))
         result = await self.runtime.lead_turn(
-            self.session_id,
-            conversation_id,
-            "Reject truncated search evidence.",
-        )
+            self.session_id, conversation_id, 'Reject truncated search evidence.')
+        check_native_delivery(
+            conversation_id, call_start, finalizer_start, 2,
+            ('accepted', 'rejected', 'rejected'))
         try:
-            self.assertIs(result.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD,)
+            self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
         except AssertionError as failure:
             from tests.recommendation_fixture import _current_policy_failure_note
             failure.add_note(_current_policy_failure_note(
                 self.backend, result))
             raise
+        self.assertIsNone(result.proposal)
+        self.assertIsNone(result.artifact_proposal)
+        self.assertIsNone(result.artifact_application_request)
+        self.assertIsNone(result.story_commit_request)
+        self.assertIsNone(result.recommendation_request)
+        self.assertEqual(writing_bytes(), before)
+        self.assertFalse(any(type(event.payload) in (
+            c.ArtifactObjectivePayload, c.ArtifactObjectivePayloadV2)
+            for event in self.history(conversation_id)))
 
     async def test_validation_failure_closes_once_and_restart_uses_fresh_turn(
         self,
