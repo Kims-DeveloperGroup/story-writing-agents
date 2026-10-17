@@ -403,7 +403,7 @@ jobs:
       always() && (github.event_name == 'workflow_dispatch' ||
       (needs.full.result == 'success' && needs.reconcile-full.result == 'failure'))
     runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
-    timeout-minutes: 10
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && 60 || 10 }}
     steps:
       - uses: actions/checkout@v4
         with:
