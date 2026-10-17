@@ -429,7 +429,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                          tuple(by_path[path] for path, _kind in expected_links))
         hits = physical[1].payload['context_observation']['search_results']
         self.assertEqual(tuple(row['read_handle'] for row in reads),
-                         tuple(row['read_handle'] for path, _query in read_queries
+                         tuple(row['read_handle'] for path, _query in expected_links
                                for row in hits
                                if row['provenance']['source_locator'] == path))
         self.assertIsNotNone(proposed.proposal, (
@@ -488,7 +488,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                          tuple(by_path[path] for path, _kind in expected_links))
         hits = physical[1].payload['context_observation']['search_results']
         self.assertEqual(tuple(row['read_handle'] for row in reads),
-                         tuple(row['read_handle'] for path, _query in read_queries
+                         tuple(row['read_handle'] for path, _query in expected_links
                                for row in hits
                                if row['provenance']['source_locator'] == path))
         self.assertIs(
