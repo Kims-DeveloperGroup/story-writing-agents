@@ -127,7 +127,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
                         'action': 'start', 'target_paths': list(paths), 'next_step': 'consult'})
                 elif native_continuation:
                     value['proposal'].update(objective_intent=lead._compact_objective(intent))
-                else:
+                elif native_inputs is None or intent is not None:
                     value.update(objective_intent=intent)
                 if response_text is not None:
                     value['message'] = response_text
