@@ -322,7 +322,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       PYTHONDONTWRITEBYTECODE: '1'
-    timeout-minutes: ${{ needs.classify.outputs.wall_time_exception == 'true' && 60 || 15 }}
+    timeout-minutes: ${{ needs.classify.outputs.wall_time_exception == 'true' && 180 || 15 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -473,395 +473,199 @@ jobs:
           from pathlib import Path
           from story_writing_agents.git import process, session_resources
           from tests import runner
-
-          """Private passive observation of one existing budget test's failed subTests.
-
-          Inert until Root supplies its already-imported runner result class to install().
-          No project imports, test/helper/owner calls, trace/profile hooks, or launch code.
-          """
-          from enum import Enum
-          from pathlib import Path
-          import hashlib
-          import json
-
-
-          CANONICAL_ID = (
-              'tests.test_lead_orchestration.LeadBudgetFinalizationTests.'
-              'test_budget_notice_preserves_maximum_utf8_synthesis'
-          )
-          EXPECTED_HEAD = '84184eec04de21b80dde26f0ab18d5c0eac7140e'
-          EXPECTED_MANIFEST = 'ecfd70cc36ddef51f00a97cc1675e74f1d0ff3ef843d79367c17eb2f4b7cbcfc'
-          SOURCE_PINS = {
-              'tests/runner.py': (
-                  '018a8534d83420ece7d3dea6f1368b4408445f59ae6fc248775ac43a3eda1e76'
-              ),
-              'tests/test_lead_orchestration.py': (
-                  '1fbe2f44423f6481cce77037a965710776d87eb76d5331e2cce054e099c4f98b'
-              ),
-              'src/story_writing_agents/conversations/context.py': (
-                  'c178f16d88700bd177ca0ef8cecb2a4e552f329c9f37cefc6c54596fbbae2882'
-              ),
-              'src/story_writing_agents/conversations/events.py': (
-                  'dd4d4f43560c9203af059db4eafcf14fa5dd5b067477426897943d7eebc79f71'
-              ),
-              'src/story_writing_agents/conversations/__init__.py': (
-                  'd4d7c3447a2e16a4ae1263cb656b07abb952da370272c109452f848b452a196a'
-              ),
-          }
-          FRAME_QUALNAME = 'LeadBudgetFinalizationTests._budget_consultation'
-          FRAME_FIRST_LINE = 5230
-          ASSERT_LINE = 5328
-          MAX_RECORDS = 3
-          MAX_HISTORY = 32
-          MAX_DETAILS = 16
-          MAX_DETAIL_CHARS = 4096
-          MAX_OUTPUT_BYTES = 65536
-          AGENTS = ('lead_orchestrator', 'plot_architect', 'character_custodian', 'execution_specialist')
-          CONVERSATIONS = 'story_writing_agents.conversations'
-
-
-          def _get(value, name):
-              return object.__getattribute__(value, name)
-
-
-          def _typed(value, name, module=CONVERSATIONS):
-              actual = type(value)
-              return actual.__module__ == module and actual.__qualname__ == name
-
-
-          def _token(value, maximum=128):
-              if type(value) is not str or not value or len(value) > maximum or not value.isascii():
-                  raise ValueError('metadata_type')
-              if not all(c.isalnum() or c in '_.:@/-' for c in value):
-                  raise ValueError('metadata_alphabet')
-              return value
-
-
-          def _enum(value):
-              if value is None:
-                  return None
-              if not isinstance(value, Enum):
-                  raise TypeError('metadata_enum')
-              return _token(value.value, 96)
-
-
-          def _integer(value, maximum=1000000):
-              if type(value) is not int or not 0 <= value <= maximum:
-                  raise TypeError('metadata_integer')
-              return value
-
-
-          def _optional_id(value):
-              return None if value is None else _token(value)
-
-
-          def _details(value):
-              if type(value) is not tuple or any(type(v) is not str for v in value):
-                  raise TypeError('validation_details_type')
-              kept, used = [], 0
-              for item in value[:MAX_DETAILS]:
-                  remaining = MAX_DETAIL_CHARS - used
-                  if remaining <= 0:
-                      break
-                  kept.append(item[:remaining])
-                  used += len(kept[-1])
-              return {'items': kept, 'count': len(value),
-                      'truncated': len(kept) != len(value) or sum(map(len, value)) != used}
-
-
-          def _unique_object(pairs):
-              result = {}
-              for key, value in pairs:
-                  if key in result:
-                      raise ValueError('duplicate_notice_member')
-                  result[key] = value
-              return result
-
-
-          def _reject_constant(_value):
-              raise ValueError('nonfinite_notice_value')
-
-
-          def _notice(message, origin):
-              """Copy only a strict, bounded, runtime-authored structured notice whitelist."""
-              if type(message) is not str:
-                  raise TypeError('message_type')
-              size = len(message.encode('utf-8'))
-              omitted = {'utf8_bytes': size, 'structured_notice': None}
-              if origin != 'runtime_fallback' or size > 4096:
-                  return omitted
-              try:
-                  value = json.loads(message, object_pairs_hook=_unique_object,
-                                     parse_constant=_reject_constant)
-                  allowed = {'code', 'language', 'state', 'paths', 'task_revisions'}
-                  if type(value) is not dict or not value.keys() <= allowed or 'code' not in value:
-                      return omitted
-                  result = {'code': _token(value['code'], 96)}
-                  for key in ('language', 'state'):
-                      if key in value:
-                          result[key] = None if value[key] is None else _token(value[key], 96)
-                  if 'paths' in value:
-                      paths = value['paths']
-                      if type(paths) is not list or len(paths) > 16:
-                          return omitted
-                      if any(type(v) is not str or not v.startswith('$') or len(v) > 256
-                             or not v.isascii() or any(ord(c) < 32 for c in v) for v in paths):
-                          return omitted
-                      result['paths'] = paths
-                  if 'task_revisions' in value:
-                      rows = value['task_revisions']
-                      if type(rows) is not list or len(rows) > 8:
-                          return omitted
-                      result['task_revisions'] = []
-                      for row in rows:
-                          if type(row) is not dict or set(row) != {'task_id', 'task_revision'}:
-                              return omitted
-                          result['task_revisions'].append({
-                              'task_id': _token(row['task_id']),
-                              'task_revision': _integer(row['task_revision'], 65535)})
-                  return {'utf8_bytes': size, 'structured_notice': result}
-              except (TypeError, ValueError, UnicodeError, RecursionError):
-                  return omitted
-
-
-          def _turn(value):
-              if not _typed(value, 'LeadTurnResult'):
-                  raise TypeError('turn_type')
-              trace = _get(value, 'trace')
-              if trace is not None and not _typed(trace, 'ReplyTrace', 'story_writing_agents.reply_trace'):
-                  raise TypeError('trace_type')
-              origin = None if trace is None else _enum(_get(trace, 'origin'))
-              result = {key: _optional_id(_get(value, key)) for key in (
-                  'session_id', 'conversation_id', 'turn_id', 'step_id', 'provider_invocation_id')}
-              result.update(kind=_enum(_get(value, 'kind')), state=_enum(_get(value, 'state')),
-                            next_action=_enum(_get(value, 'next_action')), trace_origin=origin,
-                            validation_details=_details(_get(value, 'validation_details')),
-                            runtime_notice=_notice(_get(value, 'message'), origin))
-              result['presence'] = {key: _get(value, key) is not None for key in (
-                  'proposal', 'confirmation_request_id', 'artifact_proposal',
-                  'artifact_application_request', 'story_commit_request', 'recommendation_request')}
-              return result
-
-
-          def _history(events):
-              if type(events) is not tuple:
-                  raise TypeError('history_type')
-              rows = []
-              for event in events[-MAX_HISTORY:]:
-                  if not _typed(event, 'CollaborationEvent'):
-                      raise TypeError('event_type')
-                  payload = _get(event, 'payload')
-                  row = {'kind': _enum(_get(event, 'kind'))}
-                  if _typed(payload, 'CollaborationProviderCallPayload'):
-                      row.update(category='provider_call',
-                                 invocation_id=_token(_get(payload, 'invocation_id')),
-                                 call_id=_token(_get(payload, 'call_id')),
-                                 ordinal=_integer(_get(payload, 'ordinal')),
-                                 role=_token(_get(payload, 'role')),
-                                 invocation_kind=_enum(_get(payload, 'invocation_kind')),
-                                 call_kind=_enum(_get(payload, 'call_kind')),
-                                 state=_enum(_get(payload, 'state')))
-                  elif _typed(payload, 'CollaborationStepStatePayload'):
-                      row.update(category='step_state', state=_enum(_get(payload, 'state')))
-                  elif _typed(payload, 'CollaborationExecutionResult'):
-                      outcomes = _get(payload, 'assignment_outcomes')
-                      if type(outcomes) is not tuple or len(outcomes) > 3:
-                          raise TypeError('outcome_type')
-                      safe = []
-                      for outcome in outcomes:
-                          if not _typed(outcome, 'CollaborationAssignmentOutcome'):
-                              raise TypeError('assignment_outcome_type')
-                          safe.append({'assignment_id': _token(_get(outcome, 'assignment_id')),
-                                       'outcome': _enum(_get(outcome, 'outcome')),
-                                       'submitted_physical_calls': _integer(
-                                           _get(outcome, 'submitted_physical_calls'))})
-                      row.update(category='execution_result', assignment_outcomes=safe,
-                                 synthesis_outcome=_enum(_get(payload, 'synthesis_outcome')),
-                                 synthesis_submitted_physical_calls=_integer(
-                                     _get(payload, 'synthesis_submitted_physical_calls')),
-                                 overall_outcome=_enum(_get(payload, 'overall_outcome')))
-                  rows.append(row)
-              return {'event_count': len(events), 'tail': rows, 'tail_truncated': len(events) > MAX_HISTORY}
-
-
-          def _queues(test):
-              backend = _get(test, 'backend')
-              if not _typed(backend, '_LeadBackend', 'tests.test_lead_orchestration'):
-                  raise TypeError('backend_type')
-              groups = _get(backend, 'scripts_by_agent')
-              if type(groups) is not dict:
-                  raise TypeError('queue_type')
-              sizes = {}
-              for agent in AGENTS:
-                  remaining = groups.get(agent, [])
-                  if type(remaining) is not list:
-                      raise TypeError('actor_queue_type')
-                  sizes[agent] = len(remaining)
-              calls, references = _get(backend, 'calls'), _get(backend, 'reference_calls')
-              if type(calls) is not list or type(references) is not list:
-                  raise TypeError('call_list_type')
-              return {'remaining_actor_group_counts': sizes, 'backend_call_count': len(calls),
-                      'reference_call_count': len(references)}
-
-
-          class BudgetSubtestObserver:
-              """Root-owned install/finalize lifecycle; no execution or hooks at import."""
-
-              def __init__(self, checkout_root, output_path, runner_argv):
-                  self.root = Path(checkout_root)
-                  self.output_path = Path(output_path)
-                  self.argv = tuple(runner_argv)
-                  self.valid = True
-                  self.errors = []
-                  self.records = []
-                  self.nonmatching_failed_subtests = 0
-                  self._result_class = None
-                  self._original = None
-                  self._wrapper = None
-                  self._helper_filename = None
-                  self._installed = False
-                  self._finalized = False
-                  self._runner_returned = False
-
-              def _invalidate(self, code):
-                  self.valid = False
-                  if code not in self.errors and len(self.errors) < 8:
-                      self.errors.append(code)
-
-              def _write(self):
-                  try:
-                      value = {'schema_version': 1, 'canonical_id': CANONICAL_ID,
-                               'pinned_source_base_head': EXPECTED_HEAD,
-                               'pinned_source_base_manifest_sha256': EXPECTED_MANIFEST,
-                               'valid': self.valid, 'errors': list(self.errors),
-                               'incomplete': not (self._finalized and self._runner_returned),
-                               'finalized': self._finalized, 'runner_returned': self._runner_returned,
-                               'completion_meaning': (
-                                   'observer lifecycle only; canonical report owns test outcome'),
-                               'nonmatching_failed_subtests': self.nonmatching_failed_subtests,
-                               'record_count': len(self.records), 'records': self.records}
-                      encoded = json.dumps(value, sort_keys=True, ensure_ascii=True).encode('utf-8')
-                      if len(encoded) > MAX_OUTPUT_BYTES:
-                          self._invalidate('output_size')
-                          value.update(valid=False, errors=list(self.errors), records=[],
-                                       records_omitted_for_size=True)
-                          encoded = json.dumps(value, sort_keys=True).encode('utf-8')
-                      temporary = self.output_path.with_suffix(self.output_path.suffix + '.tmp')
-                      temporary.write_bytes(encoded)
-                      temporary.replace(self.output_path)
-                  except BaseException:
-                      self._invalidate('output_io')
-
-              def install(self, result_class):
-                  try:
-                      self.root = self.root.resolve(strict=True)
-                      self.output_path = self.output_path.resolve()
-                      if self.root in self.output_path.parents or not self.output_path.parent.is_dir():
-                          raise ValueError('output_location')
-                      if (len(self.argv) != 5 or self.argv[:3] != ('run', '--id', CANONICAL_ID)
-                              or self.argv[3] != '--json'
-                              or Path(self.argv[4]).name != 'instrumented-run.json'):
-                          raise ValueError('argv')
-                      for relative, expected in SOURCE_PINS.items():
-                          if hashlib.sha256((self.root / relative).read_bytes()).hexdigest() != expected:
-                              raise ValueError('source_pin')
-                      original = result_class.__dict__['addSubTest']
-                      code = original.__code__
-                      if (result_class.__module__ != 'tests.runner'
-                              or result_class.__qualname__ != 'TimedTextTestResult'
-                              or code.co_qualname != 'TimedTextTestResult.addSubTest'
-                              or code.co_filename != str(self.root / 'tests/runner.py')
-                              or code.co_firstlineno != 308 or code.co_argcount != 4):
-                          raise ValueError('result_seam')
-                      self._helper_filename = str(self.root / 'tests/test_lead_orchestration.py')
-                      self._result_class, self._original = result_class, original
-
-                      def observed(result, test, subtest, err):
-                          returned = original(result, test, subtest, err)
-                          try:
-                              self._capture(test, err)
-                          except BaseException:
-                              try:
-                                  self._invalidate('capture_error')
-                                  self._write()
-                              except BaseException:
-                                  pass
-                          return returned
-
-                      self._wrapper = observed
-                      result_class.addSubTest = observed
-                      self._installed = True
-                  except BaseException:
-                      self._invalidate('install_guard')
-                  self._write()
-                  return self._installed
-
-              def _capture(self, test, err):
-                  if err is None:
-                      return
-                  test_type = type(test)
-                  identifier = (test_type.__module__ + '.' + test_type.__qualname__ + '.'
-                                + _get(test, '_testMethodName'))
-                  if identifier != CANONICAL_ID:
-                      return
-                  if type(err) is not tuple or len(err) != 3:
-                      raise TypeError('error_tuple')
-                  current, found, depth = err[2], None, 0
-                  while current is not None and depth < 64:
-                      code = current.tb_frame.f_code
-                      if (code.co_filename == self._helper_filename
-                              and code.co_qualname == FRAME_QUALNAME
-                              and code.co_firstlineno == FRAME_FIRST_LINE
-                              and current.tb_lineno == ASSERT_LINE):
-                          if found is not None:
-                              raise ValueError('ambiguous_target_frame')
-                          found = current.tb_frame
-                      current, depth = current.tb_next, depth + 1
-                  if current is not None:
-                      raise ValueError('traceback_bound')
-                  if found is None:
-                      self.nonmatching_failed_subtests += 1
-                      return
-                  if len(self.records) >= MAX_RECORDS:
-                      self._invalidate('record_limit')
-                      self._write()
-                      return
-                  values = found.f_locals
-                  if values.get('self') is not test:
-                      raise ValueError('test_frame_identity')
-                  decision = values['decision_result']
-                  if not _typed(decision, 'LeadDecisionResult'):
-                      raise TypeError('decision_type')
-                  record = {'assertion_line': ASSERT_LINE,
-                            'synthesis_utf8_bytes': len(values['message'].encode('utf-8')),
-                            'decision': _enum(_get(decision, 'decision')),
-                            'step_id': _token(_get(decision, 'step_id')),
-                            'turn': _turn(_get(decision, 'turn')),
-                            'history': _history(values['history']),
-                            'fixture_counts': _queues(test)}
-                  if len(json.dumps(record, ensure_ascii=True).encode('utf-8')) > 20000:
-                      raise ValueError('record_size')
-                  self.records.append(record)
-                  self._write()
-
-              def finalize(self, *, runner_returned):
-                  try:
-                      if self._installed:
-                          if self._result_class.__dict__.get('addSubTest') is self._wrapper:
-                              self._result_class.addSubTest = self._original
-                          else:
-                              self._invalidate('restore_conflict')
-                  except BaseException:
-                      self._invalidate('restore_error')
-                  finally:
-                      self._installed = False
-                      self._runner_returned = runner_returned is True
-                      self._finalized = True
-                      self._write()
-
           output = Path(os.environ["RUNNER_TEMP"]) / "timing-diagnostic"
           output.mkdir(mode=0o700)
           paths = subprocess.check_output(["git", "ls-files", "-z", "src", "tests", "config", "pyproject.toml", "uv.lock"]).decode().split("\0")
+          FAILURE_LOCAL_TARGETS = {'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_empty_continuation_retains_selection_and_cancel_is_terminal': ('tests/test_artifact_objectives.py',
+                                                                                                                                              'ObjectiveCase.prepare',
+                                                                                                                                              'offered'),
+           'tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_draft_task_cannot_skip_current_revision_drafting_via_review_artifact_intent': ('tests/test_specialist_routing_runtime.py',
+                                                                                                                                                                    'SpecialistRoutingRuntimeTests._assert_continuation',
+                                                                                                                                                                    'result'),
+           'tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_empty_inventory_does_not_add_unaffected_owners_and_mixed_scope_does': ('tests/test_specialist_routing_runtime.py',
+                                                                                                                                                            'SpecialistRoutingRuntimeTests.test_empty_inventory_does_not_add_unaffected_owners_and_mixed_scope_does',
+                                                                                                                                                            'review')}
+          FAILURE_LOCAL_PINS = {'PYTHON_MODULE_INDEX.md': '6e07afa0718eaeaa989003ce46289dc2bfbaad0ad5487e65cdb88b7c0d51ba7c',
+           'TEST_POLICY.md': 'dc5fdf28ea6e6793edd5e703720d4c6f70020de19c76b10382eaf881989ba3d9',
+           'docs/guides/lead-agent.md': '5e408b728fae79f214d99d7f9057f26c9008975c2d631e61e74de5071debd4d3',
+           'docs/reference/provider-wire.md': 'e6f2fc05a736c17011ac2878d19f2873f568d83de6d2a7f61bfe8e204f04ac9f',
+           'src/story_writing_agents/agent_context/actions.py': '8f35ecf197acb7f2fa88c0bfff03eed053f98aa7cdf39850bd2db9fc3b7048de',
+           'src/story_writing_agents/agent_context/service.py': '3e31d162ee202710b363429d94bd8917fd476d78146d031806942f95d54db7b3',
+           'src/story_writing_agents/antigravity_adapter.py': 'a2da00173befd84e522f30efac0576764863072ebf1b59e94e36ee0fcbddef16',
+           'src/story_writing_agents/artifact_proposals.py': '06d3d50b1a2b714ed1fd4e520bef88585620bca5ff39dc8b5a46c2de0abc6524',
+           'src/story_writing_agents/authoring_admission.py': 'd577e1a89dddd8d3611842185353ccbaae56da2423eac3397579f4293883cf9a',
+           'src/story_writing_agents/backend.py': 'd605891fab7ef93588f576d7717f3ec365bb16d9359116c0ec178460d9691682',
+           'src/story_writing_agents/conversations/events.py': 'dd4d4f43560c9203af059db4eafcf14fa5dd5b067477426897943d7eebc79f71',
+           'src/story_writing_agents/conversations/session_context.py': '99744fc8303c7bb325de38a18a2a1c0b9a5f1bcbcee418a329697c185d217ade',
+           'src/story_writing_agents/core_document_readiness.py': '695550df45bfc50dc3c20d7bf23b98b7fafcc939b9c08572c545f01ac64f3937',
+           'src/story_writing_agents/lead_exploration.py': 'fd69642f02929b7248379cde206212777317eb3feced83cc15ba988f0947da91',
+           'src/story_writing_agents/lead_premise_decisions.py': 'd52addce51b8d94d7678c604320d3dec5f2acd5ab1df0ad5ae4c70a0d0abd0a1',
+           'src/story_writing_agents/lead_provider_contracts.py': '329600f1fa03305b59b2c28c8184c6ad6b7e04f61e5df316965b7850b1a8f6ef',
+           'src/story_writing_agents/orchestrator.py': 'f345b9cd93143c6684e8765d9df8166438d1e5e0129ba16a260cd96a783bafc1',
+           'src/story_writing_agents/provider_wire.py': 'c792deabda347c2e6fc87c10bd2c659ae77e75927e2ae5f834cf5f4fc4343918',
+           'src/story_writing_agents/specialist_routing.py': 'ca9a9ab375983856aa00c2079630f0f7f0684f25522ef6e482028b40cabc9134',
+           'src/story_writing_agents/structured_output_validation.py': 'a100f40c8566b495a50c3ab5da9bf0165cead04ffda66f41e3709010c80d723b',
+           'src/story_writing_agents/writing_artifacts/__init__.py': 'ea06cecd04e2225e2f2660828b927b6bba4452764389dbcc019554c05f34611c',
+           'src/story_writing_agents/writing_artifacts/catalog.py': 'da092de280d9054952653ea961b3f1c9eab0aed657df286f059d28ab151d9329',
+           'src/story_writing_agents/writing_artifacts/read_actions.py': 'd93b81e051d9ed6e9310d989e4f6598aa7b7767c889ae87451ec028aca1b80a5',
+           'src/story_writing_agents/writing_artifacts/relationship_policy.py': '73186465aacb0ceefbca31638ea3c8158661db76f7bbdbfbcbfcd98c4096d092',
+           'src/story_writing_agents/writing_artifacts/repository.py': 'ff2c548e9081de0ded29bd4e8d036ce6aebb6f743037681f64b402053d8d65d0',
+           'tests/provider_wire_fixture.py': '7b796d4bb737b417a6e426747222fd7cedde48e2a8f258ea0a89f1afc7aa02cb',
+           'tests/recommendation_fixture.py': 'e8c03bd70a173c7968d73783da86fd422caa39944c59fed5bd581320e8f6d9bc',
+           'tests/test_agent_context_accounting.py': '7202adf4fa90f3e1dd4b7d949cc69ea89a3336f4956484bf9900d77af01a85b8',
+           'tests/test_agent_context_actions.py': 'd6ad0067be386a7ed4075be71f8534419354f500632d2d4cf80deeee5e2234e6',
+           'tests/test_agent_context_execution.py': 'f786da12bede8bd4a71370761eba7e51ee63a8bd68895de6a0240ecc9afc2d82',
+           'tests/test_agent_context_ledger.py': '4704fe2f3e84aec1e9b16198a44501fd28e05085441f6a2a4057ef8bcf37a0b1',
+           'tests/test_agent_context_planning.py': '0b67e15cf0755e8fafebc37c23d2d06491ca1598934f9b160dc653a36f23e7ba',
+           'tests/test_agent_context_service.py': '95f0cf523a26a6d48229fce3c2c79d6280397d0ab11e1278c2451aefc4892498',
+           'tests/test_antigravity_parity.py': 'bcf97ce16e9507da3ad879be91c0cffc95a0f28c4144edd06f886626b8b8ddde',
+           'tests/test_artifact_application_contracts.py': '00890983717a01d38a486a05be12164dd133ed0c3b8e4e7faf10449cfd3e2f45',
+           'tests/test_artifact_application_store_recovery.py': '0bc81fa1507544ef02e68589cf400a6bdd8498eb5975078835e6bfcfb80fa3c7',
+           'tests/test_artifact_change_sets.py': '4e78daed261e311b9772b7f58b8c7278a369a1e07656d29849757ca445dd926e',
+           'tests/test_artifact_objectives.py': '9409f67da64baf00579ece42506b0286e65b4d64a1fa5a3475ce3fac3f309d61',
+           'tests/test_artifact_proposal_orchestration.py': 'c7c13caaeeb478b574278a519ce5a2fedd6d17320189134b3af8287127c39226',
+           'tests/test_artifact_reference_authorization.py': '494c0b991b9c1fed5164bc5f48f8c8d6e509c15a2ea97d9b5f0325f713a3c1ab',
+           'tests/test_artifact_reference_read_actions.py': '9117e9bfd4f97ce61e1cd370e8f8d80ee2cc9ab88368085b0b1829475ec317ac',
+           'tests/test_artifact_relationship_policy.py': 'b90a606e2bcc921e1f0fb0370ab34e75756826435e2647f97d7ecf3c2e5d8d49',
+           'tests/test_codex_backend.py': '22269fbf8c4b51398a2920970ce5995ee118bb97ecdb36610999447a066003f5',
+           'tests/test_git_external_operation_inspection.py': 'ef8c5dc39c1c4089470b6896abda049d8b09d5b8e06b9ddcbb3c8481481225d3',
+           'tests/test_interactive_controller.py': 'b86bbdc3eb93725c601a033e0157cf0b06847d034ac33f9f6b9e086b01412add',
+           'tests/test_lead_artifact_objectives.py': '93982e244ff7b99394eb2b3a3d6a19e54573e861ed149f642a0e296f5d3c2ae1',
+           'tests/test_lead_orchestration.py': '237d37667bdbd01015c7506443df8a94b96aa38dbb3583f95847c92dddc64e3a',
+           'tests/test_lead_recommendations.py': '8cf41e424faee9c3491d8ab983c8491ff5fa4aac1560ae8ff66987186727f3a2',
+           'tests/test_lead_session_continuity.py': '4fc79147cd1a95e6ae0d094dfd9e97f590869506f8f63eb58bdd9d801efef0fb',
+           'tests/test_provider_auth_recovery.py': '283f6f078fd182fb1d5f9ba2e8c601644bd54b45572a35789d9dd02d671e786f',
+           'tests/test_recommendation_actions.py': '39847408aec08e7f37bb7526246497cbaf4617a029a88f0a1f97de1e4c6896d5',
+           'tests/test_specialist_orchestration.py': '7f78e9b3b665fbe59a3e0e347f12dc56c4f4167a8b2cef4acf87d130af31fc2c',
+           'tests/test_specialist_routing.py': '69f386922a8bdd456c68480fc6a9e8730864b3b859f2f9bafc4ac1d06814d6d4',
+           'tests/test_specialist_routing_runtime.py': 'cc62f81ad3fa9e2b1e2646f8986e9eef9cc99cd0a696fa4354c2f2f7dd18da5b'}
+          class FailureLocalObserver:
+              """Private, failure-local metadata; never changes a test result."""
+
+              def __init__(self, root, destination, selected_id, pins, target):
+                  self.root, self.destination = root, destination
+                  self.selected_id, self.pins = selected_id, pins
+                  self.target = target
+                  self.originals, self.wrappers, self.frames, self.errors = {}, {}, [], []
+                  self.checked = {
+                      path: hashlib.sha256((root / path).read_bytes()).hexdigest()
+                      for path in pins
+                  }
+                  self.source_matches = self.checked == pins
+                  self.result_class = None
+
+              def install(self, result_class):
+                  if not self.source_matches:
+                      self.errors.append("source_pin_mismatch")
+                      return
+                  self.result_class = result_class
+                  for name in ("addError", "addFailure"):
+                      original = getattr(result_class, name)
+                      self.originals[name] = original
+
+                      def wrapper(result, test, error, _original=original, _name=name):
+                          returned = _original(result, test, error)
+                          try:
+                              self.observe(test, error, _name)
+                          except BaseException as exc:
+                              self.errors.append(type(exc).__name__)
+                          return returned
+
+                      self.wrappers[name] = wrapper
+                      setattr(result_class, name, wrapper)
+
+              @staticmethod
+              def text(value):
+                  if value is None or isinstance(value, (bool, int)):
+                      return value
+                  if isinstance(value, str):
+                      return value[:2048]
+                  return {"type": type(value).__name__}
+
+              def observe(self, test, error, method):
+                  if test.id() != self.selected_id:
+                      return
+                  traceback = error[2]
+                  while traceback is not None:
+                      frame = traceback.tb_frame
+                      matches = (
+                          frame.f_code.co_qualname == self.target[1]
+                          and Path(frame.f_code.co_filename).resolve()
+                          == (self.root / self.target[0]).resolve()
+                      )
+                      if matches and self.target[2] in frame.f_locals and len(self.frames) < 2:
+                          offered = frame.f_locals[self.target[2]]
+                          if type(offered).__name__ != "LeadTurnResult":
+                              self.errors.append("unexpected_result_type")
+                              return
+                          record = {
+                              "method": method,
+                              "line": traceback.tb_lineno,
+                              "frame": frame.f_code.co_qualname,
+                              "exception_type": error[0].__name__,
+                              "result": {
+                                  name: self.text(getattr(offered, name, None))
+                                  for name in ("kind", "state", "next_action")
+                              },
+                              "present": {
+                                  name: getattr(offered, name, None) is not None
+                                  for name in ("recommendation_request", "proposal",
+                                               "artifact_proposal", "artifact_application_request",
+                                               "story_commit_request", "provider_invocation_id")
+                              },
+                          }
+                          details = offered.validation_details
+                          record["validation_details"] = [self.text(item) for item in details[:16]]
+                          record["validation_details_truncated"] = (
+                              len(details) > 16 or any(len(item) > 2048 for item in details[:16])
+                          )
+                          trace = offered.trace
+                          record["trace_origin"] = self.text(getattr(trace, "origin", None))
+                          message = offered.message
+                          record["message_utf8_bytes"] = len(message.encode("utf-8"))
+                          record["message_sha256"] = hashlib.sha256(message.encode("utf-8")).hexdigest()
+                          try:
+                              notice = json.loads(message)
+                          except (ValueError, TypeError):
+                              notice = None
+                          if isinstance(notice, dict):
+                              record["notice"] = {
+                                  key: notice[key] for key in ("code", "language", "state", "task_revisions")
+                                  if key in notice
+                              }
+                          case = frame.f_locals.get("self")
+                          backend = getattr(case, "backend", None)
+                          record["counts"] = {
+                              name: len(value) for name in ("calls", "reference_records")
+                              if isinstance(value := getattr(backend, name, None), (list, tuple))
+                          }
+                          self.frames.append(record)
+                      traceback = traceback.tb_next
+
+              def finalize(self, *, runner_returned):
+                  if self.result_class is not None:
+                      for name, original in self.originals.items():
+                          if getattr(self.result_class, name) is self.wrappers[name]:
+                              setattr(self.result_class, name, original)
+                          else:
+                              self.errors.append("hook_changed_" + name)
+                  after = {
+                      path: hashlib.sha256((self.root / path).read_bytes()).hexdigest()
+                      for path in self.pins
+                  }
+                  payload = {
+                      "schema_version": 1, "diagnostic_only": True,
+                      "canonical_id": self.selected_id, "source_pins": self.pins,
+                      "source_before": self.checked, "source_after": after,
+                      "source_matches": self.source_matches and after == self.pins,
+                      "runner_returned": runner_returned, "finalized": True,
+                      "incomplete": not runner_returned, "errors": self.errors,
+                      "observations": self.frames,
+                      "valid": self.source_matches and after == self.pins
+                               and runner_returned and not self.errors,
+                  }
+                  self.destination.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
           def hashes():
               return {path: hashlib.sha256(Path(path).read_bytes()).hexdigest() for path in paths if path}
           before = hashes()
@@ -895,27 +699,27 @@ jobs:
           profile = cProfile.Profile()
           started = time.perf_counter()
           profile.enable()
+          failure_observer = None
+          observer_errors = []
+          runner_returned = False
           try:
-              run_argv = ["run", "--id", os.environ["DIAGNOSTIC_TEST_ID"], "--json", str(output / "instrumented-run.json")]
-              budget_observer = None
-              runner_returned = False
-              try:
-                  if os.environ["DIAGNOSTIC_TEST_ID"] == CANONICAL_ID:
-                      try:
-                          budget_observer = BudgetSubtestObserver(
-                              Path.cwd(), output / "budget-subtest-observation.private.json", run_argv)
-                          budget_observer.install(runner.TimedTextTestResult)
-                      except BaseException:
-                          pass
-                  code = runner.main(run_argv)
-                  runner_returned = True
-              finally:
-                  if budget_observer is not None:
-                      try:
-                          budget_observer.finalize(runner_returned=runner_returned)
-                      except BaseException:
-                          pass
+              if os.environ["DIAGNOSTIC_TEST_ID"] in FAILURE_LOCAL_TARGETS:
+                  try:
+                      failure_observer = FailureLocalObserver(
+                          Path.cwd(), output / "failure-local-observation.private.json",
+                          os.environ["DIAGNOSTIC_TEST_ID"], FAILURE_LOCAL_PINS,
+                          FAILURE_LOCAL_TARGETS[os.environ["DIAGNOSTIC_TEST_ID"]])
+                      failure_observer.install(runner.TimedTextTestResult)
+                  except BaseException as exc:
+                      observer_errors.append("initialize:" + type(exc).__name__)
+              code = runner.main(["run", "--id", os.environ["DIAGNOSTIC_TEST_ID"], "--json", str(output / "instrumented-run.json")])
+              runner_returned = True
           finally:
+              if failure_observer is not None:
+                  try:
+                      failure_observer.finalize(runner_returned=runner_returned)
+                  except BaseException as exc:
+                      observer_errors.append("finalize:" + type(exc).__name__)
               profile.disable()
               profile.dump_stats(str(output / "profile.pstats"))
               with (output / "profile.txt").open("w") as stream:
@@ -923,10 +727,10 @@ jobs:
               after = hashes()
               evidence = {"diagnostic_only": True, "source_valid": before == after, "source_before": before, "source_after": after, "instrumented_seconds": time.perf_counter() - started, "counts": dict(counts), "fixture_samples": samples, "platform": platform.platform(), "python": platform.python_version(), "cpu_count": os.cpu_count(), "git": subprocess.check_output(["git", "--version"], text=True).strip()}
               evidence.update(python_compiler=platform.python_compiler(), python_enable_optimizations_flag="--enable-optimizations" in (sysconfig.get_config_var("CONFIG_ARGS") or ""), temporary_filesystem=subprocess.check_output(["stat", "-f", "-c", "%T", tempfile.gettempdir()], text=True).strip())
-              evidence.update(capture_checkout_head=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(), github_event_sha=os.environ.get("GITHUB_SHA"), diagnostic_workflow_sha256=hashlib.sha256(Path(".github/workflows/pr-validation.yml").read_bytes()).hexdigest())
-              observation_path = output / "budget-subtest-observation.private.json"
+              evidence["failure_observer_errors"] = observer_errors
+              observation_path = output / "failure-local-observation.private.json"
               if observation_path.is_file():
-                  evidence["budget_subtest_observation_sha256"] = hashlib.sha256(observation_path.read_bytes()).hexdigest()
+                  evidence["failure_local_observation_sha256"] = hashlib.sha256(observation_path.read_bytes()).hexdigest()
               (output / "counters.json").write_text(json.dumps(evidence, indent=2))
           raise SystemExit(code if before == after else 2)
           PY

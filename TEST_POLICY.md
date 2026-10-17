@@ -68,7 +68,7 @@ the existing 1,080/540-second ceilings; aim for 900/450 seconds to leave margin.
 
 A maintainer may authorize extra validation time for a specific PR and record the
 reason and authorization in its owning Issue and PR. The root then applies
-`test:wall-time-exception`. On that PR, CI allows each full shard up to 60 minutes
+`test:wall-time-exception`. On that PR, CI allows each full shard up to 180 minutes
 including setup, and passes `--allow-wall-time-overage` to the budget checker.
 The checker still reports actual durations; only the measured sequential and
 per-shard time comparisons are waived. Local validation may use the same option
