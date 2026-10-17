@@ -34,8 +34,7 @@ _AUTHORITY_BY_KIND = {
     ContextSourceKind.RUNTIME_INPUT: ContextAuthorityKind.REQUEST,
     ContextSourceKind.AGENT_DEFINITION: ContextAuthorityKind.AGENT_DEFINITION,
     ContextSourceKind.WRITING_ARTIFACT: (
-        ContextAuthorityKind.WRITING_ARTIFACT_REPOSITORY
-    ),
+        ContextAuthorityKind.WRITING_ARTIFACT_REPOSITORY),
     ContextSourceKind.CONVERSATION: ContextAuthorityKind.CONVERSATION_STORAGE,
     ContextSourceKind.ACTIVE_DEBATE: ContextAuthorityKind.ACTIVE_DEBATE,
     ContextSourceKind.OWN_AGENT_STATE: ContextAuthorityKind.OWN_AGENT_STATE,
@@ -43,8 +42,7 @@ _AUTHORITY_BY_KIND = {
 _DEFAULT_CLASSIFICATION = {
     ContextSourceKind.RUNTIME_INPUT: (
         ContextSemanticChannel.CURRENT_INPUT,
-        ContextPriority.P0_REQUIRED,
-    ),
+        ContextPriority.P0_REQUIRED,),
     ContextSourceKind.AGENT_DEFINITION: (
         ContextSemanticChannel.STABLE_BEHAVIOR,
         ContextPriority.P1_STABLE,
@@ -74,8 +72,7 @@ def _scope(**overrides: object) -> ContextScope:
         "session_id": "session",
         "subject_kind": ContextSubjectKind.CONVERSATION,
         "subject_id": "c_main",
-        "agent_id": "lead_orchestrator",
-    }
+        "agent_id": "lead_orchestrator",}
     values.update(overrides)
     return ContextScope(**values)  # type: ignore[arg-type]
 
@@ -348,8 +345,7 @@ class ManifestIdentityTests(unittest.TestCase):
             "core_documents/outline.md",
             "manuscript/part_01/chapter.md#L4-L8",
             "conversation:c_main:event:4",
-            "C:relative.txt",
-        )
+            "C:relative.txt",)
         for locator in valid:
             with self.subTest(locator=locator):
                 self.assertEqual(_provenance(locator=locator).locator, locator)
@@ -359,8 +355,7 @@ class ManifestIdentityTests(unittest.TestCase):
             "\\rooted\\file.md",
             "\\\\server\\share\\file.md",
             "C:\\private\\file.md",
-            "D:/private/file.md",
-        )
+            "D:/private/file.md",)
         for locator in invalid:
             with self.subTest(locator=locator):
                 error = self.assert_manifest_error(
@@ -408,8 +403,7 @@ class ManifestClassificationTests(unittest.TestCase):
             (
                 ContextSourceKind.AGENT_DEFINITION,
                 ContextSemanticChannel.STABLE_BEHAVIOR,
-                ContextPriority.P1_STABLE,
-            ),
+                ContextPriority.P1_STABLE,),
         }
         for kind in (
             ContextSourceKind.WRITING_ARTIFACT,
@@ -442,8 +436,7 @@ class ManifestClassificationTests(unittest.TestCase):
                 if authority is _AUTHORITY_BY_KIND[kind]:
                     self.assertIs(
                         _entry(source_kind=kind, provenance=_provenance(authority)).provenance.authority_kind,
-                        authority,
-                    )
+                        authority,)
                 else:
                     with self.assertRaises(ContextManifestError) as caught:
                         _entry( source_kind=kind, provenance=_provenance(authority), )
@@ -492,8 +485,7 @@ class ManifestCanonicalizationTests(unittest.TestCase):
                 entry.source_id
                 for entry in ContextManifest( _scope(), tuple(unordered.values()), ).entries
             ),
-            expected_ids,
-        )
+            expected_ids,)
 
     def test_priority_channel_ordinal_and_metadata_key_are_exact(self) -> None:
         entries = (

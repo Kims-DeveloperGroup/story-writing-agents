@@ -9,28 +9,24 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from story_writing_agents.writing_artifacts import (
-    ArtifactReference,
+from story_writing_agents.writing_artifacts import (ArtifactReference,
     ArtifactReferenceBatch,
     ReferenceAuthorizationError,
     ReferenceAuthorizationErrorCode,
     ReferenceInvocationState,
     ReferenceOperationState,
 )
-from story_writing_agents.writing_artifacts._storage import (
-    ArtifactRootSecurityError,
+from story_writing_agents.writing_artifacts._storage import (ArtifactRootSecurityError,
 )
 
-from tests.test_artifact_reference_authorization import (
-    _MANUSCRIPT_PATH,
+from tests.test_artifact_reference_authorization import (_MANUSCRIPT_PATH,
     _SNAPSHOTS,
     _expect_error,
     ReferenceRepositoryTestCase,
 )
 
 
-_FORBIDDEN_EVIDENCE_KEYS = frozenset(
-    {
+_FORBIDDEN_EVIDENCE_KEYS = frozenset({
         "author_agent_id",
         "artifact_bytes",
         "bytes",
@@ -67,8 +63,7 @@ class ReferenceEvidenceTestCase(ReferenceRepositoryTestCase):
     def evidence_root(self, operation_id: str) -> Path:
         return self.root / _SNAPSHOTS / operation_id
 
-    def complete_invocation(
-        self,
+    def complete_invocation(self,
         authorization,
         invocation_id: str,
         ordinal: int,
@@ -92,8 +87,7 @@ class EvidenceSchemaAndPrivacyTests(ReferenceEvidenceTestCase):
     def test_absent_is_none_but_each_partial_authoritative_shape_is_corrupt(self) -> None:
         self.assertIsNone(self.repository.inspect_reference_operation("absent"))
 
-        for name, relative in (
-            ("empty", None),
+        for name, relative in (("empty", None),
             ("manifest-only", "manifest.json"),
             ("events-only", "operation_events/00000001.json"),
         ):
@@ -125,14 +119,12 @@ class EvidenceSchemaAndPrivacyTests(ReferenceEvidenceTestCase):
                     self.assertNotIn("reference request", item)
 
         manifest = json.loads((root / "manifest.json").read_text())
-        invocation = json.loads(
-            (root / "invocations/invoke/manifest.json").read_text()
+        invocation = json.loads((root / "invocations/invoke/manifest.json").read_text()
         )
         self.assertEqual(manifest["schema_version"], 2)
         self.assertEqual(invocation["schema_version"], 2)
         source = invocation["references"][0]["source"]
-        self.assertEqual(
-            set(source),
+        self.assertEqual(set(source),
             {
                 "changed_ns",
                 "device_id",

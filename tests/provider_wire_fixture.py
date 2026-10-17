@@ -5,21 +5,19 @@ import copy
 from collections.abc import Mapping
 import json
 
-_FIELDS = {
-    "message": "response_text", "authoring_scope": "writing_task_scope",
-    "activity": "activity_type",
-    "intent": "writing_intent", "domains": "specialist_domains",
-    "target_paths": "target_artifact_paths", "proposal": "specialist_consultation_proposal",
-    "artifact_intent": "artifact_change_proposal", "next_intent": "follow_up_consultation",
-    "instruction": "task_instructions", "input_ids": "input_source_ids",
-    "mode": "assignment_type", "purpose": "consultation_purpose",
-    "assessment": "assignment_status", "decision": "review_outcome",
-    "operations": "artifact_changes", "suggested_path": "proposed_artifact_path",
-    "suggested_destination": "proposed_destination_path", "new_text": "new_content_text",
-    "replacement_text": "replacement_content_text", "recommended_action": "proposal_drafting_request",
-    "objective_intent": "document_change_request_update", "objective_id": "document_change_request_id",
-    "next_step": "requested_workflow_step",
-}
+_FIELDS = {'message': 'response_text', 'authoring_scope': 'writing_task_scope',
+    'activity': 'activity_type', 'intent': 'writing_intent', 'domains': 'specialist_domains',
+    'target_paths': 'target_artifact_paths', 'proposal': 'specialist_consultation_proposal',
+    'artifact_intent': 'artifact_change_proposal', 'next_intent': 'follow_up_consultation',
+    'instruction': 'task_instructions', 'input_ids': 'input_source_ids', 'mode': 'assignment_type',
+    'purpose': 'consultation_purpose', 'assessment': 'assignment_status',
+    'decision': 'review_outcome', 'operations': 'artifact_changes',
+    'suggested_path': 'proposed_artifact_path',
+    'suggested_destination': 'proposed_destination_path', 'new_text': 'new_content_text',
+    'replacement_text': 'replacement_content_text',
+    'recommended_action': 'proposal_drafting_request',
+    'objective_intent': 'document_change_request_update',
+    'objective_id': 'document_change_request_id', 'next_step': 'requested_workflow_step'}
 _VALUES = {
     "activity": {"workflow": "workflow_guidance", "draft": "draft_writing", "revise": "revise_writing", "review": "review_writing"},
     "mode": {"draft": "draft_content", "review": "review_content", "constraint_assessment": "assess_constraints", "premise_analysis": "analyze_premise"},
@@ -31,24 +29,19 @@ _CHANGE = {"create": "create_artifact", "patch": "patch_artifact_text", "replace
 _DRAFTING = {"prepare_artifact": "draft_document_change_proposal", "prepare_consultation": "draft_specialist_consultation_proposal"}
 _UPDATES = {"start": "start_request", "continue": "continue_request", "cancel": "cancel_request"}
 _LEAD_TYPES = {"answer": "answer", "question": "clarification_question", "critique": "critique", "recommendation": "proposal_drafting_recommendation"}
-_FAMILIES = {
-    "lead-response-v7": "lead",
-    "lead-response-v6": "lead",
-    "specialist-assignment-response-v4": "specialist_assignment_result",
-    "specialist-assignment-response-v3": "specialist_assignment_result",
-    "consultation-summary-v4": "consultation_summary",
-    "artifact-review-summary-v4": "artifact_review_summary",
-    "lead-response-v8": "lead",
-    "lead-response-v9": "lead",
-    "specialist-assignment-response-v5": "specialist_assignment_result",
-    "premise-analysis-response-v1": "premise_analysis_result",
-    "premise-decision-summary-v1": "premise_decision_summary",
-}
+_FAMILIES = {'lead-response-v7': 'lead', 'lead-response-v6': 'lead',
+    'specialist-assignment-response-v4': 'specialist_assignment_result',
+    'specialist-assignment-response-v3': 'specialist_assignment_result',
+    'consultation-summary-v4': 'consultation_summary',
+    'artifact-review-summary-v4': 'artifact_review_summary', 'lead-response-v8': 'lead',
+    'lead-response-v9': 'lead', 'specialist-assignment-response-v5': 'specialist_assignment_result',
+    'premise-analysis-response-v1': 'premise_analysis_result',
+    'premise-decision-summary-v1': 'premise_decision_summary'}
 
 
-def result(value, contract_id):
+def result(value, contract_id, *, native_types=None):
     """Write independently specified wire names from a domain scenario result."""
-    family = _FAMILIES.get(contract_id)
+    family = "lead" if native_types is not None else _FAMILIES.get(contract_id)
     if family is None or not isinstance(value, dict):
         return copy.deepcopy(value)
 
@@ -60,6 +53,14 @@ def result(value, contract_id):
         output = {}
         for key, child in item.items():
             name = _FIELDS.get(key, key)
+            if native_types is not None and key != name and name in item:
+                output[key] = copy.deepcopy(child)
+                continue
+            if key == "kind" and not shape and native_types is not None:
+                if "response_type" not in item:
+                    name = "response_type"
+                    if isinstance(child, str):
+                        child = native_types.get(child, child)
             if key == "task" and shape == "authoring_scope" and isinstance(child, str):
                 task_id, revision = child.rsplit("@", 1)
                 output["task_reference"] = {"task_id": task_id, "task_revision": int(revision)}
@@ -76,6 +77,8 @@ def result(value, contract_id):
         return output
 
     output = project(value)
+    if native_types is not None:
+        return output
     if family == "lead":
         kind = output.pop("kind", "answer")
         response_type = ("artifact_change_proposal" if "artifact_change_proposal" in output else "specialist_consultation_proposal") if kind == "proposal" else _LEAD_TYPES.get(kind, kind)
@@ -159,6 +162,19 @@ def response(text, result_contract):
     return json.dumps(body, ensure_ascii=False, separators=(",", ":"))
 
 
+def indexed_response(action, *, outer_schema_id, inner_schema_id):
+    """Write explicit fixture bindings without choosing or repairing action values."""
+    value = copy.deepcopy(action)
+    if "schema_id" in value:
+        raise ValueError("Supply the outer ID through its explicit fixture binding")
+    value["schema_id"] = outer_schema_id
+    if inner_schema_id is not None and type(value.get("task_result")) is dict:
+        if "schema_id" in value["task_result"]:
+            raise ValueError("Supply the inner ID through its explicit fixture binding")
+        value["task_result"]["schema_id"] = inner_schema_id
+    return json.dumps({"agent_action": value}, ensure_ascii=False, separators=(",", ":"))
+
+
 def direct_response(text, payload):
     """Encode deterministic direct-call domain scenarios without runtime helpers."""
     def unique_pairs(pairs):
@@ -215,20 +231,35 @@ def assert_guidance(test, payload, schema):
 
 def assert_schema_descriptions(test, schema):
     """Inspect schema positions independently; property names are caller data."""
-    def visit(node, required=False):
+    def visit(node, required=False, refs=()):
         if not isinstance(node, Mapping):
             return
+        if "$ref" in node:
+            reference = node["$ref"]
+            test.assertIsInstance(reference, str)
+            test.assertTrue(reference.startswith("#/"))
+            test.assertNotIn(reference, refs)
+            target = schema
+            for part in reference[2:].split("/"):
+                test.assertNotRegex(part, r"~(?![01])")
+                name = part.replace("~1", "/").replace("~0", "~")
+                test.assertIsInstance(target, Mapping)
+                test.assertIn(name, target)
+                target = target[name]
+            test.assertIsInstance(target, Mapping)
+            visit(target, required and "description" not in node, (*refs, reference))
+            required = required and "description" in node
         if required:
             test.assertIsInstance(node.get("description"), str)
             test.assertTrue(node["description"].strip())
         for keyword in ("properties", "patternProperties", "$defs", "definitions", "dependentSchemas"):
             for child in node.get(keyword, {}).values():
-                visit(child)
+                visit(child, refs=refs)
         for keyword in ("items", "additionalProperties", "contains", "not", "if", "then", "else", "propertyNames"):
-            visit(node.get(keyword))
+            visit(node.get(keyword), refs=refs)
         for keyword in ("anyOf", "allOf", "oneOf", "prefixItems"):
             for child in node.get(keyword, ()):
-                visit(child, keyword == "anyOf")
+                visit(child, keyword == "anyOf", refs)
     visit(schema, True)
 
 
@@ -306,3 +337,320 @@ def artifact_candidate(value):
     if not isinstance(value, Mapping): return value
     return {names.get(key, key): _CHANGE[item] if key == "operation" else reasons[item]
             if key == "reason" else artifact_candidate(item) for key, item in value.items()}
+
+
+def fixture_schema_node(schema, node):
+    """Follow an offered schema pointer without validating a fixture payload."""
+    while '$ref' in node:
+        pointer = node['$ref']
+        if not pointer.startswith('#/'):
+            raise ValueError('Fixture bindings require local offered schema references')
+        node = schema
+        for part in pointer[2:].split('/'):
+            node = node[part.replace('~1', '/').replace('~0', '~')]
+    return node
+
+
+def _fixture_partition_matches(schema, value):
+    """Match finite action and scope selectors within one complete detail arm."""
+    def choices(node):
+        node = fixture_schema_node(schema, node)
+        if 'anyOf' in node:
+            return tuple(choice for branch in node['anyOf'] for choice in choices(branch))
+        return (node,)
+    def literals(node):
+        return tuple(item for choice in choices(node) for item in choice.get('enum', ()))
+    details = value.get('response_details', {}) if isinstance(value, Mapping) else {}
+    request = details.get('proposal_drafting_request') if isinstance(details, Mapping) else None
+    scope = details.get('task_scope', {}) if isinstance(details, Mapping) else {}
+    if not isinstance(scope, Mapping):
+        return False
+    root = fixture_schema_node(schema, schema)
+    for detail in choices(root['properties']['response_details']):
+        if isinstance(request, Mapping) and isinstance(request.get('action_type'), str) and not any(
+            request['action_type'] in literals(option.get('properties', {}).get('action_type', {}))
+            for option in choices(detail.get('properties', {}).get('proposal_drafting_request', {}))):
+            continue
+        scope_node = detail.get('properties', {}).get('task_scope')
+        if scope_node is None:
+            continue
+        for declared in choices(scope_node):
+            props = declared.get('properties', {})
+            if any(name in scope and (name not in props or scope[name] not in literals(props[name]))
+                   for name in ('intent', 'activity')):
+                continue
+            if any(name in scope and (not isinstance(scope[name], Mapping) or set(scope[name]) !=
+                   set(fixture_schema_node(schema, props.get(name, {})).get('properties', {})))
+                   for name in ('domains', 'roles')):
+                continue
+            roles = scope.get('roles', {})
+            role_nodes = fixture_schema_node(schema, props.get('roles', {})).get('properties', {})
+            if any(not isinstance(row, Mapping) or domain not in role_nodes or ('role' in row and
+                   row['role'] not in literals(fixture_schema_node(schema, role_nodes[domain]).get(
+                       'properties', {}).get('role', {}))) for domain, row in roles.items()):
+                continue
+            return True
+    return False
+
+
+def offered_fixture_bindings(
+    request, *, action_type, response_type, family, branch_key=None, value=None):
+    """Look up an explicit original family, then route its unchanged finite fixture selectors."""
+    if action_type != 'submit_result' and response_type is not None:
+        raise ValueError('Context-action fixtures have no semantic result family')
+    bound = request.contract
+    pairs = dict(bound.outer_inner_schema_ids)
+    results = {member.schema_id: member for member in bound.semantic_index.contracts}
+    offered = {}
+    for member in bound.action_index.contracts:
+        if member.rule_graph.literal_at(('action_type',)) != action_type:
+            continue
+        inner = pairs[member.schema_id]
+        if inner is None:
+            response_types = (None,)
+        else:
+            graph = results[inner].rule_graph.schema_value()
+            root = fixture_schema_node(graph, graph)
+            declared = fixture_schema_node(graph, root['properties']['response_type'])
+            response_types = tuple(declared['enum'])
+        if response_type in response_types:
+            key = member.schema_id if inner is None else results[inner].owner.variant.branch_key
+            original = key.partition(':partition:')[0]
+            if branch_key is not None and (inner is None or branch_key not in (key, original)):
+                continue
+            offered.setdefault(original, []).append((member.schema_id, inner))
+    if type(family) is not int or not 0 <= family < len(offered):
+        raise ValueError('The explicitly intended fixture family was not offered')
+    choices = list(offered.values())[family]
+    if len(choices) > 1 and value is not None:
+        for pair in choices:
+            if _fixture_partition_matches(results[pair[1]].rule_graph.schema_value(), value):
+                return pair
+    return choices[0]
+
+
+def finite_fixture_selection(choices, selected):
+    """Encode one explicit valid selection in issued order, including false leaves."""
+    choices, selected = tuple(choices), tuple(selected)
+    if len(set(choices)) != len(choices) or len(set(selected)) != len(selected):
+        raise ValueError('Finite fixture selections must not conceal duplicates')
+    if not set(selected) <= set(choices):
+        raise ValueError('Finite fixture selections must not conceal unoffered identities')
+    def tree(names):
+        if not names:
+            return {}
+        if len(names) == 1:
+            return {names[0]: names[0] in selected}
+        middle = len(names) // 2
+        return {'left': tree(names[:middle]), 'right': tree(names[middle:])}
+    return tree(choices)
+
+
+def lead_fixture_assessment(value, *, source_choices):
+    """Encode supplied assessment rows; preserve omissions and malformed values."""
+    encoded = copy.deepcopy(value)
+    if type(encoded) is not dict:
+        return encoded
+    rows = [encoded[name] for name in ('direction', 'creative_scope')
+            if type(encoded.get(name)) is dict]
+    for name in ('foundations', 'decisions'):
+        supplied = encoded.get(name)
+        if type(supplied) in (list, tuple):
+            rows.extend(row for row in supplied if type(row) is dict)
+    for row in rows:
+        selected = row.get('source_ids')
+        if (type(selected) in (list, tuple)
+                and all(type(item) is str for item in selected)
+                and len(set(selected)) == len(selected)
+                and set(selected).issubset(source_choices)):
+            row['source_ids'] = finite_fixture_selection(source_choices, tuple(selected))
+    return encoded
+
+
+def lead_fixture_scope_record(record, *, fixed_targets=False, fixed_dependencies=False):
+    """Encode only fields present in the caller's explicit domain scope declaration."""
+    if type(record) is not dict:
+        return copy.deepcopy(record)
+    names = {'activity': 'activity_type', 'intent': 'writing_intent',
+             'target_paths': 'target_artifact_paths', 'domains': 'specialist_domains',
+             'contributions': 'contributions', 'dependency_slots': 'dependency_slots'}
+    native = {names.get(name, name): copy.deepcopy(value) for name, value in record.items()
+              if name not in ('interpretation', 'schema_version', 'task_id', 'task_revision')}
+    if 'activity_type' in native:
+        native['activity_type'] = {'workflow': 'workflow_guidance', 'draft': 'draft_writing',
+            'review': 'review_writing', 'revise': 'revise_writing'}.get(
+                native['activity_type'], native['activity_type'])
+    task = {name: copy.deepcopy(record[name]) for name in ('task_id', 'task_revision')
+            if name in record}
+    if task:
+        native['task_reference'] = task
+    return lead_fixture_scope(native, fixed_targets=fixed_targets, fixed_dependencies=fixed_dependencies)
+
+
+def lead_fixture_scope(scope, *, fixed_targets=False, fixed_dependencies=False):
+    """Encode supplied valid cells; preserve omitted fields and malformed values for rejection."""
+    if type(scope) is not dict:
+        return copy.deepcopy(scope)
+    scope = copy.deepcopy(scope)
+    workflow = scope.get('activity_type', scope.get('activity')) == 'workflow_guidance'
+    domains = scope.get('specialist_domains')
+    if type(domains) in (list, tuple):
+        if len(set(domains)) != len(domains):
+            raise ValueError('Use a raw frame for intentionally duplicate scope')
+        scope['specialist_domains'] = {domain: True for domain in domains}
+    rows = scope.get('contributions')
+    if not workflow and type(rows) in (list, tuple) and all((type(row) is dict for row in rows)):
+        if len({row['domain'] for row in rows}) != len(rows):
+            raise ValueError('Use a raw frame for intentionally duplicate contribution')
+        scope['contributions'] = {row['domain']: row for row in rows}
+    targets = scope.get('target_artifact_paths')
+    if fixed_targets and type(targets) in (list, tuple):
+        if len(set(targets)) != len(targets):
+            raise ValueError('Use a raw frame for intentionally duplicate target')
+        scope['target_artifact_paths'] = {target: True for target in targets}
+    slots = scope.get('dependency_slots')
+    if (not workflow and type(slots) in (list, tuple)
+            and all(type(slot) is dict for slot in slots)):
+        if fixed_dependencies:
+            scope['dependency_slots'] = {slot['slot_id']: {**slot, 'dependent_domains': {
+                domain: True for domain in slot['dependent_domains']}} for slot in slots}
+        elif slots and type(rows) in (list, tuple):
+            drafts = tuple(row['domain'] for row in rows if row['role'] == 'draft_owner')
+            for item in slots:
+                selected = tuple(item['dependent_domains'])
+                finite_fixture_selection(drafts, selected)
+                item['dependent_domains'] = dict.fromkeys(selected, True)
+    names = {'activity_type': 'activity', 'writing_intent': 'intent',
+             'specialist_domains': 'domains', 'target_artifact_paths': 'paths',
+             'contributions': 'roles', 'dependency_slots': 'slots', 'task_reference': 'task'}
+    # A deliberate mixed old/new input remains mixed and invalid; collisions are never discarded.
+    compact = {name if names.get(name, name) in scope and names.get(name, name) != name else
+               names.get(name, name): value for name, value in scope.items()}
+    if type(compact.get('task')) is dict:
+        task_names = {'task_id': 'id', 'task_revision': 'revision'}
+        task = compact['task']
+        compact['task'] = {name if task_names.get(name, name) in task and
+                           task_names.get(name, name) != name else task_names.get(name, name): value
+                           for name, value in task.items()}
+    if 'slots' in compact and not workflow:
+        def slot(value):
+            if type(value) is not dict:
+                return value
+            names = {'slot_id': 'id', 'dependent_domains': 'domains'}
+            return {name if names.get(name, name) in value and names.get(name, name) != name else
+                    names.get(name, name): item for name, item in value.items()}
+        rows = compact['slots']
+        if type(rows) is dict:
+            compact['slots'] = {name: slot(value) for name, value in rows.items()}
+        elif type(rows) in (list, tuple):
+            compact['slots'] = [slot(value) for value in rows]
+    return compact
+
+
+def lead_fixture_bound_scope(request, scope, *, record=False):
+    """Encode supplied scope fields using the frozen declaration presence only."""
+    constraints = request.contract.factory.constraints
+    writer = lead_fixture_scope_record if record else lead_fixture_scope
+    return writer(
+        scope, fixed_targets=(constraints.scope is not None
+                              or constraints.adoption_intent is not None),
+        fixed_dependencies=constraints.scope is not None)
+
+
+def lead_fixture_result(value):
+    """Group explicitly supplied wire fields; no defaults, binding or branch inference."""
+    value = copy.deepcopy(value)
+    if type(value) is not dict:
+        return value
+    if 'response_details' in value:
+        raise ValueError('Supply either grouped or ungrouped fixture fields explicitly')
+    common = {'schema_id', 'response_type', 'response_text'}
+    common.update(key for key in value if key.endswith('_result_type'))
+    result = {key: child for key, child in value.items() if key in common}
+    result['response_details'] = {key: child for key, child in value.items() if key not in common}
+    return result
+
+
+def author_positive_fixture_review_bases(rows, *, candidate_choices):
+    """Author the selected-input/instruction basis for explicitly opted positive fixtures."""
+    authored = copy.deepcopy(rows)
+    for row in authored:
+        if 'review_basis' in row:
+            continue
+        if row['assignment_type'] != 'review_content':
+            row['review_basis'] = None
+            continue
+        selected = row['input_source_ids']
+        criteria = row['task_instructions']
+        if (type(selected) not in (list, tuple) or not selected
+                or any(type(item) is not str for item in selected)
+                or len(set(selected)) != len(selected)
+                or any(item not in candidate_choices for item in selected)
+                or type(criteria) is not str or not criteria.strip()):
+            raise ValueError('positive review authoring requires eligible edges and criterion')
+        row['review_basis'] = {
+            'candidate_input_ids': list(selected), 'criteria': criteria}
+    return authored
+
+
+def lead_fixture_assignments(rows, *, input_choices, review_choices, anchors, recipients):
+    """Encode authored edges and basis without inventing a missing review value."""
+    if (type(rows) not in (list, tuple)
+            or any(type(row) is not dict or type(row.get('agent_id')) is not str for row in rows)):
+        return {'assignments': copy.deepcopy(rows), 'required_input_recipients': copy.deepcopy(recipients)}
+    if len({row['agent_id'] for row in rows}) != len(rows):
+        raise ValueError('Use a raw frame for an intentionally duplicate assignment')
+    assignments = {}
+    for row in rows:
+        identity = row['agent_id']
+        native = {key: copy.deepcopy(value) for key, value in row.items()
+                  if key not in ('agent_id', 'input_source_ids')}
+        if 'review_basis' not in native:
+            raise ValueError('fixture allocation requires an authored review_basis value')
+        basis = native['review_basis']
+        if type(basis) is dict:
+            if set(basis) != {'candidate_input_ids', 'criteria'}:
+                raise ValueError('fixture review basis requires its closed native semantic fields')
+            native['review_basis'] = {
+                'candidate_input_ids': finite_fixture_selection(
+                    review_choices, tuple(basis['candidate_input_ids'])),
+                'criteria': copy.deepcopy(basis['criteria']),
+            }
+        elif basis is not None:
+            raise ValueError('fixture review basis must be an authored object or null')
+        selected = row.get('input_source_ids')
+        required = ([source for source, agent in recipients.items() if agent == identity]
+                    if type(recipients) is dict else [])
+        anchor = native.get('input_anchor_id', anchors.get(identity))
+        if (type(selected) in (list, tuple) and all(type(item) is str for item in selected)
+                and len(set(selected)) == len(selected) and anchor in selected
+                and all(source in selected for source in required)):
+            if 'input_anchor_id' not in native:
+                native['input_anchor_id'] = copy.deepcopy(anchor)
+            if 'optional_inputs' not in native:
+                native['optional_inputs'] = {
+                    source: source in selected
+                    for source in dict.fromkeys((*input_choices, *selected))}
+            else:
+                native['input_source_ids'] = copy.deepcopy(selected)
+        elif 'input_source_ids' in row:
+            native['input_source_ids'] = copy.deepcopy(selected)
+        assignments[identity] = native
+    return {'assignments': assignments, 'required_input_recipients': copy.deepcopy(recipients)}
+
+
+def lead_fixture_response(request, value, *, family, branch_key=None, response_type=None):
+    """Pair caller-authored current wire values with one explicitly intended issued family."""
+    outer, inner = offered_fixture_bindings(
+        request, action_type='submit_result',
+        response_type=value['response_type'] if response_type is None else response_type,
+        family=family, branch_key=branch_key, value=value)
+    return indexed_response({'action_type': 'submit_result', 'task_result': value},
+                            outer_schema_id=outer, inner_schema_id=inner)
+
+
+def finite_fixture_read_selection(choices, selected):
+    """Encode caller-supplied READ choices; no count or value repair."""
+    if not choices:
+        raise ValueError('READ fixtures require actual offered handles')
+    return finite_fixture_selection(choices, selected)

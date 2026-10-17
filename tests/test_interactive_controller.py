@@ -1768,7 +1768,7 @@ class ControllerContractTests(ControllerTestCase):
         for module_name in graph:
             visit(module_name)
         self.assertEqual(len(modules), 163)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 712)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 731)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -6130,12 +6130,13 @@ class ControllerConversationCommandTests(ControllerTestCase):
             self.assertEqual(resumed.run_session_lobby(), 0)
         self.assertEqual(observed, [("session", first.conversation_id),
                                    ("session", second.conversation_id), ("session", first.conversation_id)])
-        from tests.test_lead_orchestration import _task_fixture, _exploration_outcome, _submitted_calls
+        from tests.test_lead_orchestration import (
+            _task_fixture, _current_exploration_outcome, _submitted_calls)
         from tests.test_specialist_routing_runtime import scoped_proposal
         case = _task_fixture(self)
         source, owner = case.conversation("Installed source A"), case.conversation("Installed owner B")
         source_text = "Prefix. 한글\r\nSelected.  Suffix."
-        case.backend.enqueue(_exploration_outcome(source_text))
+        case.backend.enqueue(_current_exploration_outcome(source_text))
         runner = asyncio.Runner()
         self.addCleanup(runner.close)
         runner.run(case.runtime.lead_turn(case.session_id, source, "Explore alternatives.",
@@ -6162,8 +6163,15 @@ class ControllerConversationCommandTests(ControllerTestCase):
                         if type(e.payload) is collaboration.CollaborationExplorationAdoptionPayload)
         self.assertEqual(captured.selected_text, source_text[8:23])
         projected = case.runtime.inspect_lead_collaboration(case.session_id, owner)
-        self.assertEqual((captured.fresh_task_id, captured.task_revision),
-                         (projected.current_proposal.authoring_scope.task_id, 1))
+        try:
+            self.assertEqual((captured.fresh_task_id, captured.task_revision),
+                             (projected.current_proposal.authoring_scope.task_id, 1))
+        except AttributeError as failure:
+            if projected.current_proposal is None:
+                from tests.recommendation_fixture import _current_policy_failure_note
+                failure.add_note(_current_policy_failure_note(
+                    case.backend, projection=projected))
+            raise
         self.assertEqual(len(_submitted_calls(case.history(source))) + len(_submitted_calls(case.history(owner))), 2)
 
 
@@ -6930,16 +6938,23 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             self.assertIn("Inspect /history and /exchanges before continuing.", message_item.content)
             self.assertNotIn("No capacity available", message_item.content)
 
-        from tests.test_lead_orchestration import _task_fixture, _discussion_reply, _submitted_calls
-        corrections = (_discussion_reply("Corrected public text."),
-                       _discussion_reply("Original public text."), '{"analysis":{"message":"PRIVATE"}}')
+        from tests.test_lead_orchestration import _task_fixture, _submitted_calls
+        from tests.provider_wire_fixture import lead_fixture_response
+
+        def reply(call, _provider, text, evidence):
+            return lead_fixture_response(call, {'response_type': 'answer', 'response_text': text,
+                'response_details': {'used_evidence_ids': evidence}}, family=0)
+
+        corrections = ("Corrected public text.", "Original public text.", None)
         for correction in corrections:
             case = _task_fixture(self)
             conversation = case.conversation("Per-call literal public visibility")
-            invalid = json.loads(_discussion_reply("Original public text."))
-            invalid["agent_action"]["task_result"]["used_evidence_ids"] = "wrong array type"
-            case.backend.enqueue(json.dumps(invalid))
-            case.backend.enqueue(correction)
+            case.backend.enqueue(lambda call, provider: reply(
+                call, provider, "Original public text.", "wrong array type"))
+            if correction is None:
+                case.backend.enqueue('{"analysis":{"message":"PRIVATE"}}')
+            else:
+                case.backend.enqueue(lambda call, provider, text=correction: reply(call, provider, text, {}))
             result = runner.run(case.runtime.decide_lead_task(task.LeadTaskDecision.for_conversation(
                 case.session_id, conversation, task.LeadTaskAction.DISCUSS, text="Discuss; do not draft.",
             )))
@@ -6956,8 +6971,8 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             self.assertIn("Call validation", rendered)
             self.assertNotIn("PRIVATE", rendered)
             self.assertEqual(rendered.count("Public response disposition"), len(result.turn.public_responses))
-            if '"response_text"' in correction:
-                corrected = json.loads(correction)["agent_action"]["task_result"]["response_text"]
+            if correction is not None:
+                corrected = correction
                 self.assertEqual(rendered.count(corrected), 2 if corrected == "Original public text." else 1)
                 self.assertIn("accepted", rendered)
                 self.assertIn("Repairs call", rendered)

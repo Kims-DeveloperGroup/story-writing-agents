@@ -40,6 +40,7 @@ from .catalog import (
     ArtifactCatalog,
     ArtifactCatalogEntry,
     ArtifactKind,
+    artifact_kind_path_rule,
     canonical_artifact_kind,
     manuscript_artifact_path,
 )
@@ -95,6 +96,7 @@ from .relationship_policy import (
     ArtifactReviewDomain,
     ArtifactReviewFact,
     ArtifactReviewReason,
+    artifact_source_operation_rule,
     validate_artifact_relationships,
 )
 
@@ -163,6 +165,8 @@ __all__ = (
     "ReferenceReadAction",
     "ReferenceReadActionKind",
     "ReferenceReadRequest",
+    "artifact_kind_path_rule",
+    "artifact_source_operation_rule",
     "build_artifact_change_set",
     "artifact_relationship_validation_digest",
     "build_artifact_application_request",

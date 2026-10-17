@@ -174,8 +174,7 @@ class CandidateWireContractTests(unittest.TestCase):
             {**valid, "base_candidate_reference": {**self.facts(1, 1, base), "content_digest": "sha256:" + "0" * 64}},
             {**valid, "target_candidate_reference": {**self.facts(1, 2, target), "content_utf8_bytes": 1}},
             *({**valid, "text_splice": {**valid["text_splice"], key: value}} for key, value in (("prefix_codepoint_count", len(base) + 1), ("suffix_codepoint_count", len(base) + 1), ("replacement_content_text", 1))),
-            {"op": "legacy_candidate_patch"},
-        ]
+            {"op": "legacy_candidate_patch"},]
         for operation in invalid:
             with self.subTest(operation=operation), self.assertRaises(AssertionError):
                 prepared().apply(self.payload(operation))

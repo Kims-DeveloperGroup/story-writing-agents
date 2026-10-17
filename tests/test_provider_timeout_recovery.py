@@ -230,8 +230,14 @@ class ProviderTimeoutRecoveryTests(lead.LeadOrchestrationTestCase):
         self.assertIs(self.failures(conversation)[0].payload.code, CollaborationLeadOutcomeFailureCode.CANCELLED)
         restarted = StoryRuntime(self.workspace, self.backend)
         # Bound test progress across the entire retry, including fixture Git work.
-        async with asyncio.timeout(30):
-            await self.answer(conversation, "A new request after cancellation.", runtime=restarted)
+        try:
+            async with asyncio.timeout(30):
+                await self.answer(
+                    conversation, "A new request after cancellation.", runtime=restarted)
+        except TimeoutError as failure:
+            from tests.recommendation_fixture import _current_policy_failure_note
+            failure.add_note(_current_policy_failure_note(self.backend))
+            raise
         self.assertEqual(len(self.backend.calls), 2)
         self.assertEqual(len(self.backend.reference_calls), 1)
         self.assertIsNone(self.backend.calls[-1].expected_thread_id)

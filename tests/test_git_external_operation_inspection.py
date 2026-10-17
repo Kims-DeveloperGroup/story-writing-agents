@@ -20,8 +20,7 @@ from story_writing_agents.git import (
     GitOperationKind,
     GitRecoveryAction,
     GitRepositoryAdapter,
-    GitRepositoryState,
-)
+    GitRepositoryState,)
 
 from tests.git_contract_fixture import DisposableGitTestCase, exception_graph
 
@@ -58,16 +57,14 @@ def _tree_snapshot(root: Path) -> tuple[tuple[str, int, int, int, int, int, byte
     for path in sorted(root.rglob("*"), key=lambda value: value.as_posix()):
         observed = path.lstat()
         content = path.read_bytes() if stat.S_ISREG(observed.st_mode) else None
-        result.append(
-            (
+        result.append((
                 path.relative_to(root).as_posix(),
                 observed.st_mode,
                 observed.st_ino,
                 observed.st_size,
                 observed.st_mtime_ns,
                 observed.st_ctime_ns,
-                content,
-            )
+                content,)
         )
     return tuple(result)
 
@@ -107,12 +104,10 @@ class GitExternalOperationInspectionTests(DisposableGitTestCase):
             (("CHERRY_PICK_HEAD",), GitExternalOperationKind.CHERRY_PICK),
             (
                 ("CHERRY_PICK_HEAD", "sequencer"),
-                GitExternalOperationKind.CHERRY_PICK,
-            ),
+                GitExternalOperationKind.CHERRY_PICK,),
             (("REVERT_HEAD",), GitExternalOperationKind.REVERT),
             (("REVERT_HEAD", "sequencer"), GitExternalOperationKind.REVERT),
-            (("sequencer",), GitExternalOperationKind.SEQUENCER),
-        )
+            (("sequencer",), GitExternalOperationKind.SEQUENCER),)
         secret = b"PRIVATE EXTERNAL OPERATION PAYLOAD"
         for index, (markers, expected) in enumerate(cases):
             with self.subTest(markers=markers):
@@ -130,15 +125,13 @@ class GitExternalOperationInspectionTests(DisposableGitTestCase):
         (root / "tracked").write_bytes(b"tracked")
         self.commit_all(root)
         linked = self.test_root / "identity-linked"
-        self.run_git(
-            root,
+        self.run_git(root,
             "worktree",
             "add",
             "--quiet",
             "--detach",
             os.fspath(linked),
-            "HEAD",
-        )
+            "HEAD",)
         other = self.initialized_repository("identity-other")
 
         first = GitRepositoryAdapter(root).inspect_external_operation()
@@ -147,16 +140,12 @@ class GitExternalOperationInspectionTests(DisposableGitTestCase):
         other_result = GitRepositoryAdapter(other).inspect_external_operation()
 
         self.assertEqual(repeated, first)
-        self.assertEqual(
-            linked_result.repository_identity_digest,
+        self.assertEqual(linked_result.repository_identity_digest,
             first.repository_identity_digest,
         )
-        self.assertNotEqual(
-            linked_result.worktree_identity_digest,
-            first.worktree_identity_digest,
-        )
-        self.assertNotEqual(
-            other_result.repository_identity_digest,
+        self.assertNotEqual(linked_result.worktree_identity_digest,
+            first.worktree_identity_digest,)
+        self.assertNotEqual(other_result.repository_identity_digest,
             first.repository_identity_digest,
         )
         for result in (first, linked_result, other_result):
@@ -187,8 +176,7 @@ class GitExternalOperationInspectionTests(DisposableGitTestCase):
             ("rebase-merge", "rebase-apply"),
             ("CHERRY_PICK_HEAD", "REVERT_HEAD"),
             ("MERGE_HEAD", "sequencer"),
-            ("rebase-apply", "sequencer"),
-        )
+            ("rebase-apply", "sequencer"),)
         secret = "PRIVATE-CONTRADICTORY-MARKER"
         for index, markers in enumerate(mixed):
             with self.subTest(markers=markers):
@@ -204,8 +192,7 @@ class GitExternalOperationInspectionTests(DisposableGitTestCase):
         wrong_types = (
             ("MERGE_HEAD", "directory"),
             ("rebase-merge", "file"),
-            ("sequencer", "file"),
-        )
+            ("sequencer", "file"),)
         for index, (name, wrong_type) in enumerate(wrong_types):
             with self.subTest(name=name, wrong_type=wrong_type):
                 root = self.initialized_repository(f"wrong-type-{index}")
@@ -233,17 +220,14 @@ class GitExternalOperationInspectionTests(DisposableGitTestCase):
                     outside.mkdir()
                 else:
                     outside.write_text(secret, encoding="utf-8")
-                (_administrative_directory(root) / name).symlink_to(
-                    outside,
-                    target_is_directory=name in _DIRECTORY_MARKERS,
-                )
+                (_administrative_directory(root) / name).symlink_to(outside,
+                    target_is_directory=name in _DIRECTORY_MARKERS,)
                 outside_before = outside.stat() if outside.is_dir() else outside.read_bytes()
                 self.assert_recovery_required(
                     lambda root=root: GitRepositoryAdapter(
                         root
                     ).inspect_external_operation(),
-                    forbidden=(secret, os.fspath(outside)),
-                )
+                    forbidden=(secret, os.fspath(outside)),)
                 outside_after = outside.stat() if outside.is_dir() else outside.read_bytes()
                 self.assertEqual(outside_after, outside_before)
 
@@ -340,10 +324,8 @@ class GitExternalOperationInspectionTests(DisposableGitTestCase):
         self.assertEqual(run_git.call_count, 0)
         self.assertEqual(filesystem_after, filesystem_before)
         self.assertEqual(git_after, git_before)
-        self.assertEqual(
-            (_administrative_directory(root) / "MERGE_HEAD").read_bytes(),
-            marker_secret,
-        )
+        self.assertEqual((_administrative_directory(root) / "MERGE_HEAD").read_bytes(),
+            marker_secret,)
 
     def test_contract_adapter_exports_and_dependencies_are_exact(self) -> None:
         for name in ("GitExternalOperationKind", "GitExternalOperationInspection"):
@@ -353,10 +335,8 @@ class GitExternalOperationInspectionTests(DisposableGitTestCase):
         public = {
             name
             for name in dir(GitRepositoryAdapter)
-            if not name.startswith("_") and callable(getattr(GitRepositoryAdapter, name))
-        }
-        self.assertFalse(
-            public & {"abort", "continue_operation", "reset", "clean", "merge"}
+            if not name.startswith("_") and callable(getattr(GitRepositoryAdapter, name))}
+        self.assertFalse(public & {"abort", "continue_operation", "reset", "clean", "merge"}
         )
 
         modules: dict[str, Path] = {}
@@ -365,8 +345,7 @@ class GitExternalOperationInspectionTests(DisposableGitTestCase):
             parts = (
                 ("story_writing_agents", *relative.parts[:-1])
                 if relative.name == "__init__.py"
-                else ("story_writing_agents", *relative.with_suffix("").parts)
-            )
+                else ("story_writing_agents", *relative.with_suffix("").parts))
             modules[".".join(parts)] = path
 
         def resolve(target: str) -> str | None:
@@ -414,7 +393,7 @@ class GitExternalOperationInspectionTests(DisposableGitTestCase):
                     if resolved is not None and resolved != module:
                         edges.add((module, resolved))
         self.assertEqual(len(modules), 163)
-        self.assertEqual(len(edges), 712)
+        self.assertEqual(len(edges), 731)
         git_contracts = "story_writing_agents.git.contracts"
         git_adapter = "story_writing_agents.git.adapter"
         self.assertEqual(

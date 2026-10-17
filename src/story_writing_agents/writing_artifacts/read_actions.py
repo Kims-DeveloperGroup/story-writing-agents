@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import NoReturn, Protocol
 
 from .authorization import (
+    AuthorizedArtifactReference as AuthorizedArtifactReference,
     ReferenceAuthorizationError,
     ReferenceAuthorizationErrorCode,
     ReferenceInvocationCorrelation,
@@ -71,12 +73,14 @@ class ReferenceReadAction:
 class ReferenceReadResult:
     """Closeable, nonserializable carrier for one transient ordered read."""
 
-    __slots__ = ("_contents", "_request")
+    __slots__ = ("_contents", "_request", "_authorized_references")
 
     def __init__(
         self,
         request: ReferenceReadRequest,
         contents: tuple[bytes, ...],
+        *,
+        authorized_references: tuple[AuthorizedArtifactReference, ...],
     ) -> None:
         if type(request) is not ReferenceReadRequest:
             raise TypeError("request must be a ReferenceReadRequest")
@@ -84,14 +88,37 @@ class ReferenceReadResult:
             raise ValueError("reference read contents do not match the request")
         if any(type(item) is not bytes for item in contents):
             raise TypeError("reference read contents must contain bytes")
+        if (type(authorized_references) is not tuple
+                or len(authorized_references) != len(request.references)
+                or any(type(item) is not AuthorizedArtifactReference
+                       for item in authorized_references)):
+            raise ValueError("reference read proofs do not match the request")
+        for ordinal, (reference, proof, content) in enumerate(zip(
+            request.references, authorized_references, contents, strict=True,
+        ), start=1):
+            if (proof.ordinal != ordinal or proof.reference != reference
+                    or proof.source.path != reference.path
+                    or proof.selected_utf8_bytes != len(content)
+                    or proof.selected_sha256 != hashlib.sha256(content).hexdigest()
+                    or (reference.line_range is None and (
+                        proof.source.source_sha256 != proof.selected_sha256
+                        or proof.source.source_utf8_bytes != proof.selected_utf8_bytes))):
+                raise ValueError("reference read contents do not match authorization proofs")
         self._request = request
         self._contents = contents
+        self._authorized_references = authorized_references
 
     @property
     def request(self) -> ReferenceReadRequest:
         """Return the immutable content-free identity for this result."""
 
         return self._request
+
+    @property
+    def authorized_references(self) -> tuple[AuthorizedArtifactReference, ...]:
+        """Return the immutable actual delivery proofs without retaining content."""
+
+        return self._authorized_references
 
     @property
     def contents(self) -> tuple[bytes, ...]:

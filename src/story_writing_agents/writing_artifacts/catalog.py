@@ -82,6 +82,25 @@ def canonical_artifact_kind(path: object) -> ArtifactKind | None:
     return ArtifactKind.MANUSCRIPT
 
 
+def artifact_kind_path_rule(artifact_kind: ArtifactKind) -> dict[str, object]:
+    """Declare the exact canonical lexical path language for one artifact kind."""
+
+    if type(artifact_kind) is not ArtifactKind:
+        raise TypeError("artifact kind must be an exact ArtifactKind")
+    end = r"$(?![\s\S])"
+    if artifact_kind is ArtifactKind.CORE_DOCUMENT:
+        body = "(?:" + "|".join(re.escape(path) for path in CORE_ARTIFACT_PATHS) + ")"
+    else:
+        component = _PATH_COMPONENT.pattern
+        filename = r"(?=[^/]*\.md" + end + ")" + component
+        body = "manuscript/" + _PART_ID.pattern + "/(?:" + component + "/)*" + filename
+    return {
+        "type": "string",
+        "maxLength": MAX_ARTIFACT_PATH_BYTES,
+        "pattern": "^(?:" + body + ")" + end,
+    }
+
+
 def manuscript_artifact_path(output_path: object) -> str:
     """Translate required ``PART/PATH.md`` output syntax to canonical identity."""
 

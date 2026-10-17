@@ -21,14 +21,12 @@ from story_writing_agents.errors import BackendProtocolError
 from story_writing_agents.workspace.initialization import (
     SessionArtifactBinding,
     SessionArtifactBindingError,
-    compose_session_artifact_binding,
-)
+    compose_session_artifact_binding, )
 from story_writing_agents.writing_artifacts._storage import ArtifactRootSecurityError
 from tests.recommendation_fixture import (
     DRAFT, OUTLINE, RecommendationCase, action, decision, digest,
     preparation, recommendation, rewrite_history,
-    task_assessment,
-)
+    task_assessment, )
 from tests import test_lead_orchestration as lead
 from tests import test_artifact_proposal_orchestration as artifact
 from tests import test_lead_artifact_application as application
@@ -72,7 +70,7 @@ class LeadRecommendationTests(RecommendationCase):
             self.assertEqual(sum(type(e.payload) is c.CollaborationMessagePayload and
                 e.direction is c.CollaborationDirection.USER_TO_LEAD for e in events), 1)
             return producer(call, provider)
-        self.backend.enqueue(observed)
+        self.enqueue_preparation(turn, answer=observed)
         calls = len(self.backend.calls)
         original_qualifier = self.runtime._qualify_authoring_inputs
         qualification_starts = []
@@ -84,7 +82,7 @@ class LeadRecommendationTests(RecommendationCase):
             prepared = await self.runtime.session(self.session_id).decide_lead_recommendation(decision(turn))
         self.assertEqual(qualification_starts[:1], [False])
         self.assertIs(type(prepared), c.LeadTurnResult)
-        self.assertEqual(len(self.backend.calls) - calls, 1)
+        self.assertEqual(len(self.backend.calls) - calls, 3)
         self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL)
         self.assertIs(prepared.next_action, c.CollaborationNextAction.SUBMIT_CONFIRMATION)
         self.assertIsNone(prepared.recommendation_request)
@@ -187,9 +185,19 @@ class LeadRecommendationTests(RecommendationCase):
             entered.set()
             await release.wait()
             return producer(call, provider)
-        self.backend.enqueue(held)
+        self.enqueue_preparation(turn, answer=held)
         first = asyncio.create_task(self.runtime.decide_lead_recommendation(choice))
-        await asyncio.wait_for(entered.wait(), 2)
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+        except TimeoutError as failure:
+            from tests.recommendation_fixture import (
+                _bounded_failure_note, _stored_failure_snapshots)
+            state = ('cancelled' if first.cancelled() else
+                     'done_unknown' if first.done() else 'pending')
+            failure.add_note(_bounded_failure_note(
+                ('task', calls, entered.is_set(), state),
+                *_stored_failure_snapshots(self.backend)))
+            raise
         second = asyncio.create_task(self.runtime.decide_lead_recommendation(choice))
         try:
             await asyncio.sleep(0)
@@ -203,11 +211,11 @@ class LeadRecommendationTests(RecommendationCase):
             await asyncio.gather(first, second, return_exceptions=True)
         self.assertIs(type(results[0]), c.LeadTurnResult)
         self.assertIsInstance(results[1], BackendProtocolError)
-        self.assertEqual(len(self.backend.calls), calls + 1)
+        self.assertEqual(len(self.backend.calls), calls + 3)
         self.assertEqual(len(self.payload_events(conversation_id, c.LeadRecommendationStartedPayload)), 1)
         with self.assertRaises(BackendProtocolError):
             await self.runtime.decide_lead_recommendation(choice)
-        self.assertEqual(len(self.backend.calls), calls + 1)
+        self.assertEqual(len(self.backend.calls), calls + 3)
         self.assert_no_downstream(conversation_id)
         self.assertEqual(self.snapshots(), snapshots)
 
@@ -240,7 +248,7 @@ class LeadRecommendationTests(RecommendationCase):
             editorial.EditorialRecordRequest.directive(independent, transition_reason="Independent scope."))
         state = self.runtime.inspect_editorial_state(self.session_id)
         self.assertEqual(state.context_digest((a_ref,)), pin)
-        self.backend.enqueue(preparation(offered))
+        self.enqueue_preparation(offered)
         prepared = await self.runtime.decide_lead_recommendation(decision(offered))
         self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL)
         self.assertEqual(prepared.proposal.basis.editorial_context_digest, pin)
@@ -268,7 +276,7 @@ class LeadRecommendationTests(RecommendationCase):
         fresh_basis = fresh.recommendation_request.basis
         self.assertEqual(fresh_basis.editorial_context_digest,
                          state.context_digest(fresh_basis.editorial_refs))
-        self.backend.enqueue(preparation(fresh))
+        self.enqueue_preparation(fresh)
         new_prepared = await self.runtime.decide_lead_recommendation(decision(fresh))
         self.assertEqual(new_prepared.proposal.basis.editorial_context_digest,
             fresh_basis.editorial_context_digest)

@@ -23,6 +23,7 @@ from .references import (
     ArtifactReference,
     ArtifactReferenceBatch,
     ArtifactSourceIdentity,
+    coalesce_reference_aliases,
 )
 
 
@@ -424,6 +425,50 @@ class ReferenceAuthorization:
         with self._lock:
             self._require_open()
             return tuple(item.authorized for item in self._captured)
+
+    def project_alias_proofs(
+        self,
+        aliases: tuple[ArtifactReference, ...],
+    ) -> tuple[AuthorizedArtifactReference, ...]:
+        """Project exact logical aliases from this operation's captured coverage."""
+
+        with self._lock:
+            self._require_open()
+            batch, ordinals = coalesce_reference_aliases(aliases)
+            if batch.references != self.manifest.references:
+                raise ReferenceAuthorizationError(
+                    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
+                )
+            proofs: list[AuthorizedArtifactReference] = []
+            total = 0
+            for ordinal, (alias, captured_ordinal) in enumerate(
+                zip(aliases, ordinals, strict=True), start=1
+            ):
+                captured = self._captured[captured_ordinal]
+                captured_range = captured.authorized.reference.line_range
+                selected_range = alias.line_range
+                if selected_range is not None and captured_range is not None:
+                    selected_range = ArtifactLineRange(
+                        selected_range.start - captured_range.start + 1,
+                        selected_range.end - captured_range.start + 1,
+                    )
+                selected, _ = select_reference_bytes(captured.content, selected_range)
+                total += len(selected)
+                if total > MAX_REFERENCE_TOTAL_BYTES:
+                    raise ReferenceAuthorizationError(
+                        ReferenceAuthorizationErrorCode.TOTAL_LIMIT_EXCEEDED
+                    )
+                proofs.append(
+                    AuthorizedArtifactReference(
+                        ordinal=ordinal,
+                        reference=alias,
+                        source=captured.authorized.source,
+                        selected_sha256=hashlib.sha256(selected).hexdigest(),
+                        selected_utf8_bytes=len(selected),
+                        source_line_count=captured.authorized.source_line_count,
+                    )
+                )
+            return tuple(proofs)
 
     def close(self) -> None:
         with self._lock:

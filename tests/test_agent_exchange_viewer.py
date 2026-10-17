@@ -57,8 +57,7 @@ VIEWER_SOURCE = ROOT / "vendor" / "jsonl-viewer" / "src"
 VIEWER_ERROR_MESSAGES = {
     "installation_required": (
         "Required agent exchange viewer is unavailable. Repair or reinstall "
-        "Story and retry /exchanges."
-    ),
+        "Story and retry /exchanges."),
     "incompatible": (
         "Required agent exchange viewer is incompatible with Story. Repair or "
         "reinstall Story and retry /exchanges."
@@ -93,8 +92,7 @@ def _inventory(
         first,
         last,
         1,
-        count,
-    )
+        count,)
 
 
 def _message(content: str, **changes: object) -> DebateMessage:
@@ -105,8 +103,7 @@ def _message(content: str, **changes: object) -> DebateMessage:
         "revision": "r0",
         "kind": "prompt",
         "content": content,
-        "timestamp": "2026-08-30T00:00:00+00:00",
-    }
+        "timestamp": "2026-08-30T00:00:00+00:00",}
     values.update(changes)
     return DebateMessage(**values)  # type: ignore[arg-type]
 
@@ -135,8 +132,7 @@ class _ExactViewerSpec:
         return (
             self.date_time_field,
             self.request_type_field,
-            self.content_field,
-        )
+            self.content_field,)
 
 
 class _ExactViewerHost:
@@ -188,13 +184,11 @@ class ExchangeProjectionTests(unittest.TestCase):
     ) -> None:
         self.assertEqual(
             debate_subject_from_messages((_message("  Alpha\n\tBeta  "),)),
-            "Alpha Beta",
-        )
+            "Alpha Beta",)
         long = "x" * 520
         self.assertEqual(
             debate_subject_from_messages((_message(long, kind="draft"),)),
-            "x" * 511 + "…",
-        )
+            "x" * 511 + "…",)
         self.assertEqual(len(debate_subject_from_messages((_message(long),))), 512)
         invalid_first = (
             (),
@@ -212,8 +206,7 @@ class ExchangeProjectionTests(unittest.TestCase):
             with self.subTest(messages=messages):
                 self.assertEqual(
                     debate_subject_from_messages(messages),
-                    DEBATE_SUBJECT_UNAVAILABLE,
-                )
+                    DEBATE_SUBJECT_UNAVAILABLE,)
 
     def test_scopes_are_inventory_only_deduplicated_latest_first_and_kind_exact(
         self,
@@ -226,8 +219,7 @@ class ExchangeProjectionTests(unittest.TestCase):
                 ROSTER[0],
                 first=1,
                 last=4,
-                count=2,
-            ),
+                count=2,),
             _inventory(
                 AgentExchangeScopeKind.DEBATE,
                 conversation_id,
@@ -257,8 +249,7 @@ class ExchangeProjectionTests(unittest.TestCase):
             conversation_subjects={
                 conversation_id: "Current subject",
                 "archived_conversation_full_id": "Archived subject",
-                "not_in_inventory": "Must not appear",
-            },
+                "not_in_inventory": "Must not appear",},
             debate_messages={conversation_id: (_message("Debate subject"),)},
         )
         self.assertEqual(
@@ -269,8 +260,7 @@ class ExchangeProjectionTests(unittest.TestCase):
                     conversation_id,
                     "Current subject",
                     5,
-                    8,
-                ),
+                    8,),
                 ExchangeScopeChoice(
                     AgentExchangeScopeKind.CONVERSATION,
                     "archived_conversation_full_id",
@@ -297,8 +287,7 @@ class ExchangeProjectionTests(unittest.TestCase):
         )
         self.assertEqual(
             choices[0].label,
-            f"Conversation {conversation_id} — Current subject",
-        )
+            f"Conversation {conversation_id} — Current subject",)
         self.assertNotIn("not_in_inventory", repr(choices))
 
     def test_scopes_and_agents_fail_closed_on_cross_session_or_duplicates(self) -> None:
@@ -315,8 +304,7 @@ class ExchangeProjectionTests(unittest.TestCase):
             ROSTER[1],
             first=2,
             last=2,
-            session_id="session_2",
-        )
+            session_id="session_2",)
         with self.assertRaises(AgentExchangeProjectionError):
             project_exchange_scopes(
                 "session_1",
@@ -355,8 +343,7 @@ class ExchangeProjectionTests(unittest.TestCase):
             ROSTER[2],
             first=7,
             last=9,
-            count=3,
-        )
+            count=3,)
         choices = project_exchange_agents(
             "session_1",
             AgentExchangeScopeKind.DEBATE,
@@ -372,8 +359,7 @@ class ExchangeProjectionTests(unittest.TestCase):
             if choice.agent_id == ROSTER[2]:
                 self.assertEqual(choice.selection, item.selection)
                 self.assertEqual(
-                    (choice.record_count, choice.last_workspace_sequence), (3, 9)
-                )
+                    (choice.record_count, choice.last_workspace_sequence), (3, 9))
                 self.assertTrue(choice.has_records)
             else:
                 self.assertEqual(
@@ -452,8 +438,7 @@ class LazyViewerAdapterTests(unittest.TestCase):
                 spec.title,
                 spec.conversation_label,
                 spec.conversation_subject,
-                spec.input_protocol,
-            ),
+                spec.input_protocol,),
             (
                 "session_1",
                 "debate_full_id",
@@ -497,8 +482,7 @@ class LazyViewerAdapterTests(unittest.TestCase):
                         viewer_module.importlib,
                         "import_module",
                         side_effect=side_effect,
-                        return_value=return_value,
-                    ),
+                        return_value=return_value,),
                     self.assertRaises(AgentExchangeViewerError) as raised,
                 ):
                     prepare_agent_exchange_view(
@@ -519,8 +503,7 @@ class LazyViewerAdapterTests(unittest.TestCase):
                 self.assertNotIn("[viewer]", str(raised.exception))
                 self.assertNotIn("optional", str(raised.exception).lower())
                 self.assertFalse(
-                    any(ord(character) < 32 for character in str(raised.exception))
-                )
+                    any(ord(character) < 32 for character in str(raised.exception)))
 
     def test_every_repaired_api_shape_mismatch_fails_before_operation_creation(
         self,
@@ -567,8 +550,7 @@ class LazyViewerAdapterTests(unittest.TestCase):
                 mock.patch.object(
                     viewer_module.importlib,
                     "import_module",
-                    return_value=module,
-                ),
+                    return_value=module,),
                 self.assertRaises(AgentExchangeViewerError) as raised,
             ):
                 prepare_agent_exchange_view(
@@ -702,8 +684,7 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
     def _commit(value: str) -> terminal_module.ControlOutcome:
         return terminal_module.ControlOutcome(
             terminal_module.ControlOutcomeKind.COMMIT,
-            text=value,
-        )
+            text=value,)
 
     def test_attached_command_uses_authoritative_archived_scope_and_exact_snapshot(
         self,
@@ -712,8 +693,7 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(workspace)
         conversation = controller._conversation_catalog.create(
             "session_1",
-            "Archived subject",
-        )
+            "Archived subject",)
         controller._conversation_catalog.archive(
             "session_1",
             conversation.conversation_id,
@@ -728,8 +708,7 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
         original_focus = controller._focused_conversation
         original_context = controller._context
         source_path = workspace.path(
-            f"debug_logs/agent_exchanges/session_1/{ROSTER[0]}.jsonl"
-        )
+            f"debug_logs/agent_exchanges/session_1/{ROSTER[0]}.jsonl")
         before_bytes = source_path.read_bytes()
         prepared: list[dict[str, object]] = []
         operation = mock.Mock(name="operation")
@@ -763,8 +742,7 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
 
         prepare_view.assert_called_once()
         open_view.assert_called_once_with(
-            controller._external_viewer, operation
-        )
+            controller._external_viewer, operation)
         self.assertEqual(len(picker.call_args_list), 2)
         scope_prompt, scope_choices = picker.call_args_list[0].args[1:3]
         agent_prompt, agent_choices = picker.call_args_list[1].args[1:3]
@@ -781,8 +759,7 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
         self.assertTrue(
             all(
                 choice.description == "No recorded exchanges"
-                for choice in agent_choices[1:]
-            )
+                for choice in agent_choices[1:])
         )
         self.assertEqual(
             prepared,
@@ -793,8 +770,7 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
                     "scope_kind": AgentExchangeScopeKind.CONVERSATION,
                     "scope_id": conversation.conversation_id,
                     "scope_subject": "Archived subject",
-                    "agent_id": ROSTER[0],
-                }
+                    "agent_id": ROSTER[0],}
             ],
         )
         self.assertIs(type(prepared[0]["source"]), bytes)
@@ -809,14 +785,12 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
         workspace = self.make_workspace()
         controller, _backend, callbacks = self.make_controller(workspace)
         conversation = controller._conversation_catalog.create(
-            "session_1", "Subject"
-        )
+            "session_1", "Subject")
         self._append(
             workspace,
             scope_kind=AgentExchangeScopeKind.CONVERSATION,
             scope_id=conversation.conversation_id,
-            content="PRIVATE_VIEWER_CONTENT",
-        )
+            content="PRIVATE_VIEWER_CONTENT",)
         controller._attached_session_id = "session_1"
         with (
             mock.patch.object(
@@ -839,8 +813,7 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
 
         rendered = "".join(callbacks.records)
         self.assertIn(
-            "terminalwithtransientdisplaysupport", "".join(rendered.split())
-        )
+            "terminalwithtransientdisplaysupport", "".join(rendered.split()))
         self.assertNotIn("PRIVATE_VIEWER_CONTENT", rendered)
 
     def test_latest_first_same_id_kind_separation_debate_subject_and_empty_agent(
@@ -850,22 +823,19 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
         controller, _backend, _callbacks = self.make_controller(workspace)
         conversation = controller._conversation_catalog.create(
             "session_1",
-            "Conversation subject",
-        )
+            "Conversation subject",)
         shared_id = conversation.conversation_id
         self._append(
             workspace,
             scope_kind=AgentExchangeScopeKind.CONVERSATION,
             scope_id=shared_id,
-            exchange_id="conversation_exchange",
-        )
+            exchange_id="conversation_exchange",)
         self._append(
             workspace,
             scope_kind=AgentExchangeScopeKind.DEBATE,
             scope_id=shared_id,
             agent_id=ROSTER[1],
-            exchange_id="debate_exchange",
-        )
+            exchange_id="debate_exchange",)
         workspace.append_debate_message(
             "session_1",
             shared_id,
@@ -908,8 +878,7 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
         )
         self.assertEqual(
             scope_choices[0].label,
-            f"Debate {shared_id} — Exact debate subject",
-        )
+            f"Debate {shared_id} — Exact debate subject",)
         prepare_view.assert_called_once()
         self.assertEqual(captured_sources, [b""])
         open_view.assert_called_once()
@@ -954,8 +923,7 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
             scope_id=conversation.conversation_id,
         )
         cancel = terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.CANCEL
-        )
+            terminal_module.ControlOutcomeKind.CANCEL)
         for outcomes in (
             (cancel,),
             (self._commit(f"conversation:{conversation.conversation_id}"), cancel),
@@ -992,14 +960,12 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
         store = mock.Mock()
         store.inventory.side_effect = ((item,), ())
         store.snapshot.side_effect = AgentExchangeStorageError(
-            AgentExchangeFailure.NOT_FOUND
-        )
+            AgentExchangeFailure.NOT_FOUND)
         with (
             mock.patch.object(
                 controller_core_module,
                 "WorkspaceAgentExchangeStore",
-                return_value=store,
-            ),
+                return_value=store,),
             mock.patch.object(
                 controller_core_module.InteractiveController,
                 "_load_agent_exchange_scope_choices",
@@ -1044,8 +1010,7 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(workspace)
         controller._attached_session_id = "session_1"
         session_state = workspace.path(
-            "agent_states/orchestrator_state/sessions/session_1.json"
-        )
+            "agent_states/orchestrator_state/sessions/session_1.json")
         session_state.parent.mkdir(parents=True, exist_ok=True)
         session_state.write_text("{}\n", encoding="utf-8")
         private = "PRIVATE_RESPONSE /tmp/private TOKEN=secret"
@@ -1081,8 +1046,7 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
             ),
             "view_failed": (
                 "The agent exchange viewer failed.",
-                "Inspect the sanitized diagnostic before retrying /exchanges.",
-            ),
+                "Inspect the sanitized diagnostic before retrying /exchanges.",),
         }
         for code, (summary, hint) in cases.items():
             with self.subTest(code=code):
@@ -1095,8 +1059,7 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
                 session_state.parent.mkdir(parents=True, exist_ok=True)
                 session_state.write_text("{}\n", encoding="utf-8")
                 controller._present_agent_exchange_viewer_failure(
-                    AgentExchangeViewerError(code)
-                )
+                    AgentExchangeViewerError(code))
                 rendered = "".join(callbacks.records)
                 compact = "".join(rendered.split())
                 self.assertIn("".join(summary.split()), compact)
@@ -1107,8 +1070,7 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
                 self.assertNotIn("/tmp/", rendered)
                 self.assertLessEqual(len(rendered.encode("utf-8")), 512)
                 debug = workspace.path("debug_logs/runtime.jsonl").read_text(
-                    encoding="utf-8"
-                )
+                    encoding="utf-8")
                 self.assertNotIn("PRIVATE", debug)
                 self.assertNotIn(str(workspace.root), debug)
 

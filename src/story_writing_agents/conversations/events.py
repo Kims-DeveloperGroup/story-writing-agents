@@ -77,6 +77,7 @@ from ..specialist_routing import (
     AuthoringDependencySlot,
     ReviewBasis,
     SpecialistAssignmentMode,
+    authoring_scope_rules, legal_specialist_rosters,
     required_authoring_specialists,
     required_authoring_domains,
     artifact_domain,
@@ -7339,6 +7340,9 @@ def _validate_scoped_assignments(
     specialist_ids: tuple[str, ...],
     modes: tuple[SpecialistAssignmentMode | None, ...],
     premise_decision: PremiseQuestionIntent | None = None,
+    *,
+    _scope_rules=authoring_scope_rules,
+    _rosters=legal_specialist_rosters,
 ) -> None:
     if premise_decision is not None:
         if type(premise_decision) is not PremiseQuestionIntent or scope is not None:
@@ -7377,8 +7381,14 @@ def _validate_scoped_assignments(
     if scope.schema_version < 3 and SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT in modes:
         raise ValueError('legacy assignments cannot acquire constraint duties')
     required = required_authoring_specialists(scope)
-    if scope.schema_version == 3 and set(specialist_ids) != set(required):
-        raise ValueError('scope3 assignments must match the complete declared specialist union')
+    if scope.schema_version == 3:
+        declared = _scope_rules(
+            scope.activity, scope.intent, scope.domains, scope.contributions,
+            target_paths=scope.target_paths, dependency_slots=scope.dependency_slots,
+            schema_version=scope.schema_version,
+        )
+        if specialist_ids not in _rosters(declared):
+            raise ValueError('scope3 assignments must match the complete declared specialist union')
     if any(
         mode is not (assignment_mode_for_specialist(scope, specialist_id) if scope.schema_version == 3 else expected_mode)
         for specialist_id, mode in zip(specialist_ids, modes, strict=True)

@@ -20,8 +20,7 @@ from story_writing_agents.agents import (
     EXECUTION_SPECIALIST,
     PLOT_ARCHITECT,
 )
-from story_writing_agents.artifact_proposals import (
-    ARTIFACT_PROPOSAL_SCHEMA_VERSION,
+from story_writing_agents.artifact_proposals import (ARTIFACT_PROPOSAL_SCHEMA_VERSION,
     ArtifactCreateIntent,
     ArtifactDeleteIntent,
     ArtifactIntentEvidence,
@@ -37,8 +36,7 @@ from story_writing_agents.artifact_proposals import (
     deserialize_artifact_review_candidate,
     serialize_artifact_review_candidate,
 )
-from story_writing_agents.writing_artifacts import (
-    ArtifactChangeOperationKind,
+from story_writing_agents.writing_artifacts import (ArtifactChangeOperationKind,
     ArtifactReviewDomain,
     project_artifact_change_set,
 )
@@ -51,8 +49,7 @@ _RULES = "core_documents/narrative_rules.md"
 _OPENING = "manuscript/part-01/opening.md"
 _MOVE = "manuscript/part-01/move.md"
 _RETIRED = "manuscript/part-01/retired.md"
-_MODULE_EXPORTS = (
-    "ARTIFACT_PROPOSAL_SCHEMA_VERSION",
+_MODULE_EXPORTS = ("ARTIFACT_PROPOSAL_SCHEMA_VERSION",
     "ArtifactChangeIntent",
     "ArtifactCreateIntent",
     "ArtifactDeleteIntent",
@@ -79,21 +76,18 @@ def _line_bytes(content: bytes, start_line: int, end_line: int) -> bytes:
     return b"".join(content.splitlines(keepends=True)[start_line - 1 : end_line])
 
 
-def _evidence(
-    evidence_id: str,
+def _evidence(evidence_id: str,
     path: str,
     content: bytes,
     *,
     start_line: int | None = None,
     end_line: int | None = None,
 ) -> ArtifactIntentEvidence:
-    selected = (
-        content
+    selected = (content
         if start_line is None
         else _line_bytes(content, start_line, end_line or start_line)
     )
-    return ArtifactIntentEvidence(
-        evidence_id=evidence_id,
+    return ArtifactIntentEvidence(evidence_id=evidence_id,
         path=path,
         source_digest=_digest(content),
         boundary_digest=_digest(selected),
@@ -102,27 +96,23 @@ def _evidence(
     )
 
 
-def _combined_candidate() -> tuple[
-    dict[str, bytes], ArtifactReviewCandidate, dict[str, bytes]
+def _combined_candidate() -> tuple[dict[str, bytes], ArtifactReviewCandidate, dict[str, bytes]
 ]:
     outline = "Act one.\n달빛 충돌.\nAct three.\n".encode()
     opening = b"Old opening.\n"
     moving = b"Move this scene.\n"
     retired = b"Retire this scene.\n"
-    base = {
-        _OUTLINE: outline,
+    base = {_OUTLINE: outline,
         _OPENING: opening,
         _MOVE: moving,
         _RETIRED: retired,
     }
-    evidence = (
-        _evidence("outline_line", _OUTLINE, outline, start_line=2, end_line=2),
+    evidence = (_evidence("outline_line", _OUTLINE, outline, start_line=2, end_line=2),
         _evidence("opening_whole", _OPENING, opening),
         _evidence("move_whole", _MOVE, moving),
         _evidence("retired_whole", _RETIRED, retired),
     )
-    intent = ArtifactProposalIntent(
-        operations=(
+    intent = ArtifactProposalIntent(operations=(
             ArtifactRenameIntent("move_whole", "manuscript/part-01/moved.md"),
             ArtifactPatchIntent("outline_line", "달빛 합의.\n"),
             ArtifactDeleteIntent("retired_whole"),
@@ -130,8 +120,7 @@ def _combined_candidate() -> tuple[
             ArtifactReplaceIntent("opening_whole", "New opening.\n"),
         )
     )
-    candidate = build_artifact_review_candidate(
-        candidate_id="candidate_all_operations",
+    candidate = build_artifact_review_candidate(candidate_id="candidate_all_operations",
         candidate_revision=1,
         intent=intent,
         evidence=evidence,
@@ -145,33 +134,27 @@ def _combined_candidate() -> tuple[
 
 class ArtifactIntentContractTests(unittest.TestCase):
     def test_five_intents_are_strict_frozen_content_hiding_values(self) -> None:
-        values_and_fields = (
-            (
+        values_and_fields = ((
                 ArtifactCreateIntent(_OPENING, "secret create text"),
                 ("suggested_path", "new_text"),
             ),
-            (
-                ArtifactPatchIntent("evidence_a", "secret patch text"),
+            (ArtifactPatchIntent("evidence_a", "secret patch text"),
                 ("evidence_id", "replacement_text"),
             ),
-            (
-                ArtifactReplaceIntent("evidence_a", "secret replace text"),
+            (ArtifactReplaceIntent("evidence_a", "secret replace text"),
                 ("evidence_id", "new_text"),
             ),
-            (
-                ArtifactRenameIntent("evidence_a", _OPENING),
+            (ArtifactRenameIntent("evidence_a", _OPENING),
                 ("evidence_id", "suggested_destination"),
             ),
             (ArtifactDeleteIntent("evidence_a"), ("evidence_id",)),
         )
-        self.assertEqual(
-            tuple(item.operation_kind for item, _fields in values_and_fields),
+        self.assertEqual(tuple(item.operation_kind for item, _fields in values_and_fields),
             tuple(ArtifactChangeOperationKind),
         )
         for value, expected_fields in values_and_fields:
             with self.subTest(intent=type(value).__name__):
-                self.assertEqual(
-                    tuple(item.name for item in dataclasses.fields(value)),
+                self.assertEqual(tuple(item.name for item in dataclasses.fields(value)),
                     expected_fields,
                 )
                 self.assertFalse(hasattr(value, "__dict__"))
@@ -191,16 +174,14 @@ class ArtifactIntentContractTests(unittest.TestCase):
         with self.assertRaises(ArtifactProposalError):
             ArtifactProposalIntent(
                 (ArtifactCreateIntent(_OPENING, "text"),),
-                (
-                    ArtifactReviewDomain.TONE_EXECUTION,
+                (ArtifactReviewDomain.TONE_EXECUTION,
                     ArtifactReviewDomain.PLOT_STRUCTURE,
                 ),
             )
 
     def test_evidence_requires_exact_current_whole_or_line_identity(self) -> None:
         content = "alpha\n한글🌙\nomega\n".encode()
-        ranged = _evidence(
-            "line_two",
+        ranged = _evidence("line_two",
             _OUTLINE,
             content,
             start_line=2,
@@ -219,14 +200,11 @@ class ArtifactIntentContractTests(unittest.TestCase):
 class ArtifactCandidateConstructionTests(unittest.TestCase):
     def test_all_operations_resolve_exact_bytes_digests_and_reviewers(self) -> None:
         base, candidate, projected = _combined_candidate()
-        self.assertNotEqual(
-            candidate.change_set.base_state_digest,
+        self.assertNotEqual(candidate.change_set.base_state_digest,
             candidate.change_set.projected_state_digest,
         )
-        self.assertEqual(
-            tuple(item.operation_kind for item in candidate.change_set.operations),
-            (
-                ArtifactChangeOperationKind.CREATE,
+        self.assertEqual(tuple(item.operation_kind for item in candidate.change_set.operations),
+            (ArtifactChangeOperationKind.CREATE,
                 ArtifactChangeOperationKind.PATCH,
                 ArtifactChangeOperationKind.RENAME,
                 ArtifactChangeOperationKind.REPLACE,
@@ -235,12 +213,10 @@ class ArtifactCandidateConstructionTests(unittest.TestCase):
         )
         patch = candidate.change_set.operations[1]
         self.assertEqual(patch.hunks[0].start_utf8_byte, len("Act one.\n".encode()))
-        self.assertEqual(
-            patch.hunks[0].end_utf8_byte,
+        self.assertEqual(patch.hunks[0].end_utf8_byte,
             len("Act one.\n달빛 충돌.\n".encode()),
         )
-        self.assertEqual(
-            projected[_OUTLINE], "Act one.\n달빛 합의.\nAct three.\n".encode()
+        self.assertEqual(projected[_OUTLINE], "Act one.\n달빛 합의.\nAct three.\n".encode()
         )
         self.assertEqual(projected[_OPENING], b"New opening.\n")
         self.assertEqual(projected["manuscript/part-01/moved.md"], base[_MOVE])
@@ -261,8 +237,7 @@ class ArtifactCandidateConstructionTests(unittest.TestCase):
         )
 
     def test_optional_domain_is_disclosed_but_never_silently_added(self) -> None:
-        candidate = build_artifact_review_candidate(
-            candidate_id="candidate_optional_review",
+        candidate = build_artifact_review_candidate(candidate_id="candidate_optional_review",
             candidate_revision=1,
             intent=ArtifactProposalIntent(
                 (ArtifactCreateIntent(_OUTLINE, "Outline.\n"),),
@@ -277,8 +252,7 @@ class ArtifactCandidateConstructionTests(unittest.TestCase):
             candidate.mandatory_review_domains,
             (ArtifactReviewDomain.PLOT_STRUCTURE,),
         )
-        self.assertEqual(
-            candidate.disclosed_review_domains,
+        self.assertEqual(candidate.disclosed_review_domains,
             (
                 ArtifactReviewDomain.PLOT_STRUCTURE,
                 ArtifactReviewDomain.TONE_EXECUTION,
@@ -292,14 +266,12 @@ class ArtifactCandidateConstructionTests(unittest.TestCase):
     def test_fixed_core_identity_and_stale_evidence_fail_content_free(self) -> None:
         content = "Sensitive plot phrase.\n".encode()
         evidence = _evidence("outline_whole", _OUTLINE, content)
-        for operation in (
-            ArtifactRenameIntent("outline_whole", _RULES),
+        for operation in (ArtifactRenameIntent("outline_whole", _RULES),
             ArtifactDeleteIntent("outline_whole"),
         ):
             with self.subTest(operation=operation.operation_kind):
                 with self.assertRaises(ArtifactProposalError) as raised:
-                    build_artifact_review_candidate(
-                        candidate_id="candidate_fixed_core",
+                    build_artifact_review_candidate(candidate_id="candidate_fixed_core",
                         candidate_revision=1,
                         intent=ArtifactProposalIntent((operation,)),
                         evidence=(evidence,),
@@ -307,8 +279,7 @@ class ArtifactCandidateConstructionTests(unittest.TestCase):
                         base_state={_OUTLINE: content},
                         attached_core_paths=(_OUTLINE,),
                     )
-                self.assertIs(
-                    raised.exception.code,
+                self.assertIs(raised.exception.code,
                     ArtifactProposalErrorCode.INVALID_INTENT,
                 )
                 self.assertNotIn("Sensitive", str(raised.exception))
@@ -318,8 +289,7 @@ class ArtifactCandidateConstructionTests(unittest.TestCase):
 
         stale = replace(evidence, source_digest=_digest(b"older bytes"))
         with self.assertRaises(ArtifactProposalError) as raised:
-            build_artifact_review_candidate(
-                candidate_id="candidate_stale",
+            build_artifact_review_candidate(candidate_id="candidate_stale",
                 candidate_revision=1,
                 intent=ArtifactProposalIntent(
                     (ArtifactReplaceIntent("outline_whole", "New outline.\n"),)
@@ -334,23 +304,19 @@ class ArtifactCandidateConstructionTests(unittest.TestCase):
         self.assertIsNone(raised.exception.__cause__)
         self.assertIsNone(raised.exception.__context__)
 
-    def test_dangling_rename_rejects_while_atomic_repair_and_cycles_are_valid(
-        self,
+    def test_dangling_rename_rejects_while_atomic_repair_and_cycles_are_valid(self,
     ) -> None:
         index = b"[next](second.md)\n"
         second = b"Second scene.\n"
-        base = {
-            "manuscript/part-01/index.md": index,
+        base = {"manuscript/part-01/index.md": index,
             "manuscript/part-01/second.md": second,
         }
-        evidence = (
-            _evidence("index_whole", "manuscript/part-01/index.md", index),
+        evidence = (_evidence("index_whole", "manuscript/part-01/index.md", index),
             _evidence("second_whole", "manuscript/part-01/second.md", second),
         )
         rename = ArtifactRenameIntent("second_whole", "manuscript/part-01/third.md")
         with self.assertRaises(ArtifactProposalError) as raised:
-            build_artifact_review_candidate(
-                candidate_id="candidate_dangling",
+            build_artifact_review_candidate(candidate_id="candidate_dangling",
                 candidate_revision=1,
                 intent=ArtifactProposalIntent((rename,)),
                 evidence=evidence,
@@ -360,12 +326,10 @@ class ArtifactCandidateConstructionTests(unittest.TestCase):
             )
         self.assertIs(raised.exception.code, ArtifactProposalErrorCode.INVALID_INTENT)
 
-        repaired = build_artifact_review_candidate(
-            candidate_id="candidate_repaired",
+        repaired = build_artifact_review_candidate(candidate_id="candidate_repaired",
             candidate_revision=1,
             intent=ArtifactProposalIntent(
-                (
-                    ArtifactReplaceIntent("index_whole", "[next](third.md)\n"),
+                (ArtifactReplaceIntent("index_whole", "[next](third.md)\n"),
                     rename,
                 )
             ),
@@ -377,12 +341,10 @@ class ArtifactCandidateConstructionTests(unittest.TestCase):
         self.assertTrue(repaired.relationship_validation.is_valid)
         self.assertEqual(repaired.relationship_validation.projected_dangling_edges, ())
 
-        cycle = build_artifact_review_candidate(
-            candidate_id="candidate_cycle",
+        cycle = build_artifact_review_candidate(candidate_id="candidate_cycle",
             candidate_revision=1,
             intent=ArtifactProposalIntent(
-                (
-                    ArtifactCreateIntent("manuscript/part-02/a.md", "[b](b.md)\n"),
+                (ArtifactCreateIntent("manuscript/part-02/a.md", "[b](b.md)\n"),
                     ArtifactCreateIntent("manuscript/part-02/b.md", "[a](a.md)\n"),
                 )
             ),
@@ -396,8 +358,7 @@ class ArtifactCandidateConstructionTests(unittest.TestCase):
 
 
 class ArtifactCandidateCodecAndBoundaryTests(unittest.TestCase):
-    def test_candidate_codec_is_exact_canonical_and_rejects_every_drift_family(
-        self,
+    def test_candidate_codec_is_exact_canonical_and_rejects_every_drift_family(self,
     ) -> None:
         _base, candidate, _projected = _combined_candidate()
         encoded = serialize_artifact_review_candidate(candidate)
@@ -408,8 +369,7 @@ class ArtifactCandidateCodecAndBoundaryTests(unittest.TestCase):
         unknown = dict(canonical)
         unknown["private_reasoning"] = "must reject"
         malformed.append(
-            json.dumps(
-                unknown,
+            json.dumps(unknown,
                 ensure_ascii=False,
                 separators=(",", ":"),
                 sort_keys=True,
@@ -417,8 +377,7 @@ class ArtifactCandidateCodecAndBoundaryTests(unittest.TestCase):
         )
         reordered = {key: canonical[key] for key in reversed(tuple(canonical))}
         malformed.append(
-            json.dumps(
-                reordered,
+            json.dumps(reordered,
                 ensure_ascii=False,
                 separators=(",", ":"),
             ).encode()
@@ -426,8 +385,7 @@ class ArtifactCandidateCodecAndBoundaryTests(unittest.TestCase):
         legacy = dict(canonical)
         legacy["schema_version"] = 0
         malformed.append(
-            json.dumps(
-                legacy,
+            json.dumps(legacy,
                 ensure_ascii=False,
                 separators=(",", ":"),
                 sort_keys=True,
@@ -436,8 +394,7 @@ class ArtifactCandidateCodecAndBoundaryTests(unittest.TestCase):
         digest_drift = dict(canonical)
         digest_drift["candidate_digest"] = "sha256:" + "0" * 64
         malformed.append(
-            json.dumps(
-                digest_drift,
+            json.dumps(digest_drift,
                 ensure_ascii=False,
                 separators=(",", ":"),
                 sort_keys=True,
@@ -460,10 +417,8 @@ class ArtifactCandidateCodecAndBoundaryTests(unittest.TestCase):
                 self.assertEqual(value.__module__, artifact_proposals.__name__)
             self.assertFalse(hasattr(story_writing_agents, name))
         self.assertFalse(hasattr(artifact_proposals, "__getattr__"))
-        self.assertEqual(
-            tuple(inspect.signature(build_artifact_review_candidate).parameters),
-            (
-                "candidate_id",
+        self.assertEqual(tuple(inspect.signature(build_artifact_review_candidate).parameters),
+            ("candidate_id",
                 "candidate_revision",
                 "intent",
                 "evidence",
@@ -484,8 +439,7 @@ assert len(module.__all__) == 16
 assert '__getattr__' not in vars(module)
 assert before == tuple(pathlib.Path.cwd().iterdir())
 """
-            completed = subprocess.run(
-                [sys.executable, "-B", "-I", "-c", code],
+            completed = subprocess.run([sys.executable, "-B", "-I", "-c", code],
                 cwd=temporary,
                 capture_output=True,
                 text=True,

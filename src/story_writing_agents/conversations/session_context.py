@@ -71,6 +71,11 @@ from ..writing_artifacts.change_sets import (
 
 
 MAX_SESSION_CONTEXT_UTF8_BYTES = 262_144
+# Physical schemas and logical payloads have separate UTF-8 limits.
+MAX_PROVIDER_SCHEMA_UTF8_BYTES = 524_288
+MAX_PROVIDER_INPUT_UTF8_BYTES = (
+    MAX_PROVIDER_SCHEMA_UTF8_BYTES + MAX_SESSION_CONTEXT_UTF8_BYTES
+)
 
 
 class SessionContextCapacityError(ValueError):

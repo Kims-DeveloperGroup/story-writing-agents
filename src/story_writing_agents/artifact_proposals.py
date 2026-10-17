@@ -42,6 +42,7 @@ from .writing_artifacts import (
     ArtifactReviewFact,
     ArtifactReviewReason,
     ArtifactTextHunk,
+    artifact_source_operation_rule,
     build_artifact_change_set,
     canonical_artifact_kind,
     deserialize_artifact_change_set,
@@ -637,6 +638,8 @@ def _resolve_operations(
     intents: tuple[ArtifactChangeIntent, ...],
     evidence: Mapping[str, ArtifactIntentEvidence],
     base: Mapping[str, bytes],
+    *,
+    _source_rule=artifact_source_operation_rule,
 ) -> tuple[ArtifactChangeOperation, ...]:
     resolved: list[ArtifactChangeOperation] = []
     patches: dict[str, list[ArtifactTextHunk]] = {}
@@ -731,7 +734,10 @@ def _resolve_operations(
                 )
             elif type(intent) is ArtifactRenameIntent:
                 destination, destination_kind = _path(intent.suggested_destination)
-                if destination_kind is not kind:
+                _, required_destination_kind = _source_rule(
+                    ArtifactChangeOperationKind.RENAME, path
+                )
+                if destination_kind is not required_destination_kind:
                     raise validation_failure(
                         ArtifactProposalError(
                             ArtifactProposalErrorCode.INVALID_INTENT,

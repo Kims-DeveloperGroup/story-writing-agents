@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from itertools import combinations, product
 from .structured_output_validation import (
+    unicode_category_exclusion,
     validation_failure,
     validation_call,
 )
@@ -83,6 +85,167 @@ class AuthoringDependencySlot:
             raise ValueError("dependency slot requires dependent authoring domains")
 
 
+@dataclass(frozen=True, slots=True)
+class AuthoringScopeRuleSet:
+    """Pure finite duties shared by scope construction and Lead projection."""
+    activity: AuthoringActivity
+    intent: AuthoringIntent
+    domains: tuple[ArtifactReviewDomain, ...]
+    contributions: tuple[AuthoringContribution, ...]
+    required_domains: tuple[ArtifactReviewDomain, ...]
+    required_specialists: tuple[str, ...]
+    assignment_modes: tuple[tuple[str, SpecialistAssignmentMode], ...]
+    schema_version: int = AUTHORING_SCOPE_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        if type(self.schema_version) is not int:
+            raise TypeError("scope rule version must be an exact integer")
+        if self.schema_version not in {1, 2, AUTHORING_SCOPE_SCHEMA_VERSION}:
+            raise ValueError("scope rule version must be 1, 2 or 3")
+        if type(self.activity) is not AuthoringActivity or type(self.intent) is not AuthoringIntent:
+            raise TypeError("scope rules require exact activity and intent")
+        _domain_tuple(self.domains)
+        _domain_tuple(self.required_domains)
+        if not set(self.domains).issubset(self.required_domains):
+            raise ValueError("scope rules lose declared domains")
+        canonical = tuple(domain for domain in ArtifactReviewDomain if domain in self.required_domains)
+        if canonical != self.required_domains:
+            raise ValueError("scope rule domains require canonical ownership order")
+        if (self.activity is AuthoringActivity.WORKFLOW) != (not canonical):
+            raise ValueError("scope rule activity/domain mismatch")
+        if self.intent is AuthoringIntent.REVIEW_ONLY and self.activity is not AuthoringActivity.REVIEW:
+            raise ValueError("review-only rule requires review activity")
+        if type(self.contributions) is not tuple or any(type(row) is not AuthoringContribution for row in self.contributions):
+            raise TypeError("scope rules require typed duties")
+        roles = {row.domain: row.role for row in self.contributions}
+        if self.contributions and (len(roles) != len(self.contributions) or set(roles) != set(canonical)):
+            raise ValueError("scope rules require complete unique duties")
+        if (self.contributions and self.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
+                and AuthoringContributionRole.DRAFT_OWNER not in roles.values()):
+            raise ValueError("scope rules require a drafting owner")
+        specialists = tuple(dict.fromkeys(_SPECIALIST_BY_DOMAIN[domain] for domain in canonical))
+        modes = tuple((specialist,
+            SpecialistAssignmentMode.REVIEW if self.activity is AuthoringActivity.REVIEW else
+            SpecialistAssignmentMode.DRAFT if not self.contributions or any(
+                _SPECIALIST_BY_DOMAIN[domain] == specialist and roles[domain] is AuthoringContributionRole.DRAFT_OWNER
+                for domain in canonical) else SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT)
+            for specialist in specialists)
+        if self.required_specialists != specialists or self.assignment_modes != modes:
+            raise ValueError("scope rule duties differ from owner policy")
+
+
+def authoring_scope_rules(
+    activity: AuthoringActivity, intent: AuthoringIntent,
+    domains: tuple[ArtifactReviewDomain, ...],
+    contributions: tuple[AuthoringContribution, ...] = (), *,
+    target_paths: tuple[str, ...] = (),
+    dependency_slots: tuple[AuthoringDependencySlot, ...] = (),
+    schema_version: int = AUTHORING_SCOPE_SCHEMA_VERSION,
+) -> AuthoringScopeRuleSet:
+    """Declare the existing role policy without acquiring task authority."""
+    if type(activity) is not AuthoringActivity or type(intent) is not AuthoringIntent:
+        raise TypeError("scope rule requires exact activity and intent")
+    _domain_tuple(domains)
+    if intent is AuthoringIntent.REVIEW_ONLY and activity is not AuthoringActivity.REVIEW:
+        raise ValueError("review-only intent requires review activity")
+    required = set(domains) | _path_domains(target_paths)
+    if activity is AuthoringActivity.WORKFLOW and required:
+        raise ValueError("workflow scope cannot carry story domains")
+    if activity is not AuthoringActivity.WORKFLOW and not required:
+        raise ValueError("story work requires an explicit affected domain")
+    if type(contributions) is not tuple or any(type(item) is not AuthoringContribution for item in contributions):
+        raise ValueError("contributions must be exact typed duties")
+    if type(dependency_slots) is not tuple or any(type(item) is not AuthoringDependencySlot for item in dependency_slots):
+        raise ValueError("dependency slots must be exact typed declarations")
+    roles = {item.domain: item.role for item in contributions}
+    if schema_version == AUTHORING_SCOPE_SCHEMA_VERSION:
+        if len(roles) != len(contributions) or set(roles) != required:
+            raise ValueError("contributions must cover every affected domain exactly once")
+        specialist_roles: dict[str, AuthoringContributionRole] = {}
+        for domain, role in roles.items():
+            specialist = _SPECIALIST_BY_DOMAIN[domain]
+            if specialist in specialist_roles and specialist_roles[specialist] is not role:
+                raise ValueError("same-specialist domains require the same contribution role")
+            specialist_roles[specialist] = role
+        if activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE} and AuthoringContributionRole.DRAFT_OWNER not in roles.values():
+            raise ValueError("authoring requires at least one substantive draft owner")
+        if len({item.slot_id for item in dependency_slots}) != len(dependency_slots):
+            raise ValueError("dependency slots must be unique")
+        if any(roles.get(domain) is not AuthoringContributionRole.DRAFT_OWNER
+               for item in dependency_slots for domain in item.dependent_domains):
+            raise ValueError("dependencies must bind declared draft owners")
+    required_domains = tuple(domain for domain in ArtifactReviewDomain if domain in required)
+    specialists = tuple(dict.fromkeys(_SPECIALIST_BY_DOMAIN[domain] for domain in required_domains))
+    if activity is AuthoringActivity.REVIEW or intent is AuthoringIntent.REVIEW_ONLY:
+        modes = tuple((agent, SpecialistAssignmentMode.REVIEW) for agent in specialists)
+    elif schema_version < AUTHORING_SCOPE_SCHEMA_VERSION:
+        modes = tuple((agent, SpecialistAssignmentMode.DRAFT) for agent in specialists)
+    else:
+        modes = tuple((agent, SpecialistAssignmentMode.DRAFT
+                       if roles[next(domain for domain in required_domains if _SPECIALIST_BY_DOMAIN[domain] == agent)]
+                       is AuthoringContributionRole.DRAFT_OWNER else SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT)
+                      for agent in specialists)
+    return AuthoringScopeRuleSet(
+        activity, intent, domains, contributions, required_domains, specialists, modes,
+        schema_version,
+    )
+
+
+def assignment_rule(rules: AuthoringScopeRuleSet, specialist_id: str) -> SpecialistAssignmentMode:
+    if (rules.activity is AuthoringActivity.REVIEW
+            and any(specialist_id in roster for roster in legal_specialist_rosters(rules))):
+        return SpecialistAssignmentMode.REVIEW
+    if type(rules) is not AuthoringScopeRuleSet:
+        raise TypeError("assignment rules require an immutable scope declaration")
+    for agent, mode in rules.assignment_modes:
+        if agent == specialist_id:
+            return mode
+    raise ValueError("specialist is outside the declared scope")
+
+
+def legal_specialist_rosters(rules: AuthoringScopeRuleSet) -> tuple[tuple[str, ...], ...]:
+    """Existing legal participation, including additional review specialists."""
+    if type(rules) is not AuthoringScopeRuleSet:
+        raise TypeError("rosters require a scope rule declaration")
+    if (rules.schema_version == AUTHORING_SCOPE_SCHEMA_VERSION
+            or rules.activity is not AuthoringActivity.REVIEW):
+        return (rules.required_specialists,)
+    canonical = tuple(dict.fromkeys(_SPECIALIST_BY_DOMAIN.values()))
+    return tuple(
+        roster for count in range(1, len(canonical) + 1)
+        for roster in combinations(canonical, count)
+        if set(rules.required_specialists).issubset(roster)
+    )
+
+
+def finite_authoring_scope_rules(
+    *, intent: AuthoringIntent | None = None,
+    target_paths: tuple[str, ...] = (),
+) -> tuple[AuthoringScopeRuleSet, ...]:
+    """All legal current finite duties; free text/identities remain separate."""
+    required = _path_domains(target_paths)
+    results: list[AuthoringScopeRuleSet] = []
+    intents = tuple(AuthoringIntent) if intent is None else (intent,)
+    for bound_intent in intents:
+        activities = (AuthoringActivity.REVIEW,) if bound_intent is AuthoringIntent.REVIEW_ONLY else tuple(AuthoringActivity)
+        for activity in activities:
+            for count in range(len(ArtifactReviewDomain) + 1):
+                for domains in combinations(tuple(ArtifactReviewDomain), count):
+                    if not required.issubset(domains) or (activity is AuthoringActivity.WORKFLOW) != (not domains):
+                        continue
+                    for roles in product(tuple(AuthoringContributionRole), repeat=len(domains)):
+                        contributions = tuple(AuthoringContribution(domain, role) for domain, role in zip(domains, roles))
+                        try:
+                            results.append(authoring_scope_rules(
+                                activity, bound_intent, domains, contributions,
+                                target_paths=target_paths,
+                                schema_version=AUTHORING_SCOPE_SCHEMA_VERSION,
+                            ))
+                        except ValueError:
+                            continue
+    return tuple(results)
+
+
 _SPECIALIST_BY_DOMAIN = {
     ArtifactReviewDomain.PLOT_STRUCTURE: "plot_architect",
     ArtifactReviewDomain.CHARACTER_WORLD: "character_custodian",
@@ -126,6 +289,23 @@ def authoring_source_scope_is_eligible(
         and source_scope.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE}
         and source_scope.task_revision < requested_scope.task_revision
     )
+
+
+_ARTIFACT_PATH_EXCLUDED = unicode_category_exclusion(("Cc", "Cf", "Cs")) + r"\\}\u2028\u2029"
+
+
+def artifact_path_rule(domains: tuple[ArtifactReviewDomain, ...]) -> dict[str, object]:
+    """Declare the same normalized lexical path language used by artifact_domain."""
+    choices = [re.escape(path) for path, domain in _CORE_DOMAIN_BY_PATH.items() if domain in domains]
+    if ArtifactReviewDomain.TONE_EXECUTION in domains:
+        excluded = _ARTIFACT_PATH_EXCLUDED
+        segment = "(?!\\.{1,2}(?:/|$))[^/" + excluded + "]+"
+        filename = "(?!\\.md$)[^/" + excluded + "]+\\.md"
+        choices.append("manuscript/(?:" + segment + "/)*" + filename)
+    if not choices:
+        raise ValueError("artifact path rule requires a declared domain")
+    return {"type": "string", "pattern": "^(?:" + "|".join(choices) + r")$(?![\s\S])",
+            "description": "Normalized relative artifact path in the declared specialist domains; current physical-root qualification remains required."}
 
 
 def artifact_domain(path: str) -> ArtifactReviewDomain | None:
@@ -251,21 +431,11 @@ class AuthoringScope:
         if self.schema_version < 3 and (self.contributions or self.dependency_slots):
             raise ValueError("legacy authoring scopes cannot acquire contribution duties")
         if self.schema_version == 3:
-            roles = {item.domain: item.role for item in self.contributions}
-            if len(roles) != len(self.contributions) or set(roles) != required:
-                raise ValueError("contributions must cover every affected domain exactly once")
-            specialist_roles: dict[str, AuthoringContributionRole] = {}
-            for item in self.contributions:
-                specialist = _SPECIALIST_BY_DOMAIN[item.domain]
-                if specialist in specialist_roles and specialist_roles[specialist] is not item.role:
-                    raise ValueError("same-specialist domains require the same contribution role")
-                specialist_roles[specialist] = item.role
-            if self.activity in {AuthoringActivity.DRAFT, AuthoringActivity.REVISE} and AuthoringContributionRole.DRAFT_OWNER not in roles.values():
-                raise ValueError("authoring requires at least one substantive draft owner")
-            if len({item.slot_id for item in self.dependency_slots}) != len(self.dependency_slots):
-                raise ValueError("dependency slots must be unique")
-            if any(roles.get(domain) is not AuthoringContributionRole.DRAFT_OWNER for item in self.dependency_slots for domain in item.dependent_domains):
-                raise ValueError("dependencies must bind declared draft owners")
+            authoring_scope_rules(
+                self.activity, self.intent, self.domains, self.contributions,
+                target_paths=self.target_paths, dependency_slots=self.dependency_slots,
+                schema_version=self.schema_version,
+            )
         if self.activity is AuthoringActivity.WORKFLOW:
             if required:
                 raise validation_failure(
@@ -438,11 +608,11 @@ def assignment_mode_for_specialist(scope: AuthoringScope, specialist_id: str) ->
         return SpecialistAssignmentMode.REVIEW
     if scope.schema_version < 3:
         return SpecialistAssignmentMode.DRAFT
-    roles = {item.role for item in scope.contributions if _SPECIALIST_BY_DOMAIN[item.domain] == specialist_id}
-    if len(roles) != 1:
-        raise ValueError("specialist has no single declared contribution role")
-    return (SpecialistAssignmentMode.DRAFT if roles == {AuthoringContributionRole.DRAFT_OWNER}
-            else SpecialistAssignmentMode.CONSTRAINT_ASSESSMENT)
+    return assignment_rule(authoring_scope_rules(
+        scope.activity, scope.intent, scope.domains, scope.contributions,
+        target_paths=scope.target_paths, dependency_slots=scope.dependency_slots,
+        schema_version=scope.schema_version,
+    ), specialist_id)
 
 
 def required_drafting_specialists(scope: AuthoringScope) -> tuple[str, ...]:
@@ -554,6 +724,11 @@ def _path_domains(paths: tuple[str, ...]) -> set[ArtifactReviewDomain]:
 
 
 __all__ = [
+    "legal_specialist_rosters",
+    "assignment_rule",
+    "finite_authoring_scope_rules",
+    "authoring_scope_rules",
+    "AuthoringScopeRuleSet",
     "AUTHORING_SCOPE_SCHEMA_VERSION",
     "REVIEW_BASIS_SCHEMA_VERSION",
     "ArtifactReviewDomain",

@@ -49,8 +49,7 @@ _RECORD_KEYS = {
     "content_full_characters",
     "content_retained_characters",
     "content_truncated",
-    "content_sha256",
-}
+    "content_sha256",}
 
 
 def _input(
@@ -119,8 +118,7 @@ def _assert_storage_failure(
     test_case.assertIs(raised.exception.failure, failure)
     test_case.assertEqual(
         str(raised.exception),
-        f"agent exchange storage failure: {failure.value}",
-    )
+        f"agent exchange storage failure: {failure.value}",)
     return raised.exception
 
 
@@ -173,8 +171,7 @@ class AgentExchangeStorageBehaviorTests(unittest.TestCase):
             (
                 AgentExchangeRequestType.REQUEST,
                 "request 한글🙂",
-                AgentExchangeProvider.CODEX,
-            ),
+                AgentExchangeProvider.CODEX,),
             (
                 AgentExchangeRequestType.RESPONSE,
                 "response",
@@ -263,8 +260,7 @@ class AgentExchangeStorageBehaviorTests(unittest.TestCase):
         second = WorkspaceAgentExchangeStore(self.workspace).append( _input(agent_id=ROSTER[1], exchange_id="e2") )
         third = WorkspaceAgentExchangeStore(self.workspace).append( _input(session_id="session_2", exchange_id="e3") )
         fourth = WorkspaceAgentExchangeStore(self.workspace).append(
-            _input(exchange_id="e4", request_type=AgentExchangeRequestType.RESPONSE)
-        )
+            _input(exchange_id="e4", request_type=AgentExchangeRequestType.RESPONSE))
         self.assertEqual( [item.workspace_sequence for item in (first, second, third, fourth)], [1, 2, 3, 4], )
         self.assertEqual( [item.sequence for item in (first, second, third, fourth)], [1, 1, 1, 2] )
 
@@ -277,8 +273,7 @@ class AgentExchangeStorageBehaviorTests(unittest.TestCase):
                 scope_kind=AgentExchangeScopeKind.DEBATE,
                 scope_id="debate_1",
                 content="PRIVATE two",
-                exchange_id="e2",
-            ),
+                exchange_id="e2",),
             _input( agent_id=ROSTER[1], content="PRIVATE three", exchange_id="e3", ),
             _input( session_id="session_2", content="PRIVATE four", exchange_id="e4", ),
         )
@@ -397,8 +392,7 @@ class AgentExchangeConcurrencyTests(unittest.TestCase):
             barrier.wait(timeout=3)
             agent_id = ROSTER[index % 2]
             receipt = WorkspaceAgentExchangeStore(self.workspace).append(
-                _input(agent_id=agent_id, exchange_id=f"thread_{index}")
-            )
+                _input(agent_id=agent_id, exchange_id=f"thread_{index}"))
             return receipt.workspace_sequence, receipt.sequence, agent_id
 
         with ThreadPoolExecutor(max_workers=16) as pool:
@@ -648,8 +642,7 @@ class AgentExchangeStorageSecurityTests(unittest.TestCase):
             ("malformed", b"{\n"),
             (
                 "duplicate",
-                b'{"agent_id":"lead_orchestrator","agent_id":"lead_orchestrator"}\n',
-            ),
+                b'{"agent_id":"lead_orchestrator","agent_id":"lead_orchestrator"}\n',),
             ("noncanonical", b'{ "schema_version": 1 }\n'),
         ):
             with self.subTest(name=name):
