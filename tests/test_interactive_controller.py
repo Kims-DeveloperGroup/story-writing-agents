@@ -6130,12 +6130,13 @@ class ControllerConversationCommandTests(ControllerTestCase):
             self.assertEqual(resumed.run_session_lobby(), 0)
         self.assertEqual(observed, [("session", first.conversation_id),
                                    ("session", second.conversation_id), ("session", first.conversation_id)])
-        from tests.test_lead_orchestration import _task_fixture, _exploration_outcome, _submitted_calls
+        from tests.test_lead_orchestration import (
+            _task_fixture, _current_exploration_outcome, _submitted_calls)
         from tests.test_specialist_routing_runtime import scoped_proposal
         case = _task_fixture(self)
         source, owner = case.conversation("Installed source A"), case.conversation("Installed owner B")
         source_text = "Prefix. 한글\r\nSelected.  Suffix."
-        case.backend.enqueue(_exploration_outcome(source_text))
+        case.backend.enqueue(_current_exploration_outcome(source_text))
         runner = asyncio.Runner()
         self.addCleanup(runner.close)
         runner.run(case.runtime.lead_turn(case.session_id, source, "Explore alternatives.",

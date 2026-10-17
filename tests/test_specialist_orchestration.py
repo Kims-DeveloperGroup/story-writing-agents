@@ -511,7 +511,8 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                           if payload.role == LEAD_ORCHESTRATOR and payload.validation_details)
         self.assertEqual(len(synthesis), 1)
         self.assertTrue(synthesis[0].validation_details[0].startswith("Original response"))
-        self.assertIn("$.agent_action.task_result: contains 1 unexpected properties",
+        self.assertIn("$.agent_action.task_result.response_details: "
+                      "contains 1 unexpected properties",
                       repr(synthesis[0].validation_details))
         self.assertIs(decision.turn.state, CollaborationStepState.COMPLETED)
         self.assertEqual(decision.turn.validation_details, tuple((
@@ -582,13 +583,15 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 self.assertIs(projection.current_state, CollaborationStepState.RUNNING)
                 self.assertEqual(len(_payloads(known, CollaborationExecutionResult)), 1)
                 submitted = _submitted_calls(known)
-                self.assertFalse(any(payload.validation_details for payload in submitted))
                 expected = tuple((detail for payload in _payloads(known,
                     CollaborationMessagePayload) for detail in payload.validation_details))
+                self.assertEqual(
+                    tuple(p.validation_details for p in submitted if p.validation_details),
+                    (expected,))
                 self.assertTrue(expected)
-                requirement = ("expected nonempty text" if rejected_role == PLOT_ARCHITECT
-                               else "expected nonempty bounded UTF-8 text")
-                self.assertEqual(expected[0], "Original response\n$.agent_action.task_result.response_text: " + requirement)
+                requirement = "expected at least 1 characters, got 0"
+                self.assertEqual(expected[0],
+                    "Original response\n$.agent_action.task_result.response_text: " + requirement)
 
                 restarted_backend = _LeadBackend()
                 restarted = StoryRuntime(
@@ -685,14 +688,16 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertIs(result.synthesis_outcome, CollaborationSynthesisOutcomeKind.NOT_ATTEMPTED)
         submitted = _submitted_specialist_calls(known)
         self.assertEqual(len(submitted), 2)
-        self.assertTrue(all(not payload.validation_details for payload in submitted))
         notices = tuple((payload for payload in _payloads(known,
             CollaborationMessagePayload) if payload.validation_details))
         self.assertEqual(len(notices), 1)
+        self.assertEqual(tuple(p.validation_details for p in submitted),
+                         (notices[0].validation_details, ()))
         self.assertEqual(notices[0].validation_call_id, submitted[0].call_id)
         self.assertEqual(notices[0].validation_invocation_id, submitted[0].invocation_id)
         self.assertEqual(notices[0].validation_details[0], "Original response\n"
-                         "$.agent_action.task_result.response_text: expected nonempty text")
+                         "$.agent_action.task_result.response_text: "
+                         "expected at least 1 characters, got 0")
         self.assertNotIn(private, repr(known))
 
         restarted_backend = _LeadBackend()

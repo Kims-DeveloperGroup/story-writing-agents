@@ -4414,13 +4414,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 LeadProviderConstraints(input_ids=inputs, source_ids=inputs),
                 LeadResultRuleSeed.declare(family, schema), ContextInvocationKind.LEAD.value,
                 definition.language, authorize, StoryRuntime._core_reviewer)
-            materials = _materials(payload) + tuple(
-                _material(item["input_id"], item["selected_text"],
-                    source_kind=ContextSourceKind.RUNTIME_INPUT,
-                    channel=ContextSemanticChannel.CURRENT_INPUT,
-                    priority=ContextPriority.P0_REQUIRED,
-                    authority=ContextAuthorityKind.REQUEST, ordinal=index + 1)
-                for index, item in enumerate(payload.get("inputs", ())))
+            materials = _materials(payload)
             current = service.scope(scope.session_id, scope.subject_kind, scope.subject_id,
                 LEAD_ORCHESTRATOR)
             returned = None

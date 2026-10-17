@@ -79,6 +79,7 @@ from .codex_adapter import CodexAdapter
 from .conversations import CollaborationEventStore
 from .conversations.session_context import (
     MAX_PROVIDER_INPUT_UTF8_BYTES,
+    MAX_PROVIDER_SCHEMA_UTF8_BYTES,
     MAX_SESSION_CONTEXT_UTF8_BYTES,
     SessionContextCapacityError,
 )
@@ -4908,7 +4909,8 @@ class AgentBackend:
             if invocation.payload_accounting is None:
                 raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
             if (
-                invocation.payload_accounting.serialized_input_utf8_bytes
+                invocation.payload_accounting.schema_utf8_bytes > MAX_PROVIDER_SCHEMA_UTF8_BYTES
+                or invocation.payload_accounting.serialized_input_utf8_bytes
                 > MAX_PROVIDER_INPUT_UTF8_BYTES
             ):
                 raise SessionContextCapacityError()
@@ -5370,6 +5372,8 @@ class AgentBackend:
         if bound_agent.definition.agent_id == LEAD_ORCHESTRATOR and "agent_action" in schema.get("properties", {}):
             if (
                 invocation.payload_accounting is None
+                or invocation.payload_accounting.schema_utf8_bytes
+                > MAX_PROVIDER_SCHEMA_UTF8_BYTES
                 or invocation.payload_accounting.serialized_input_utf8_bytes
                 > MAX_PROVIDER_INPUT_UTF8_BYTES
             ):

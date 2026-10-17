@@ -442,6 +442,7 @@ from .writing_artifacts.repository import WritingArtifactRepository
 from .writing_artifacts.runtime_references import (
     RuntimeReferenceOperation,
     prepare_registered_guarded_runtime_reference_operation,
+    reference_alias_source_text,
     reference_operation_belongs_to_session,
     reference_operation_session_id,
 )
@@ -8587,7 +8588,9 @@ class StoryRuntime:
                 repository_access,
                 artifact_binding=artifact_binding,
                 session_id=session_id,
-                text=" ".join(item.locator for item in artifact_inputs),
+                text=reference_alias_source_text(
+                    tuple(item.locator for item in artifact_inputs)
+                ),
             )
             self._validate_assignment_reference_proofs(
                 artifact_inputs,
@@ -9002,7 +9005,7 @@ class StoryRuntime:
         inputs: tuple[CollaborationInputRevision, ...],
         operation: RuntimeReferenceOperation,
     ) -> None:
-        proofs = operation.reference_proofs
+        proofs = operation.project_alias_proofs(tuple(item.locator for item in inputs))
         if len(proofs) != len(inputs):
             raise BackendProtocolError("assignment reference proof count changed")
         for expected, proof in zip(inputs, proofs, strict=True):

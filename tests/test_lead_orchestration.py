@@ -1324,8 +1324,10 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             tuple(call.payload["response_contract"]["allowed_action_types"] for call in calls),
             (["search_context", "submit_result"], ["search_context", "read_context", "submit_result"], ["search_context", "read_context", "submit_result"]),
         )
-        self.assertIn("Visible lead response.", json.dumps(dict(calls[0].payload), ensure_ascii=False),)
-        self.assertIn("visible lead response", json.dumps(dict(calls[1].payload), ensure_ascii=False).lower(),)
+        self.assertIn("A prior lead response",
+                      json.dumps(dict(calls[0].payload), ensure_ascii=False),)
+        self.assertIn("a prior lead response",
+                      json.dumps(dict(calls[1].payload), ensure_ascii=False).lower(),)
         self.assertEqual(project_collaboration_history(self.history(conversation_id)).physical_calls_spent, 3,)
         self.assertEqual(len(_submitted_calls(self.history(conversation_id))), 4,)
         basis = _event_payloads(
@@ -1560,7 +1562,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
                 notice = json.loads(result.message)
                 self.assertEqual(notice["code"], "LEAD_CONTRACT_REJECTED")
-                self.assertEqual(notice["state"], "rejected")
+                self.assertEqual(notice["state"], result.state)
                 self.assertEqual(notice["language"], "KO")
                 self.assertEqual(tuple((row["task_id"], row["task_revision"])
                           for row in notice["task_revisions"]),
@@ -1712,21 +1714,23 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             self.assertLessEqual(family_bytes, 65536, (compiled_member.schema_id, family_bytes))
         self.assertEqual(call.contract.semantic_index.policy.maximum_schema_bytes, 65536)
         self.assertEqual(call.contract.action_index.policy.maximum_schema_bytes, 262144)
-        self.assertEqual(call.contract.rule_graph.maximum_bytes, 262144)
-        for budget_index in (call.contract.semantic_index, call.contract.action_index):
-            self.assertEqual(budget_index.policy.maximum_index_schema_bytes, 262144)
-            self.assertEqual(budget_index.rule_graph.maximum_bytes, 262144)
+        self.assertEqual(call.contract.rule_graph.maximum_bytes, 524288)
+        for budget_index, index_cap in (
+            (call.contract.semantic_index, 262144),
+            (call.contract.action_index, 524288)):
+            self.assertEqual(budget_index.policy.maximum_index_schema_bytes, index_cap)
+            self.assertEqual(budget_index.rule_graph.maximum_bytes, index_cap)
             budget_index_bytes = len(json.dumps(plain(budget_index.rule_graph.schema_value()), separators=(',', ':'),
                 ensure_ascii=False).encode('utf-8'))
-            self.assertLessEqual(budget_index_bytes, 262144, budget_index_bytes)
+            self.assertLessEqual(budget_index_bytes, index_cap, budget_index_bytes)
         request_schema_bytes = len(json.dumps(plain(call.schema), separators=(',', ':'),
                                               ensure_ascii=False).encode('utf-8'))
-        self.assertLessEqual(request_schema_bytes, 262144, request_schema_bytes)
+        self.assertLessEqual(request_schema_bytes, 524288, request_schema_bytes)
         call.contract.require_projection(call.schema)
         from story_writing_agents.structured_output_validation import (
             SchemaRules, decode_finite_selection, finite_selection_rule)
         physical = json.loads(_visible_outcome('answer', 'Independent workflow response.')(call, None))
-        selected = SchemaRules.declare(plain(call.schema), maximum_bytes=262144)
+        selected = SchemaRules.declare(plain(call.schema), maximum_bytes=524288)
         self.assertEqual(selected.findings(physical), ())
         self.assertEqual(set(physical), {'agent_action'})
         result = physical['agent_action']['task_result']
@@ -5100,7 +5104,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                     unredacted_result = await unredacted_runtime.lead_turn(self.session_id, unredacted_conv, "Request with unredacted failure.")
                     self.assertIs(unredacted_result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
                     self.assertNotIn("/sensitive/file/path.db", unredacted_result.message)
-                    self.assertIn("The Lead provider attempt failed without a usable result.", unredacted_result.message)
+                    self.assertEqual(unredacted_result.message, result.message)
                 prefix = self.history(conversation)
                 closure = [event.payload for event in prefix if type(event.payload) is CollaborationLeadOutcomeFailurePayload]
                 self.assertEqual(len(closure), 1)

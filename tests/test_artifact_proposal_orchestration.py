@@ -1068,28 +1068,19 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         def answer_with_artifact(call, provider):
             observation = call.payload["context_observation"]
             evidence_id = observation["read_results"][0]["evidence_id"]
-            return _provider_envelope(
-                call,
-                {
-                    "recommended_action": None,
-                    "artifact_intent": {
-                        "additional_review_domains": [],
-                        "operations": [
-                            {"kind": "create", "new_text": "A searched scene candidate.\n", "suggested_path": "manuscript/part-02/searched.md"}
-                        ],
-                    },
-                    "evidence_ids": [*reference_ids, evidence_id],
-                    "evidence_status": "verified",
-                    "kind": "proposal",
-                    "message": "The read context supports an exact candidate.",
-                    "authoring_scope": _live_scope(call, activity="review", domains=("plot_structure", "character_world", "tone_execution"), paths=("manuscript/part-02/searched.md",)),
-                    "proposal": None,
-                    "scope": "story_specific",
-                "objective_intent": None,
-                    "authoring_assessment": asdict(task_assessment(foundation_ids=('user_input',), actions=('bounded artifact review judgments', 'separate proposal preparation'))),
-                },
-                used_handles=provider.used_handles,
-            )
+            return _artifact_outcome(
+                operations=[{"kind": "create", "new_text": "A searched scene candidate.\n",
+                    "suggested_path": "manuscript/part-02/searched.md"}],
+                evidence_ids=[*reference_ids, evidence_id], evidence_status="verified",
+                additional_review_domains=(),
+                message="The read context supports an exact candidate.",
+                authoring_scope=_live_scope(call, activity="review",
+                    domains=("plot_structure", "character_world", "tone_execution"),
+                    paths=("manuscript/part-02/searched.md",)),
+                authoring_assessment=asdict(task_assessment(foundation_ids=('user_input',),
+                    actions=('bounded artifact review judgments',
+                             'separate proposal preparation'))),
+            )(call, provider)
 
         def search_prior_answer(call, _provider):
             reference_ids[:] = _reference_ids(_workflow_material(call.payload))

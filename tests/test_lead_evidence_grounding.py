@@ -5,6 +5,7 @@ from story_writing_agents import authoring_admission as admission
 from tests.test_specialist_routing_runtime import _ADMISSION_BRIEF, _fixture_assessment
 
 from tests.test_lead_orchestration import _exploration_outcome, _read_history_hit
+from tests.provider_wire_fixture import indexed_response, offered_fixture_bindings
 from story_writing_agents import lead_exploration as exploration
 import hashlib
 
@@ -13,7 +14,8 @@ import unittest
 from dataclasses import asdict, replace
 
 from story_writing_agents import StoryRuntime
-from story_writing_agents.agent_context.service import ContextProviderTerminalCode
+from story_writing_agents.agent_context.service import (
+    BoundContextProviderCallRequest, ContextProviderTerminalCode)
 from story_writing_agents.agents import EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR, PLOT_ARCHITECT
 from story_writing_agents.conversations import (
     CollaborationAppendError,
@@ -269,26 +271,23 @@ class DurableLeadEvidenceMatrixTests(unittest.TestCase):
 
 def _search(query: str, kinds: list[str]):
     def respond(call, _provider):
-        source_kinds = {
-            "w": "writing_artifact",
-            "c": "conversation",
-            "d": "active_debate",
-            "o": "own_agent_state",
+        assert type(call) is BoundContextProviderCallRequest
+        assert call.scope.agent_id == LEAD_ORCHESTRATOR
+        source_types = {
+            "w": "story_document",
+            "c": "conversation_history",
+            "d": "current_consensus_run",
+            "o": "agent_work_history",
         }
-        return json.dumps(
-            {
-                "action": {
-                    "kind": "search",
-                    "queries": [
-                        {
-                            "text": query,
-                            "source_kinds": [source_kinds[kind] for kind in kinds],
-                        }
-                    ],
-                },
-            },
-            separators=(",", ":"),
-        )
+        outer, inner = offered_fixture_bindings(
+            call, action_type="search_context", response_type=None, family=0)
+        assert inner is None
+        return indexed_response(
+            {"action_type": "search_context", "queries": [{
+                "search_text": query,
+                "source_types": {source_types[kind]: True for kind in kinds},
+            }]},
+            outer_schema_id=outer, inner_schema_id=None)
 
     return respond
 
@@ -708,15 +707,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         prior_evidence_ids: list[str] = []
 
         def read_prior_turn(call, provider: _LeadContextProvider):
-            observation = call.payload["context_observation"]
-            handle = observation["search_results"][0]["read_handle"]
-            provider.used_handles = (handle,)
-            return json.dumps(
-                {
-                    "action": {"kind": "read", "handles": [handle]},
-                },
-                separators=(",", ":"),
-            )
+            return _read_history_hit(call, provider)
 
         def answer_prior_turn(call, provider: _LeadContextProvider):
             observation = call.payload["context_observation"]

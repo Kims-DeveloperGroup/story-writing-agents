@@ -35,12 +35,41 @@ from .read_actions import (
     ReferenceReadInvocation,
     ReferenceReadResult,
 )
-from .references import ArtifactReferenceBatch
+from .references import (
+    MAX_REFERENCE_COUNT,
+    ArtifactReference,
+    ArtifactReferenceBatch,
+    ArtifactReferenceDirectiveError,
+    coalesce_reference_aliases,
+)
 from .repository import WritingArtifactRepository
 
 
 _INVOCATION_ID = re.compile(r"ri_[0-9a-f]{32}")
 _T = TypeVar("_T")
+def _parse_reference_aliases(locators: tuple[str, ...]) -> tuple[ArtifactReference, ...]:
+    if type(locators) is not tuple:
+        raise TypeError("reference alias locators must be a tuple")
+    if len(locators) > MAX_REFERENCE_COUNT:
+        raise ArtifactReferenceDirectiveError("reference input exceeds the directive limit")
+    aliases: list[ArtifactReference] = []
+    for locator in locators:
+        if type(locator) is not str:
+            raise TypeError("reference alias locators must contain strings")
+        batch = parse_artifact_references(locator)
+        if len(batch.references) != 1 or batch.references[0].token != locator:
+            raise ArtifactReferenceDirectiveError("reference alias must be one exact directive")
+        aliases.append(batch.references[0])
+    return tuple(aliases)
+
+
+def reference_alias_source_text(locators: tuple[str, ...]) -> str:
+    """Return canonical directive text for a frozen vector of logical aliases."""
+
+    batch, _ = coalesce_reference_aliases(_parse_reference_aliases(locators))
+    return batch.source_text
+
+
 def _operation_id(session_id: str) -> str:
     validate_reference_identity(session_id)
     if len(session_id) > 64:
@@ -413,6 +442,18 @@ class RuntimeReferenceOperation:
 
         self._require_process_affinity()
         return self._reference_proofs
+
+    def project_alias_proofs(
+        self,
+        locators: tuple[str, ...],
+    ) -> tuple[AuthorizedArtifactReference, ...]:
+        """Return exact logical-alias proofs without granting another READ."""
+
+        self._require_process_affinity()
+        with self._lock:
+            if self._finished or self._authorization is None:
+                raise ReferenceAuthorizationError(ReferenceAuthorizationErrorCode.CLOSED)
+            return self._authorization.project_alias_proofs(_parse_reference_aliases(locators))
 
     @property
     def finished(self) -> bool:

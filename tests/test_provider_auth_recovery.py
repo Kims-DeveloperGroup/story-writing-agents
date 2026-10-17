@@ -328,8 +328,13 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
         self.assertNotEqual(first.contract.offers.offer_digest, replay.contract.offers.offer_digest)
         self.assertEqual(first.contract.eligibility_offers, replay.contract.eligibility_offers)
         self.assertIs(first.contract.factory, replay.contract.factory)
-        self.assertEqual(first.contract.semantic_index.expected_schema_ids,
-                         replay.contract.semantic_index.expected_schema_ids)
+        self.assertEqual(
+            tuple((m.owner.variant.branch_key, m.owner.variant.rules.canonical_bytes)
+                  for m in first.contract.semantic_index.contracts),
+            tuple((m.owner.variant.branch_key, m.owner.variant.rules.canonical_bytes)
+                  for m in replay.contract.semantic_index.contracts))
+        self.assertNotEqual(first.contract.semantic_index.expected_schema_ids,
+                            replay.contract.semantic_index.expected_schema_ids)
         for call in (first, replay):
             call.contract.require_submission(call.payload, call.schema)
             call.contract.require_current_offer(call.contract.offers)
@@ -353,11 +358,10 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
         self.assertEqual(calls[0].contract.eligibility_offers.delivery_read_facts, ())
 
     def reference_request(self, limit=5):
-        reference = context.MandatoryReferenceReservation(1, "reference-1", "artifact-1", "revision-1",
-            context.ContextProvenance(context.ContextAuthorityKind.REFERENCE_AUTHORIZATION,
-                "core_documents/global_outline.md"), context._digest(b"reference"), 9)
-        return self.request(reference_operation_id="reference-operation", mandatory_references=(reference,),
-                            physical_call_limit=limit)
+        reference_operation_id = f"reference-operation-{limit}"
+        proof = self.reference(operation_id=reference_operation_id)
+        return self.request(reference_operation_id=reference_operation_id,
+            mandatory_references=(proof,), physical_call_limit=limit)
 
     async def test_local_reference_load_does_not_consume_provider_capacity(self):
         request = self.reference_request()

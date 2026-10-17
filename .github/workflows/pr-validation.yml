@@ -491,60 +491,73 @@ jobs:
            'tests.test_specialist_routing_runtime.SpecialistRoutingRuntimeTests.test_empty_inventory_does_not_add_unaffected_owners_and_mixed_scope_does': ('tests/test_specialist_routing_runtime.py',
                                                                                                                                                             'SpecialistRoutingRuntimeTests.test_empty_inventory_does_not_add_unaffected_owners_and_mixed_scope_does',
                                                                                                                                                             'review')}
-          FAILURE_LOCAL_PINS = {'PYTHON_MODULE_INDEX.md': '6e07afa0718eaeaa989003ce46289dc2bfbaad0ad5487e65cdb88b7c0d51ba7c',
+          FAILURE_LOCAL_PINS = {'PYTHON_MODULE_INDEX.md': '883d49926bce4c503c3a35c8e9651e1420efd53b2c1a6063a21f670eac9e2b72',
            'TEST_POLICY.md': 'dc5fdf28ea6e6793edd5e703720d4c6f70020de19c76b10382eaf881989ba3d9',
            'docs/guides/lead-agent.md': '5e408b728fae79f214d99d7f9057f26c9008975c2d631e61e74de5071debd4d3',
            'docs/reference/provider-wire.md': 'e6f2fc05a736c17011ac2878d19f2873f568d83de6d2a7f61bfe8e204f04ac9f',
            'src/story_writing_agents/agent_context/actions.py': '8f35ecf197acb7f2fa88c0bfff03eed053f98aa7cdf39850bd2db9fc3b7048de',
-           'src/story_writing_agents/agent_context/service.py': '3f547b04df334d1e53761f596764d5debad5a76f423c8cd4f785686119f0476c',
+           'src/story_writing_agents/agent_context/service.py': 'a5bccd9a8f75f95ee87dcfe63d72760f29b0af8f08218e3ee65b7dd51e3460e4',
            'src/story_writing_agents/antigravity_adapter.py': 'a2da00173befd84e522f30efac0576764863072ebf1b59e94e36ee0fcbddef16',
            'src/story_writing_agents/artifact_proposals.py': '06d3d50b1a2b714ed1fd4e520bef88585620bca5ff39dc8b5a46c2de0abc6524',
            'src/story_writing_agents/authoring_admission.py': 'd577e1a89dddd8d3611842185353ccbaae56da2423eac3397579f4293883cf9a',
-           'src/story_writing_agents/backend.py': 'd605891fab7ef93588f576d7717f3ec365bb16d9359116c0ec178460d9691682',
+           'src/story_writing_agents/backend.py': '2a2dfdca71658943fef93b06bae5964264b4ea387c64ea70883ed361df852474',
            'src/story_writing_agents/conversations/events.py': 'dd4d4f43560c9203af059db4eafcf14fa5dd5b067477426897943d7eebc79f71',
-           'src/story_writing_agents/conversations/session_context.py': '99744fc8303c7bb325de38a18a2a1c0b9a5f1bcbcee418a329697c185d217ade',
+           'src/story_writing_agents/conversations/session_context.py': '5b443a8e9cf4fb6d6cfced30897564f4d497c1e0938259522e5ca6ab4e779afa',
            'src/story_writing_agents/core_document_readiness.py': '695550df45bfc50dc3c20d7bf23b98b7fafcc939b9c08572c545f01ac64f3937',
            'src/story_writing_agents/lead_exploration.py': 'fd69642f02929b7248379cde206212777317eb3feced83cc15ba988f0947da91',
            'src/story_writing_agents/lead_premise_decisions.py': 'd52addce51b8d94d7678c604320d3dec5f2acd5ab1df0ad5ae4c70a0d0abd0a1',
-           'src/story_writing_agents/lead_provider_contracts.py': '617205bc66ec8c06d6ee3b40c0aa81c77314b88d315058b509a7c0e7ce40b9e4',
-           'src/story_writing_agents/orchestrator.py': 'f345b9cd93143c6684e8765d9df8166438d1e5e0129ba16a260cd96a783bafc1',
+           'src/story_writing_agents/lead_provider_contracts.py': 'e9e492ba332775d590922e9376873c888c1e509ad4e0a009e989d1366a90ce8e',
+           'src/story_writing_agents/orchestrator.py': '601c1300b6de2c2456e568cc70032b4cb4ea12b900f9eec819a25b0bc8b1b447',
            'src/story_writing_agents/provider_wire.py': 'c792deabda347c2e6fc87c10bd2c659ae77e75927e2ae5f834cf5f4fc4343918',
            'src/story_writing_agents/specialist_routing.py': 'ca9a9ab375983856aa00c2079630f0f7f0684f25522ef6e482028b40cabc9134',
            'src/story_writing_agents/structured_output_validation.py': '69d014d10985158d12e588b62eca3125aeac214bb818eeb89fa3e867be279777',
            'src/story_writing_agents/writing_artifacts/__init__.py': 'ea06cecd04e2225e2f2660828b927b6bba4452764389dbcc019554c05f34611c',
+           'src/story_writing_agents/writing_artifacts/authorization.py': '3fe9da19e22d828b86909428df8d52821753e978fea8bac929cebcac5998d23a',
            'src/story_writing_agents/writing_artifacts/catalog.py': 'da092de280d9054952653ea961b3f1c9eab0aed657df286f059d28ab151d9329',
            'src/story_writing_agents/writing_artifacts/read_actions.py': 'd93b81e051d9ed6e9310d989e4f6598aa7b7767c889ae87451ec028aca1b80a5',
+           'src/story_writing_agents/writing_artifacts/references.py': 'c24d9d92424cdaeccd61932a7205fec92a03951f79861253c1a99435fb78f616',
            'src/story_writing_agents/writing_artifacts/relationship_policy.py': '73186465aacb0ceefbca31638ea3c8158661db76f7bbdbfbcbfcd98c4096d092',
            'src/story_writing_agents/writing_artifacts/repository.py': 'ff2c548e9081de0ded29bd4e8d036ce6aebb6f743037681f64b402053d8d65d0',
+           'src/story_writing_agents/writing_artifacts/runtime_references.py': 'e149a07a7aee77a781753b59c33162754c30ada5023fb177a4b81d0ad3782e72',
            'tests/provider_wire_fixture.py': '7b796d4bb737b417a6e426747222fd7cedde48e2a8f258ea0a89f1afc7aa02cb',
            'tests/recommendation_fixture.py': 'e8c03bd70a173c7968d73783da86fd422caa39944c59fed5bd581320e8f6d9bc',
+           'tests/test_adapter_streaming.py': '6c9245a056bc18b390bf56855a6823f681301252b97d6f253f7bdd280f09a0e9',
+           'tests/test_advisory_progress_streaming.py': 'f8a3d5d3d1a6a111e875e325ee3d2187bee8330911e338ff08e56fe29930e249',
            'tests/test_agent_context_accounting.py': '7202adf4fa90f3e1dd4b7d949cc69ea89a3336f4956484bf9900d77af01a85b8',
            'tests/test_agent_context_actions.py': 'd6ad0067be386a7ed4075be71f8534419354f500632d2d4cf80deeee5e2234e6',
+           'tests/test_agent_context_conformance.py': '3d08b81d52ab72fb6a411846eec256ba7808b2a25a472c2dd108eeba6ff3b851',
            'tests/test_agent_context_execution.py': 'f786da12bede8bd4a71370761eba7e51ee63a8bd68895de6a0240ecc9afc2d82',
            'tests/test_agent_context_ledger.py': '4704fe2f3e84aec1e9b16198a44501fd28e05085441f6a2a4057ef8bcf37a0b1',
+           'tests/test_agent_context_manifest.py': '0cca234a5274960ea1501b161c1c75c16d40a8cf0869c8e85dcc4b6301f3b8fb',
            'tests/test_agent_context_planning.py': '0b67e15cf0755e8fafebc37c23d2d06491ca1598934f9b160dc653a36f23e7ba',
+           'tests/test_agent_context_runtime_adoption.py': 'd98b81996647f70f726da36ce14c1beea9da09193a49b61253d08e0f5cd15a7b',
            'tests/test_agent_context_service.py': '95f0cf523a26a6d48229fce3c2c79d6280397d0ab11e1278c2451aefc4892498',
+           'tests/test_agent_context_sources.py': '94f4811c7ba17ff30f84c96a3694ec16c2b8bdfeb90acdba4aea9628af431a68',
            'tests/test_antigravity_parity.py': 'bcf97ce16e9507da3ad879be91c0cffc95a0f28c4144edd06f886626b8b8ddde',
            'tests/test_artifact_application_contracts.py': '00890983717a01d38a486a05be12164dd133ed0c3b8e4e7faf10449cfd3e2f45',
            'tests/test_artifact_application_store_recovery.py': '0bc81fa1507544ef02e68589cf400a6bdd8498eb5975078835e6bfcfb80fa3c7',
            'tests/test_artifact_change_sets.py': '4e78daed261e311b9772b7f58b8c7278a369a1e07656d29849757ca445dd926e',
            'tests/test_artifact_objectives.py': '9409f67da64baf00579ece42506b0286e65b4d64a1fa5a3475ce3fac3f309d61',
-           'tests/test_artifact_proposal_orchestration.py': '94b8fbb736ef7b564048c948e10e7d6b14c9fbe337c32ba0e9dad775e0bc8504',
-           'tests/test_artifact_reference_authorization.py': '494c0b991b9c1fed5164bc5f48f8c8d6e509c15a2ea97d9b5f0325f713a3c1ab',
+           'tests/test_artifact_proposal_orchestration.py': 'f72ce39823f2c7273258e7c19ecc1cf4a1a4d37de4a82201c630565d81fcac2e',
+           'tests/test_artifact_reference_authorization.py': '8e44f30e079e7ebf8ef4bd1473b849a9774986300dda7c47196a29991bea13ef',
            'tests/test_artifact_reference_read_actions.py': '9117e9bfd4f97ce61e1cd370e8f8d80ee2cc9ab88368085b0b1829475ec317ac',
            'tests/test_artifact_relationship_policy.py': 'b90a606e2bcc921e1f0fb0370ab34e75756826435e2647f97d7ecf3c2e5d8d49',
-           'tests/test_codex_backend.py': 'da43c532d16b12723a237a3bdcc0f8dd741c682dc47830b7f5680322bbe6ad68',
+           'tests/test_codex_backend.py': '7492fce11c015015cf00a0472903614474dd330c56a8d06e037164f83d9c204f',
            'tests/test_git_external_operation_inspection.py': 'ef8c5dc39c1c4089470b6896abda049d8b09d5b8e06b9ddcbb3c8481481225d3',
-           'tests/test_interactive_controller.py': 'b86bbdc3eb93725c601a033e0157cf0b06847d034ac33f9f6b9e086b01412add',
+           'tests/test_interactive_controller.py': 'bc378a09e397bb7b669fa0e3a76ccdd67091e1f939467c1663705d5c69910fb8',
            'tests/test_lead_artifact_objectives.py': '93982e244ff7b99394eb2b3a3d6a19e54573e861ed149f642a0e296f5d3c2ae1',
-           'tests/test_lead_orchestration.py': '014acfbdda3b559ad96a66431b52bb63cc44df349d8f276b952aefa33d4dd8ba',
+           'tests/test_lead_evidence_grounding.py': '7671f50d4c7cf69b44af10d0c3e349a788d7dac11b6ba6667afacf4b95e0f8f2',
+           'tests/test_lead_orchestration.py': '60e409580d17c7b93101517d9daa2fd85373aa8d3a77e01ff049077f34a2fbbe',
            'tests/test_lead_recommendations.py': '8cf41e424faee9c3491d8ab983c8491ff5fa4aac1560ae8ff66987186727f3a2',
            'tests/test_lead_session_continuity.py': '4fc79147cd1a95e6ae0d094dfd9e97f590869506f8f63eb58bdd9d801efef0fb',
-           'tests/test_provider_auth_recovery.py': '283f6f078fd182fb1d5f9ba2e8c601644bd54b45572a35789d9dd02d671e786f',
+           'tests/test_provider_auth_recovery.py': 'e282bed2b48fe8dab21697227a1b10266a6c0f9cfea1002732fdb0855c802642',
+           'tests/test_rag_module_and_packaging_boundary.py': '348df4695c5b57f4266e60086030f0e93bd3feac2fb7d511c0901f8c51fea624',
            'tests/test_recommendation_actions.py': '39847408aec08e7f37bb7526246497cbaf4617a029a88f0a1f97de1e4c6896d5',
-           'tests/test_specialist_orchestration.py': '7f78e9b3b665fbe59a3e0e347f12dc56c4f4167a8b2cef4acf87d130af31fc2c',
+           'tests/test_session_recovery_contracts.py': '2d803765e4f68fa3cc2c9268cc2d90cff1e5728cca037a1509cc02077b0f9c6a',
+           'tests/test_specialist_orchestration.py': '20c1cc3dafbed9ac327f34fc79aa4b355583480309e65d4c218d90441c6e430c',
            'tests/test_specialist_routing.py': '69f386922a8bdd456c68480fc6a9e8730864b3b859f2f9bafc4ac1d06814d6d4',
-           'tests/test_specialist_routing_runtime.py': 'cc62f81ad3fa9e2b1e2646f8986e9eef9cc99cd0a696fa4354c2f2f7dd18da5b'}
+           'tests/test_specialist_routing_runtime.py': 'e00d4080b8dc849378c56a68634c02aebf8d696569ca5442f7fba2735a69c9ea',
+           'tests/test_workspace_session_history.py': '2b969fa9bb497dc6ebb19bc94e3b6ef00d22096cebfaeaf0df22e05767be336c'}
           ORIGINAL_FAILURE_TARGETS = {'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_empty_continuation_retains_selection_and_cancel_is_terminal': 'lead', 'tests.test_artifact_objectives.ArtifactObjectiveContractTests.test_question_and_synthesis_sources_preserve_exact_whole_message_digests': 'lead', 'tests.test_artifact_proposal_orchestration.ArtifactProposalOrchestrationTests.test_core_conflict_revision_and_manuscript_atomic_rename_workflows': 'specialist'}
 
           import sys
@@ -625,8 +638,8 @@ jobs:
                   self.canonical_code = self.function_code(self.loaded(
                       'story_writing_agents.structured_output_validation', 'canonical_schema_rules'))
                   expected = (
-                      (self.close_code, 'src/story_writing_agents/orchestrator.py', 14247),
-                      (self.guarded_code, 'src/story_writing_agents/orchestrator.py', 8529),
+                      (self.close_code, 'src/story_writing_agents/orchestrator.py', 14250),
+                      (self.guarded_code, 'src/story_writing_agents/orchestrator.py', 8530),
                       (self.canonical_code, 'src/story_writing_agents/structured_output_validation.py', 677),
                   )
                   for code, name, line in expected:
@@ -660,7 +673,7 @@ jobs:
                   elif self.seam == 'specialist':
                       if (code is not self.facts_code or frame.f_back is None
                               or frame.f_back.f_code is not self.guarded_code
-                              or frame.f_back.f_lineno != 8913):
+                              or frame.f_back.f_lineno != 8916):
                           return None
                   else:
                       return None
@@ -791,6 +804,192 @@ jobs:
                   encoded = json.dumps(record, sort_keys=True, indent=2).encode()
                   if len(encoded) > 131072:
                       raise ValueError('bounded observation overflow')
+                  self.path.write_bytes(encoded + b'\n')
+
+          class BudgetResultObserver(OriginalFailureObserver):
+              """Read bounded metadata at one existing persistence call, without replay."""
+
+              MAXIMUM_CAPTURES = 3
+              MAXIMUM_ASSIGNMENTS = 8
+              PERSIST_FIRSTLINE = 9114
+
+              def prepare_readers(self):
+                  super().prepare_readers()
+                  runtime = self.loaded('story_writing_agents.orchestrator', 'StoryRuntime')
+                  methods = type.__getattribute__(runtime, '__dict__')
+                  self.persist_code = self.function_code(
+                      methods['_persist_collaboration_results_locked'])
+                  if (self.paths.get(self.persist_code.co_filename)
+                          != 'src/story_writing_agents/orchestrator.py'
+                          or self.persist_code.co_firstlineno != self.PERSIST_FIRSTLINE):
+                      raise TypeError('unsupported persistence code identity')
+                  self.result_class = self.loaded(
+                      'story_writing_agents.orchestrator', '_CollaborationInvocationResult')
+                  if type(self.result_class) is not type:
+                      raise TypeError('unsupported result identity')
+                  self.result_readers = {
+                      name: self.descriptor(self.result_class, name)
+                      for name in ('value', 'failure', 'submitted_physical_calls',
+                                   'submission_uncertain', 'artifact_binding',
+                                   'generation_pin', 'pending_validation')
+                  }
+                  self.value_types = tuple(
+                      (self.loaded('story_writing_agents.orchestrator', name), name)
+                      for name in ('_LeadSynthesisResult', '_ArtifactSynthesisResult')
+                  )
+                  self.labels[AssertionError] = ('builtins', 'AssertionError')
+                  for name in ('BackendProtocolError', 'SessionContextCapacityError',
+                               'ProviderAuthenticationRequiredError'):
+                      error_class = self.loaded('story_writing_agents.orchestrator', name)
+                      if (type(error_class) is not type
+                              or BaseException not in type.__getattribute__(error_class, '__mro__')):
+                          raise TypeError('unsupported closed failure identity')
+                      module = type.__getattribute__(error_class, '__module__')
+                      if type(module) is not str or not module.startswith('story_writing_agents.'):
+                          raise TypeError('unsupported failure module identity')
+                      self.labels[error_class] = (module, name)
+                  self.closed_codes = []
+                  for name in ('ContextExecutionErrorCode', 'ContextProviderTerminalCode'):
+                      enum_class = self.loaded('story_writing_agents.agent_context.service', name)
+                      members = type.__getattribute__(enum_class, '__dict__').get('_member_map_')
+                      if type(members) is not dict or len(members) > 128:
+                          raise TypeError('unsupported closed code identity')
+                      for label, member in members.items():
+                          if type(label) is not str or len(label) > 96:
+                              raise TypeError('unsupported closed code label')
+                          self.closed_codes.append((member, name + '.' + label))
+                  self.captures = []
+
+              def supported_failure_chain(self, failure):
+                  current, held = failure, []
+                  while current is not None:
+                      if len(held) == 4 or any(current is item for item in held):
+                          return False
+                      if not any(type(current) is owner for owner in self.labels):
+                          return False
+                      held.append(current)
+                      cause = self.read(self.exception_readers['__cause__'], current, BaseException)
+                      current = cause if cause is not None else self.read(
+                          self.exception_readers['__context__'], current, BaseException)
+                  return True
+              def result_metadata(self, value):
+                  if value is None:
+                      return {'present': False}
+                  if type(value) is not self.result_class:
+                      return {'present': True, 'exact_result_type': False}
+                  fields = {
+                      name: self.read(reader, value, self.result_class)
+                      for name, reader in self.result_readers.items()
+                  }
+                  submitted = fields['submitted_physical_calls']
+                  uncertain = fields['submission_uncertain']
+                  if (type(submitted) is not int or not 0 <= submitted < 2**31
+                          or type(uncertain) is not bool):
+                      raise TypeError('unsupported result accounting shape')
+                  result = {
+                      'present': True, 'exact_result_type': True,
+                      'submitted_physical_calls': submitted, 'submission_uncertain': uncertain,
+                      'value_present': fields['value'] is not None,
+                      'value_type': ('none' if fields['value'] is None else 'unclassified'),
+                      'artifact_binding_present': fields['artifact_binding'] is not None,
+                      'generation_pin_present': fields['generation_pin'] is not None,
+                      'pending_validation_present': fields['pending_validation'] is not None,
+                      'failure_present': fields['failure'] is not None,
+                  }
+                  for known_type, label in self.value_types:
+                      if type(fields['value']) is known_type:
+                          result['value_type'] = 'story_writing_agents.orchestrator.' + label
+                  pending = fields['pending_validation']
+                  if pending is not None:
+                      if type(pending) is not tuple or len(pending) != 2:
+                          raise TypeError('unsupported pending validation shape')
+                      if type(pending[1]) is not tuple or len(pending[1]) > 64:
+                          raise TypeError('unsupported validation count')
+                      result['pending_validation_call_count'] = len(pending[1])
+                  failure = fields['failure']
+                  if failure is not None:
+                      known = any(type(failure) is owner for owner in self.labels)
+                      result['failure_type_supported'] = known
+                      if known:
+                          result['failure_snapshot_supported'] = False
+                          if self.supported_failure_chain(failure):
+                              try:
+                                  result['original_failure'] = self.snapshot(failure)
+                                  result['failure_snapshot_supported'] = True
+                              except (TypeError, ValueError):
+                                  pass
+                          values = self.read(self.exception_readers['__dict__'], failure, BaseException)
+                          if type(values) is not dict or len(values) > 32:
+                              raise TypeError('unsupported failure storage')
+                          result['closed_failure_code_supported'] = False
+                          for key, code in values.items():
+                              if type(key) is not str or key != 'code':
+                                  continue
+                              for member, label in self.closed_codes:
+                                  if code is member:
+                                      result['closed_failure_code'] = label
+                                      result['closed_failure_code_supported'] = True
+                                      break
+                  return result
+
+              def trace_calls(self, frame, event, arg):
+                  if event != 'call' or frame.f_code is not self.persist_code:
+                      return None
+                  self.attempted = True
+                  if len(self.captures) >= self.MAXIMUM_CAPTURES:
+                      if 'capture_count_exceeded' not in self.errors:
+                          self.errors.append('capture_count_exceeded')
+                      return None
+                  try:
+                      values = frame.f_locals
+                      if type(values) is not dict:
+                          raise TypeError('unsupported persistence frame')
+                      arguments = values.get('arguments')
+                      if type(arguments) is not dict:
+                          raise TypeError('unsupported persistence arguments')
+                      assignments = arguments.get('assignment_results')
+                      if (type(assignments) is not tuple
+                              or len(assignments) > self.MAXIMUM_ASSIGNMENTS
+                              or 'synthesis_result' not in arguments):
+                          raise TypeError('unsupported persistence result vector')
+                      self.captures.append({
+                          'ordinal': len(self.captures) + 1,
+                          'assignment_count': len(assignments),
+                          'assignment_results': [self.result_metadata(item) for item in assignments],
+                          'synthesis_result': self.result_metadata(arguments['synthesis_result']),
+                      })
+                  except Exception:
+                      if 'capture_read_failed' not in self.errors:
+                          self.errors.append('capture_read_failed')
+                  return None
+
+              def finalize(self, *, runner_returned):
+                  after = self.hashes()
+                  source_matches = self.before == after == self.pins
+                  if not source_matches:
+                      self.errors.append('source_after_mismatch')
+                  record = {
+                      'schema_version': 1, 'diagnostic_only': True,
+                      'kind': 'collaboration_results_metadata',
+                      'canonical_id': self.selected_id, 'source_pins': self.pins,
+                      'source_before': self.before, 'source_after': after,
+                      'source_matches': source_matches, 'runner_returned': runner_returned,
+                      'finalized': True, 'incomplete': not runner_returned,
+                      'attempted': self.attempted, 'maximum_snapshots': self.MAXIMUM_CAPTURES,
+                      'maximum_assignments': self.MAXIMUM_ASSIGNMENTS,
+                      'observations': self.captures, 'errors': self.errors[:16],
+                      'trace_restored': self.trace_restored,
+                      'profile_unchanged': self.profile_unchanged,
+                      'qualification': (
+                          'Passive metadata only. Unknown value/failure types and unsupported '
+                          'original chains are explicitly unclassified. No content/exception '
+                          'strings or extra original invocation; tracing overhead is unmeasured.'),
+                  }
+                  record['valid'] = (runner_returned and source_matches and not self.errors
+                                     and self.trace_restored and self.profile_unchanged)
+                  encoded = json.dumps(record, sort_keys=True, indent=2).encode()
+                  if len(encoded) > 131072:
+                      raise ValueError('bounded results observation overflow')
                   self.path.write_bytes(encoded + b'\n')
 
           class FailureLocalObserver:
@@ -959,6 +1158,7 @@ jobs:
               profile.enable()
           failure_observer = None
           original_failure_observer = None
+          budget_result_observer = None
           observer_errors = []
           runner_returned = False
           try:
@@ -979,9 +1179,19 @@ jobs:
                           ORIGINAL_FAILURE_TARGETS[os.environ["DIAGNOSTIC_TEST_ID"]])
                   except Exception as exc:
                       observer_errors.append("original_initialize:" + type(exc).__name__)
+              if os.environ["DIAGNOSTIC_TEST_ID"] == 'tests.test_lead_orchestration.LeadBudgetFinalizationTests.test_budget_notice_preserves_maximum_utf8_synthesis':
+                  try:
+                      budget_result_observer = BudgetResultObserver(
+                          Path.cwd(), output / "collaboration-results-observation.private.json",
+                          os.environ["DIAGNOSTIC_TEST_ID"], FAILURE_LOCAL_PINS,
+                          "collaboration_results_metadata")
+                  except Exception as exc:
+                      observer_errors.append("budget_results_initialize:" + type(exc).__name__)
               selected_argv = ["run", "--id", os.environ["DIAGNOSTIC_TEST_ID"], "--json", str(output / "instrumented-run.json")]
               if original_failure_observer is not None:
                   code = original_failure_observer.run(lambda: runner.main(selected_argv))
+              elif budget_result_observer is not None:
+                  code = budget_result_observer.run(lambda: runner.main(selected_argv))
               else:
                   code = runner.main(selected_argv)
               runner_returned = True
@@ -996,6 +1206,11 @@ jobs:
                       original_failure_observer.finalize(runner_returned=runner_returned)
                   except Exception as exc:
                       observer_errors.append("original_finalize:" + type(exc).__name__)
+              if budget_result_observer is not None:
+                  try:
+                      budget_result_observer.finalize(runner_returned=runner_returned)
+                  except Exception as exc:
+                      observer_errors.append("budget_results_finalize:" + type(exc).__name__)
               if profile_mode == "cprofile":
                   profile.disable()
                   profile.dump_stats(str(output / "profile.pstats"))
@@ -1018,6 +1233,9 @@ jobs:
               original_path = output / "original-failure-observation.private.json"
               if original_path.is_file():
                   evidence["original_failure_observation_sha256"] = hashlib.sha256(original_path.read_bytes()).hexdigest()
+              budget_results_path = output / "collaboration-results-observation.private.json"
+              if budget_results_path.is_file():
+                  evidence["collaboration_results_observation_sha256"] = hashlib.sha256(budget_results_path.read_bytes()).hexdigest()
               (output / "counters.json").write_text(json.dumps(evidence, indent=2))
           raise SystemExit(code if before == after else 2)
           PY

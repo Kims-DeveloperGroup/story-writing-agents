@@ -36,6 +36,7 @@ from .core_document_readiness import current_assessment_schema, decode_current_a
 from .agents import SPECIALIST_IDS
 from .conversations import COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES
 from .conversations.events import authoring_scope_from_dict
+from .conversations.session_context import MAX_PROVIDER_SCHEMA_UTF8_BYTES
 from .specialist_routing import (
     ArtifactReviewDomain, AuthoringActivity, AuthoringIntent, AuthoringScope,
     required_authoring_specialists, required_authoring_domains, assignment_mode_for_specialist,
@@ -409,7 +410,10 @@ class LeadStagePolicy:
                 (self.stage, self.physical_call_id, self.language, self.logical_origin_call_id))
                 or self.maximum_schema_bytes not in {65_536, 262_144}
                 or type(self.maximum_index_schema_bytes) is not int
-                or self.maximum_index_schema_bytes != 262_144
+                or self.maximum_index_schema_bytes != (
+                    MAX_PROVIDER_SCHEMA_UTF8_BYTES
+                    if self.wire_root_path == "$.agent_action" else 262_144
+                )
                 or self.wire_root_path not in {"$", "$.agent_action", "$.agent_action.task_result"}
                 or any(type(value) is not str or len(value) != 64 or any(
                     char not in "0123456789abcdef" for char in value)

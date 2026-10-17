@@ -214,7 +214,8 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         response = _artifact_outcome(
             operations=lambda call, material: [{"kind": "replace", "evidence_id": _status_id(call, OUTLINE), "new_text": "Synthetic reviewed outline.\n"}],
             evidence_status="empty", evidence_ids=lambda call, material: [_status_id(call, OUTLINE)],
-            objective_intent={"action": "start", "target_paths": [OUTLINE], "next_step": "prepare"},
+            objective_intent={"action": "start", "target_paths": {OUTLINE: True},
+                              "next_step": "prepare"},
             authoring_scope=lambda _: c.authoring_scope_to_dict(proposed.proposal.authoring_scope),
             authoring_assessment=assessment,)
         def prepare(call, provider):

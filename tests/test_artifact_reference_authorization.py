@@ -42,6 +42,8 @@ from story_writing_agents.writing_artifacts.authorization import (
     build_authorized_references,
     select_reference_bytes,
 )
+from story_writing_agents.writing_artifacts import references as reference_values
+from story_writing_agents.writing_artifacts import runtime_references as reference_runtime
 from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
@@ -559,7 +561,122 @@ class ReferenceCaptureAndEligibilityTests(ReferenceRepositoryTestCase):
             tuple(item.ordinal for item in authorization.authorized_references),
             (1, 2, 3),
         )
+        batch, indices = reference_values.coalesce_reference_aliases(references)
+        self.assertEqual((batch.references, indices), (references, (0, 1, 2)))
+        self.assertEqual(
+            (batch.source_text, batch.provider_text),
+            (" ".join(item.token for item in references),) * 2,
+        )
+        self.assertEqual(
+            authorization.project_alias_proofs(references), authorization.authorized_references,
+        )
         authorization.close()
+        with _expect_error(self, ReferenceAuthorizationErrorCode.CLOSED):
+            authorization.project_alias_proofs(references)
+        batch, indices = reference_values.coalesce_reference_aliases(())
+        self.assertEqual((batch.references, indices), ((), ()))
+        self.assertEqual(reference_runtime.reference_alias_source_text(()), "")
+        lines_by_path = {
+            _MANUSCRIPT_PATH: ("頭🙂\n".encode(), "한\r\n".encode(), "β\r".encode(),
+                               b"four\n", b"gap\n", b"last"),
+            _CORE_PATH: tuple(self.core_bytes.splitlines(keepends=True)),
+        }
+        (self.root / _MANUSCRIPT_PATH).write_bytes(b"".join(lines_by_path[_MANUSCRIPT_PATH]))
+        whole, core = ArtifactReference(_MANUSCRIPT_PATH), ArtifactReference(_CORE_PATH)
+
+        def ranged(first, last):
+            return ArtifactReference(_MANUSCRIPT_PATH, ArtifactLineRange(first, last))
+
+        cases = (
+            ((ranged(3, 3), core, whole, whole, ranged(1, 6)),
+             (whole, core), (0, 1, 0, 0, 0)),
+            ((ranged(6, 6), ranged(3, 4), ranged(2, 3), ranged(3, 3), ranged(6, 6)),
+             (ranged(6, 6), ranged(2, 4)), (0, 1, 1, 1, 0)),
+        )
+        directive_error = reference_values.ArtifactReferenceDirectiveError
+        for index, (aliases, canonical, expected_indices) in enumerate(cases):
+            batch, indices = reference_values.coalesce_reference_aliases(aliases)
+            self.assertEqual((batch.references, indices), (canonical, expected_indices))
+            self.assertEqual(batch.source_text, " ".join(item.token for item in canonical))
+            with self.capture(f"aliases-{index}", batch.references) as authorization:
+                operation_id = authorization.manifest.operation_id
+                history = self.repository.inspect_reference_operation(operation_id)
+                with mock.patch.object(
+                    SecureWorkspaceStorage, "read_snapshot", side_effect=AssertionError,
+                ):
+                    proofs = authorization.project_alias_proofs(aliases)
+                self.assertEqual(
+                    self.repository.inspect_reference_operation(operation_id),
+                    history,
+                )
+                captured = authorization.authorized_references
+                for ordinal, (alias, proof) in enumerate(zip(aliases, proofs, strict=True), 1):
+                    source_lines = lines_by_path[alias.path]
+                    selection = alias.line_range
+                    selected = b"".join(source_lines if selection is None else
+                                        source_lines[selection.start - 1:selection.end])
+                    self.assertEqual(
+                        (proof.ordinal, proof.reference, proof.reference.token, proof.source,
+                         proof.source_line_count, proof.source.source_sha256,
+                         proof.source.source_utf8_bytes, proof.selected_utf8_bytes,
+                         proof.selected_sha256),
+                        (ordinal, alias, alias.token, captured[indices[ordinal - 1]].source,
+                         len(source_lines), hashlib.sha256(b"".join(source_lines)).hexdigest(),
+                         sum(map(len, source_lines)), len(selected),
+                         hashlib.sha256(selected).hexdigest()),
+                    )
+                if index == 0:
+                    first_proofs = proofs
+                    limit_aliases = (whole,) * (reference_values.MAX_REFERENCE_COUNT - 1) + (core,)
+                    self.assertEqual(
+                        len(authorization.project_alias_proofs(limit_aliases)),
+                        reference_values.MAX_REFERENCE_COUNT,
+                    )
+                    with self.assertRaises(directive_error) as raised:
+                        authorization.project_alias_proofs(limit_aliases + (whole,))
+                    self.assertEqual(
+                        str(raised.exception), "reference input exceeds the directive limit",
+                    )
+                    for mismatch in ((core, whole), (ranged(1, 1), core)):
+                        with _expect_error(
+                            self, ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
+                        ):
+                            authorization.project_alias_proofs(mismatch)
+        locators = tuple(item.token for item in cases[0][0])
+        source_text = reference_runtime.reference_alias_source_text(locators)
+        self.assertEqual(source_text, " ".join(item.token for item in cases[0][1]))
+        operation = reference_runtime.prepare_runtime_reference_operation(
+            self.repository, session_id="session", text=source_text,
+        )
+        try:
+            history = self.repository.inspect_reference_operation(operation.operation_id)
+            self.assertEqual(history.invocation_events, ())
+            self.assertEqual(operation.project_alias_proofs(locators), first_proofs)
+            self.assertEqual(
+                tuple(item.reference for item in operation.reference_proofs), cases[0][1],
+            )
+            self.assertEqual(
+                self.repository.inspect_reference_operation(operation.operation_id), history,
+            )
+        finally:
+            operation.failure(
+                ReferenceAuthorizationError(ReferenceAuthorizationErrorCode.CANCELLED),
+            )
+        with _expect_error(self, ReferenceAuthorizationErrorCode.CLOSED):
+            operation.project_alias_proofs(locators)
+        for locator in ("prefix " + whole.token, whole.token + " " + core.token):
+            with self.assertRaises(directive_error) as raised:
+                reference_runtime.reference_alias_source_text((locator,))
+            self.assertEqual(str(raised.exception), "reference alias must be one exact directive")
+        (self.root / _MANUSCRIPT_PATH).write_bytes(b"\n" + b"x" * (MAX_REFERENCE_UTF8_BYTES - 1))
+        with self.capture("alias-byte-limit") as authorization:
+            proofs = authorization.project_alias_proofs((whole,) * 2)
+            self.assertEqual(
+                sum(item.selected_utf8_bytes for item in proofs),
+                MAX_REFERENCE_TOTAL_BYTES,
+            )
+            with _expect_error(self, ReferenceAuthorizationErrorCode.TOTAL_LIMIT_EXCEEDED):
+                authorization.project_alias_proofs((whole, whole, ranged(1, 1)))
 
     def test_manual_empty_missing_invalid_and_nul_sources_are_coded_exactly(
         self,

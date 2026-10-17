@@ -16,8 +16,7 @@ class AgentContextConformanceTests(unittest.TestCase):
             "context_accounting_baseline_fixture",
             "context_accounting_optimized_fixture",
             "provider_context_baseline_v1",
-            "provider_context_optimized_v1",
-        )
+            "provider_context_optimized_v1",)
         violations: list[tuple[str, str, str]] = []
         for source in sorted((_ROOT / "src/story_writing_agents").rglob("*.py")):
             tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))

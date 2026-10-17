@@ -90,8 +90,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             b'{"type":"item.started","item":{"type":"reasoning","text":"Brainstorming inciting incident"}}\n',
             b'{"type":"item.updated","item":{"type":"agent_message","text":"The kingdom was in turmoil."}}\n',
             b'{"type":"item.completed","item":{"type":"agent_message","text":" King Alden had vanished."}}\n',
-            b'\n',
-        ]
+            b'\n',]
 
         async def fake_run_process(
             request: ProcessRequest,
@@ -158,8 +157,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             b'{"type":"item.updated","item":{"type":"reasoning","type":"agent_message","text":"Secret"}}\n',
             b'{"type":"item.updated","item":{"type":"agent_message","text":"Val","score":NaN}}\n',
             b'{"type":"turn.started"}\n',
-            b'{"type":"item.updated","item":{"type":"agent_message","text":"Valid text"}}\n',
-        ]
+            b'{"type":"item.updated","item":{"type":"agent_message","text":"Valid text"}}\n',]
 
         async def fake_run_process(
             request: ProcessRequest,
@@ -241,8 +239,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             b'{"type":"turn_start"}\n',
             b'{"type":"thought","text":"Assessing historical parallels..."}\n',
             b'{"type":"agent_message","text":"The banners waved in the freezing mist."}\n',
-            terminal_json_bytes,
-        ]
+            terminal_json_bytes,]
 
         captured_commands: list[list[str]] = []
 
@@ -623,8 +620,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(exc_info.exception.authentication_failure)
             self.assertIsInstance(
                 exc_info.exception.authentication_failure,
-                ProviderAuthenticationRequiredError,
-            )
+                ProviderAuthenticationRequiredError,)
 
     async def test_antigravity_adapter_unwraps_event_alias_result_envelope(self) -> None:
         agy_backend = AgentBackend(
@@ -647,8 +643,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             schema={"type": "object", "properties": {"msg": {"type": "string"}}, "required": ["msg"], "additionalProperties": False},
             payload={},
             thread_id="thread_alias_1",
-            stream_sink=lambda _ev: None,
-        )
+            stream_sink=lambda _ev: None,)
 
         stream_lines = [
             (
@@ -689,8 +684,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             b'{"type":"turn.started"}\n',
             b'{"type":"item.updated","item":{"type":"reasoning","text":"Step 1"}}\n',
             b'{"type":"item.updated","item":{"type":"agent_message","text":"Step 1 result"}}\n',
-            b'{"type":"turn.completed","result":{"structured_output":{"done":true}}}\n',
-        ]
+            b'{"type":"turn.completed","result":{"structured_output":{"done":true}}}\n',]
 
         async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
             output_flag_index = request.command.index("--output-last-message")
@@ -725,8 +719,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
                 schema={"type": "object"},
                 payload={},
                 thread_id="thread_async_1",
-                stream_sink=async_sink,
-            )
+                stream_sink=async_sink,)
     async def test_antigravity_adapter_rejects_multiple_terminal_results_in_stream(self) -> None:
         """Verify stream with multiple terminal results fails closed."""
         from story_writing_agents.provider_adapter import ProviderInvocationError
@@ -761,8 +754,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         stream_lines = [
             b'{"type":"turn_start"}\n',
             json.dumps(res1).encode("utf-8") + b"\n",
-            json.dumps(res2).encode("utf-8") + b"\n",
-        ]
+            json.dumps(res2).encode("utf-8") + b"\n",]
 
         async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
             for line in stream_lines:
@@ -850,8 +842,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
         stream_lines = [
             b'{"type":"turn_start"}\n',
             json.dumps(res).encode("utf-8") + b"\n",
-            b'{"type":"text_delta","text":"extra trailing delta"}\n',
-        ]
+            b'{"type":"text_delta","text":"extra trailing delta"}\n',]
 
         async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
             for line in stream_lines:
@@ -1212,8 +1203,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             stream_sink=lambda _event: None,
         )
         stream_lines = [
-            b'{"type":null,"structured_output":{"status":"ok"},"conversation_id":"c1"}\n',
-        ]
+            b'{"type":null,"structured_output":{"status":"ok"},"conversation_id":"c1"}\n',]
 
         async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
             for line in stream_lines:
@@ -1548,8 +1538,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             # Matching delta with explicit agent_message type: must emit TEXT_DELTA
             b'{"type":"item.delta","item_id":"m_typed","item_type":"agent_message","delta":"Valid text "}\n',
             # Delta without explicit type falls back to remembered agent_message: must emit TEXT_DELTA
-            b'{"type":"item.delta","item_id":"m_typed","delta":"part two"}\n',
-        ]
+            b'{"type":"item.delta","item_id":"m_typed","delta":"part two"}\n',]
 
         async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
             output_flag_index = request.command.index("--output-last-message")
@@ -1692,8 +1681,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
                     "structured_output": {"reply": "First part second part.\n"},
                     "json_schema": schema,
                 },
-            }).encode("utf-8") + b"\n",
-        ]
+            }).encode("utf-8") + b"\n",]
 
         async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
             self.assertIsNotNone(request.on_stdout_line)
@@ -1755,8 +1743,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
                 "conversation_id": "conv_err_1",
                 "status": "ERROR",
                 "response": "",
-                "error": "No capacity available for model gpt-oss-120b-medium on the server",
-            },
+                "error": "No capacity available for model gpt-oss-120b-medium on the server",},
         }).encode("utf-8") + b"\n"
 
         async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
@@ -1947,8 +1934,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             # Send item.delta with non-string item_id
             b'{"type":"item.delta","item_id":123,"item_type":"agent_message","delta":"ignored"}\n',
             # Send valid item.delta with omitted item_type (allowed to use remembered kind)
-            b'{"type":"item.delta","item_id":"m1","delta":"visible"}\n',
-        ]
+            b'{"type":"item.delta","item_id":"m1","delta":"visible"}\n',]
 
         async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
             self.assertIsNotNone(request.on_stdout_line)
@@ -2123,8 +2109,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         stream_lines = [
             b'{"type":"turn_start"}\n',
-            b'{"conversation_id":"c1","status":"ERROR","error":"Quota exceeded for tier"}\n',
-        ]
+            b'{"conversation_id":"c1","status":"ERROR","error":"Quota exceeded for tier"}\n',]
 
         async def fake_run_process(request: ProcessRequest, **_kwargs: object) -> ProcessResult:
             for line in stream_lines:
@@ -2325,8 +2310,7 @@ class AdapterStreamingTests(unittest.IsolatedAsyncioTestCase):
             [
                 "typed delta accepted",
                 "agent message accepted",
-                "agent response accepted",
-            ],
+                "agent response accepted",],
         )
 
     async def test_antigravity_stream_extracts_validated_string_message_and_avoids_dict_leak(self) -> None:

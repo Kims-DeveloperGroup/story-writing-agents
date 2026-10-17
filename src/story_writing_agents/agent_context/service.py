@@ -46,6 +46,7 @@ from ..writing_artifacts.read_actions import (
     AuthorizedArtifactReference, ReferenceReadRequest, ReferenceReadResult,
 )
 from ..conversations.session_context import (
+    MAX_PROVIDER_SCHEMA_UTF8_BYTES,
     MAX_SESSION_CONTEXT_UTF8_BYTES,
     SessionContextCapacityError,
     SessionContextHistoryChangedError,
@@ -589,7 +590,7 @@ class BoundCallContract:
                 {"agent_action": outer.schema_value()},
                 description=_CONTEXT_ACTION_ROOT_DESCRIPTION,
             )),
-            maximum_bytes=262144,
+            maximum_bytes=MAX_PROVIDER_SCHEMA_UTF8_BYTES,
         )
         object.__setattr__(self, "eligibility_offers", eligible)
         object.__setattr__(self, "semantic_index", semantic)
@@ -944,7 +945,7 @@ def _bound_action_index(
         eligible.offer_digest,
         semantic.policy.logical_origin_call_id,
         maximum_schema_bytes=262144,
-        maximum_index_schema_bytes=262144,
+        maximum_index_schema_bytes=MAX_PROVIDER_SCHEMA_UTF8_BYTES,
         wire_root_path="$.agent_action",
         owner_declarations=tuple(owners),
     )

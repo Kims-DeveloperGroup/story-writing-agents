@@ -114,7 +114,7 @@ Dependencies flow from `service`, `sources`, and `progress` toward manifest/acti
 contracts. Filesystem source access is delegated to writing-artifact and workspace owners. Optional
 validation diagnostics preserve rejection, repair, checkpoint, and authority decisions.
 
-`service` owns provider delivery, exact payload UTF-8 capacity diagnostics and verified native continuity; `backend` enforces the combined schema-plus-payload input budget from `conversations.session_context`. Individual payload and schema preflights retain their limits. Host retains integrity receipts and complete-history coverage. `request_compaction` shares only when properties and bytes decrease before accounting; it owns no durable state or resources. Genuine mandatory-reference proofs enter current READ offers only through the typed prelude factory and reservation checks; their complete metadata is bound into the offer digest.
+`service` owns provider delivery, exact payload UTF-8 capacity diagnostics and verified native continuity; `backend` enforces native-schema and combined schema-plus-payload input budgets from `conversations.session_context`. Logical payload and member-schema preflights retain their limits. Host retains integrity receipts and complete-history coverage. `request_compaction` shares only when properties and bytes decrease before accounting; it owns no durable state or resources. Genuine mandatory-reference proofs enter current READ offers only through the typed prelude factory and reservation checks; their complete metadata is bound into the offer digest.
 Actual status snapshots stay separate from READ and are pinned in offer and repair digests.
 `BoundCallContract` shares pure structural findings with accounting; typed and host checks run only
 during actual decoding.
@@ -202,7 +202,7 @@ relationships, read sources, and apply/persist artifacts through a repository bo
 
 `repository` owns artifact filesystem mutation and strict core absence batches; private stores own durable metadata. The public `read_actions.ReferenceReadResult` preserves actual authorized delivery proofs beside closeable bytes; no lower reference owner imports context or backend code.
 Session callers borrow descriptor-bound repositories from the workspace binding; root configuration remains the control plane.
-Runtime references retain exact session-owned evidence and release their generation pin at terminal use.
+Runtime references retain exact session-owned evidence and release their generation pin at terminal use. `references.coalesce_reference_aliases` owns physical alias coverage; `authorization` projects exact logical-alias proofs from captured bytes through the public `runtime_references` facade without another READ.
 Callers must not import `_storage`, `_application_store`, or `_reference_evidence`.
 
 ### Git resources, history, checkpoints, and story commits

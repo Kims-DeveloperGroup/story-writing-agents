@@ -35,15 +35,13 @@ _SOURCE_ROOT = _REPOSITORY_ROOT / "src" / "story_writing_agents"
 _GENERIC_RAG_PIN = "c77456321c614518e420e45c033e3f71dc5363b8"
 _GENERIC_RAG_REPOSITORY = "https://github.com/Kims-DeveloperGroup/generic-rag.git"
 _GENERIC_RAG_REQUIREMENT = (
-    f"generic-rag @ git+{_GENERIC_RAG_REPOSITORY}@{_GENERIC_RAG_PIN}"
-)
+    f"generic-rag @ git+{_GENERIC_RAG_REPOSITORY}@{_GENERIC_RAG_PIN}")
 _OLD_JSONL_VIEWER_PIN = "997f3a2af2c6e9e1f0fa305f6caeb1e0689593ea"
 _JSONL_VIEWER_PIN = "91e2e21f301a0628fd7651d248a3556c6d3b7f95"
 _JSONL_VIEWER_VERSION = "0.6.4"
 _JSONL_VIEWER_REPOSITORY = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git"
 _JSONL_VIEWER_REQUIREMENT = (
-    f"jsonl-viewer @ git+{_JSONL_VIEWER_REPOSITORY}@{_JSONL_VIEWER_PIN}"
-)
+    f"jsonl-viewer @ git+{_JSONL_VIEWER_REPOSITORY}@{_JSONL_VIEWER_PIN}")
 _GITLINK_PATHS = {
     "vendor/generic-rag": _GENERIC_RAG_PIN,
     "vendor/jsonl-viewer": _JSONL_VIEWER_PIN,
@@ -90,8 +88,7 @@ def _internal_edges(modules: dict[str, Path]) -> set[tuple[str, str]]:
     for module, path in modules.items():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         context = (
-            module.split(".") if path.name == "__init__.py" else module.split(".")[:-1]
-        )
+            module.split(".") if path.name == "__init__.py" else module.split(".")[:-1])
         for node in runtime_nodes(tree):
             targets: list[str] = []
             if isinstance(node, ast.Import):
@@ -183,12 +180,10 @@ def _copy_build_input(source: Path, destination: Path, *, vendor: bool) -> None:
     if vendor:
         _export_gitlink_project(
             "vendor/generic-rag",
-            destination / "vendor" / "generic-rag",
-        )
+            destination / "vendor" / "generic-rag",)
         _export_gitlink_project(
             "vendor/jsonl-viewer",
-            destination / "vendor" / "jsonl-viewer",
-        )
+            destination / "vendor" / "jsonl-viewer",)
 
 
 def _copy_setuptools_build_support(destination: Path) -> None:
@@ -319,15 +314,13 @@ def _build_local_artifacts(project: Path, distribution: Path) -> tuple[Path, Pat
         sdist = build_meta.build_sdist(str(destination))
         print(wheel)
         print(sdist)
-        """
-    )
+        """)
     completed = subprocess.run(
         [sys.executable, "-I", "-c", script, str(distribution)],
         cwd=project,
         text=True,
         capture_output=True,
-        check=False,
-    )
+        check=False,)
     if completed.returncode != 0:
         raise AssertionError(
             "local artifact build failed\n"
@@ -346,7 +339,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         modules = _module_inventory()
         edges = _internal_edges(modules)
         self.assertEqual(len(modules), 163)
-        self.assertEqual(len(edges), 712)
+        self.assertEqual(len(edges), 731)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
@@ -748,12 +741,15 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.agent_context.progress",
                 "story_writing_agents.agent_context.request_compaction",
                 "story_writing_agents.agent_context.sources",
+                "story_writing_agents.agents",
                 "story_writing_agents.conversations.session_context",
                 "story_writing_agents.errors",
+                "story_writing_agents.lead_provider_contracts",
                 "story_writing_agents.provider_auth_recovery",
                 "story_writing_agents.provider_execution_workspace",
                 "story_writing_agents.structured_output_validation",
                 "story_writing_agents.workspace",
+                "story_writing_agents.writing_artifacts.read_actions",
             },
         )
         self.assertIn(
@@ -861,18 +857,15 @@ class RagModuleBoundaryTests(unittest.TestCase):
             conversation_rag_composition.__all__,
             conversation_rag_local.__all__,
             conversation_rag_runtime.__all__,
-            conversation_rag_store.__all__,
-        )
+            conversation_rag_store.__all__,)
         self.assertTrue(rag_names.isdisjoint(story_writing_agents.__all__))
         self.assertFalse(hasattr(story_writing_agents, "compose_conversation_rag"))
         self.assertFalse(
-            hasattr(story_writing_agents, "compose_local_conversation_rag")
-        )
+            hasattr(story_writing_agents, "compose_local_conversation_rag"))
         self.assertFalse(hasattr(story_writing_agents, "ConversationRagCandidate"))
         self.assertFalse(hasattr(story_writing_agents, "LocalConversationRagEmbedder"))
         self.assertFalse(
-            hasattr(story_writing_agents, "ConversationRagGenerationStore")
-        )
+            hasattr(story_writing_agents, "ConversationRagGenerationStore"))
         self.assertFalse(hasattr(story_writing_agents, "ConversationRagRuntimeService"))
         self.assertEqual(
             tuple(conversation_rag_runtime.__all__),
@@ -913,20 +906,17 @@ class RagPackagingBoundaryTests(unittest.TestCase):
         self.assertEqual(generic["version"], "0.1.0")
         self.assertEqual(
             generic["source"]["git"],
-            f"{_GENERIC_RAG_REPOSITORY}?rev={_GENERIC_RAG_PIN}#{_GENERIC_RAG_PIN}",
-        )
+            f"{_GENERIC_RAG_REPOSITORY}?rev={_GENERIC_RAG_PIN}#{_GENERIC_RAG_PIN}",)
         self.assertEqual(viewer["version"], _JSONL_VIEWER_VERSION)
         self.assertEqual(
             viewer["source"]["git"],
-            f"{_JSONL_VIEWER_REPOSITORY}?rev={_JSONL_VIEWER_PIN}#{_JSONL_VIEWER_PIN}",
-        )
+            f"{_JSONL_VIEWER_REPOSITORY}?rev={_JSONL_VIEWER_PIN}#{_JSONL_VIEWER_PIN}",)
         story = packages["story-writing-agents"]
         self.assertEqual(story["version"], "0.1.0")
         self.assertEqual(story["dependencies"], [{"name": "jsonl-viewer"}, {"name": "markdown-it-py"}])
         self.assertEqual(
             story["optional-dependencies"],
-            {"rag": [{"name": "generic-rag"}]},
-        )
+            {"rag": [{"name": "generic-rag"}]},)
         self.assertEqual(
             story["metadata"]["requires-dist"],
             [
@@ -940,8 +930,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     "git": f"{_JSONL_VIEWER_REPOSITORY}?rev={_JSONL_VIEWER_PIN}",
                 },
                 {"name": "markdown-it-py", "specifier": ">=4.2,<5"},
-            ],
-        )
+            ],)
         self.assertEqual(story["metadata"]["provides-extras"], ["rag", "viewer"])
         self.assertEqual((packages["markdown-it-py"]["version"], packages["markdown-it-py"]["dependencies"]), ("4.2.0", [{"name": "mdurl"}]))
 
@@ -952,24 +941,19 @@ class RagPackagingBoundaryTests(unittest.TestCase):
         self.assertEqual(submodules.sections(), [generic_section, viewer_section])
         self.assertEqual(
             submodules[generic_section]["path"],
-            "vendor/generic-rag",
-        )
+            "vendor/generic-rag",)
         self.assertEqual(
             submodules[generic_section]["url"],
-            _GENERIC_RAG_REPOSITORY,
-        )
+            _GENERIC_RAG_REPOSITORY,)
         self.assertEqual(
             submodules[viewer_section]["path"],
-            "vendor/jsonl-viewer",
-        )
+            "vendor/jsonl-viewer",)
         self.assertEqual(
             submodules[viewer_section]["url"],
-            _JSONL_VIEWER_REPOSITORY,
-        )
+            _JSONL_VIEWER_REPOSITORY,)
         self.assertEqual(
             (_REPOSITORY_ROOT / "MANIFEST.in").read_text(encoding="utf-8"),
-            "prune vendor/jsonl-viewer\n",
-        )
+            "prune vendor/jsonl-viewer\n",)
         _assert_effective_gitlink(self, "vendor/generic-rag")
         _assert_effective_gitlink(self, "vendor/jsonl-viewer")
 
@@ -988,12 +972,10 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             _copy_build_input(_REPOSITORY_ROOT, story_project, vendor=True)
             _export_gitlink_project(
                 "vendor/generic-rag",
-                generic_project,
-            )
+                generic_project,)
             _export_gitlink_project(
                 "vendor/jsonl-viewer",
-                viewer_project,
-            )
+                viewer_project,)
             story_distribution = root / "story-dist"
             generic_distribution = root / "generic-dist"
             viewer_distribution = root / "viewer-dist"
@@ -1002,12 +984,10 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             viewer_distribution.mkdir()
             story_wheel, story_sdist = _build_local_artifacts(
                 story_project,
-                story_distribution,
-            )
+                story_distribution,)
             generic_wheel, _generic_sdist = _build_local_artifacts(
                 generic_project,
-                generic_distribution,
-            )
+                generic_distribution,)
             viewer_wheel, _viewer_sdist = _build_local_artifacts(
                 viewer_project,
                 viewer_distribution,
